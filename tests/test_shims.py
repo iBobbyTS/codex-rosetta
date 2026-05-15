@@ -146,7 +146,7 @@ class TestBuiltinShims:
             assert shim is not None, f"Built-in shim '{name}' not registered"
 
     def test_third_party_providers_registered(self):
-        for name in ("deepseek", "volcengine"):
+        for name in ("deepseek", "volcengine", "openrouter"):
             shim = get_shim(name)
             assert shim is not None, f"Built-in shim '{name}' not registered"
 

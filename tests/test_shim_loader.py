@@ -83,12 +83,13 @@ class TestLoadProviders:
         return d
 
     def test_loads_from_builtin_directory(self):
-        """Verify the real providers/ directory loads all 11 built-in shims."""
+        """Verify the real providers/ directory loads all 12 built-in shims."""
         shims = load_providers()
         names = {s.name for s in shims}
         assert names == {
             "openai",
             "openai_responses",
+            "openrouter",
             "anthropic",
             "google",
             "deepseek",
@@ -105,6 +106,7 @@ class TestLoadProviders:
         load_providers()
         for name in (
             "openai",
+            "openrouter",
             "anthropic",
             "google",
             "deepseek",
@@ -132,12 +134,121 @@ class TestLoadProviders:
         assert "logprobs" not in result
         assert "messages" in result
 
+    def test_deepseek_has_transforms(self):
+        """DeepSeek shim should strip n, logit_bias, seed."""
+        load_providers()
+        s = get_shim("deepseek")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {"n": 2, "logit_bias": {}, "seed": 42, "messages": []}
+        result = s.to_transforms[0](body)
+        assert "n" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert "messages" in result
+
+    def test_xai_has_transforms(self):
+        """xAI shim should strip logit_bias."""
+        load_providers()
+        s = get_shim("xai")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {"logit_bias": {"50256": -100}, "messages": []}
+        result = s.to_transforms[0](body)
+        assert "logit_bias" not in result
+        assert "messages" in result
+
+    def test_moonshot_has_transforms(self):
+        """Moonshot shim should strip logprobs, top_logprobs, logit_bias, seed."""
+        load_providers()
+        s = get_shim("moonshot")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {
+            "logprobs": True,
+            "top_logprobs": 5,
+            "logit_bias": {},
+            "seed": 123,
+            "messages": [],
+        }
+        result = s.to_transforms[0](body)
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert "messages" in result
+
+    def test_qwen_has_transforms(self):
+        """Qwen shim should strip frequency_penalty, logit_bias."""
+        load_providers()
+        s = get_shim("qwen")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {"frequency_penalty": 0.5, "logit_bias": {}, "messages": []}
+        result = s.to_transforms[0](body)
+        assert "frequency_penalty" not in result
+        assert "logit_bias" not in result
+        assert "messages" in result
+
+    def test_minimax_has_transforms(self):
+        """MiniMax shim should strip logprobs, top_logprobs, seed, stop."""
+        load_providers()
+        s = get_shim("minimax")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {
+            "logprobs": True,
+            "top_logprobs": 5,
+            "seed": 42,
+            "stop": ["\n"],
+            "messages": [],
+        }
+        result = s.to_transforms[0](body)
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "seed" not in result
+        assert "stop" not in result
+        assert "messages" in result
+
+    def test_zhipu_has_transforms(self):
+        """Zhipu shim should strip n, penalties, logprobs, logit_bias, seed."""
+        load_providers()
+        s = get_shim("zhipu")
+        assert s is not None
+        assert len(s.to_transforms) == 1
+        assert len(s.from_transforms) == 0
+        body = {
+            "n": 2,
+            "presence_penalty": 0.5,
+            "frequency_penalty": 0.5,
+            "logprobs": True,
+            "top_logprobs": 5,
+            "logit_bias": {},
+            "seed": 42,
+            "messages": [],
+        }
+        result = s.to_transforms[0](body)
+        assert "n" not in result
+        assert "presence_penalty" not in result
+        assert "frequency_penalty" not in result
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert "messages" in result
+
     def test_base_types_correct(self):
         """Each shim should have the expected base converter type."""
         load_providers()
         expected = {
             "openai": "openai_chat",
             "openai_responses": "openai_responses",
+            "openrouter": "openai_chat",
             "anthropic": "anthropic",
             "google": "google",
             "deepseek": "openai_chat",

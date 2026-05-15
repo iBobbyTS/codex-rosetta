@@ -217,6 +217,120 @@ class TestBuiltinTransforms:
         assert "top_logprobs" not in result
         assert result["model"] == "test"
 
+    def test_deepseek_strips_unsupported(self):
+        shim = get_shim("deepseek")
+        assert shim is not None
+        body = {
+            "model": "deepseek-chat",
+            "n": 2,
+            "logit_bias": {"50256": -100},
+            "seed": 42,
+            "temperature": 0.7,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "n" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert result["model"] == "deepseek-chat"
+        assert result["temperature"] == 0.7
+
+    def test_xai_strips_logit_bias(self):
+        shim = get_shim("xai")
+        assert shim is not None
+        body = {
+            "model": "grok-3",
+            "logit_bias": {"50256": -100},
+            "temperature": 1.0,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "logit_bias" not in result
+        assert result["model"] == "grok-3"
+        assert result["temperature"] == 1.0
+
+    def test_moonshot_strips_unsupported(self):
+        shim = get_shim("moonshot")
+        assert shim is not None
+        body = {
+            "model": "moonshot-v1-8k",
+            "logprobs": True,
+            "top_logprobs": 3,
+            "logit_bias": {},
+            "seed": 99,
+            "temperature": 0.5,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert result["model"] == "moonshot-v1-8k"
+        assert result["temperature"] == 0.5
+
+    def test_qwen_strips_unsupported(self):
+        shim = get_shim("qwen")
+        assert shim is not None
+        body = {
+            "model": "qwen-max",
+            "frequency_penalty": 0.5,
+            "logit_bias": {"50256": -100},
+            "temperature": 0.7,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "frequency_penalty" not in result
+        assert "logit_bias" not in result
+        assert result["model"] == "qwen-max"
+        assert result["temperature"] == 0.7
+
+    def test_minimax_strips_unsupported(self):
+        shim = get_shim("minimax")
+        assert shim is not None
+        body = {
+            "model": "MiniMax-M2",
+            "logprobs": True,
+            "top_logprobs": 3,
+            "seed": 42,
+            "stop": ["END"],
+            "temperature": 0.8,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "seed" not in result
+        assert "stop" not in result
+        assert result["model"] == "MiniMax-M2"
+        assert result["temperature"] == 0.8
+
+    def test_zhipu_strips_unsupported(self):
+        shim = get_shim("zhipu")
+        assert shim is not None
+        body = {
+            "model": "glm-4",
+            "n": 2,
+            "presence_penalty": 0.5,
+            "frequency_penalty": 0.5,
+            "logprobs": True,
+            "top_logprobs": 5,
+            "logit_bias": {},
+            "seed": 99,
+            "temperature": 0.8,
+            "messages": [],
+        }
+        result = apply_transforms(shim.to_transforms, body)
+        assert "n" not in result
+        assert "presence_penalty" not in result
+        assert "frequency_penalty" not in result
+        assert "logprobs" not in result
+        assert "top_logprobs" not in result
+        assert "logit_bias" not in result
+        assert "seed" not in result
+        assert result["model"] == "glm-4"
+        assert result["temperature"] == 0.8
+
 
 # ---------------------------------------------------------------------------
 # Integration: convert() with transforms
