@@ -209,13 +209,20 @@ async def get_config(request: Any) -> Response:
             "server": server,
             "known_provider_types": known_provider_types(),
             "registered_shims": [
-                {"name": s.name, "base": s.base, "logo": s.logo} for s in list_shims()
+                {
+                    "name": s.name,
+                    "base": s.base,
+                    "logo": s.logo,
+                    "default_base_url": s.default_base_url,
+                    "default_api_key_env": s.default_api_key_env,
+                }
+                for s in list_shims()
             ],
         }
     )
 
 
-async def put_provider(request: Any) -> Response:
+async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -283,7 +290,7 @@ async def put_provider(request: Any) -> Response:
     )
 
 
-async def delete_provider(request: Any) -> Response:
+async def delete_provider(request: Any, **kwargs: Any) -> Response:
     """Remove a provider entry."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -345,7 +352,7 @@ async def delete_provider(request: Any) -> Response:
     )
 
 
-async def toggle_provider(request: Any) -> Response:
+async def toggle_provider(request: Any, **kwargs: Any) -> Response:
     """Toggle a provider's enabled/disabled state."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -394,7 +401,7 @@ async def toggle_provider(request: Any) -> Response:
     return JSONResponse({"ok": True, "provider": name, "enabled": new_enabled})
 
 
-async def put_model(request: Any) -> Response:
+async def put_model(request: Any, **kwargs: Any) -> Response:
     """Add or update a model routing entry."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -476,7 +483,7 @@ async def put_model(request: Any) -> Response:
     )
 
 
-async def delete_model(request: Any) -> Response:
+async def delete_model(request: Any, **kwargs: Any) -> Response:
     """Remove a model routing entry."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -631,7 +638,7 @@ async def clear_requests(request: Any) -> Response:
     return JSONResponse({"ok": True})
 
 
-async def get_provider_key(request: Any) -> Response:
+async def get_provider_key(request: Any, **kwargs: Any) -> Response:
     """Return the raw (unmasked) API key for a single provider."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -808,7 +815,7 @@ async def create_api_key(request: Any) -> Response:
     return JSONResponse({"ok": True, "key": entry})
 
 
-async def update_api_key(request: Any) -> Response:
+async def update_api_key(request: Any, **kwargs: Any) -> Response:
     """Update an API key's label."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -861,7 +868,7 @@ async def update_api_key(request: Any) -> Response:
     return JSONResponse({"ok": True, "id": key_id, "label": target["label"]})
 
 
-async def delete_api_key(request: Any) -> Response:
+async def delete_api_key(request: Any, **kwargs: Any) -> Response:
     """Delete a gateway API key."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -903,7 +910,7 @@ async def delete_api_key(request: Any) -> Response:
     return JSONResponse({"ok": True, "deleted": key_id})
 
 
-async def reveal_api_key(request: Any) -> Response:
+async def reveal_api_key(request: Any, **kwargs: Any) -> Response:
     """Return the raw (unmasked) API key value."""
     config_path = _get_config_path(request)
     if not config_path:

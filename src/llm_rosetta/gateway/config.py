@@ -141,7 +141,7 @@ class GatewayConfig:
                 self.provider_types[name] = resolve_base(cfg["shim"])
                 self.provider_shim_names[name] = cfg["shim"]
             elif "type" in cfg:
-                self.provider_types[name] = cfg["type"]
+                self.provider_types[name] = resolve_base(cfg["type"])
                 self.provider_shim_names[name] = cfg["type"]
             else:
                 self.provider_types[name] = name
