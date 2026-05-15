@@ -907,13 +907,19 @@ function openProviderModal(name, baseUrl, apiKey, proxy, provType) {
     typeSel.appendChild(opt);
   }
 
-  // Auto-fill base URL and API key placeholder when selecting a type (new providers only)
+  // Auto-fill base URL and API key placeholder when selecting a type
+  const _initialType = provType || '';
   typeSel.onchange = () => {
-    if (name) return; // don't auto-fill when editing
     const s = shimMap[typeSel.value];
     if (!s) return;
     const urlInput = document.getElementById('provBaseUrl');
-    if (!urlInput.value && s.default_base_url) urlInput.value = s.default_base_url;
+    // When the type actually changed, replace base URL with the new shim's default
+    // (user can still manually edit it afterwards)
+    if (s.default_base_url && typeSel.value !== _initialType) {
+      urlInput.value = s.default_base_url;
+    } else if (!urlInput.value && s.default_base_url) {
+      urlInput.value = s.default_base_url;
+    }
     const keyInput = document.getElementById('provApiKey');
     if (!keyInput.value && s.default_api_key_env) keyInput.value = '${' + s.default_api_key_env + '}';
   };
