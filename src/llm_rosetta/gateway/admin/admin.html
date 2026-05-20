@@ -37,14 +37,40 @@ a { color: var(--accent); text-decoration: none; }
 .header h1 span { color: var(--text-dim); font-weight: 400; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 .config-path { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
-.theme-toggle { display: flex; gap: 8px; }
-.theme-btn {
-  flex: 1; padding: 8px 16px; border: 1px solid var(--border);
-  border-radius: var(--radius); background: var(--bg); color: var(--text);
-  cursor: pointer; font-size: 13px; text-align: center; transition: all 0.15s;
+/* Settings popup (tinyleaf-style centered modal) */
+.settings-popup {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.5); z-index: 200;
+  align-items: center; justify-content: center;
 }
-.theme-btn:hover { background: var(--bg-hover); }
-.theme-btn.active { border-color: var(--accent); background: var(--bg-hover); color: var(--accent); font-weight: 600; }
+.settings-popup.open { display: flex; }
+.settings-popup-panel {
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  min-width: 340px; max-width: 440px; padding: 24px;
+}
+.settings-popup-panel h3 { margin-bottom: 16px; font-size: 16px; font-weight: 600; }
+.settings-popup-item {
+  padding: 8px 0; font-size: 13px;
+  display: flex; align-items: center; gap: 12px;
+}
+.settings-popup-item label {
+  font-size: 12px; color: var(--text-dim);
+  white-space: nowrap; min-width: 80px;
+}
+.settings-popup-item select {
+  flex: 1; min-width: 0; padding: 4px 8px; font-size: 12px;
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 4px;
+}
+.settings-divider { border-top: 1px solid var(--border); margin: 6px 0; }
+.about-link {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; font-size: 13px; color: var(--text);
+  text-decoration: none; border: 1px solid var(--border);
+  border-radius: 6px; transition: background 0.15s, border-color 0.15s;
+}
+.about-link:hover { background: var(--bg-hover); border-color: var(--accent); color: var(--accent); }
 .header-select {
   padding: 4px 8px; font-size: 12px; background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); color: var(--text); cursor: pointer;
@@ -528,29 +554,34 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
   </div>
 </div>
 
-<!-- Settings Modal -->
-<div class="modal-overlay" id="settingsModal">
-  <div class="modal">
+<!-- Settings Popup (tinyleaf-style) -->
+<div class="settings-popup" id="settingsPopup" onclick="this.classList.remove('open')">
+  <div class="settings-popup-panel" onclick="event.stopPropagation()">
     <h3 data-i18n="modal.settings">Settings</h3>
-    <div class="form-group">
+    <div class="settings-popup-item">
       <label data-i18n="label.theme">Theme</label>
-      <div class="theme-toggle" id="themeToggle">
-        <button class="theme-btn" data-theme="light" onclick="setTheme('light')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg> <span data-i18n="theme.light">Light</span></button>
-        <button class="theme-btn" data-theme="dark" onclick="setTheme('dark')"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg> <span data-i18n="theme.dark">Dark</span></button>
-      </div>
+      <select id="settingsThemeSelect" onchange="setTheme(this.value)">
+        <option value="light" data-i18n="theme.light">Light</option>
+        <option value="dark" data-i18n="theme.dark">Dark</option>
+      </select>
     </div>
-    <div class="form-group">
+    <div class="settings-popup-item">
       <label data-i18n="label.language">Language</label>
-      <div class="theme-toggle" id="langToggle">
-        <button class="theme-btn" data-lang="en" onclick="setLang('en')">English</button>
-        <button class="theme-btn" data-lang="zh" onclick="setLang('zh')">&#x4E2D;&#x6587;</button>
+      <select id="settingsLangSelect" onchange="setLang(this.value)">
+        <option value="en">English</option>
+        <option value="zh">中文</option>
+      </select>
+    </div>
+    <div class="settings-divider"></div>
+    <div style="text-align:center;padding:4px 0 2px">
+      <div style="font-size:15px;font-weight:600;margin-bottom:2px">llm-rosetta</div>
+      <div id="settingsVersion" style="font-size:11px;color:var(--text-dim);margin-bottom:8px"></div>
+      <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
+        <a href="https://github.com/Oaklight/llm-rosetta" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 20.86c-3.37.73-4.08-1.63-4.08-1.63-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.73.08-.73 1.21.08 1.85 1.24 1.85 1.24 1.08 1.85 2.83 1.32 3.52 1 .1-.78.42-1.32.76-1.62-2.69-.3-5.52-1.34-5.52-5.98 0-1.32.47-2.4 1.24-3.24-.12-.3-.54-1.54.12-3.2 0 0 1.01-.33 3.3 1.24a11.5 11.5 0 0 1 6.02 0c2.3-1.57 3.3-1.24 3.3-1.24.66 1.66.24 2.9.12 3.2a4.65 4.65 0 0 1 1.24 3.24c0 4.65-2.83 5.67-5.53 5.97.43.37.82 1.1.82 2.22l-.01 3.29c0 .31.22.69.83.57A12 12 0 0 0 12 .3"/></svg> GitHub</a>
+        <a href="https://pypi.org/project/llm-rosetta/" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26.02.2-.01.13V8.5l-.05.63-.13.55-.21.46-.26.38-.3.31-.33.25-.35.19-.35.14-.33.1-.3.07-.26.04-.21.02H8.77l-.69.05-.59.14-.5.22-.41.27-.33.32-.27.35-.2.36-.15.37-.1.35-.07.32-.04.27-.02.21v3.06H3.17l-.21-.03-.28-.07-.32-.12-.35-.18-.36-.26-.36-.36-.35-.46-.32-.59-.28-.73-.21-.88-.14-1.05-.05-1.23.06-1.22.16-1.04.24-.87.32-.71.36-.57.4-.44.42-.33.42-.24.4-.16.36-.1.32-.05.24-.01h.16l.06.01h8.16v-.83H6.18l-.01-2.75-.02-.37.05-.34.11-.31.17-.28.25-.26.31-.23.38-.2.44-.18.51-.15.58-.12.64-.1.71-.06.77-.04.84-.02 1.27.05zm-6.3 1.98l-.23.33-.08.41.08.41.23.34.33.22.41.09.41-.09.33-.22.23-.34.08-.41-.08-.41-.23-.33-.33-.22-.41-.09-.41.09zm13.09 3.95l.28.06.32.12.35.18.36.27.36.35.35.47.32.59.28.73.21.88.14 1.04.05 1.23-.06 1.23-.16 1.04-.24.86-.32.71-.36.57-.4.45-.42.33-.42.24-.4.16-.36.09-.32.05-.24.02-.16-.01h-8.22v.82h5.84l.01 2.76.02.36-.05.34-.11.31-.17.29-.25.25-.31.24-.38.2-.44.17-.51.15-.58.13-.64.09-.71.07-.77.04-.84.01-1.27-.04-1.07-.14-.9-.2-.73-.25-.59-.3-.45-.33-.34-.34-.25-.34-.16-.33-.1-.3-.04-.25-.02-.2.01-.13v-5.34l.05-.64.13-.54.21-.46.26-.38.3-.32.33-.24.35-.2.35-.14.33-.1.3-.06.26-.04.21-.02.13-.01h5.84l.69-.05.59-.14.5-.21.41-.28.33-.32.27-.35.2-.36.15-.36.1-.35.07-.32.04-.28.02-.21V6.07h2.09l.14.01zm-6.47 14.25l-.23.33-.08.41.08.41.23.33.33.23.41.08.41-.08.33-.23.23-.33.08-.41-.08-.41-.23-.33-.33-.23-.41-.08-.41.08z"/></svg> PyPI</a>
+        <a href="https://hub.docker.com/r/oaklight/llm-rosetta-gateway" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg> Docker</a>
+        <a href="https://llm-rosetta.readthedocs.io" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Docs</a>
       </div>
-    </div>
-    <div style="margin-top:20px;padding-top:14px;border-top:1px solid var(--border);font-size:12px;color:var(--text-dim)">
-      llm-rosetta gateway <span id="settingsVersion"></span>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal('settingsModal')" data-i18n="btn.close">Close</button>
     </div>
   </div>
 </div>
@@ -763,10 +794,9 @@ function setTheme(name) {
   for (const [k, v] of Object.entries(vars)) root.style.setProperty(k, v);
   currentTheme = name;
   localStorage.setItem('llm-rosetta-theme', name);
-  // Update settings modal toggle if open
-  document.querySelectorAll('#themeToggle .theme-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.theme === name);
-  });
+  // Sync settings popup dropdown if open
+  const ts = document.getElementById('settingsThemeSelect');
+  if (ts) ts.value = name;
   // Redraw charts if on dashboard tab
   if (currentTab === 'dashboard') loadMetrics();
 }
@@ -874,6 +904,7 @@ const I18N = {
     'section.server':'\u670d\u52a1\u5668\u8bbe\u7f6e', 'section.providers':'\u670d\u52a1\u5546', 'section.models':'\u6a21\u578b\u8def\u7531',
     'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
     'label.globalProxy.hint':'\u9002\u7528\u4e8e\u6240\u6709\u670d\u52a1\u5546\uff0c\u9664\u975e\u5355\u72ec\u8bbe\u7f6e\u4e86\u4ee3\u7406\u3002',
+    'modal.settings':'\u8bbe\u7f6e', 'label.theme':'\u4e3b\u9898', 'label.language':'\u8bed\u8a00', 'theme.light':'\u6d45\u8272', 'theme.dark':'\u6df1\u8272',
     'btn.save':'\u4fdd\u5b58', 'btn.cancel':'\u53d6\u6d88', 'btn.close':'\u5173\u95ed',
     'btn.addProvider':'+ \u6dfb\u52a0\u670d\u52a1\u5546', 'btn.addModel':'+ \u6dfb\u52a0\u6a21\u578b',
     'btn.edit':'\u7f16\u8f91', 'btn.delete':'\u5220\u9664', 'btn.clearLog':'\u6e05\u9664\u65e5\u5fd7',
@@ -974,10 +1005,9 @@ function t(key, params) {
 function setLang(lang) {
   currentLang = lang;
   localStorage.setItem('llm-rosetta-lang', lang);
-  // Update settings modal toggle if open
-  document.querySelectorAll('#langToggle .theme-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.lang === lang);
-  });
+  // Sync settings popup dropdown if open
+  const ls = document.getElementById('settingsLangSelect');
+  if (ls) ls.value = lang;
   applyI18n();
 }
 
@@ -1077,18 +1107,16 @@ function doLogout() {
 }
 
 function openSettings() {
-  // Highlight active theme & lang
-  document.querySelectorAll('#themeToggle .theme-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.theme === currentTheme);
-  });
-  document.querySelectorAll('#langToggle .theme-btn').forEach(b => {
-    b.classList.toggle('active', b.dataset.lang === currentLang);
-  });
+  const popup = document.getElementById('settingsPopup');
+  // Sync dropdowns with current state
+  const ts = document.getElementById('settingsThemeSelect');
+  if (ts) ts.value = currentTheme;
+  const ls = document.getElementById('settingsLangSelect');
+  if (ls) ls.value = currentLang;
   // Show version
   const ver = document.getElementById('settingsVersion');
   if (ver) ver.textContent = configData?.version ? 'v' + configData.version : '';
-  document.getElementById('settingsModal').classList.add('open');
-  applyI18n();
+  popup.classList.toggle('open');
 }
 
 function showLoginOverlay() {
@@ -1331,6 +1359,15 @@ async function loadConfig() {
     document.getElementById('globalProxy').value = (configData.server && configData.server.proxy) || '';
     renderProviders();
     renderModels();
+    // Detect host IP in background (for proxy placeholder hints)
+    if (!window._detectedHostIp) {
+      api.get('/admin/api/diagnostics/host-ip').then(data => {
+        if (data.ok) {
+          window._detectedHostIp = data.ip;
+          document.getElementById('globalProxy').placeholder = `e.g. http://${data.ip}:7890`;
+        }
+      }).catch(() => {});
+    }
   } catch(e) {
     console.error('Failed to load config:', e);
   }
@@ -2213,9 +2250,10 @@ document.getElementById('filterStatus').addEventListener('change', () => { logOf
 document.querySelectorAll('.modal-overlay').forEach(m => {
   m.addEventListener('click', e => { if (e.target === m) closeModal(m.id); });
 });
-// Close test modal on Escape key
+// Close popups/modals on Escape key
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
+    document.getElementById('settingsPopup').classList.remove('open');
     const testModal = document.getElementById('testModal');
     if (testModal && testModal.classList.contains('open')) closeModal('testModal');
   }
