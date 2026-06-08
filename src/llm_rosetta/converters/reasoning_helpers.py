@@ -321,12 +321,14 @@ def _apply_anthropic_extras(
     # Apply shim thinking_type override if set.
     if cap is not None and cap.thinking_type is not None and "thinking" in result:
         current_type = result["thinking"].get("type")
-        if current_type != cap.thinking_type:
-            result["thinking"]["type"] = cap.thinking_type
-            if (
-                cap.thinking_type == "adaptive"
-                and "budget_tokens" in result["thinking"]
-            ):
+        target_type = cap.thinking_type
+        # Anthropic requires budget_tokens when type=enabled; if missing,
+        # fall back to adaptive instead of emitting an invalid payload.
+        if target_type == "enabled" and "budget_tokens" not in result["thinking"]:
+            target_type = "adaptive"
+        if current_type != target_type:
+            result["thinking"]["type"] = target_type
+            if target_type == "adaptive" and "budget_tokens" in result["thinking"]:
                 del result["thinking"]["budget_tokens"]
 
 

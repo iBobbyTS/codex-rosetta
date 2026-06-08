@@ -334,8 +334,35 @@ class TestCustomShim:
         assert result["thinking"]["type"] == "adaptive"
         assert "budget_tokens" not in result["thinking"]
 
-    def test_thinking_type_enabled_overrides_adaptive(self):
-        """thinking_type=enabled forces adaptive→enabled."""
+    def test_thinking_type_enabled_overrides_adaptive_with_budget(self):
+        """thinking_type=enabled forces adaptive→enabled when budget is present."""
+        custom = ReasoningCapability(
+            disabled="thinking_disabled",
+            effort_field="output_config.effort",
+            thinking_type="enabled",
+            effort_map={
+                "minimal": "low",
+                "low": "low",
+                "medium": "medium",
+                "high": "high",
+                "xhigh": "xhigh",
+                "max": "max",
+            },
+        )
+        result = apply_reasoning_config(
+            cast(
+                ReasoningConfig,
+                {"mode": "auto", "effort": "high", "budget_tokens": 4096},
+            ),
+            custom,
+            converter_type="anthropic",
+        )
+        # auto normally emits adaptive; thinking_type=enabled overrides
+        assert result["thinking"]["type"] == "enabled"
+        assert result["thinking"]["budget_tokens"] == 4096
+
+    def test_thinking_type_enabled_without_budget_falls_back(self):
+        """thinking_type=enabled without budget_tokens falls back to adaptive."""
         custom = ReasoningCapability(
             disabled="thinking_disabled",
             effort_field="output_config.effort",
@@ -354,8 +381,8 @@ class TestCustomShim:
             custom,
             converter_type="anthropic",
         )
-        # auto normally emits adaptive; thinking_type=enabled overrides
-        assert result["thinking"]["type"] == "enabled"
+        # No budget_tokens → can't use enabled, falls back to adaptive
+        assert result["thinking"]["type"] == "adaptive"
 
     def test_thinking_type_none_preserves_original(self):
         """thinking_type=None does not override."""
