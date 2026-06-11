@@ -138,6 +138,66 @@ Tooling config (ruff, ty, complexipy) lives in `pyproject.toml`.
 5. No manual edits to `_vendor/` — update upstream, re-vendor
 6. Python ≥ 3.10 compatibility
 
+## Integration testing with agentabi
+
+After gateway or converter changes that affect cross-format conversion,
+run the `agentabi` test matrix to verify end-to-end behavior with real
+agent CLIs. This requires a running proxy (e.g. argo-proxy or
+llm-rosetta-gateway) with upstream access.
+
+### Setup
+
+```bash
+conda activate agentabi
+# Ensure the proxy is running (e.g. on :44497)
+```
+
+### Test matrix
+
+```python
+from agentabi import run_sync
+
+PROXY_ENV = {
+    "OPENAI_BASE_URL": "http://127.0.0.1:44497/v1",
+    "OPENAI_API_KEY": "<token>",
+}
+
+tests = [
+    # (agent, model, prompt) — covers same-format and cross-format paths
+    ("codex", "gpt-5-nano", "What is 2+2? Reply with just the number."),
+    ("codex", "claude-haiku-4-5", "What is 3+3? Reply with just the number."),
+    ("codex", "claude-opus-4-6", "What is 4+4? Reply with just the number."),
+    ("opencode", "gpt-5-nano", "What is 5+5? Reply with just the number."),
+]
+
+for agent, model, prompt in tests:
+    result = run_sync(prompt, agent=agent, model=model, env=PROXY_ENV,
+                      max_turns=1, timeout=60)
+    print(f"{agent}/{model}: {result.get('status')} → {result.get('result_text')}")
+```
+
+### Multi-turn tool-use test
+
+For deeper validation (file reads, writes, multi-step reasoning):
+
+```python
+result = run_sync(
+    "Read src/llm_rosetta/shims/provider_shim.py and write a summary to /tmp/test-output.md",
+    agent="codex", model="claude-haiku-4-5",
+    env=PROXY_ENV, max_turns=10, timeout=120,
+    working_dir="/path/to/llm-rosetta",
+)
+# Check /tmp/test-output.md was created with meaningful content
+```
+
+### What to verify
+
+- Same-format pass-through (OpenAI → OpenAI)
+- Cross-format conversion (OpenAI Responses → Anthropic, via shim)
+- Streaming SSE round-trip
+- Multi-turn tool calls (file read/write)
+- Reasoning/thinking fields preserved across formats
+
 ## Workflow
 
 - **Branch from master**, open a PR, require CI green before merge.
