@@ -146,13 +146,15 @@ deploy-dev:
 ifndef SSH_TARGET
 	$(error SSH_TARGET is required. Usage: make deploy-dev SSH_TARGET=cloud.usa2)
 endif
-	@COMMIT=$$(git rev-parse --short HEAD); \
-	DEV_VER="$(VERSION).dev0+g$$COMMIT"; \
+	@set -e; \
+	COMMIT=$$(git rev-parse --short HEAD); \
+	ORIG_VER=$$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("src/llm_rosetta/__init__.py").read()).group(1))'); \
+	DEV_VER="$$ORIG_VER.dev0+g$$COMMIT"; \
 	echo "==> Building dev wheel $$DEV_VER..."; \
-	sed -i "s/__version__ = \"$(VERSION)\"/__version__ = \"$$DEV_VER\"/" src/llm_rosetta/__init__.py; \
+	python -c 'from pathlib import Path; p=Path("src/llm_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$ORIG_VER"'\"", "__version__ = \"'"$$DEV_VER"'\""))'; \
 	rm -rf dist build; \
 	conda run -n llm-rosetta python -m build --wheel -q; \
-	git checkout src/llm_rosetta/__init__.py; \
+	python -c 'from pathlib import Path; p=Path("src/llm_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$DEV_VER"'\"", "__version__ = \"'"$$ORIG_VER"'\""))'; \
 	WHEEL=$$(ls dist/*.whl | head -1 | xargs basename); \
 	echo "==> Building Docker image from $$WHEEL..."; \
 	docker build -f docker/Dockerfile --build-arg LOCAL_WHEEL=$$WHEEL -t $(DOCKER_IMAGE):dev-test -q .; \
