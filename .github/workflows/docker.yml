@@ -38,6 +38,21 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
 
+      - name: Wait for PyPI availability
+        run: |
+          VERSION="${{ steps.meta.outputs.version }}"
+          echo "Waiting for llm-rosetta==$VERSION on PyPI..."
+          for i in $(seq 1 30); do
+            if pip index versions llm-rosetta 2>/dev/null | grep -q "$VERSION"; then
+              echo "✅ llm-rosetta==$VERSION found on PyPI (attempt $i)"
+              exit 0
+            fi
+            echo "  Attempt $i/30: not yet available, waiting 20s..."
+            sleep 20
+          done
+          echo "❌ llm-rosetta==$VERSION not found on PyPI after 10 minutes"
+          exit 1
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
