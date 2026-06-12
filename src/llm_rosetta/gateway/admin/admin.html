@@ -2705,6 +2705,12 @@ function initApp() {
   api.get('/admin/api/metrics?seconds=1').then(data => {
     renderPersistence(data.persistence, data.total_requests);
   }).catch(() => {});
+  // Trigger data load for the currently active tab.  On first page load
+  // the tab restore (savedTab.click()) runs before auth completes, so
+  // its fetch calls fail with 401.  Re-trigger here after successful auth.
+  stopTimers();
+  if (currentTab === 'dashboard') { loadMetrics(); dashboardTimer = setInterval(loadMetrics, 3000); }
+  if (currentTab === 'logs') { logOffset = 0; loadLogs(); logTimer = setInterval(loadLogs, 5000); }
 }
 // ===================== System Clock =====================
 (function initClock() {
