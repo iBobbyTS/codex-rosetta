@@ -15,25 +15,42 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need full history + tags so back-releases can resolve an
+          # existing v<version> tag rather than only the default branch.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Verify version matches package
+      - name: Resolve tag and verify version
         run: |
-          PKG_VER=$(python -c "import re; m=re.search(r'__version__\s*=\s*\"(.+?)\"', open('src/llm_rosetta/__init__.py').read()); print(m.group(1))")
-          echo "Package version: $PKG_VER"
-          echo "Requested version: ${{ inputs.version }}"
-          [ "$PKG_VER" = "${{ inputs.version }}" ] || \
-            (echo "::error::Version mismatch: __init__.py has $PKG_VER but release requested ${{ inputs.version }}"; exit 1)
-
-      - name: Create and push git tag
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "v${{ inputs.version }}"
-          git push origin "v${{ inputs.version }}"
+          VERSION="${{ inputs.version }}"
+          TAG="v$VERSION"
+          read_pkg_ver() {
+            python -c "import re; m=re.search(r'__version__\s*=\s*\"(.+?)\"', open('src/llm_rosetta/__init__.py').read()); print(m.group(1))"
+          }
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            # Back-release: tag already exists. Verify __init__.py *at the tag*
+            # matches, so we publish exactly what was tagged.
+            echo "Tag $TAG already exists — back-release mode."
+            PKG_VER=$(git show "$TAG:src/llm_rosetta/__init__.py" | python -c "import re,sys; m=re.search(r'__version__\s*=\s*\"(.+?)\"', sys.stdin.read()); print(m.group(1))")
+            echo "Package version at $TAG: $PKG_VER"
+            [ "$PKG_VER" = "$VERSION" ] || \
+              (echo "::error::Version mismatch: $TAG has $PKG_VER but release requested $VERSION"; exit 1)
+          else
+            # Fresh release: verify the current checkout, then create the tag.
+            echo "Tag $TAG does not exist — fresh release mode."
+            PKG_VER=$(read_pkg_ver)
+            echo "Package version: $PKG_VER"
+            [ "$PKG_VER" = "$VERSION" ] || \
+              (echo "::error::Version mismatch: __init__.py has $PKG_VER but release requested $VERSION"; exit 1)
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
 
   build-publish:
     needs: prepare
