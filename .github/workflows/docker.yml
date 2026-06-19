@@ -1,18 +1,28 @@
 name: Docker
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # Called by the Release workflow after the package is published to PyPI.
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Version to build (e.g. 0.7.0)'
+        required: true
+        type: string
+    secrets:
+      DOCKERHUB_USERNAME:
+        required: true
+      DOCKERHUB_TOKEN:
+        required: true
+  # Manual trigger for ad-hoc rebuilds of an already-published version.
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Image tag override (default: git tag)'
-        required: false
+        description: 'Version to build (e.g. 0.7.0)'
+        required: true
+        type: string
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   build-and-push:
@@ -30,10 +40,12 @@ jobs:
       - name: Extract version tag
         id: meta
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            VERSION="${{ inputs.tag }}"
-          else
-            VERSION="${GITHUB_REF#refs/tags/v}"
+          VERSION="${{ inputs.tag }}"
+          # Normalize: strip an optional leading "v" so callers may pass either form.
+          VERSION="${VERSION#v}"
+          if [ -z "$VERSION" ]; then
+            echo "::error::No version provided via inputs.tag"
+            exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version: $VERSION"
@@ -43,11 +55,15 @@ jobs:
           VERSION="${{ steps.meta.outputs.version }}"
           echo "Waiting for llm-rosetta==$VERSION on PyPI..."
           for i in $(seq 1 30); do
-            if pip index versions llm-rosetta 2>/dev/null | grep -q "$VERSION"; then
+            # Query the version-specific JSON endpoint for an exact match
+            # (200 = exists, 404 = not yet). Avoids substring false-positives.
+            CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
+              "https://pypi.org/pypi/llm-rosetta/$VERSION/json" || true)
+            if [ "$CODE" = "200" ]; then
               echo "✅ llm-rosetta==$VERSION found on PyPI (attempt $i)"
               exit 0
             fi
-            echo "  Attempt $i/30: not yet available, waiting 20s..."
+            echo "  Attempt $i/30: not yet available (HTTP $CODE), waiting 20s..."
             sleep 20
           done
           echo "❌ llm-rosetta==$VERSION not found on PyPI after 10 minutes"
