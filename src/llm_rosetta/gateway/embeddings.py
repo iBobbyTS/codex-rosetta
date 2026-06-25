@@ -15,7 +15,6 @@ from typing import Any
 
 from llm_rosetta._vendor.httpserver import JSONResponse, Response
 
-from .auth import api_key_label_var
 from .config import GatewayConfig
 from .logging import get_logger
 from .transport import UpstreamConnectionError, UpstreamTransport
@@ -65,9 +64,9 @@ async def handle_embeddings(
             status_code=400,
         )
 
-    # --- Resolve provider ---
+    # --- Resolve provider via unified routing ---
     try:
-        _, provider_info, _, upstream_model, provider_name = config.resolve_model(model)
+        route, provider_info = config.resolve("openai_chat", model)
     except KeyError:
         configured = ", ".join(sorted(config.models.keys()))
         return JSONResponse(
@@ -82,15 +81,13 @@ async def handle_embeddings(
 
     # Model alias: replace the model name in the request body with the
     # actual upstream identifier so the upstream provider sees the correct name.
-    if upstream_model:
-        body["model"] = upstream_model
+    if route.upstream_model:
+        body["model"] = route.upstream_model
 
     # --- Forward via transport ---
     upstream_url = f"{provider_info.base_url}/embeddings"
     transport: UpstreamTransport = request.app.transport
 
-    metrics = getattr(request.app, "metrics", None)
-    request_log = getattr(request.app, "request_log", None)
     t0 = time.monotonic()
     status_code = 500
     error_detail: str | None = None
@@ -128,36 +125,16 @@ async def handle_embeddings(
         error_detail = str(exc)
         raise
     finally:
-        duration_ms = (time.monotonic() - t0) * 1000
-        provider_type = config.provider_types.get(
-            config.models.get(model, ""), "unknown"
-        )
-        if metrics:
-            metrics.record_request(
-                model=model,
-                source="openai_chat",
-                target=provider_type,
-                status_code=status_code,
-                duration_ms=duration_ms,
-                is_stream=False,
-            )
-        if request_log is not None:
-            from .admin.request_log import RequestLogEntry
-            from .app import _extract_client_ip
+        from .app import _record_telemetry
 
-            api_key_label = api_key_label_var.get()
-            client_ip = _extract_client_ip(request)
-            request_log.add(
-                RequestLogEntry.create(
-                    model=model,
-                    source_provider="openai_chat",
-                    target_provider=provider_type,
-                    target_provider_name=provider_name,
-                    is_stream=False,
-                    status_code=status_code,
-                    duration_ms=duration_ms,
-                    error_detail=error_detail,
-                    api_key_label=api_key_label,
-                    client_ip=client_ip,
-                )
-            )
+        _record_telemetry(
+            request,
+            model=model,
+            source_provider="openai_chat",
+            target_provider=route.target_provider,
+            provider_name=route.provider_name,
+            is_stream=False,
+            status_code=status_code,
+            duration_ms=(time.monotonic() - t0) * 1000,
+            error_detail=error_detail,
+        )
