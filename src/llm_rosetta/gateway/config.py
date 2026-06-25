@@ -304,43 +304,6 @@ class GatewayConfig:
         """First configured key (for backward-compat middleware init)."""
         return self.api_keys[0]["key"] if self.api_keys else None
 
-    def resolve_model(
-        self, model: str
-    ) -> tuple[str, ProviderInfo, str | None, str | None, str]:
-        """Return (provider_type, provider_info, shim_name, upstream_model, provider_name).
-
-        ``provider_type`` is the API standard (e.g. ``"openai_chat"``),
-        resolved from the provider's ``type`` field or its name as fallback.
-
-        ``shim_name`` is the original shim/type identifier before base
-        resolution (e.g. ``"volcengine"``), used for transform lookup.
-
-        ``upstream_model`` is the actual model identifier to send to the
-        upstream provider, or ``None`` when the gateway model name is used
-        as-is.  This enables model aliasing — e.g. gateway name
-        ``"argo:claude-opus-4.5"`` mapping to upstream ``"claudeopus45"``.
-
-        ``provider_name`` is the user-configured provider name (e.g.
-        ``"deepseek"``, ``"my-openai"``), used for admin UI filtering
-        and display.
-
-        Raises KeyError if the model is not in the routing table.
-        """
-        provider_name = self.models[model]
-        provider_type = self.provider_types[provider_name]
-        shim_name = self.provider_shim_names.get(provider_name)
-        upstream_model = self.model_upstream_names.get(model)
-        return (
-            provider_type,
-            self.providers[provider_name],
-            shim_name,
-            upstream_model,
-            provider_name,
-        )
-
-    # Default model capabilities when not explicitly declared.
-    DEFAULT_CAPABILITIES: list[str] = ["text"]
-
     def resolve(
         self,
         source_provider: ProviderType,
