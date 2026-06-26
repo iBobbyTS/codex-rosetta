@@ -138,6 +138,10 @@ def _try_start_profiler(app: Any) -> Any | None:
         profiler.start()
         return profiler
     except RuntimeError:
+        # pyinstrument not installed — restore the consumed slot
+        state.remaining += 1
+        if not state.enabled:
+            state.enabled = True
         return None
 
 

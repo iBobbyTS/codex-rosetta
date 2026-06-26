@@ -27,28 +27,28 @@ RUN apk add --no-cache su-exec
 RUN mkdir -p /tmp/dist/
 COPY dist/ /tmp/dist/
 
-# Install llm-rosetta[gateway]: local wheel > specific version > latest from PyPI
+# Install llm-rosetta[gateway,profiling]: local wheel > specific version > latest from PyPI
 # Then remove pip/setuptools to save ~10MB
 RUN if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
         echo "Installing from local wheel: $LOCAL_WHEEL"; \
         if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway]"; \
+            pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
         else \
-            pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway]"; \
+            pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
         fi; \
     elif [ -n "$PACKAGE_VERSION" ]; then \
         echo "Installing llm-rosetta version: $PACKAGE_VERSION"; \
         if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway]==$PACKAGE_VERSION"; \
+            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
         else \
-            pip install --no-cache-dir "llm-rosetta[gateway]==$PACKAGE_VERSION"; \
+            pip install --no-cache-dir "llm-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
         fi; \
     else \
         echo "Installing latest llm-rosetta from PyPI"; \
         if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway]"; \
+            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway,profiling]"; \
         else \
-            pip install --no-cache-dir "llm-rosetta[gateway]"; \
+            pip install --no-cache-dir "llm-rosetta[gateway,profiling]"; \
         fi; \
     fi && \
     pip uninstall -y pip setuptools 2>/dev/null || true && \
