@@ -73,13 +73,25 @@ def load_config(path: str) -> dict[str, Any]:
 def write_config(path: str, data: dict[str, Any]) -> None:
     """Write a config dict as formatted JSON to *path*.
 
-    Creates parent directories if needed.  Comments in the original
-    JSONC file (if any) are **not** preserved.
+    Creates parent directories if needed.  Uses an exclusive file lock
+    (``fcntl.flock``) to prevent concurrent writes from multiple
+    gateway instances sharing the same config file (e.g. via hard link).
+
+    Comments in the original JSONC file (if any) are **not** preserved.
     """
+    import fcntl
+
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    with open(path, "w") as f:
+    # Use "a+" to create the file if it doesn't exist, then lock.
+    # "r+" would fail on a new file; "w" truncates before locking.
+    with open(path, "a+") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.truncate(0)
+        f.seek(0)
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
+        f.flush()
+        # Lock released automatically when f is closed
 
 
 def load_config_raw(path: str) -> dict[str, Any]:
