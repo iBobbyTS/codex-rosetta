@@ -17,6 +17,8 @@ from typing import Any
 
 from llm_rosetta._vendor.httpserver import JSONResponse, Response
 
+from ._shared import _qp
+
 
 # ---------------------------------------------------------------------------
 # Profiler state
@@ -190,8 +192,8 @@ async def get_profiling_result(request: Any, **kwargs: Any) -> Response:
     """
     state: ProfilerState = request.app.profiler_state
     try:
-        index = int(request.path_params.get("index", kwargs.get("index", 0)))
-    except (ValueError, TypeError):
+        index = int(request.path_params["index"])
+    except (ValueError, TypeError, KeyError):
         return JSONResponse({"error": "Invalid index"}, status_code=400)
 
     if index < 0 or index >= len(state.results):
@@ -199,14 +201,7 @@ async def get_profiling_result(request: Any, **kwargs: Any) -> Response:
 
     result = state.results[index]
 
-    # Check query param for format
-    fmt = ""
-    if hasattr(request, "query_params"):
-        fmt = request.query_params.get("format", "")
-    elif hasattr(request, "args"):
-        fmt = request.args.get("format", "")
-
-    if fmt == "html":
+    if _qp(request, "format") == "html":
         return Response(
             body=result["html"].encode("utf-8"),
             status_code=200,
