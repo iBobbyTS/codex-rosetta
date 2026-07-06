@@ -32,6 +32,7 @@ class OpenAIResponsesStreamContext(StreamContext):
     item_id: str = ""
     accumulated_text: str = ""
     content_part_done_emitted: bool = False
+    message_item_metadata: dict = field(default_factory=dict)
     passthrough_output_items: list[dict] = field(default_factory=list)
     tool_call_provider_metadata_map: dict[str, dict] = field(default_factory=dict)
     _sequence_number: int = 0
@@ -67,9 +68,19 @@ class OpenAIResponsesStreamContext(StreamContext):
         ctx._tool_call_types = base._tool_call_types
         if hasattr(base, "passthrough_output_items"):
             ctx.passthrough_output_items = base.passthrough_output_items
+        if hasattr(base, "message_item_metadata"):
+            ctx.message_item_metadata = base.message_item_metadata
         if hasattr(base, "tool_call_provider_metadata_map"):
             ctx.tool_call_provider_metadata_map = base.tool_call_provider_metadata_map
         return ctx
+
+    def register_message_item_metadata(self, item: dict) -> None:
+        """Remember Responses message output item metadata for round-trip."""
+        if item_id := item.get("id"):
+            self.item_id = item_id
+        for key, value in item.items():
+            if key not in {"content", "status"}:
+                self.message_item_metadata[key] = value
 
     def register_tool_call_item(self, tool_call_id: str, item_id: str) -> None:
         """Register tool call item with reverse item_id mapping.
