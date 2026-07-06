@@ -59,6 +59,14 @@ from .utils import build_message_preamble_events, resolve_call_id
 
 RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES = frozenset(
     {
+        "reasoning",
+        "tool_search_call",
+        "tool_search_output",
+    }
+)
+
+RESPONSES_TOOL_LOOP_PASSTHROUGH_OUTPUT_ITEM_TYPES = frozenset(
+    {
         "tool_search_call",
         "tool_search_output",
     }
@@ -261,6 +269,10 @@ class OpenAIResponsesConverter(BaseConverter):
         self._convert_cache_from_p(provider_request, ir_request)
 
         # 11. Provider extensions (passthrough fields like allowed_tools)
+        include = provider_request.get("include")
+        if include is not None:
+            ir_request.setdefault("provider_extensions", {})["include"] = include
+
         allowed_tools = provider_request.get("allowed_tools")
         if allowed_tools is not None:
             ir_request.setdefault("provider_extensions", {})["allowed_tools"] = (
@@ -1058,9 +1070,8 @@ class OpenAIResponsesConverter(BaseConverter):
                     context, OpenAIResponsesStreamContext
                 ):
                     context.add_passthrough_output_item(item)
-                if (
-                    item_type == "function_call"
-                    or item_type in RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES
+                if item_type == "function_call" or (
+                    item_type in RESPONSES_TOOL_LOOP_PASSTHROUGH_OUTPUT_ITEM_TYPES
                 ):
                     reason = "tool_calls"
                     break

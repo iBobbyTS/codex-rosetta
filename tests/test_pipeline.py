@@ -450,6 +450,24 @@ class TestConversionPipeline:
         assert "messages" in target
         assert target["model"] == "gpt-4"
 
+    def test_convert_request_openai_responses_preserves_include(self):
+        """Responses same-format conversion preserves native include fields."""
+        from llm_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_responses")
+        target = pipeline.convert_request(
+            {
+                "model": "gpt-5.4",
+                "input": "test",
+                "stream": True,
+                "include": ["reasoning.encrypted_content"],
+                "reasoning": {"effort": "low"},
+            }
+        )
+
+        assert target["include"] == ["reasoning.encrypted_content"]
+        assert target["reasoning"] == {"effort": "low"}
+
     def test_convert_response_openai_to_openai(self):
         """Response round-trip produces valid source response."""
         from llm_rosetta.pipeline import ConversionPipeline
