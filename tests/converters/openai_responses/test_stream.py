@@ -759,8 +759,8 @@ class TestStreamResponseFromProviderWithContext:
         assert events[0]["type"] == "tool_call_start"
         assert ctx.get_tool_name("call_abc") == "get_weather"
 
-    def test_output_item_added_message_emits_no_events(self):
-        """response.output_item.added (message) with context produces no IR events.
+    def test_output_item_added_message_emits_passthrough_with_context(self):
+        """response.output_item.added (message) preserves metadata with context.
 
         The actual content block is signaled by response.content_part.added.
         """
@@ -778,7 +778,10 @@ class TestStreamResponseFromProviderWithContext:
             list[Any],
             self.converter.stream_response_from_provider(event, context=ctx),
         )
-        assert len(events) == 0
+        assert len(events) == 1
+        assert events[0]["type"] == "provider_passthrough"
+        assert ctx.message_item_metadata["type"] == "message"
+        assert ctx.message_item_metadata["role"] == "assistant"
 
     def test_output_item_added_message_without_context_no_events(self):
         """response.output_item.added (message) without context produces no events."""
@@ -1843,6 +1846,112 @@ class TestCustomToolCallStreaming:
         ]
         assert completed
         assert completed[-1]["response"]["output"] == [reasoning_item]
+
+    def test_message_phase_stream_round_trip(self):
+        """Responses message item metadata survives streaming round-trip."""
+        ctx_from = OpenAIResponsesStreamContext()
+        ctx_to = OpenAIResponsesStreamContext()
+
+        chunks = [
+            {
+                "type": "response.created",
+                "response": {
+                    "id": "resp_123",
+                    "object": "response",
+                    "model": "gpt-5.5",
+                    "created_at": 123,
+                    "status": "in_progress",
+                    "output": [],
+                },
+            },
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": {
+                    "id": "msg_123",
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "in_progress",
+                    "phase": "commentary",
+                    "content": [],
+                },
+            },
+            {
+                "type": "response.content_part.added",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": ""},
+            },
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "working",
+            },
+            {
+                "type": "response.content_part.done",
+                "item_id": "msg_123",
+                "output_index": 0,
+                "content_index": 0,
+                "part": {"type": "output_text", "text": "working"},
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "object": "response",
+                    "model": "gpt-5.5",
+                    "created_at": 123,
+                    "status": "completed",
+                    "output": [
+                        {
+                            "id": "msg_123",
+                            "type": "message",
+                            "role": "assistant",
+                            "phase": "commentary",
+                            "content": [{"type": "output_text", "text": "working"}],
+                        }
+                    ],
+                },
+            },
+        ]
+
+        restored_events: list[dict[str, Any]] = []
+        for chunk in chunks:
+            ir_events = cast(
+                list[Any],
+                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            )
+            for ir_event in ir_events:
+                restored = self.converter.stream_response_to_provider(
+                    ir_event, context=ctx_to
+                )
+                if isinstance(restored, list):
+                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                elif restored:
+                    restored_events.append(cast(dict[str, Any], restored))
+
+        added = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.added"
+        ]
+        assert added
+        assert added[0]["item"]["id"] == "msg_123"
+        assert added[0]["item"]["phase"] == "commentary"
+
+        completed = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.completed"
+        ]
+        assert completed
+        output = completed[-1]["response"]["output"]
+        assert output[0]["id"] == "msg_123"
+        assert output[0]["phase"] == "commentary"
+        assert output[0]["content"] == [{"type": "output_text", "text": "working"}]
 
     def test_namespaced_function_call_stream_round_trip(self):
         """Responses namespaced function calls keep namespace and item id."""

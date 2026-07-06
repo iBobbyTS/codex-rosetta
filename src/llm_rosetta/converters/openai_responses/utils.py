@@ -51,19 +51,22 @@ def build_message_preamble_events(
         Two-element list of SSE event dicts.
     """
     context.output_item_emitted = True
-    item_id = generate_message_id(context.response_id)
+    item_id = context.item_id or generate_message_id(context.response_id)
     context.item_id = item_id
+    item = {
+        "id": item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": "in_progress",
+        "content": [],
+    }
+    item.update(context.message_item_metadata)
+    item["content"] = []
     return [
         {
             "type": ResponsesEventType.OUTPUT_ITEM_ADDED,
             "output_index": output_index,
-            "item": {
-                "id": item_id,
-                "type": "message",
-                "role": "assistant",
-                "status": "in_progress",
-                "content": [],
-            },
+            "item": item,
         },
         {
             "type": ResponsesEventType.CONTENT_PART_ADDED,
