@@ -1706,24 +1706,35 @@ class OpenAIResponsesConverter(BaseConverter):
                     },
                 }
             )
+        msg_item = {
+            "id": item_id,
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": accumulated,
+                    "annotations": [],
+                    "logprobs": [],
+                }
+            ],
+        }
+        msg_item.update(context.message_item_metadata)
+        msg_item["status"] = "completed"
+        msg_item["content"] = [
+            {
+                "type": "output_text",
+                "text": accumulated,
+                "annotations": [],
+                "logprobs": [],
+            }
+        ]
         results.append(
             {
                 "type": ResponsesEventType.OUTPUT_ITEM_DONE,
                 "output_index": 0,
-                "item": {
-                    "id": item_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "status": "completed",
-                    "content": [
-                        {
-                            "type": "output_text",
-                            "text": accumulated,
-                            "annotations": [],
-                            "logprobs": [],
-                        }
-                    ],
-                },
+                "item": msg_item,
             }
         )
 

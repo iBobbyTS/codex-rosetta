@@ -1942,6 +1942,17 @@ class TestCustomToolCallStreaming:
         assert added[0]["item"]["id"] == "msg_123"
         assert added[0]["item"]["phase"] == "commentary"
 
+        done = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.done"
+            and event.get("item", {}).get("type") == "message"
+        ]
+        assert done
+        assert done[0]["item"]["id"] == "msg_123"
+        assert done[0]["item"]["phase"] == "commentary"
+        assert done[0]["item"]["status"] == "completed"
+
         completed = [
             event
             for event in restored_events
