@@ -35,6 +35,7 @@ from .logging import (
     log_stream_summary,
     log_upstream_error,
 )
+from .stream_trace import StreamTraceLogger
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
@@ -355,6 +356,7 @@ async def _stream_event_generator(
     format_sse: Any,
     entry_id: str | None = None,
     request_log: Any | None = None,
+    trace: StreamTraceLogger | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events from an already-opened upstream stream.
 
@@ -376,11 +378,21 @@ async def _stream_event_generator(
                 if chunk_count == 0:
                     ttfb_ms = round((time.perf_counter() - t_stream_open) * 1000, 2)
                 chunk_count += 1
+                if trace is not None:
+                    trace.log("upstream_chunk", chunk, chunk_index=chunk_count)
                 for source_event in processor.process_chunk(chunk):
-                    yield format_sse(source_event)
+                    if trace is not None:
+                        trace.log("source_event", source_event, chunk_index=chunk_count)
+                    sse_event = format_sse(source_event)
+                    if trace is not None:
+                        trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
+                    yield sse_event
 
         if source_provider == "openai_chat":
-            yield format_sse_done()
+            done_event = format_sse_done()
+            if trace is not None:
+                trace.log("downstream_sse_done", done_event, chunk_index=chunk_count)
+            yield done_event
 
         log_stream_summary(
             model=model,
@@ -406,6 +418,16 @@ async def _stream_event_generator(
                 request_log.update_profile(entry_id, stream_profile)
             except Exception:
                 logger.debug("Failed to write stream profile for %s", entry_id)
+        if trace is not None:
+            trace.log(
+                "stream_complete",
+                {
+                    "chunk_count": chunk_count,
+                    "stream_complete": stream_error is None,
+                    "stream_error": stream_error,
+                    "ttfb_ms": ttfb_ms,
+                },
+            )
 
 
 async def handle_streaming(
@@ -542,10 +564,37 @@ async def handle_streaming(
         )
 
     # Phase 4: No error — create stream processor and return SSE response
+    request_id = extra_headers.get("x-request-id") if extra_headers else None
+    trace = StreamTraceLogger.from_env(
+        request_id=request_id,
+        request_log_id=entry_id,
+        model=model,
+        source_provider=route.source_provider,
+        target_provider=route.target_provider,
+        provider_name=route.provider_name,
+    )
+
+    def _on_ir_event(ir_event: dict[str, Any]) -> None:
+        store.cache_from_stream_event(ir_event)
+        if trace is not None:
+            trace.log("ir_event", ir_event)
+
     processor = pipeline.create_stream_processor(
-        on_ir_event=store.cache_from_stream_event,
+        on_ir_event=_on_ir_event,
     )
     format_sse = SSE_FORMATTERS[route.source_provider]
+
+    if trace is not None:
+        trace.log(
+            "stream_start",
+            {
+                "model": model,
+                "source_provider": route.source_provider,
+                "target_provider": route.target_provider,
+                "provider_name": route.provider_name,
+                "entry_id": entry_id,
+            },
+        )
 
     return (
         StreamingResponse(
@@ -557,6 +606,7 @@ async def handle_streaming(
                 format_sse=format_sse,
                 entry_id=entry_id,
                 request_log=request_log,
+                trace=trace,
             ),
             content_type="text/event-stream",
         ),
