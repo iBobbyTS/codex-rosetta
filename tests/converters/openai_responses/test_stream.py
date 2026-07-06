@@ -693,6 +693,31 @@ class TestStreamResponseFromProviderWithContext:
         assert finish_events[0]["finish_reason"]["reason"] == "tool_calls"
         assert ctx.passthrough_output_items == [item]
 
+    def test_response_completed_with_reasoning_does_not_set_tool_calls(self):
+        """reasoning output items are preserved without entering tool loop."""
+        ctx = OpenAIResponsesStreamContext()
+        ctx.mark_started()
+        item = {
+            "type": "reasoning",
+            "id": "rs_123",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        event = {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [item],
+            },
+        }
+        events = cast(
+            list[Any],
+            self.converter.stream_response_from_provider(event, context=ctx),
+        )
+        finish_events = [e for e in events if e["type"] == "finish"]
+        assert finish_events[0]["finish_reason"]["reason"] == "stop"
+        assert ctx.passthrough_output_items == [item]
+
     def test_response_failed_emits_stream_end(self):
         """response.failed with context emits StreamEndEvent after FinishEvent."""
         ctx = OpenAIResponsesStreamContext()
@@ -1744,6 +1769,80 @@ class TestCustomToolCallStreaming:
         ]
         assert completed
         assert completed[-1]["response"]["output"] == [tool_search_item]
+
+    def test_reasoning_stream_round_trip_completed_output(self):
+        """reasoning output items survive streaming provider → IR → provider conversion."""
+        ctx_from = OpenAIResponsesStreamContext()
+        ctx_to = OpenAIResponsesStreamContext()
+
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "rs_123",
+            "summary": [],
+            "encrypted_content": "encrypted",
+        }
+        chunks = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": reasoning_item,
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": reasoning_item,
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "object": "response",
+                    "model": "gpt-5.5",
+                    "created_at": 123,
+                    "status": "completed",
+                    "output": [reasoning_item],
+                },
+            },
+        ]
+
+        restored_events: list[dict[str, Any]] = []
+        for chunk in chunks:
+            ir_events = cast(
+                list[Any],
+                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            )
+            for ir_event in ir_events:
+                restored = self.converter.stream_response_to_provider(
+                    ir_event, context=ctx_to
+                )
+                if isinstance(restored, list):
+                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                elif restored:
+                    restored_events.append(cast(dict[str, Any], restored))
+
+        added = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.added"
+        ]
+        assert added
+        assert added[0]["item"] == reasoning_item
+
+        done = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.done"
+        ]
+        assert done
+        assert done[-1]["item"] == reasoning_item
+
+        completed = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.completed"
+        ]
+        assert completed
+        assert completed[-1]["response"]["output"] == [reasoning_item]
 
     def test_namespaced_function_call_stream_round_trip(self):
         """Responses namespaced function calls keep namespace and item id."""

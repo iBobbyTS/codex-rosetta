@@ -191,6 +191,25 @@ class TestOpenAIResponsesConverter:
         result = self.converter.request_from_provider(provider_request)
         assert result["response_format"]["type"] == "json_object"
 
+    def test_request_from_provider_preserves_include_extension(self):
+        """OpenAI Responses include field survives through provider extensions."""
+        provider_request = {
+            "model": "gpt-5.4",
+            "input": "test",
+            "stream": True,
+            "include": ["reasoning.encrypted_content"],
+            "reasoning": {"effort": "low"},
+        }
+
+        ir_request = self.converter.request_from_provider(provider_request)
+        restored, _ = self.converter.request_to_provider(ir_request)
+
+        assert ir_request["provider_extensions"]["include"] == [
+            "reasoning.encrypted_content"
+        ]
+        assert restored["include"] == ["reasoning.encrypted_content"]
+        assert restored["reasoning"] == {"effort": "low"}
+
     def test_request_from_provider_codex_custom_tool_passes_validation(self):
         """End-to-end: a Codex ``"custom"`` apply_patch tool passes IR validation.
 
