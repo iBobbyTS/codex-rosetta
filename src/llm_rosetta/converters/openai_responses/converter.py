@@ -884,7 +884,15 @@ class OpenAIResponsesConverter(BaseConverter):
                 # own ``ContentBlockStartEvent``.  Emitting a
                 # ``ContentBlockStartEvent`` here would cause duplicate
                 # ``response.content_part.added`` events on round-trip.
-                pass
+                if isinstance(context, OpenAIResponsesStreamContext):
+                    context.register_message_item_metadata(item)
+                    events.append(
+                        ProviderPassthroughEvent(
+                            type="provider_passthrough",
+                            provider=self._CONVERTER_TAG,
+                            payload=dict(chunk),
+                        )
+                    )
             elif item_type in RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES:
                 if isinstance(context, OpenAIResponsesStreamContext):
                     context.add_passthrough_output_item(item)
@@ -1368,12 +1376,12 @@ class OpenAIResponsesConverter(BaseConverter):
             return {}
         payload = dict(event.get("payload", {}))
         item = payload.get("item")
-        if (
-            isinstance(context, OpenAIResponsesStreamContext)
-            and isinstance(item, dict)
-            and item.get("type") in RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES
-        ):
-            context.add_passthrough_output_item(item)
+        if isinstance(context, OpenAIResponsesStreamContext) and isinstance(item, dict):
+            if item.get("type") == "message":
+                context.register_message_item_metadata(item)
+                context.output_item_emitted = True
+            elif item.get("type") in RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES:
+                context.add_passthrough_output_item(item)
         return payload
 
     def _handle_tool_call_start_to_p(
@@ -1557,6 +1565,8 @@ class OpenAIResponsesConverter(BaseConverter):
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": accumulated}],
             }
+            msg_item.update(context.message_item_metadata)
+            msg_item["content"] = [{"type": "output_text", "text": accumulated}]
             if context.metadata_mode == "preserve":
                 msg_item["status"] = "completed"
                 for part in msg_item.get("content", []):
