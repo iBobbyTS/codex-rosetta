@@ -33,6 +33,7 @@ class OpenAIResponsesStreamContext(StreamContext):
     accumulated_text: str = ""
     content_part_done_emitted: bool = False
     passthrough_output_items: list[dict] = field(default_factory=list)
+    tool_call_provider_metadata_map: dict[str, dict] = field(default_factory=dict)
     _sequence_number: int = 0
 
     @classmethod
@@ -66,6 +67,8 @@ class OpenAIResponsesStreamContext(StreamContext):
         ctx._tool_call_types = base._tool_call_types
         if hasattr(base, "passthrough_output_items"):
             ctx.passthrough_output_items = base.passthrough_output_items
+        if hasattr(base, "tool_call_provider_metadata_map"):
+            ctx.tool_call_provider_metadata_map = base.tool_call_provider_metadata_map
         return ctx
 
     def register_tool_call_item(self, tool_call_id: str, item_id: str) -> None:
@@ -94,3 +97,14 @@ class OpenAIResponsesStreamContext(StreamContext):
                 self.passthrough_output_items[idx] = dict(item)
                 return
         self.passthrough_output_items.append(dict(item))
+
+    def register_tool_call_provider_metadata(
+        self, tool_call_id: str, metadata: dict
+    ) -> None:
+        """Remember provider metadata for a Responses tool call item."""
+        if tool_call_id and metadata:
+            self.tool_call_provider_metadata_map[tool_call_id] = dict(metadata)
+
+    def get_tool_call_provider_metadata(self, tool_call_id: str) -> dict:
+        """Return provider metadata for a Responses tool call item."""
+        return self.tool_call_provider_metadata_map.get(tool_call_id, {})

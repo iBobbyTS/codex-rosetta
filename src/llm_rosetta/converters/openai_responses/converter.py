@@ -839,11 +839,18 @@ class OpenAIResponsesConverter(BaseConverter):
                 call_id = item.get("call_id", "")
                 item_id = item.get("id", "")
                 tool_type = "custom" if item_type == "custom_tool_call" else "function"
+                provider_metadata = self._build_tool_call_provider_metadata(item)
 
                 # Register tool call in context
                 if context is not None:
                     context.register_tool_call(call_id, item.get("name", ""), tool_type)
                     context.register_tool_call_item(call_id, item_id)
+                    if provider_metadata and isinstance(
+                        context, OpenAIResponsesStreamContext
+                    ):
+                        context.register_tool_call_provider_metadata(
+                            call_id, provider_metadata
+                        )
 
                 start_event_tc = ToolCallStartEvent(
                     type="tool_call_start",
@@ -851,6 +858,8 @@ class OpenAIResponsesConverter(BaseConverter):
                     tool_name=item.get("name", ""),
                     tool_type=tool_type,
                 )
+                if provider_metadata:
+                    start_event_tc["provider_metadata"] = provider_metadata
                 output_index = chunk.get("output_index")
                 if output_index is not None:
                     start_event_tc["tool_call_index"] = output_index
@@ -1364,12 +1373,15 @@ class OpenAIResponsesConverter(BaseConverter):
         call_id = event["tool_call_id"]
         tool_name = event["tool_name"]
         tool_type = event.get("tool_type", "function")
-        item_id = call_id
+        provider_metadata = event.get("provider_metadata") or {}
+        item_id = provider_metadata.get("responses_item_id") or call_id
 
         # Register in context for later done events
         if context is not None and call_id:
             context.register_tool_call(call_id, tool_name, tool_type)
             context.register_tool_call_item(call_id, item_id)
+            if provider_metadata and isinstance(context, OpenAIResponsesStreamContext):
+                context.register_tool_call_provider_metadata(call_id, provider_metadata)
 
         tc_index = event.get("tool_call_index")
         output_index = tc_index if tc_index is not None else 0
@@ -1398,6 +1410,7 @@ class OpenAIResponsesConverter(BaseConverter):
             "output_index": output_index,
             "item": item,
         }
+        self._apply_tool_call_provider_metadata(item, provider_metadata)
         return result
 
     def _handle_tool_call_delta_to_p(
@@ -1547,29 +1560,51 @@ class OpenAIResponsesConverter(BaseConverter):
             tool_type = context.get_tool_type(call_id)
 
             if tool_type == "custom":
-                output.append(
-                    {
-                        "id": tc_item_id,
-                        "type": "custom_tool_call",
-                        "call_id": call_id,
-                        "name": tool_name,
-                        "input": arguments,
-                        "status": "completed",
-                    }
-                )
+                item = {
+                    "id": tc_item_id,
+                    "type": "custom_tool_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "input": arguments,
+                    "status": "completed",
+                }
             else:
-                output.append(
-                    {
-                        "id": tc_item_id,
-                        "type": "function_call",
-                        "call_id": call_id,
-                        "name": tool_name,
-                        "arguments": arguments,
-                        "status": "completed",
-                    }
-                )
+                item = {
+                    "id": tc_item_id,
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "status": "completed",
+                }
+            self._apply_tool_call_provider_metadata(
+                item, context.get_tool_call_provider_metadata(call_id)
+            )
+            output.append(item)
         output.extend(context.passthrough_output_items)
         return output
+
+    @staticmethod
+    def _build_tool_call_provider_metadata(item: dict[str, Any]) -> dict[str, Any]:
+        """Capture Responses-specific tool call fields for same-format streaming."""
+        metadata: dict[str, Any] = {}
+        item_id = item.get("id")
+        call_id = item.get("call_id")
+        if item_id and item_id != call_id:
+            metadata["responses_item_id"] = item_id
+        namespace = item.get("namespace")
+        if namespace:
+            metadata["responses_namespace"] = namespace
+        return metadata
+
+    @staticmethod
+    def _apply_tool_call_provider_metadata(
+        item: dict[str, Any], metadata: dict[str, Any]
+    ) -> None:
+        """Restore Responses-specific tool call fields from provider metadata."""
+        namespace = metadata.get("responses_namespace")
+        if namespace:
+            item["namespace"] = namespace
 
     @staticmethod
     def _build_finish_usage(pending_usage: dict[str, Any]) -> dict[str, Any]:
@@ -1683,6 +1718,7 @@ class OpenAIResponsesConverter(BaseConverter):
             item_id = context.get_tool_call_item_id(call_id) or call_id
             output_index = tc_idx + (1 if context.output_item_emitted else 0)
             tool_type = context.get_tool_type(call_id)
+            provider_metadata = context.get_tool_call_provider_metadata(call_id)
 
             if tool_type == "custom":
                 # response.custom_tool_call_input.done
@@ -1696,18 +1732,20 @@ class OpenAIResponsesConverter(BaseConverter):
                 )
 
                 # response.output_item.done for the custom_tool_call
+                item = {
+                    "id": item_id,
+                    "type": "custom_tool_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "input": arguments,
+                    "status": "completed",
+                }
+                self._apply_tool_call_provider_metadata(item, provider_metadata)
                 results.append(
                     {
                         "type": ResponsesEventType.OUTPUT_ITEM_DONE,
                         "output_index": output_index,
-                        "item": {
-                            "id": item_id,
-                            "type": "custom_tool_call",
-                            "call_id": call_id,
-                            "name": tool_name,
-                            "input": arguments,
-                            "status": "completed",
-                        },
+                        "item": item,
                     }
                 )
             else:
@@ -1722,18 +1760,20 @@ class OpenAIResponsesConverter(BaseConverter):
                 )
 
                 # response.output_item.done for the function_call
+                item = {
+                    "id": item_id,
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": tool_name,
+                    "arguments": arguments,
+                    "status": "completed",
+                }
+                self._apply_tool_call_provider_metadata(item, provider_metadata)
                 results.append(
                     {
                         "type": ResponsesEventType.OUTPUT_ITEM_DONE,
                         "output_index": output_index,
-                        "item": {
-                            "id": item_id,
-                            "type": "function_call",
-                            "call_id": call_id,
-                            "name": tool_name,
-                            "arguments": arguments,
-                            "status": "completed",
-                        },
+                        "item": item,
                     }
                 )
 
