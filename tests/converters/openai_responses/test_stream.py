@@ -1744,3 +1744,99 @@ class TestCustomToolCallStreaming:
         ]
         assert completed
         assert completed[-1]["response"]["output"] == [tool_search_item]
+
+    def test_namespaced_function_call_stream_round_trip(self):
+        """Responses namespaced function calls keep namespace and item id."""
+        ctx_from = OpenAIResponsesStreamContext()
+        ctx_to = OpenAIResponsesStreamContext()
+
+        function_item = {
+            "type": "function_call",
+            "id": "fc_123",
+            "call_id": "call_123",
+            "name": "spawn_agent",
+            "namespace": "multi_agent_v1",
+            "arguments": "",
+            "status": "in_progress",
+        }
+        chunks = [
+            {
+                "type": "response.output_item.added",
+                "output_index": 0,
+                "item": function_item,
+            },
+            {
+                "type": "response.function_call_arguments.delta",
+                "item_id": "fc_123",
+                "output_index": 0,
+                "delta": '{"agent_type":"default"}',
+            },
+            {
+                "type": "response.output_item.done",
+                "output_index": 0,
+                "item": {
+                    **function_item,
+                    "arguments": '{"agent_type":"default"}',
+                    "status": "completed",
+                },
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "id": "resp_123",
+                    "object": "response",
+                    "model": "gpt-5.5",
+                    "created_at": 123,
+                    "status": "completed",
+                    "output": [
+                        {
+                            **function_item,
+                            "arguments": '{"agent_type":"default"}',
+                            "status": "completed",
+                        }
+                    ],
+                },
+            },
+        ]
+
+        restored_events: list[dict[str, Any]] = []
+        for chunk in chunks:
+            ir_events = cast(
+                list[Any],
+                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            )
+            for ir_event in ir_events:
+                restored = self.converter.stream_response_to_provider(
+                    ir_event, context=ctx_to
+                )
+                if isinstance(restored, list):
+                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                elif restored:
+                    restored_events.append(cast(dict[str, Any], restored))
+
+        added = next(
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.added"
+        )
+        assert added["item"]["id"] == "fc_123"
+        assert added["item"]["call_id"] == "call_123"
+        assert added["item"]["namespace"] == "multi_agent_v1"
+
+        done = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.output_item.done"
+        ]
+        assert done
+        assert done[-1]["item"]["id"] == "fc_123"
+        assert done[-1]["item"]["namespace"] == "multi_agent_v1"
+
+        completed = [
+            event
+            for event in restored_events
+            if event.get("type") == "response.completed"
+        ]
+        assert completed
+        assert completed[-1]["response"]["output"][0]["id"] == "fc_123"
+        assert completed[-1]["response"]["output"][0]["namespace"] == "multi_agent_v1"
