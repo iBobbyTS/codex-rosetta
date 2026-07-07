@@ -12,6 +12,17 @@ Use this skill to run repeatable agent-behavior tests against
 The test repository is disposable for content changes, but preserve diagnostics
 and revert the repository after inspection.
 
+## Defaults
+
+- Default model: `deepseek-v4-flash`, unless the user explicitly specifies a
+  different model.
+- Temporary Rosetta gateway configs live under
+  `/Users/ibobby/Projects/codex-rosetta/rosetta-test-config`.
+- The isolated Codex home lives at
+  `/Users/ibobby/Projects/codex-rosetta/codex-test-home`.
+- Gateway trace logs and captured Codex stdout/stderr should be kept under
+  `/Volumes/RAM Disk`.
+
 ## Workflow
 
 1. Confirm the test repository exists:
@@ -21,7 +32,11 @@ and revert the repository after inspection.
    ```
 
 2. Confirm `llm-rosetta-gateway` is running and locate the active port. The
-   usual local endpoint is `http://127.0.0.1:8765/v1`.
+   usual local endpoint is `http://127.0.0.1:8765/v1`. When testing current
+   uncommitted gateway code, prefer launching a separate gateway instance on a
+   free port with a config copied into
+   `/Users/ibobby/Projects/codex-rosetta/rosetta-test-config`, rather than
+   changing or killing the user's main gateway.
 
    ```bash
    curl -sS http://127.0.0.1:8765/v1/models | python3 -m json.tool | sed -n '1,120p'
@@ -30,22 +45,23 @@ and revert the repository after inspection.
 3. Enable Rosetta backend logging before starting the Codex run. Use the admin
    UI/API or the project's current config mechanism. Set:
 
-   - log path: an explicit temporary path such as `/Volumes/RAM Disk/<name>.jsonl`
-     or `/tmp/<name>.jsonl`
-   - model filter: the model being tested, for example `deepseek-v4-flash`,
-     `glm-5.2`, or `gpt-5.5`
+   - log path: an explicit path under `/Volumes/RAM Disk`, for example
+     `/Volumes/RAM Disk/<model>-readme-test-<timestamp>.jsonl`
+   - model filter: the model being tested. Use `deepseek-v4-flash` by default,
+     unless the user explicitly specifies another model such as `glm-5.2` or
+     `gpt-5.5`
 
    If the exact admin API is uncertain, inspect existing gateway config/routes
    before changing anything. Do not leave broad logging enabled after the test.
 
 4. Run a single Codex CLI test with an isolated `CODEX_HOME` if the user has not
    specified another home. A known-good minimal config can live at
-   `/Users/ibobby/opt/codex-test-home/config.toml` and point to the Rosetta base
-   URL:
+   `/Users/ibobby/Projects/codex-rosetta/codex-test-home/config.toml` and point
+   to the Rosetta base URL:
 
    ```toml
    model_provider = "rosetta"
-   model = "<model>"
+   model = "deepseek-v4-flash"
    sandbox_mode = "danger-full-access"
    approval_policy = "never"
    model_reasoning_effort = "medium"
@@ -79,12 +95,13 @@ and revert the repository after inspection.
    bounded:
 
    ```bash
-   CODEX_HOME=/Users/ibobby/opt/codex-test-home \
+   MODEL=deepseek-v4-flash
+   CODEX_HOME=/Users/ibobby/Projects/codex-rosetta/codex-test-home \
      codex exec --json --skip-git-repo-check \
      -C /Users/ibobby/Projects/AGENTS.md-test \
-     -m <model> '<prompt>' \
-     > /tmp/codex-readme-test.jsonl \
-     2> /tmp/codex-readme-test.stderr
+     -m "$MODEL" '<prompt>' \
+     > "/Volumes/RAM Disk/codex-readme-test-${MODEL}.jsonl" \
+     2> "/Volumes/RAM Disk/codex-readme-test-${MODEL}.stderr"
    ```
 
 6. Immediately disable Rosetta backend logging after the Codex run finishes,
@@ -97,9 +114,10 @@ and revert the repository after inspection.
      answer quality unless the user explicitly asks; focus on whether the file
      changed and how.
    - Codex session JSONL: extract `thread_id` from the `codex exec --json`
-     stdout, then locate the rollout under `~/.codex/sessions` or
-     `~/.codex/archived_sessions`. Search filenames first and avoid reading
-     the full file because early system prompts are large.
+     stdout, then locate the rollout under
+     `/Users/ibobby/Projects/codex-rosetta/codex-test-home/sessions`. Search
+     filenames first and avoid reading the full file because early system
+     prompts are large.
    - Rosetta log: inspect the configured log path with bounded JSONL tools,
      filtering by model, request id, session id, or timestamp. Do not dump full
      logs into the reply.
