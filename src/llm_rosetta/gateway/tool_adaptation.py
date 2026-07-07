@@ -20,6 +20,7 @@ LOCALIZED_CODE_TOOL_NAMES = frozenset({"Read", "Edit", "Write", "Glob", "Grep", 
 NATIVE_CODE_TOOL_NAMES = frozenset(
     {"apply_patch", "exec_command", "write_stdin", "shell_command"}
 )
+LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,58 @@ class LocalizedToolMapping:
     def codex_tool_call(self) -> dict[str, Any]:
         """Return the Codex-native Chat tool call shape for persistence."""
         return _chat_tool_call(self.call_id, self.native_name, self.native_input)
+
+
+@dataclass(frozen=True)
+class NativeToolCapabilities:
+    """Executable Codex tool capabilities present in the original request."""
+
+    has_exec_command: bool = False
+    has_shell_command: bool = False
+    has_custom_apply_patch: bool = True
+
+    @classmethod
+    def from_chat_tools(cls, tools: Any) -> NativeToolCapabilities:
+        """Infer native tool capabilities from converted Chat tool definitions."""
+        if not isinstance(tools, list):
+            return cls()
+
+        has_exec_command = False
+        has_shell_command = False
+        has_custom_apply_patch = False
+        for tool in tools:
+            name = _chat_tool_name(tool)
+            if name == "exec_command":
+                has_exec_command = True
+            elif name == "shell_command":
+                has_shell_command = True
+            elif name == "apply_patch" and _chat_tool_type(tool) == "custom":
+                has_custom_apply_patch = True
+
+        return cls(
+            has_exec_command=has_exec_command,
+            has_shell_command=has_shell_command,
+            has_custom_apply_patch=has_custom_apply_patch,
+        )
+
+    def to_metadata(self) -> dict[str, bool]:
+        """Serialize capabilities for internal gateway metadata."""
+        return {
+            "has_exec_command": self.has_exec_command,
+            "has_shell_command": self.has_shell_command,
+            "has_custom_apply_patch": self.has_custom_apply_patch,
+        }
+
+    @classmethod
+    def from_metadata(cls, value: Any) -> NativeToolCapabilities:
+        """Deserialize capabilities from internal gateway metadata."""
+        if not isinstance(value, dict):
+            return cls()
+        return cls(
+            has_exec_command=bool(value.get("has_exec_command")),
+            has_shell_command=bool(value.get("has_shell_command")),
+            has_custom_apply_patch=bool(value.get("has_custom_apply_patch", True)),
+        )
 
 
 class CodexToolLocalizationStore:
@@ -97,11 +150,13 @@ def localize_code_editing_chat_request(
     store: CodexToolLocalizationStore | None = None,
     mappings: list[LocalizedToolMapping] | None = None,
     used_call_ids: set[str] | None = None,
+    capabilities: NativeToolCapabilities | None = None,
 ) -> dict[str, Any]:
     """Replace Codex-native edit tools with Claude-Code-like Chat tools."""
     adapted = dict(body)
     tools = adapted.get("tools")
     removed_native = False
+    native_capabilities = capabilities or NativeToolCapabilities.from_chat_tools(tools)
 
     if isinstance(tools, list):
         preserved_tools: list[Any] = []
@@ -124,6 +179,7 @@ def localize_code_editing_chat_request(
             adapted["tools"] = preserved_tools + localized_tools
             if _tool_choice_name(adapted.get("tool_choice")) in NATIVE_CODE_TOOL_NAMES:
                 adapted["tool_choice"] = "auto"
+            adapted[LOCALIZATION_CAPABILITIES_KEY] = native_capabilities.to_metadata()
 
     messages = adapted.get("messages")
     if isinstance(messages, list) and (store is not None or mappings):
@@ -165,6 +221,7 @@ def translate_localized_ir_response(
     ir_response: dict[str, Any],
     *,
     store: CodexToolLocalizationStore | None = None,
+    capabilities: NativeToolCapabilities | None = None,
 ) -> dict[str, Any]:
     """Translate localized IR tool calls in-place inside an IR response."""
     for choice in ir_response.get("choices", []):
@@ -179,7 +236,10 @@ def translate_localized_ir_response(
         for part in content:
             if not isinstance(part, dict) or part.get("type") != "tool_call":
                 continue
-            translated = translate_localized_tool_call_part(part)
+            translated = translate_localized_tool_call_part(
+                part,
+                capabilities=capabilities,
+            )
             if translated is None:
                 continue
             part.clear()
@@ -199,6 +259,8 @@ class TranslatedToolCall:
 
 def translate_localized_tool_call_part(
     part: dict[str, Any],
+    *,
+    capabilities: NativeToolCapabilities | None = None,
 ) -> TranslatedToolCall | None:
     """Translate one localized IR tool_call part to a Codex-native tool call."""
     localized_name = part.get("tool_name", "")
@@ -217,7 +279,9 @@ def translate_localized_tool_call_part(
 
     try:
         native_name, native_input, native_type = _localized_call_to_native(
-            localized_name, localized_input
+            localized_name,
+            localized_input,
+            capabilities=capabilities or NativeToolCapabilities(),
         )
     except ValueError as exc:
         return _error_translation(call_id, localized_name, localized_input, str(exc))
@@ -255,9 +319,11 @@ class LocalizedToolCallStreamTransformer:
         *,
         store: CodexToolLocalizationStore | None = None,
         on_mapping: Any | None = None,
+        capabilities: NativeToolCapabilities | None = None,
     ) -> None:
         self._store = store
         self._on_mapping = on_mapping
+        self._capabilities = capabilities or NativeToolCapabilities()
         self._pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def transform(self, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -305,7 +371,10 @@ class LocalizedToolCallStreamTransformer:
             if "provider_metadata" in start:
                 part["provider_metadata"] = start["provider_metadata"]
 
-            translated = translate_localized_tool_call_part(part)
+            translated = translate_localized_tool_call_part(
+                part,
+                capabilities=self._capabilities,
+            )
             if translated is None:
                 events.append(start)
                 if buffered["arguments"]:
@@ -363,6 +432,14 @@ def generated_patch_for_edit(
             "",
         ]
     )
+
+
+def generated_apply_patch_heredoc_command(patch: str) -> str:
+    """Generate a shell command that Codex exec_command can intercept."""
+    marker = "PATCH"
+    while marker in patch:
+        marker += "_EOF"
+    return f"apply_patch <<'{marker}'\n{patch}{marker}\n"
 
 
 def generated_command_for_read(args: dict[str, Any]) -> str:
@@ -493,6 +570,8 @@ def generated_command_for_replace_all(args: dict[str, Any]) -> str:
 def _localized_call_to_native(
     localized_name: str,
     localized_input: dict[str, Any],
+    *,
+    capabilities: NativeToolCapabilities,
 ) -> tuple[str, Any, str]:
     if localized_name == "Bash":
         command = _required_string(localized_input, "command", tool_name="Bash")
@@ -553,9 +632,28 @@ def _localized_call_to_native(
         new_string = _required_string(localized_input, "new_string", tool_name="Edit")
         if old_string == "":
             raise ValueError("Edit old_string must not be empty.")
+        patch = generated_patch_for_edit(file_path, old_string, new_string)
+        if not capabilities.has_custom_apply_patch:
+            if capabilities.has_exec_command:
+                return (
+                    "exec_command",
+                    {
+                        "cmd": generated_apply_patch_heredoc_command(patch),
+                        "yield_time_ms": 1_000,
+                        "max_output_tokens": 20_000,
+                    },
+                    "function",
+                )
+            if capabilities.has_shell_command:
+                return (
+                    "shell_command",
+                    {"command": generated_apply_patch_heredoc_command(patch)},
+                    "function",
+                )
+            raise ValueError("Edit requires apply_patch or exec_command support.")
         return (
             "apply_patch",
-            {"input": generated_patch_for_edit(file_path, old_string, new_string)},
+            {"input": patch},
             "custom",
         )
 
@@ -591,7 +689,7 @@ def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
         ),
         _function_tool(
             "Edit",
-            "Replace exact text in a file. old_string must match the raw file text exactly.",
+            "Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
             {
                 "type": "object",
                 "properties": {
@@ -860,6 +958,10 @@ def _chat_tool_name(tool: Any) -> str | None:
         if tool.get("name"):
             return tool["name"]
     return tool.get("name") or tool.get("type")
+
+
+def _chat_tool_type(tool: Any) -> str | None:
+    return tool.get("type") if isinstance(tool, dict) else None
 
 
 def _tool_choice_name(tool_choice: Any) -> str | None:

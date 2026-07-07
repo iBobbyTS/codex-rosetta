@@ -39,8 +39,10 @@ from .logging import (
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
+    LOCALIZATION_CAPABILITIES_KEY,
     LocalizedToolMapping,
     LocalizedToolCallStreamTransformer,
+    NativeToolCapabilities,
     localized_mapping_from_tool_calls,
     localize_code_editing_chat_request,
     should_localize_code_tools,
@@ -211,6 +213,7 @@ def _apply_converted_request_tool_adaptation(
     codex_tool_store: CodexToolLocalizationStore | None = None,
     persistent_mappings: list[LocalizedToolMapping] | None = None,
     used_mapping_call_ids: set[str] | None = None,
+    capabilities: NativeToolCapabilities | None = None,
 ) -> dict[str, Any]:
     """Apply tool adaptation after source request has been converted."""
     if should_localize_code_tools(route):
@@ -219,8 +222,18 @@ def _apply_converted_request_tool_adaptation(
             store=codex_tool_store,
             mappings=persistent_mappings,
             used_call_ids=used_mapping_call_ids,
+            capabilities=capabilities,
         )
     return body
+
+
+def _pop_tool_localization_capabilities(
+    body: dict[str, Any],
+) -> NativeToolCapabilities:
+    """Remove and return internal tool localization metadata from a request."""
+    return NativeToolCapabilities.from_metadata(
+        body.pop(LOCALIZATION_CAPABILITIES_KEY, None)
+    )
 
 
 def _load_persistent_tool_mappings(
@@ -333,10 +346,15 @@ def _translate_and_persist_localized_response_tools(
     tool_store: CodexToolLocalizationStore,
     persistence: Any | None,
     session_id: str | None,
+    capabilities: NativeToolCapabilities | None = None,
 ) -> None:
     if not should_localize_code_tools(route):
         return
-    translate_localized_ir_response(ir_response, store=tool_store)
+    translate_localized_ir_response(
+        ir_response,
+        store=tool_store,
+        capabilities=capabilities,
+    )
     _persist_localized_response_mappings(
         ir_response,
         tool_store=tool_store,
@@ -525,6 +543,7 @@ async def handle_non_streaming(
     # model was already injected into body by app.py
     model = body.get("model", "")
     body = _apply_tool_adaptation(body, route)
+    source_tool_capabilities = NativeToolCapabilities.from_chat_tools(body.get("tools"))
 
     if _is_openai_responses_direct(route):
         log_original_request(body)
@@ -614,7 +633,9 @@ async def handle_non_streaming(
         codex_tool_store=tool_store,
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
+        capabilities=source_tool_capabilities,
     )
+    tool_capabilities = _pop_tool_localization_capabilities(target_body)
 
     profile.update(pipeline.profile)
 
@@ -688,6 +709,7 @@ async def handle_non_streaming(
             tool_store=tool_store,
             persistence=persistence,
             session_id=tool_cache_session_id,
+            capabilities=tool_capabilities,
         )
         store.cache_from_response(ir_response)
 
@@ -890,6 +912,7 @@ async def handle_streaming(
     # model was already injected into body by app.py
     model = body.get("model", "")
     body = _apply_tool_adaptation(body, route)
+    source_tool_capabilities = NativeToolCapabilities.from_chat_tools(body.get("tools"))
 
     if _is_openai_responses_direct(route):
         log_original_request(body)
@@ -1030,7 +1053,9 @@ async def handle_streaming(
         codex_tool_store=tool_store,
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
+        capabilities=source_tool_capabilities,
     )
+    tool_capabilities = _pop_tool_localization_capabilities(target_body)
 
     profile.update(pipeline.profile)
 
@@ -1153,6 +1178,7 @@ async def handle_streaming(
         stream_transformer = LocalizedToolCallStreamTransformer(
             store=tool_store,
             on_mapping=_persist_stream_mapping,
+            capabilities=tool_capabilities,
         )
     else:
         stream_transformer = None

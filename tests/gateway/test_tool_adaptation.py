@@ -17,8 +17,10 @@ from llm_rosetta.gateway.proxy import (
 )
 from llm_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
+    LOCALIZATION_CAPABILITIES_KEY,
     LOCALIZED_CODE_TOOL_NAMES,
     LocalizedToolCallStreamTransformer,
+    NativeToolCapabilities,
     localized_mapping_from_tool_calls,
     generated_patch_for_edit,
     localize_code_editing_chat_request,
@@ -79,6 +81,13 @@ def test_localize_code_editing_chat_request_replaces_native_tools():
     assert "view_image" in names
     assert adapted["tool_choice"] == "auto"
     assert body["tools"][0]["function"]["name"] == "exec_command"
+    edit_tool = next(
+        tool
+        for tool in adapted["tools"]
+        if tool.get("function", {}).get("name") == "Edit"
+    )
+    assert "complete lines" in edit_tool["function"]["description"]
+    assert "rather than substrings" in edit_tool["function"]["description"]
 
 
 def test_translate_localized_bash_to_exec_command():
@@ -119,6 +128,34 @@ def test_translate_localized_edit_to_custom_apply_patch():
     assert "*** Update File: src/app.py" in patch
     assert "-print('old')" in patch
     assert "+print('new')" in patch
+
+
+def test_translate_localized_edit_to_exec_command_when_apply_patch_absent():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_edit",
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "src/app.py",
+                "old_string": "print('old')",
+                "new_string": "print('new')",
+            },
+        },
+        capabilities=NativeToolCapabilities(
+            has_exec_command=True,
+            has_custom_apply_patch=False,
+        ),
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec_command"
+    assert translated.part["tool_type"] == "function"
+    command = translated.part["tool_input"]["cmd"]
+    assert "apply_patch <<'PATCH'" in command
+    assert "*** Update File: src/app.py" in command
+    assert "-print('old')" in command
+    assert "+print('new')" in command
 
 
 def test_invalid_localized_call_becomes_meaningful_exec_error():
@@ -261,6 +298,7 @@ def test_gateway_non_streaming_localizes_request_and_returns_native_tool_call():
 
     assert response.status_code == 200
     assert "request_conversion_ms" in profile
+    assert LOCALIZATION_CAPABILITIES_KEY not in captured_body
     assert LOCALIZED_CODE_TOOL_NAMES.issubset(_tool_names(captured_body["tools"]))
     assert {"exec_command", "apply_patch"}.isdisjoint(
         _tool_names(captured_body["tools"])
@@ -295,6 +333,89 @@ def test_gateway_non_streaming_localizes_request_and_returns_native_tool_call():
     restored = next_chat_request["messages"][0]["tool_calls"][0]["function"]
     assert restored["name"] == "Edit"
     assert json.loads(restored["arguments"])["old_string"] == "old"
+
+
+def test_gateway_non_streaming_translates_edit_to_exec_when_apply_patch_absent():
+    captured_body: dict[str, Any] = {}
+    upstream_body = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_edit",
+                            "type": "function",
+                            "function": {
+                                "name": "Edit",
+                                "arguments": json.dumps(
+                                    {
+                                        "file_path": "example.txt",
+                                        "old_string": "old",
+                                        "new_string": "new",
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "edit example.txt"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+        )
+
+    response, _ = asyncio.run(run())
+
+    assert response.status_code == 200
+    assert LOCALIZATION_CAPABILITIES_KEY not in captured_body
+    assert LOCALIZED_CODE_TOOL_NAMES.issubset(_tool_names(captured_body["tools"]))
+    assert "exec_command" not in _tool_names(captured_body["tools"])
+    source_body = json.loads(response.body)
+    output = source_body["output"]
+    assert output[0]["type"] == "function_call"
+    assert output[0]["name"] == "exec_command"
+    arguments = json.loads(output[0]["arguments"])
+    assert "apply_patch <<'PATCH'" in arguments["cmd"]
+    assert "*** Update File: example.txt" in arguments["cmd"]
 
 
 def test_persisted_mapping_restores_history_without_memory_store():
@@ -651,6 +772,7 @@ def test_gateway_streaming_localizes_request_and_returns_native_tool_events():
     chunks = asyncio.run(run())
 
     assert LOCALIZED_CODE_TOOL_NAMES.issubset(_tool_names(captured_body["tools"]))
+    assert LOCALIZATION_CAPABILITIES_KEY not in captured_body
     assert "exec_command" not in _tool_names(captured_body["tools"])
     joined = "\n".join(chunks)
     assert "response.output_item.added" in joined
@@ -658,6 +780,96 @@ def test_gateway_streaming_localizes_request_and_returns_native_tool_events():
     assert "response.function_call_arguments.delta" in joined
     assert '\\"cmd\\": \\"printf ok\\"' in joined
     assert '"name": "Bash"' not in joined
+
+
+def test_gateway_streaming_translates_edit_to_exec_when_apply_patch_absent():
+    captured_body: dict[str, Any] = {}
+    stream = _ChatStream(
+        [
+            {
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": "glm-5.2",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_edit",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Edit",
+                                        "arguments": json.dumps(
+                                            {
+                                                "file_path": "example.txt",
+                                                "old_string": "old",
+                                                "new_string": "new",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": "glm-5.2",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            },
+        ]
+    )
+
+    async def send_streaming(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return stream
+
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(side_effect=send_streaming)
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "edit example.txt"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "stream": True,
+    }
+
+    async def run() -> list[str]:
+        response, _ = await handle_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+        )
+        chunks: list[str] = []
+        async for chunk in response._generator:
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(run())
+
+    assert LOCALIZATION_CAPABILITIES_KEY not in captured_body
+    joined = "\n".join(chunks)
+    assert '"name": "exec_command"' in joined
+    assert "apply_patch <<'PATCH'" in joined
+    assert "*** Update File: example.txt" in joined
+    assert '"name": "apply_patch"' not in joined
 
 
 def test_gateway_streaming_persists_tool_mapping(tmp_path):
