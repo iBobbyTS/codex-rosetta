@@ -11,6 +11,10 @@
 
 **LLM-Rosetta** — A Python library for converting between different LLM provider API formats using a hub-and-spoke architecture with a central IR (Intermediate Representation).
 
+## Fork Focus
+
+This project is forked from [Oaklight/llm-rosetta](https://github.com/Oaklight/llm-rosetta). This fork focuses on converting Chat Completions-compatible APIs to the Responses API, including tool-calling adaptation, so open-source models can better fit Codex, and on aggregating multiple providers behind one gateway. It will put less emphasis on upstream Anthropic/Gemini protocol models and downstream integrations for Chat Completions, Anthropic, or Gemini products.
+
 ## Full Documentation
 
 Full documentation is available at:

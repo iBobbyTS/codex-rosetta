@@ -99,6 +99,10 @@ class HttpUpstreamStream(UpstreamStream):
             except json.JSONDecodeError:
                 logger.warning("Skipping malformed SSE data: %s", event.data[:200])
 
+    def aiter_raw_bytes(self) -> AsyncIterator[bytes]:
+        """Yield raw upstream response bytes without parsing SSE events."""
+        return self._resp.aiter_bytes()
+
     async def close(self) -> None:
         """Close the underlying HTTP streaming response."""
         await self._resp.aclose()

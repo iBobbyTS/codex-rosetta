@@ -11,6 +11,10 @@
 
 **LLM-Rosetta** — 一个通过中心化中间表示（IR）的轴辐式架构，在不同 LLM 提供商 API 格式之间进行转换的 Python 库。
 
+## Fork 定位
+
+本项目 fork 自 [Oaklight/llm-rosetta](https://github.com/Oaklight/llm-rosetta)。这个 fork 聚焦于将 Chat Completions 兼容接口转换到 Responses API，并适配工具调用语义，让开源模型更好地适配 Codex，同时也聚焦于多 Provider 的网关聚合。它不会太关注上游 Anthropic/Gemini 协议的大模型，也不会重点投入下游接入 Chat Completions、Anthropic 或 Gemini 产品。
+
 ## 完整文档
 
 完整文档请访问：
