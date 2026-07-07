@@ -9,11 +9,33 @@ description: Inspect LLM-Rosetta gateway JSONL logs and Codex rollout session JS
 
 Use this skill for read-only investigation of LLM-Rosetta gateway behavior against Codex sessions. Prefer the bundled script for JSONL inspection so large system prompts, full contexts, and verbose gateway logs are streamed and summarized instead of dumped into the model context.
 
+## Local Test Paths
+
+For Rosetta/Codex test runs created by `rosetta-codex-readme-test`, prefer these
+paths:
+
+- Codex test home:
+  `/Users/ibobby/Projects/codex-rosetta/codex-test-home`
+- Codex test sessions:
+  `/Users/ibobby/Projects/codex-rosetta/codex-test-home/sessions`
+- Rosetta temporary configs:
+  `/Users/ibobby/Projects/codex-rosetta/rosetta-test-config`
+- Gateway trace logs and captured test stdout/stderr:
+  `/Volumes/RAM Disk`
+- Default model for new tests: `deepseek-v4-flash`, unless the user explicitly
+  names another model.
+
 ## Workflow
 
-1. Resolve session ids before opening files. Search filenames first under `~/.codex/sessions` and `~/.codex/archived_sessions`; only scan file contents when a filename search fails.
+1. Resolve session ids before opening files. For Rosetta README tests, search
+   filenames first under
+   `/Users/ibobby/Projects/codex-rosetta/codex-test-home/sessions`. For normal
+   user sessions, search `~/.codex/sessions` and `~/.codex/archived_sessions`.
+   Only scan file contents when a filename search fails.
 2. Summarize sessions with the script. Do not `cat` rollout files, because early system-prompt lines can be very large.
-3. Summarize gateway logs with a `--session-id` filter when possible. Logs can include full request/response bodies and temporary credentials; keep output redacted and bounded.
+3. Summarize gateway logs from `/Volumes/RAM Disk` with a `--session-id` filter
+   when possible. Logs can include full request/response bodies and temporary
+   credentials; keep output redacted and bounded.
 4. When comparing direct vs Rosetta, summarize both sessions and the Rosetta log, then compare structure rather than answer quality: models, request counts, tool definitions, tool calls, output item types, `phase`, `reasoning`, `reasoning_content`, warnings, and errors.
 5. If a finding depends on an exact raw line, reopen only that line range with a short Python one-liner or extend the script output. Avoid full-file reads.
 
@@ -22,7 +44,7 @@ Use this skill for read-only investigation of LLM-Rosetta gateway behavior again
 Run from the repository root:
 
 ```bash
-python .agents/skills/inspect-rosetta-sessions/scripts/inspect_rosetta_sessions.py find-session 019f3cec-c207-7013-9c18-6e7af1369e09
+python .agents/skills/inspect-rosetta-sessions/scripts/inspect_rosetta_sessions.py find-session --root /Users/ibobby/Projects/codex-rosetta/codex-test-home/sessions 019f3cec-c207-7013-9c18-6e7af1369e09
 python .agents/skills/inspect-rosetta-sessions/scripts/inspect_rosetta_sessions.py session-summary 019f3cec-c207-7013-9c18-6e7af1369e09
 python .agents/skills/inspect-rosetta-sessions/scripts/inspect_rosetta_sessions.py log-summary "/Volumes/RAM Disk/log.jsonl" --session-id 019f3cec-c207-7013-9c18-6e7af1369e09
 ```
