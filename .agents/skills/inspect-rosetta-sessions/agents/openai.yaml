@@ -1,0 +1,4 @@
+interface:
+  display_name: "Inspect Rosetta Sessions"
+  short_description: "Analyze Rosetta gateway logs and Codex sessions"
+  default_prompt: "Use $inspect-rosetta-sessions to compare a Rosetta gateway log with a Codex rollout session."

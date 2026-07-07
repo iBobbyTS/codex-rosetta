@@ -1,0 +1,4 @@
+interface:
+  display_name: "Rosetta Codex README Test"
+  short_description: "Run controlled Rosetta Codex README tests"
+  default_prompt: "Use $rosetta-codex-readme-test to run a controlled README rewrite or local-edit test through LLM-Rosetta."
