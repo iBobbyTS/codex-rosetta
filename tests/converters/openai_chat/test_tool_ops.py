@@ -91,6 +91,32 @@ class TestOpenAIChatToolOps:
         assert "call create_goal first" in description
         assert result["function"]["parameters"]["required"] == ["status"]
 
+    def test_ir_tool_definition_to_p_adds_request_user_input_chat_guidance(self):
+        """request_user_input gets Plan-mode guidance for Chat models."""
+        ir_tool = cast(
+            ToolDefinition,
+            {
+                "type": "function",
+                "name": "request_user_input",
+                "description": "Request user input.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"questions": {"type": "array"}},
+                    "required": ["questions"],
+                },
+                "required_parameters": ["questions"],
+                "metadata": {},
+            },
+        )
+
+        result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
+
+        description = result["function"]["description"]
+        assert description.startswith("Request user input.")
+        assert "let the Codex UI handle approval and implementation" in description
+        assert "without A:/B:/C: prefixes" in description
+        assert result["function"]["parameters"]["required"] == ["questions"]
+
     def test_p_tool_definition_to_ir(self):
         """Test OpenAI tool definition → IR ToolDefinition."""
         provider_tool = {

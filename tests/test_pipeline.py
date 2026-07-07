@@ -547,6 +547,35 @@ class TestConversionPipeline:
         assert "Do not set token_budget unless" in descriptions["create_goal"]
         assert "call create_goal first" in descriptions["update_goal"]
 
+    def test_responses_request_user_input_gets_chat_guidance(self):
+        """Plan-mode user-input tool gets clearer guidance for Chat targets."""
+        from llm_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        target = pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "plan a README update",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "request_user_input",
+                        "description": "Request user input.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"questions": {"type": "array"}},
+                            "required": ["questions"],
+                        },
+                    }
+                ],
+            }
+        )
+
+        description = target["tools"][0]["function"]["description"]
+        assert "materially change the plan" in description
+        assert "let the Codex UI handle approval and implementation" in description
+        assert "without A:/B:/C: prefixes" in description
+
     def test_responses_namespace_tools_stay_namespaced_for_responses_target(self):
         """Responses target keeps namespace tools in native shape."""
         from llm_rosetta.pipeline import ConversionPipeline

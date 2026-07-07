@@ -29,10 +29,18 @@ from ..base.helpers import log_orphan_warnings, sanitize_schema
 logger = logging.getLogger(__name__)
 
 
-# Extra guidance for Codex goal tools when they are exposed through Chat
+# Extra guidance for selected Codex tools when they are exposed through Chat
 # Completions-style function descriptions. Some Chat models do not reliably infer
-# the get/create/update sequence from the terse native Responses tool names.
-_GOAL_TOOL_DESCRIPTION_SUFFIXES = {
+# Codex UI conventions from terse native Responses tool names.
+_CHAT_TOOL_DESCRIPTION_SUFFIXES = {
+    "request_user_input": (
+        "Chat-model guidance: use this only for real user preferences or "
+        "decisions that materially change the plan. Do not use it to ask "
+        "whether to approve, proceed with, or implement a proposed plan; after "
+        "emitting the final <proposed_plan> block, let the Codex UI handle "
+        "approval and implementation. Keep option labels short natural phrases "
+        "without A:/B:/C: prefixes."
+    ),
     "create_goal": (
         "Chat-model guidance: call this when the user explicitly asks to mark "
         "a goal complete or blocked but get_goal returns no active goal, or "
@@ -52,7 +60,7 @@ _GOAL_TOOL_DESCRIPTION_SUFFIXES = {
 
 def _adapt_chat_tool_description(tool_name: str, description: str) -> str:
     """Add Chat-model guidance for selected Codex tool descriptions."""
-    suffix = _GOAL_TOOL_DESCRIPTION_SUFFIXES.get(tool_name)
+    suffix = _CHAT_TOOL_DESCRIPTION_SUFFIXES.get(tool_name)
     if not suffix or suffix in description:
         return description
     return f"{description}\n\n{suffix}" if description else suffix
