@@ -113,6 +113,14 @@ def extract_model(source_provider: ProviderType, body: dict[str, Any]) -> str | 
     return body.get("model")
 
 
+def _is_openai_responses_direct(route: ResolvedRoute) -> bool:
+    """Return true for same-protocol Responses requests that can pass through."""
+    return (
+        route.source_provider in ("openai_responses", "open_responses")
+        and route.target_provider in ("openai_responses", "open_responses")
+    )
+
+
 # ---------------------------------------------------------------------------
 # Resource cleanup
 # ---------------------------------------------------------------------------
@@ -258,6 +266,67 @@ async def handle_non_streaming(
     profile: dict[str, Any] = {}
     # model was already injected into body by app.py
     model = body.get("model", "")
+
+    if _is_openai_responses_direct(route):
+        log_original_request(body)
+        t_upstream = time.perf_counter()
+        try:
+            resp = await transport.send_request(
+                provider_info,
+                route.target_provider,
+                body,
+                model,
+                extra_headers=extra_headers,
+            )
+        except UpstreamConnectionError as exc:
+            profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
+            return (
+                error_response_for_source(
+                    route.source_provider, 502, f"Upstream request failed: {exc}"
+                ),
+                profile,
+            )
+        profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
+        profile["passthrough"] = True
+
+        if resp.is_error:
+            log_upstream_error(
+                resp.status_code,
+                resp.error_text,
+                endpoint=str(route.target_provider),
+            )
+            dump_error(
+                persistence,
+                request_body=body,
+                response_text=resp.error_text,
+                converted_body=body,
+                model=model,
+                source_provider=route.source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+                status_code=resp.status_code,
+                error_phase="upstream",
+                upstream_url=str(provider_info.base_url),
+            )
+            return (
+                Response(
+                    body=resp.raw_content,
+                    status_code=resp.status_code,
+                    content_type="application/json",
+                ),
+                profile,
+            )
+
+        if resp.body is not None:
+            log_response(resp.body, label="UPSTREAM RESPONSE")
+        return (
+            Response(
+                body=resp.raw_content,
+                status_code=resp.status_code,
+                content_type="application/json",
+            ),
+            profile,
+        )
 
     pipeline = ConversionPipeline(
         route.source_provider,
@@ -430,6 +499,72 @@ async def _stream_event_generator(
             )
 
 
+async def _raw_stream_event_generator(
+    *,
+    stream: Any,
+    model: str,
+    entry_id: str | None = None,
+    request_log: Any | None = None,
+    trace: StreamTraceLogger | None = None,
+) -> AsyncIterator[bytes]:
+    """Pass raw upstream stream bytes to the client without event conversion."""
+    chunk_count = 0
+    t0 = time.monotonic()
+    stream_error: str | None = None
+    ttfb_ms: float | None = None
+    t_stream_open = time.perf_counter()
+
+    try:
+        async with stream:
+            raw_iter = stream.aiter_raw_bytes()
+            if raw_iter is None:
+                raise RuntimeError("Upstream stream does not support raw passthrough")
+            async for chunk in raw_iter:
+                if chunk_count == 0:
+                    ttfb_ms = round((time.perf_counter() - t_stream_open) * 1000, 2)
+                chunk_count += 1
+                if trace is not None:
+                    trace.log("upstream_raw_chunk", chunk, chunk_index=chunk_count)
+                    trace.log("downstream_raw_sse", chunk, chunk_index=chunk_count)
+                yield chunk
+
+        log_stream_summary(
+            model=model,
+            duration_s=time.monotonic() - t0,
+            chunk_count=chunk_count,
+        )
+    except Exception as exc:
+        stream_error = str(exc)
+        raise
+    finally:
+        if entry_id and request_log is not None:
+            stream_profile: dict[str, Any] = {
+                "stream_duration_ms": round((time.monotonic() - t0) * 1000, 2),
+                "stream_chunks": chunk_count,
+                "stream_complete": stream_error is None,
+                "stream_passthrough": True,
+            }
+            if ttfb_ms is not None:
+                stream_profile["stream_ttfb_ms"] = ttfb_ms
+            if stream_error is not None:
+                stream_profile["stream_error"] = stream_error[:500]
+            try:
+                request_log.update_profile(entry_id, stream_profile)
+            except Exception:
+                logger.debug("Failed to write stream profile for %s", entry_id)
+        if trace is not None:
+            trace.log(
+                "stream_complete",
+                {
+                    "chunk_count": chunk_count,
+                    "stream_complete": stream_error is None,
+                    "stream_error": stream_error,
+                    "ttfb_ms": ttfb_ms,
+                    "passthrough": True,
+                },
+            )
+
+
 async def handle_streaming(
     route: ResolvedRoute,
     provider_info: ProviderInfo,
@@ -460,6 +595,122 @@ async def handle_streaming(
     profile: dict[str, Any] = {}
     # model was already injected into body by app.py
     model = body.get("model", "")
+
+    if _is_openai_responses_direct(route):
+        log_original_request(body)
+        t_connect = time.perf_counter()
+        try:
+            stream = await transport.send_streaming(
+                provider_info,
+                route.target_provider,
+                body,
+                model,
+                extra_headers=extra_headers,
+            )
+        except UpstreamConnectionError as exc:
+            profile["stream_connect_ms"] = round(
+                (time.perf_counter() - t_connect) * 1000, 2
+            )
+            error_msg = str(exc)
+            dump_error(
+                persistence,
+                request_body=body,
+                response_text=error_msg,
+                converted_body=body,
+                model=model,
+                source_provider=route.source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+                status_code=502,
+                error_phase="stream_header",
+                upstream_url=str(provider_info.base_url),
+                request_log_id=entry_id,
+            )
+            return (
+                error_response_for_source(
+                    route.source_provider, 502, f"Upstream request failed: {exc}"
+                ),
+                profile,
+            )
+
+        profile["stream_connect_ms"] = round(
+            (time.perf_counter() - t_connect) * 1000, 2
+        )
+        profile["passthrough"] = True
+
+        if stream.is_error:
+            error_text = await stream.read_error()
+            await stream.close()
+            log_upstream_error(
+                stream.status_code,
+                error_text,
+                endpoint=str(route.target_provider),
+                is_streaming=True,
+            )
+            dump_error(
+                persistence,
+                request_body=body,
+                response_text=error_text,
+                converted_body=body,
+                model=model,
+                source_provider=route.source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+                status_code=stream.status_code,
+                error_phase="stream_header",
+                upstream_url=str(provider_info.base_url),
+                request_log_id=entry_id,
+            )
+            return (
+                Response(
+                    body=error_text.encode("utf-8")
+                    if isinstance(error_text, str)
+                    else error_text,
+                    status_code=stream.status_code,
+                    content_type="application/json",
+                ),
+                profile,
+            )
+
+        request_id = extra_headers.get("x-request-id") if extra_headers else None
+        trace = (
+            stream_trace_state.create_logger(
+                request_id=request_id,
+                request_log_id=entry_id,
+                model=model,
+                source_provider=route.source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+            )
+            if stream_trace_state is not None
+            else None
+        )
+        if trace is not None:
+            trace.log(
+                "stream_start",
+                {
+                    "model": model,
+                    "source_provider": route.source_provider,
+                    "target_provider": route.target_provider,
+                    "provider_name": route.provider_name,
+                    "entry_id": entry_id,
+                    "passthrough": True,
+                },
+            )
+
+        return (
+            StreamingResponse(
+                _raw_stream_event_generator(
+                    stream=stream,
+                    model=model,
+                    entry_id=entry_id,
+                    request_log=request_log,
+                    trace=trace,
+                ),
+                content_type="text/event-stream",
+            ),
+            profile,
+        )
 
     pipeline = ConversionPipeline(
         route.source_provider,

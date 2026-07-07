@@ -92,6 +92,16 @@ class UpstreamStream(ABC):
     def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
         """Yield parsed response chunks (e.g. JSON objects from SSE data)."""
 
+    def aiter_raw_bytes(self) -> AsyncIterator[bytes] | None:
+        """Yield raw upstream stream bytes when the transport supports it.
+
+        The default implementation returns ``None`` so generic transports only
+        need to support parsed event iteration. HTTP/SSE transports can
+        override this for same-protocol passthrough paths that must avoid
+        decoding and re-serializing events.
+        """
+        return None
+
     async def __aenter__(self) -> UpstreamStream:
         return self
 
