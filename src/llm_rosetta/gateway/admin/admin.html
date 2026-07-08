@@ -27,7 +27,7 @@
 body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
 /* Hide main content until auth check completes to prevent flash of unauthenticated content */
 body.auth-pending > .header,
-body.auth-pending > .tabs,
+body.auth-pending > .admin-nav,
 body.auth-pending > .content,
 body.auth-pending > .db-footer { display: none !important; }
 a { color: var(--accent); text-decoration: none; }
@@ -81,23 +81,23 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: var(--radius); color: var(--text); cursor: pointer;
 }
 
-/* Tabs */
-.tabs {
+/* Navigation */
+.admin-nav {
   display: flex; gap: 0; border-bottom: 1px solid var(--border);
   padding: 0 24px; align-items: center;
 }
-.tab {
+.nav-link {
   padding: 12px 20px; cursor: pointer; font-size: 14px; color: var(--text-dim);
   border-bottom: 2px solid transparent; transition: all 0.15s;
-  white-space: nowrap; flex-shrink: 0;
+  white-space: nowrap; flex-shrink: 0; display: block;
 }
-.tab:hover { color: var(--text); }
-.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.nav-link:hover { color: var(--text); }
+.nav-link.active { color: var(--accent); border-bottom-color: var(--accent); }
 
 /* Content */
 .content { padding: 24px; max-width: 1200px; margin: 0 auto; }
-.tab-panel { display: none; }
-.tab-panel.active { display: block; }
+.page-panel { display: none; }
+.page-panel.active { display: block; }
 
 /* Cards */
 .stats-grid {
@@ -432,8 +432,8 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 @media (max-width: 768px) {
   .header { padding: 12px 16px; }
   .header h1 { font-size: 16px; }
-  .tabs { padding: 0 12px; }
-  .tab { padding: 10px 14px; font-size: 13px; }
+  .admin-nav { padding: 0 12px; }
+  .nav-link { padding: 10px 14px; font-size: 13px; }
   .config-path { display: none; }
   .content { padding: 16px; }
   .chart-row { grid-template-columns: 1fr; }
@@ -500,20 +500,20 @@ body { padding-bottom: 26px; }
   </div>
 </div>
 
-<div class="tabs">
-  <div class="tab active" data-tab="providers" data-i18n="tab.providers">Providers</div>
-  <div class="tab" data-tab="models" data-i18n="tab.models">Models</div>
-  <div class="tab" data-tab="keys" data-i18n="tab.keys">API Keys</div>
-  <div class="tab" data-tab="dashboard" data-i18n="tab.dashboard">Dashboard</div>
-  <div class="tab" data-tab="logs" data-i18n="tab.logs">Request Log</div>
-  <div class="tab" data-tab="gateway-logs" data-i18n="tab.gatewayLogs">Gateway Logs</div>
+<nav class="admin-nav">
+  <a class="nav-link active" href="/admin/providers" data-page="providers" data-i18n="nav.providers">Providers</a>
+  <a class="nav-link" href="/admin/models" data-page="models" data-i18n="nav.models">Models</a>
+  <a class="nav-link" href="/admin/keys" data-page="keys" data-i18n="nav.keys">API Keys</a>
+  <a class="nav-link" href="/admin/dashboard" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</a>
+  <a class="nav-link" href="/admin/logs" data-page="logs" data-i18n="nav.logs">Request Log</a>
+  <a class="nav-link" href="/admin/gateway-logs" data-page="gateway-logs" data-i18n="nav.gatewayLogs">Gateway Logs</a>
   <div style="flex:1"></div>
   <div class="config-path" id="configPath"></div>
-</div>
+</nav>
 
 <div class="content">
-  <!-- Providers Tab -->
-  <div class="tab-panel active" id="tab-providers">
+  <!-- Providers Page -->
+  <div class="page-panel active" id="page-providers">
     <div class="section">
       <div class="section-header">
         <h2 data-i18n="section.server">Server Settings</h2>
@@ -550,8 +550,8 @@ body { padding-bottom: 26px; }
     </div>
   </div>
 
-  <!-- Models Tab -->
-  <div class="tab-panel" id="tab-models">
+  <!-- Models Page -->
+  <div class="page-panel" id="page-models">
     <div class="section">
       <div class="section-header">
         <h2 data-i18n="section.models">Model Routing</h2>
@@ -578,8 +578,8 @@ body { padding-bottom: 26px; }
     </div>
   </div>
 
-  <!-- API Keys Tab -->
-  <div class="tab-panel" id="tab-keys">
+  <!-- API Keys Page -->
+  <div class="page-panel" id="page-keys">
     <div class="section">
       <div class="section-header">
         <h2 data-i18n="section.apiKeys">API Keys</h2>
@@ -598,8 +598,8 @@ body { padding-bottom: 26px; }
     </div>
   </div>
 
-  <!-- Dashboard Tab -->
-  <div class="tab-panel" id="tab-dashboard">
+  <!-- Dashboard Page -->
+  <div class="page-panel" id="page-dashboard">
     <div class="stats-grid" id="statsGrid"></div>
     <div class="chart-row">
       <div class="chart-box">
@@ -647,8 +647,8 @@ body { padding-bottom: 26px; }
     </div>
   </div>
 
-  <!-- Request Log Tab -->
-  <div class="tab-panel" id="tab-logs">
+  <!-- Request Log Page -->
+  <div class="page-panel" id="page-logs">
     <div class="filters">
       <select id="filterModel"><option value="" data-i18n="filter.allModels">All Models</option></select>
       <select id="filterProvider"><option value="" data-i18n="filter.allProviders">All Providers</option></select>
@@ -671,8 +671,8 @@ body { padding-bottom: 26px; }
     </div>
   </div>
 
-  <!-- Gateway Logs Tab -->
-  <div class="tab-panel" id="tab-gateway-logs">
+  <!-- Gateway Logs Page -->
+  <div class="page-panel" id="page-gateway-logs">
     <div class="section">
       <div class="section-header">
         <h2 data-i18n="section.gatewayLogs">Gateway Logs</h2>
@@ -1016,8 +1016,8 @@ function setTheme(name) {
   // Sync settings popup dropdown if open
   const ts = document.getElementById('settingsThemeSelect');
   if (ts) ts.value = name;
-  // Redraw charts if on dashboard tab
-  if (currentTab === 'dashboard') loadMetrics();
+  // Redraw charts if on dashboard page
+  if (currentPage === 'dashboard') loadMetrics();
 }
 
 // Theme is applied after state variables are declared (see below).
@@ -1025,8 +1025,8 @@ function setTheme(name) {
 // ===================== i18n =====================
 const I18N = {
   en: {
-    'tab.providers':'Providers', 'tab.models':'Models', 'tab.keys':'API Keys',
-    'tab.dashboard':'Dashboard', 'tab.logs':'Request Log', 'tab.gatewayLogs':'Gateway Logs',
+    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys',
+    'nav.dashboard':'Dashboard', 'nav.logs':'Request Log', 'nav.gatewayLogs':'Gateway Logs',
     'section.server':'Server Settings', 'section.providers':'Providers', 'section.models':'Model Routing',
     'section.gatewayLogs':'Gateway Logs',
     'label.globalProxy':'Global Proxy URL',
@@ -1151,8 +1151,8 @@ const I18N = {
   },
   zh: {
     'btn.logout':'\u9000\u51fa\u767b\u5f55',
-    'tab.providers':'\u670d\u52a1\u65b9', 'tab.models':'\u6a21\u578b', 'tab.keys':'API \u5bc6\u94a5',
-    'tab.dashboard':'\u76d1\u63a7\u9762\u677f', 'tab.logs':'\u8bf7\u6c42\u65e5\u5fd7', 'tab.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
+    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5',
+    'nav.dashboard':'\u76d1\u63a7\u9762\u677f', 'nav.logs':'\u8bf7\u6c42\u65e5\u5fd7', 'nav.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
     'section.server':'\u670d\u52a1\u5668\u8bbe\u7f6e', 'section.providers':'\u670d\u52a1\u65b9', 'section.models':'\u6a21\u578b\u8def\u7531',
     'section.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
     'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
@@ -1306,16 +1306,47 @@ function applyI18n() {
   });
   // Re-render dynamic content
   if (configData) { renderProviders(); renderModels(); }
-  if (keysData) renderKeys();
-  if (currentTab === 'dashboard') loadMetrics();
-  if (currentTab === 'logs') loadLogs();
-  if (currentTab === 'gateway-logs') renderStreamTraceSettings();
+  if (keysData) { renderKeys(); updateKeyFilterOptions(); }
+  if (currentPage === 'dashboard') loadMetrics();
+  if (currentPage === 'logs') loadLogs();
+  if (currentPage === 'gateway-logs') renderStreamTraceSettings();
   // Re-render DB status footer with cached data
   if (_lastPersistence != null) renderPersistence(_lastPersistence, _lastTotalReq);
 }
 
+// ===================== Page Routing =====================
+const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'dashboard', 'logs', 'gateway-logs']);
+const DEFAULT_ADMIN_PAGE = 'providers';
+
+function getCurrentPageFromLocation() {
+  const path = window.location.pathname.replace(/\/+$/, '');
+  if (path.startsWith('/admin/')) {
+    const page = path.slice('/admin/'.length);
+    if (ADMIN_PAGE_IDS.has(page)) return page;
+  }
+  return DEFAULT_ADMIN_PAGE;
+}
+
+function canonicalizeAdminPath() {
+  const path = window.location.pathname.replace(/\/+$/, '');
+  if (path === '/admin') {
+    window.history.replaceState(null, '', '/admin/providers' + window.location.search + window.location.hash);
+  }
+}
+
+function activateCurrentPage() {
+  currentPage = getCurrentPageFromLocation();
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.toggle('active', link.dataset.page === currentPage);
+  });
+  document.querySelectorAll('.page-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === 'page-' + currentPage);
+  });
+}
+
 // ===================== State =====================
-let currentTab = localStorage.getItem('llm-rosetta-tab') || 'providers';
+canonicalizeAdminPath();
+let currentPage = getCurrentPageFromLocation();
 let configData = null;
 let _credentialVisible = true;
 let keysData = null;
@@ -1678,7 +1709,7 @@ function updateToolAdaptationVisibility() {
   document.getElementById('toolUseApplyPatchRow').style.display = localize ? '' : 'none';
 }
 
-// ===================== Config Tab =====================
+// ===================== Config Pages =====================
 async function loadConfig() {
   try {
     configData = await api.get('/admin/api/config');
@@ -2505,7 +2536,7 @@ async function bulkAddFetchedModels() {
   }
 }
 
-// ===================== API Keys Tab =====================
+// ===================== API Keys Page =====================
 async function loadKeys() {
   try {
     keysData = await api.get('/admin/api/keys');
@@ -2528,6 +2559,7 @@ async function loadLogKeyLabels() {
 
 function renderKeys() {
   const tbody = document.getElementById('keysTable');
+  if (!tbody) return;
   const keys = (keysData && keysData.keys) || [];
   if (keys.length === 0) {
     tbody.innerHTML = `<tr><td colspan="4" style="color:var(--text-dim)">${t('keys.noKeys')}</td></tr>`;
@@ -2564,7 +2596,7 @@ async function generateKey() {
   if (res.ok) {
     closeModal('keyModal');
     showToast(t('toast.keySaved'));
-    // Show the created key for one-time copy
+    // Show the created key for one-time copy.
     document.getElementById('createdKeyValue').value = res.key.key;
     document.getElementById('keyCreatedModal').classList.add('open');
     loadKeys();
@@ -2628,7 +2660,7 @@ async function editKeyLabel(id, currentLabel) {
   else { showToast(res.error || 'Failed', 'error'); }
 }
 
-// ===================== Dashboard Tab =====================
+// ===================== Dashboard Page =====================
 async function loadMetrics() {
   const data = await api.get('/admin/api/metrics?seconds=60');
   renderStats(data);
@@ -2903,7 +2935,7 @@ function drawChart(canvasId, series, key, unit) {
   ctx.fill();
 }
 
-// ===================== Request Log Tab =====================
+// ===================== Request Log Page =====================
 async function loadLogs() {
   const model = document.getElementById('filterModel').value;
   const provider = document.getElementById('filterProvider').value;
@@ -2963,8 +2995,8 @@ function renderLogs(entries, total) {
 
   // Pagination
   const totalPages = Math.ceil(total / LOG_LIMIT) || 1;
-  const currentPage = Math.floor(logOffset / LOG_LIMIT) + 1;
-  document.getElementById('pageInfo').textContent = t('page.info', {current: currentPage, total: totalPages, count: total});
+  const currentLogPage = Math.floor(logOffset / LOG_LIMIT) + 1;
+  document.getElementById('pageInfo').textContent = t('page.info', {current: currentLogPage, total: totalPages, count: total});
   document.getElementById('prevPage').disabled = logOffset === 0;
   document.getElementById('nextPage').disabled = logOffset + LOG_LIMIT >= total;
 }
@@ -2999,7 +3031,7 @@ function rotateKey(id, label, btn) {
     const res = await api.post(`/admin/api/keys/${encodeURIComponent(id)}/rotate`);
     if (res.ok) {
       showToast(t('toast.keyRotated', {label}));
-      // Show the new key for one-time copy
+      // Show the new key for one-time copy.
       document.getElementById('createdKeyValue').value = res.key;
       document.getElementById('keyCreatedModal').classList.add('open');
       loadKeys();
@@ -3042,29 +3074,23 @@ function updateKeyFilterOptions() {
   kSel.value = kVal;
 }
 
-// ===================== Tabs =====================
-document.querySelectorAll('.tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    tab.classList.add('active');
-    const id = tab.dataset.tab;
-    document.getElementById('tab-' + id).classList.add('active');
-    currentTab = id;
-    localStorage.setItem('llm-rosetta-tab', id);
-    stopTimers();
-    if (id === 'dashboard') { loadMetrics(); dashboardTimer = setInterval(loadMetrics, 3000); }
-    if (id === 'logs') { logOffset = 0; loadLogs(); logTimer = setInterval(loadLogs, 5000); }
-    if (id === 'gateway-logs') { loadConfig(); }
-    if (id === 'providers' || id === 'models') { loadConfig(); }
-    if (id === 'keys') { loadKeys(); }
-  });
-});
+// ===================== Page Lifecycle =====================
+activateCurrentPage();
 
-// Restore saved tab on page load
-if (currentTab !== 'providers') {
-  const savedTab = document.querySelector(`.tab[data-tab="${currentTab}"]`);
-  if (savedTab) savedTab.click();
+function loadActivePageData() {
+  stopTimers();
+  if (currentPage === 'dashboard') {
+    loadMetrics();
+    dashboardTimer = setInterval(loadMetrics, 3000);
+  }
+  if (currentPage === 'logs') {
+    logOffset = 0;
+    loadLogs();
+    logTimer = setInterval(loadLogs, 5000);
+  }
+  if (currentPage === 'gateway-logs') {
+    renderStreamTraceSettings();
+  }
 }
 
 function stopTimers() {
@@ -3450,21 +3476,16 @@ async function runTest(model, type) {
 
 // ===================== Init =====================
 function initApp() {
+  activateCurrentPage();
   loadConfig();
   loadKeys();
   loadLogKeyLabels();
   api.get('/admin/api/internal-token').then(r => { internalToken = r.token; }).catch(() => {});
-  // Always load the DB footer regardless of the active tab
+  // Always load the DB footer regardless of the active page
   api.get('/admin/api/metrics?seconds=1').then(data => {
     renderPersistence(data.persistence, data.total_requests);
   }).catch(() => {});
-  // Trigger data load for the currently active tab.  On first page load
-  // the tab restore (savedTab.click()) runs before auth completes, so
-  // its fetch calls fail with 401.  Re-trigger here after successful auth.
-  stopTimers();
-  if (currentTab === 'dashboard') { loadMetrics(); dashboardTimer = setInterval(loadMetrics, 3000); }
-  if (currentTab === 'logs') { logOffset = 0; loadLogs(); logTimer = setInterval(loadLogs, 5000); }
-  if (currentTab === 'gateway-logs') { loadConfig(); }
+  loadActivePageData();
 }
 // ===================== System Clock =====================
 (function initClock() {
