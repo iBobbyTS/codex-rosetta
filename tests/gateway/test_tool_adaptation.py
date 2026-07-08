@@ -1009,6 +1009,268 @@ def test_gateway_enriches_empty_tool_search_output_from_deferred_namespaces():
     assert output["namespace"] == "mcp__codex_apps__github"
 
 
+def test_gateway_deferred_tool_search_limits_namespace_children():
+    captured_bodies: list[dict[str, Any]] = []
+    window_store = WindowToolSearchStore()
+    upstream_body = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_bodies.append(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    initial_body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "check tools"}],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps__github",
+                "description": "GitHub connector.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "_fetch_pr",
+                        "description": "Fetch GitHub pull request details.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "type": "function",
+                        "name": "_get_pr_info",
+                        "description": "Get GitHub pull request summary, files, comments, and checks.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "type": "function",
+                        "name": "_create_issue",
+                        "description": "Create a GitHub issue.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                    {
+                        "type": "function",
+                        "name": "_delete_file",
+                        "description": "Delete a file from a GitHub repository.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            },
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps__gmail",
+                "description": "Gmail connector.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "_search",
+                        "description": "Search email.",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            },
+        ],
+    }
+    search_result_body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "tool_search_call",
+                "call_id": "call_search",
+                "arguments": {"query": "github pull request", "limit": 2},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "call_search",
+                "tools": [],
+            },
+            {"role": "user", "content": "inspect PR"},
+        ],
+        "tools": [
+            {
+                "type": "tool_search",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        first_response, _ = await handle_non_streaming(
+            _plain_route(),
+            _provider_info(),
+            initial_body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-abc:0",
+            window_tool_search_store=window_store,
+        )
+        second_response, _ = await handle_non_streaming(
+            _plain_route(),
+            _provider_info(),
+            search_result_body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-abc:0",
+            window_tool_search_store=window_store,
+        )
+        return first_response, second_response
+
+    first_response, second_response = asyncio.run(run())
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    loadable_tools = search_result_body["input"][1]["tools"]
+    assert len(loadable_tools) == 1
+    assert loadable_tools[0]["name"] == "mcp__codex_apps__github"
+    assert [tool["name"] for tool in loadable_tools[0]["tools"]] == [
+        "_fetch_pr",
+        "_get_pr_info",
+    ]
+    names = _tool_names(captured_bodies[1]["tools"])
+    assert "mcp__codex_apps__github___fetch_pr" in names
+    assert "mcp__codex_apps__github___get_pr_info" in names
+    assert "mcp__codex_apps__github___create_issue" not in names
+    assert "mcp__codex_apps__github___delete_file" not in names
+    assert "mcp__codex_apps__gmail___search" not in names
+
+
+def test_gateway_deferred_tool_search_matches_nested_schema_metadata():
+    captured_body: dict[str, Any] = {}
+    window_store = WindowToolSearchStore()
+    upstream_body = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    window_store.remember_deferred_tools(
+        "thread-abc:0",
+        [
+            {
+                "type": "namespace",
+                "name": "mcp__calendar",
+                "description": "Calendar connector.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "_create_event",
+                        "description": "Create a record.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "participants": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "attendee_email": {"type": "string"}
+                                        },
+                                    },
+                                },
+                                "recurrence": {
+                                    "anyOf": [
+                                        {
+                                            "type": "object",
+                                            "description": "Recurring schedule rule.",
+                                        },
+                                        {"type": "null"},
+                                    ]
+                                },
+                            },
+                        },
+                    },
+                    {
+                        "type": "function",
+                        "name": "_delete_event",
+                        "description": "Delete a record.",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            }
+        ],
+    )
+    body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "tool_search_call",
+                "call_id": "call_search",
+                "arguments": {"query": "attendee recurring", "limit": 1},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "call_search",
+                "tools": [],
+            },
+            {"role": "user", "content": "create a recurring event"},
+        ],
+        "tools": [
+            {
+                "type": "tool_search",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _plain_route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-abc:0",
+            window_tool_search_store=window_store,
+        )
+
+    response, _ = asyncio.run(run())
+
+    assert response.status_code == 200
+    assert [tool["name"] for tool in body["input"][1]["tools"][0]["tools"]] == [
+        "_create_event"
+    ]
+    names = _tool_names(captured_body["tools"])
+    assert "mcp__calendar___create_event" in names
+    assert "mcp__calendar___delete_event" not in names
+
+
 def test_gateway_does_not_overwrite_non_empty_tool_search_output():
     captured_body: dict[str, Any] = {}
     window_store = WindowToolSearchStore()
@@ -1327,6 +1589,14 @@ def test_gateway_defers_preloaded_plugin_namespaces_but_keeps_base_tools():
     )
     assert "mcp__codex_apps__github" in tool_search["function"]["description"]
     assert "mcp__codex_apps__gmail" in tool_search["function"]["description"]
+    assert "generic capability/source terms" in tool_search["function"]["description"]
+    assert "not task data" in tool_search["function"]["description"]
+    query = tool_search["function"]["parameters"]["properties"]["query"]
+    assert "Do not include task-specific values" in query["description"]
+    limit = tool_search["function"]["parameters"]["properties"]["limit"]
+    assert (
+        limit["description"] == "Use 8 unless previous search didn't give enough tools."
+    )
 
 
 def test_gateway_does_not_defer_preloaded_namespaces_without_codex_window_id():
