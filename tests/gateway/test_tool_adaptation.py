@@ -160,6 +160,57 @@ def test_translate_localized_edit_to_exec_command_when_apply_patch_absent():
     assert "+print('new')" in command
 
 
+def test_translate_localized_write_to_custom_apply_patch_add_file():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_write",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "docs/new.md",
+                "content": "# Title\n\nBody\n",
+            },
+        }
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "apply_patch"
+    assert translated.part["tool_type"] == "custom"
+    patch = translated.part["tool_input"]["input"]
+    assert "*** Add File: docs/new.md" in patch
+    assert "+# Title" in patch
+    assert "+Body" in patch
+    assert translated.mapping.localized_name == "Write"
+
+
+def test_translate_localized_write_to_exec_command_when_apply_patch_absent():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_write",
+            "tool_name": "Write",
+            "tool_input": {
+                "file_path": "docs/new.md",
+                "content": "# Title\n\nBody\n",
+            },
+        },
+        capabilities=NativeToolCapabilities(
+            has_exec_command=True,
+            has_custom_apply_patch=False,
+        ),
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec_command"
+    assert translated.part["tool_type"] == "function"
+    command = translated.part["tool_input"]["cmd"]
+    assert "apply_patch <<'PATCH'" in command
+    assert "*** Add File: docs/new.md" in command
+    assert "+# Title" in command
+    assert "+Body" in command
+    assert "docs/new.md" in command
+
+
 def test_translate_localized_edit_expands_substring_from_read_cache():
     cache = ReadOutputCache()
     cache.remember(
@@ -1055,6 +1106,96 @@ def test_gateway_streaming_translates_edit_to_exec_when_apply_patch_absent():
     assert '"name": "apply_patch"' not in joined
 
 
+def test_gateway_streaming_translates_write_to_apply_patch_when_available():
+    captured_body: dict[str, Any] = {}
+    stream = _ChatStream(
+        [
+            {
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": "glm-5.2",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_write",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Write",
+                                        "arguments": json.dumps(
+                                            {
+                                                "file_path": "example.txt",
+                                                "content": "hello\n",
+                                            }
+                                        ),
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {
+                "id": "chatcmpl-stream",
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": "glm-5.2",
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+            },
+        ]
+    )
+
+    async def send_streaming(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return stream
+
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(side_effect=send_streaming)
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "write example.txt"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            },
+            {"type": "custom", "name": "apply_patch", "description": "Apply patch"},
+        ],
+        "stream": True,
+    }
+
+    async def run() -> list[str]:
+        response, _ = await handle_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+        )
+        chunks: list[str] = []
+        async for chunk in response._generator:
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(run())
+
+    assert LOCALIZATION_CAPABILITIES_KEY not in captured_body
+    joined = "\n".join(chunks)
+    assert '"name": "apply_patch"' in joined
+    assert "*** Add File: example.txt" in joined
+    assert "+hello" in joined
+    assert '"name": "Write"' not in joined
+
+
 def test_gateway_streaming_persists_tool_mapping(tmp_path):
     stream = _ChatStream(
         [
@@ -1220,14 +1361,31 @@ def _execute_native_call(tmp_path: Path, part: dict[str, Any]) -> dict[str, Any]
 
 def _apply_test_patch(tmp_path: Path, patch: str) -> dict[str, Any]:
     lines = patch.splitlines()
-    if len(lines) < 5 or lines[0] != "*** Begin Patch":
+    if len(lines) < 4 or lines[0] != "*** Begin Patch":
         return {"ok": False, "stdout": "", "stderr": "Invalid patch header"}
     update_lines = [line for line in lines if line.startswith("*** Update File: ")]
+    add_lines = [line for line in lines if line.startswith("*** Add File: ")]
+    if len(add_lines) == 1 and not update_lines:
+        rel_path = add_lines[0].split(": ", 1)[1]
+        target = (tmp_path / rel_path).resolve()
+        if not str(target).startswith(str(tmp_path.resolve())):
+            return {"ok": False, "stdout": "", "stderr": "Path escapes test root"}
+        if target.exists():
+            return {"ok": False, "stdout": "", "stderr": f"{rel_path} already exists"}
+        content_lines = [
+            line[1:]
+            for line in lines
+            if line.startswith("+") and not line.startswith("***")
+        ]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("\n".join(content_lines) + "\n")
+        return {"ok": True, "stdout": f"Added {rel_path}\n", "stderr": ""}
+
     if len(update_lines) != 1:
         return {
             "ok": False,
             "stdout": "",
-            "stderr": "Test executor supports one update hunk",
+            "stderr": "Test executor supports one add-file or update hunk",
         }
     rel_path = update_lines[0].split(": ", 1)[1]
     target = (tmp_path / rel_path).resolve()

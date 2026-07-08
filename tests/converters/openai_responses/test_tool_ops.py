@@ -176,11 +176,19 @@ class TestOpenAIResponsesToolOps:
         result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
 
         assert isinstance(result, list)
-        assert [tool["name"] for tool in result] == ["spawn_agent", "wait_agent"]
+        assert [tool["name"] for tool in result] == [
+            "multi_agent_v1__spawn_agent",
+            "multi_agent_v1__wait_agent",
+        ]
         assert result[0]["type"] == "function"
         assert result[0]["required_parameters"] == ["prompt"]
         assert result[0]["metadata"]["provider_type"] == "namespace"
         assert result[0]["metadata"]["responses_namespace"] == "multi_agent_v1"
+        assert result[0]["metadata"]["responses_namespace_child_name"] == "spawn_agent"
+        assert (
+            result[0]["metadata"]["responses_chat_tool_name"]
+            == "multi_agent_v1__spawn_agent"
+        )
         assert (
             result[0]["metadata"]["responses_namespace_description"]
             == "Spawn and manage sub-agents."

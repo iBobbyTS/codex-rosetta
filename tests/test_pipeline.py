@@ -500,8 +500,57 @@ class TestConversionPipeline:
         )
 
         tool_names = [tool["function"]["name"] for tool in target["tools"]]
-        assert tool_names == ["spawn_agent"]
+        assert tool_names == ["multi_agent_v1__spawn_agent"]
         assert "multi_agent_v1" not in tool_names
+
+    def test_responses_namespace_duplicate_child_names_are_unique_for_chat_target(self):
+        """Namespace child names are disambiguated when flattened for Chat."""
+        from llm_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        target = pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "fetch from different connectors",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "mcp__codex_apps__github",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "_fetch",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"id": {"type": "string"}},
+                                },
+                            }
+                        ],
+                    },
+                    {
+                        "type": "namespace",
+                        "name": "mcp__codex_apps__gmail",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "_fetch",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"id": {"type": "string"}},
+                                },
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        tool_names = [tool["function"]["name"] for tool in target["tools"]]
+        assert tool_names == [
+            "mcp__codex_apps__github___fetch",
+            "mcp__codex_apps__gmail___fetch",
+        ]
+        assert len(tool_names) == len(set(tool_names))
 
     def test_responses_goal_tools_get_chat_guidance(self):
         """Codex goal tools get clearer descriptions for Chat targets."""
@@ -671,7 +720,7 @@ class TestConversionPipeline:
                                     "id": "call_123",
                                     "type": "function",
                                     "function": {
-                                        "name": "spawn_agent",
+                                        "name": "multi_agent_v1__spawn_agent",
                                         "arguments": '{"prompt":"Translate README"}',
                                     },
                                 }
@@ -687,6 +736,76 @@ class TestConversionPipeline:
         assert tool_call["type"] == "function_call"
         assert tool_call["name"] == "spawn_agent"
         assert tool_call["namespace"] == "multi_agent_v1"
+
+    def test_chat_response_duplicate_namespace_child_tool_call_restores_source_name(
+        self,
+    ):
+        """Disambiguated Chat tool calls restore original namespace child names."""
+        from llm_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "fetch from github",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "mcp__codex_apps__github",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "_fetch",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                    {
+                        "type": "namespace",
+                        "name": "mcp__codex_apps__gmail",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "_fetch",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "mcp__codex_apps__github___fetch",
+                                        "arguments": '{"id":"issue-1"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        tool_call = response["output"][0]
+        assert tool_call["type"] == "function_call"
+        assert tool_call["name"] == "_fetch"
+        assert tool_call["namespace"] == "mcp__codex_apps__github"
 
     def test_convert_response_openai_to_openai(self):
         """Response round-trip produces valid source response."""
@@ -902,7 +1021,7 @@ class TestConversionPipeline:
                                     "id": "call_123",
                                     "type": "function",
                                     "function": {
-                                        "name": "spawn_agent",
+                                        "name": "multi_agent_v1__spawn_agent",
                                         "arguments": "",
                                     },
                                 }

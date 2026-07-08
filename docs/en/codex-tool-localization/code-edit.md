@@ -37,11 +37,11 @@ Localized tool calls are translated back before Codex receives the response:
 - `Read` becomes an `exec_command` that prints UTF-8 file contents, with optional offset and limit.
 - `Glob` becomes an `exec_command` using Python `glob`.
 - `Grep` becomes an `exec_command` using `rg`.
-- `Write` becomes an `exec_command` that writes UTF-8 content through a base64-safe Python helper.
+- `Write` normally becomes a custom `apply_patch` add-file call.
 - `Edit` normally becomes a custom `apply_patch` call.
 - `Edit(replace_all=true)` becomes an `exec_command` that performs a controlled replace-all operation.
 
-If the original request does not expose custom `apply_patch`, Rosetta falls back to an `exec_command` or `shell_command` that invokes `apply_patch` through a heredoc when available.
+If the original request does not expose custom `apply_patch`, `Edit` falls back to an `exec_command` or `shell_command` that invokes `apply_patch` through a heredoc when available, and `Write` falls back to an `exec_command` that writes UTF-8 content through a base64-safe Python helper.
 
 ## Read Output Expansion
 

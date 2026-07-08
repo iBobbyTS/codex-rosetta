@@ -526,6 +526,21 @@ def generated_patch_for_edit(
     )
 
 
+def generated_patch_for_write(args: dict[str, Any]) -> str:
+    """Generate a Codex apply_patch add-file patch for Write."""
+    file_path = _required_string(args, "file_path", tool_name="Write")
+    content = _required_string(args, "content", tool_name="Write")
+    return "\n".join(
+        [
+            "*** Begin Patch",
+            f"*** Add File: {file_path}",
+            *_prefixed_patch_lines(content, "+"),
+            "*** End Patch",
+            "",
+        ]
+    )
+
+
 def generated_apply_patch_heredoc_command(patch: str) -> str:
     """Generate a shell command that Codex exec_command can intercept."""
     marker = "PATCH"
@@ -717,15 +732,25 @@ def _localized_call_to_native(
         )
 
     if localized_name == "Write":
-        return (
-            "exec_command",
-            {
-                "cmd": generated_command_for_write(localized_input),
-                "yield_time_ms": 1_000,
-                "max_output_tokens": 20_000,
-            },
-            "function",
-        )
+        if capabilities.has_custom_apply_patch:
+            return (
+                "apply_patch",
+                {"input": generated_patch_for_write(localized_input)},
+                "custom",
+            )
+        if capabilities.has_exec_command:
+            return (
+                "exec_command",
+                {
+                    "cmd": generated_apply_patch_heredoc_command(
+                        generated_patch_for_write(localized_input)
+                    ),
+                    "yield_time_ms": 1_000,
+                    "max_output_tokens": 20_000,
+                },
+                "function",
+            )
+        raise ValueError("Write requires apply_patch or exec_command support.")
 
     raise ValueError(f"Unsupported localized tool: {localized_name}")
 
@@ -818,7 +843,7 @@ def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
         ),
         _function_tool(
             "Write",
-            "Create or overwrite a UTF-8 text file with the provided full content.",
+            "Create a new UTF-8 text file with the provided full content.",
             {
                 "type": "object",
                 "properties": {

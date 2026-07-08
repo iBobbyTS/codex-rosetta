@@ -38,7 +38,11 @@ from ...types.ir.stream import (
     ProviderPassthroughEvent,
 )
 from ..base import BaseConverter
-from ..base.context import ConversionContext, StreamContext
+from ..base.context import (
+    ConversionContext,
+    ResponsesNamespaceToolMapping,
+    StreamContext,
+)
 from ..base.helpers import fix_orphaned_tool_calls_ir, strip_orphaned_tool_config
 from .stream_context import OpenAIResponsesStreamContext
 from ._constants import (
@@ -575,7 +579,7 @@ class OpenAIResponsesConverter(BaseConverter):
         ctx: ConversionContext,
     ) -> None:
         """Record Responses namespace child tool mappings for response restore."""
-        mapping: dict[str, str] = {}
+        mapping: dict[str, ResponsesNamespaceToolMapping] = {}
         for tool in ir_tools:
             if not isinstance(tool, dict):
                 continue
@@ -583,14 +587,24 @@ class OpenAIResponsesConverter(BaseConverter):
             if metadata.get("provider_type") != "namespace":
                 continue
             namespace = metadata.get("responses_namespace")
-            name = tool.get("name")
+            chat_tool_name = metadata.get("responses_chat_tool_name") or tool.get(
+                "name"
+            )
+            child_name = metadata.get("responses_namespace_child_name")
+            if not isinstance(child_name, str) or not child_name:
+                child = metadata.get("responses_namespace_child")
+                if isinstance(child, dict):
+                    child_name = child.get("name")
             if (
                 isinstance(namespace, str)
                 and namespace
-                and isinstance(name, str)
-                and name
+                and isinstance(chat_tool_name, str)
+                and chat_tool_name
             ):
-                mapping[name] = namespace
+                entry: dict[str, str] = {"namespace": namespace}
+                if isinstance(child_name, str) and child_name:
+                    entry["child_name"] = child_name
+                mapping[chat_tool_name] = entry
         ctx.store_responses_namespace_tool_map(mapping)
 
     def _ir_tool_call_to_p_with_context(
@@ -614,6 +628,13 @@ class OpenAIResponsesConverter(BaseConverter):
             return self.tool_ops.ir_tool_call_to_p(part)
 
         patched = dict(part)
+        child_name = (
+            context.get_responses_child_name_for_tool(tool_name)
+            if isinstance(tool_name, str)
+            else None
+        )
+        if child_name:
+            patched["tool_name"] = child_name
         provider_metadata = dict(patched.get("provider_metadata") or {})
         provider_metadata.setdefault("responses_namespace", namespace)
         patched["provider_metadata"] = provider_metadata
@@ -1520,6 +1541,10 @@ class OpenAIResponsesConverter(BaseConverter):
             namespace = context.get_responses_namespace_for_tool(tool_name)
             if namespace:
                 provider_metadata["responses_namespace"] = namespace
+        if context is not None and isinstance(tool_name, str):
+            child_name = context.get_responses_child_name_for_tool(tool_name)
+            if child_name:
+                tool_name = child_name
         item_id = provider_metadata.get("responses_item_id") or call_id
 
         # Register in context for later done events
