@@ -36,6 +36,7 @@ from .logging import (
     log_stream_summary,
     log_upstream_error,
 )
+from .stream_phase_buffer import ResponsesPhaseBuffer
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
@@ -745,6 +746,7 @@ async def _stream_event_generator(
     processor: Any,
     model: str,
     format_sse: Any,
+    event_buffer: ResponsesPhaseBuffer | None = None,
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
@@ -772,12 +774,23 @@ async def _stream_event_generator(
                 if trace is not None:
                     trace.log("upstream_chunk", chunk, chunk_index=chunk_count)
                 for source_event in processor.process_chunk(chunk):
-                    if trace is not None:
-                        trace.log("source_event", source_event, chunk_index=chunk_count)
-                    sse_event = format_sse(source_event)
-                    if trace is not None:
-                        trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
-                    yield sse_event
+                    for sse_event in _format_source_event_sse(
+                        source_event,
+                        event_buffer=event_buffer,
+                        format_sse=format_sse,
+                        trace=trace,
+                        chunk_count=chunk_count,
+                    ):
+                        yield sse_event
+
+        if event_buffer is not None:
+            for sse_event in _format_buffered_events_sse(
+                event_buffer.flush(),
+                format_sse=format_sse,
+                trace=trace,
+                chunk_count=chunk_count,
+            ):
+                yield sse_event
 
         if source_provider == "openai_chat":
             done_event = format_sse_done()
@@ -794,31 +807,90 @@ async def _stream_event_generator(
         stream_error = str(exc)
         raise
     finally:
-        # Write back stream profile to request log entry
-        if entry_id and request_log is not None:
-            stream_profile: dict[str, Any] = {
-                "stream_duration_ms": round((time.monotonic() - t0) * 1000, 2),
-                "stream_chunks": chunk_count,
-                "stream_complete": stream_error is None,
-            }
-            if ttfb_ms is not None:
-                stream_profile["stream_ttfb_ms"] = ttfb_ms
-            if stream_error is not None:
-                stream_profile["stream_error"] = stream_error[:500]
-            try:
-                request_log.update_profile(entry_id, stream_profile)
-            except Exception:
-                logger.debug("Failed to write stream profile for %s", entry_id)
+        _finalize_stream_profile(
+            entry_id=entry_id,
+            request_log=request_log,
+            trace=trace,
+            t0=t0,
+            chunk_count=chunk_count,
+            stream_error=stream_error,
+            ttfb_ms=ttfb_ms,
+        )
+
+
+def _format_source_event_sse(
+    source_event: dict[str, Any],
+    *,
+    event_buffer: ResponsesPhaseBuffer | None,
+    format_sse: Any,
+    trace: StreamTraceLogger | None,
+    chunk_count: int,
+) -> list[str]:
+    if trace is not None:
+        trace.log("source_event", source_event, chunk_index=chunk_count)
+    buffered_events = (
+        event_buffer.process(source_event)
+        if event_buffer is not None
+        else [source_event]
+    )
+    return _format_buffered_events_sse(
+        buffered_events,
+        format_sse=format_sse,
+        trace=trace,
+        chunk_count=chunk_count,
+    )
+
+
+def _format_buffered_events_sse(
+    events: list[dict[str, Any]],
+    *,
+    format_sse: Any,
+    trace: StreamTraceLogger | None,
+    chunk_count: int,
+) -> list[str]:
+    sse_events: list[str] = []
+    for event in events:
+        sse_event = format_sse(event)
         if trace is not None:
-            trace.log(
-                "stream_complete",
-                {
-                    "chunk_count": chunk_count,
-                    "stream_complete": stream_error is None,
-                    "stream_error": stream_error,
-                    "ttfb_ms": ttfb_ms,
-                },
-            )
+            trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
+        sse_events.append(sse_event)
+    return sse_events
+
+
+def _finalize_stream_profile(
+    *,
+    entry_id: str | None,
+    request_log: Any | None,
+    trace: StreamTraceLogger | None,
+    t0: float,
+    chunk_count: int,
+    stream_error: str | None,
+    ttfb_ms: float | None,
+) -> None:
+    if entry_id and request_log is not None:
+        stream_profile: dict[str, Any] = {
+            "stream_duration_ms": round((time.monotonic() - t0) * 1000, 2),
+            "stream_chunks": chunk_count,
+            "stream_complete": stream_error is None,
+        }
+        if ttfb_ms is not None:
+            stream_profile["stream_ttfb_ms"] = ttfb_ms
+        if stream_error is not None:
+            stream_profile["stream_error"] = stream_error[:500]
+        try:
+            request_log.update_profile(entry_id, stream_profile)
+        except Exception:
+            logger.debug("Failed to write stream profile for %s", entry_id)
+    if trace is not None:
+        trace.log(
+            "stream_complete",
+            {
+                "chunk_count": chunk_count,
+                "stream_complete": stream_error is None,
+                "stream_error": stream_error,
+                "ttfb_ms": ttfb_ms,
+            },
+        )
 
 
 async def _raw_stream_event_generator(
@@ -899,6 +971,7 @@ async def handle_streaming(
     request_log: Any | None = None,
     persistence: Any | None = None,
     tool_cache_session_id: str | None = None,
+    codex_window_id: str | None = None,
     stream_trace_state: StreamTraceState | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Streaming proxy: convert -> forward -> stream-convert back -> SSE.
@@ -1203,6 +1276,13 @@ async def handle_streaming(
         else None,
     )
     format_sse = SSE_FORMATTERS[route.source_provider]
+    event_buffer = (
+        ResponsesPhaseBuffer(window_id=codex_window_id)
+        if route.source_provider in ("openai_responses", "open_responses")
+        and route.target_provider == "openai_chat"
+        and codex_window_id
+        else None
+    )
 
     if trace is not None:
         trace.log(
@@ -1213,6 +1293,8 @@ async def handle_streaming(
                 "target_provider": route.target_provider,
                 "provider_name": route.provider_name,
                 "entry_id": entry_id,
+                "codex_window_id": codex_window_id,
+                "phase_buffer_enabled": event_buffer is not None,
             },
         )
         trace.log("source_request", body)
@@ -1226,6 +1308,7 @@ async def handle_streaming(
                 processor=processor,
                 model=model,
                 format_sse=format_sse,
+                event_buffer=event_buffer,
                 entry_id=entry_id,
                 request_log=request_log,
                 trace=trace,

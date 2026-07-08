@@ -239,7 +239,8 @@ async def _proxy_handler(
 
     # Determine streaming
     is_stream = force_stream or detect_stream_request(source_provider, body)
-    tool_cache_session_id = request.headers.get("x-codex-window-id") or f"model:{model}"
+    codex_window_id = request.headers.get("x-codex-window-id")
+    tool_cache_session_id = codex_window_id or f"model:{model}"
 
     model_label = (
         f"{model} (upstream={route.upstream_model})" if route.upstream_model else model
@@ -290,6 +291,7 @@ async def _proxy_handler(
                 request_log=request_log,
                 persistence=persistence,
                 tool_cache_session_id=tool_cache_session_id,
+                codex_window_id=codex_window_id,
                 stream_trace_state=getattr(request.app, "stream_trace_state", None),
             )
         else:
