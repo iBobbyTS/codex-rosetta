@@ -201,7 +201,11 @@ def _synthetic_responses_tool_search_definition(
         "execution": "client",
         "description": (
             "Search deferred Codex tools by capability or provider name and expose "
-            "the matching tools for a later model request."
+            "the matching tools for a later model request. The query is for tool "
+            "discovery only: include generic capability/source terms, not task data. "
+            "Do not include repository names, PR/issue numbers, URLs, file paths, "
+            "user text, or other runtime arguments; pass those later to the loaded "
+            "tool."
             f"{source_hint}"
         ),
         "parameters": {
@@ -209,11 +213,15 @@ def _synthetic_responses_tool_search_definition(
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Natural-language search query for tools to load.",
+                    "description": (
+                        "Tool-discovery query using generic capability/source terms "
+                        "only. Do not include task-specific values such as repo names, "
+                        "PR numbers, issue IDs, URLs, file paths, or user content."
+                    ),
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of matching tools to return.",
+                    "description": "Use 8 unless previous search didn't give enough tools.",
                 },
             },
             "required": ["query"],
@@ -782,6 +790,20 @@ class WindowToolSearchStore:
                     values.append(prop_name)
                 if isinstance(prop_schema, dict):
                     values.extend(cls._schema_search_text(prop_schema))
+        items = schema.get("items")
+        if isinstance(items, dict):
+            values.extend(cls._schema_search_text(items))
+        elif isinstance(items, list):
+            for item_schema in items:
+                if isinstance(item_schema, dict):
+                    values.extend(cls._schema_search_text(item_schema))
+        for keyword in ("anyOf", "oneOf", "allOf"):
+            variants = schema.get(keyword)
+            if not isinstance(variants, list):
+                continue
+            for variant in variants:
+                if isinstance(variant, dict):
+                    values.extend(cls._schema_search_text(variant))
         return values
 
     @classmethod
@@ -807,6 +829,69 @@ class WindowToolSearchStore:
                 score += 1
         return score
 
+    @classmethod
+    def _score_namespace_child_for_query(
+        cls, namespace: dict[str, Any], child: dict[str, Any], query: str
+    ) -> int:
+        query_tokens = set(cls._expanded_query_tokens(query))
+        if not query_tokens:
+            return 0
+
+        namespace_text = " ".join(
+            value
+            for key in ("name", "description")
+            if isinstance((value := namespace.get(key)), str)
+        )
+        child_name = child.get("name") if isinstance(child.get("name"), str) else ""
+        child_description = (
+            child.get("description")
+            if isinstance(child.get("description"), str)
+            else ""
+        )
+        schema_text = " ".join(
+            cls._schema_search_text(child.get("parameters", {}))
+            if isinstance(child.get("parameters"), dict)
+            else []
+        )
+
+        namespace_tokens = set(cls._search_tokens(namespace_text))
+        child_name_tokens = set(cls._search_tokens(child_name.replace("_", " ")))
+        description_tokens = set(cls._search_tokens(child_description))
+        schema_tokens = set(cls._search_tokens(schema_text))
+        all_tokens = (
+            namespace_tokens | child_name_tokens | description_tokens | schema_tokens
+        )
+        if not all_tokens:
+            return 0
+
+        score = 0
+        for token in query_tokens:
+            if token in child_name_tokens:
+                score += 12
+            elif any(tool_token.startswith(token) for tool_token in child_name_tokens):
+                score += 5
+            if token in description_tokens:
+                score += 5
+            if token in schema_tokens:
+                score += 3
+            if token in namespace_tokens:
+                score += 3
+
+        normalized_query = " ".join(cls._search_tokens(query))
+        normalized_description = " ".join(cls._search_tokens(child_description))
+        if normalized_query and normalized_query in normalized_description:
+            score += 10
+        return score
+
+    @classmethod
+    def _expanded_query_tokens(cls, query: str) -> list[str]:
+        tokens = cls._search_tokens(query)
+        expanded = list(tokens)
+        token_set = set(tokens)
+        if {"pull", "request"}.issubset(token_set):
+            expanded.extend(["pr", "prs"])
+        return expanded
+
     def _remember_tools(
         self,
         store: dict[str, _CacheEntry],
@@ -821,9 +906,42 @@ class WindowToolSearchStore:
             key = self._tool_key(tool)
             if not key:
                 continue
-            window_tools[key] = copy.deepcopy(tool)
+            window_tools[key] = self._merge_loadable_tool(window_tools.get(key), tool)
         self._evict_oldest()
         store[window_id] = _CacheEntry(data=window_tools)
+
+    @staticmethod
+    def _merge_loadable_tool(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+        if (
+            not isinstance(existing, dict)
+            or existing.get("type") != "namespace"
+            or incoming.get("type") != "namespace"
+        ):
+            return copy.deepcopy(incoming)
+
+        merged = copy.deepcopy(existing)
+        existing_children = merged.setdefault("tools", [])
+        incoming_children = incoming.get("tools")
+        if not isinstance(existing_children, list) or not isinstance(
+            incoming_children, list
+        ):
+            return copy.deepcopy(incoming)
+
+        existing_names = {
+            child.get("name")
+            for child in existing_children
+            if isinstance(child, dict) and isinstance(child.get("name"), str)
+        }
+        for child in incoming_children:
+            if not isinstance(child, dict):
+                continue
+            child_name = child.get("name")
+            if isinstance(child_name, str) and child_name in existing_names:
+                continue
+            existing_children.append(copy.deepcopy(child))
+            if isinstance(child_name, str):
+                existing_names.add(child_name)
+        return merged
 
     def remember_deferred_tools(
         self, window_id: str | None, tools: list[dict[str, Any]]
@@ -873,24 +991,67 @@ class WindowToolSearchStore:
                 continue
             call = calls_by_id.get(item.get("call_id"))
             query = self._tool_search_query(call)
-            matches = self._match_deferred_tools(deferred_tools, query)
+            limit = self._tool_search_limit(call)
+            matches = self._match_deferred_tools(deferred_tools, query, limit)
             if not matches:
                 continue
-            limit = self._tool_search_limit(call)
-            item["tools"] = [copy.deepcopy(tool) for tool in matches[:limit]]
+            item["tools"] = [copy.deepcopy(tool) for tool in matches]
 
     @classmethod
     def _match_deferred_tools(
-        cls, deferred_tools: list[dict[str, Any]], query: str
+        cls, deferred_tools: list[dict[str, Any]], query: str, limit: int
     ) -> list[dict[str, Any]]:
-        scored: list[tuple[int, int, dict[str, Any]]] = []
-        for index, tool in enumerate(deferred_tools):
+        scored: list[tuple[int, int, int, dict[str, Any]]] = []
+        for tool_index, tool in enumerate(deferred_tools):
+            if tool.get("type") == "namespace" and isinstance(tool.get("tools"), list):
+                for child_index, child in enumerate(tool["tools"]):
+                    if not isinstance(child, dict):
+                        continue
+                    if child.get("type", "function") != "function":
+                        continue
+                    score = cls._score_namespace_child_for_query(tool, child, query)
+                    if score <= 0:
+                        continue
+                    namespace_match = {
+                        "type": "namespace",
+                        "name": tool.get("name", ""),
+                        "description": tool.get("description", ""),
+                        "tools": [copy.deepcopy(child)],
+                    }
+                    scored.append((score, tool_index, child_index, namespace_match))
+                continue
+
             score = cls._score_tool_for_query(tool, query)
             if score <= 0:
                 continue
-            scored.append((score, index, tool))
-        scored.sort(key=lambda item: (-item[0], item[1]))
-        return [tool for _, _, tool in scored]
+            scored.append((score, tool_index, -1, copy.deepcopy(tool)))
+
+        scored.sort(key=lambda item: (-item[0], item[1], item[2]))
+        return cls._coalesce_loadable_tools([tool for _, _, _, tool in scored[:limit]])
+
+    @classmethod
+    def _coalesce_loadable_tools(
+        cls, tools: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        coalesced: list[dict[str, Any]] = []
+        namespace_indexes: dict[str, int] = {}
+        for tool in tools:
+            if tool.get("type") != "namespace":
+                coalesced.append(copy.deepcopy(tool))
+                continue
+            namespace_name = tool.get("name")
+            if not isinstance(namespace_name, str):
+                coalesced.append(copy.deepcopy(tool))
+                continue
+            if namespace_name not in namespace_indexes:
+                namespace_indexes[namespace_name] = len(coalesced)
+                coalesced.append(copy.deepcopy(tool))
+                continue
+            existing = coalesced[namespace_indexes[namespace_name]]
+            coalesced[namespace_indexes[namespace_name]] = cls._merge_loadable_tool(
+                existing, tool
+            )
+        return coalesced
 
     def inject_into_request(
         self,
