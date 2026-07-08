@@ -13,6 +13,7 @@ from llm_rosetta.converters.openai_responses._constants import ResponsesEventTyp
 from llm_rosetta.gateway.proxy import _stream_event_generator, handle_streaming
 from llm_rosetta.gateway.stream_phase_buffer import (
     COMMENTARY_PHASE,
+    FINAL_ANSWER_PHASE,
     ResponsesPhaseBuffer,
 )
 from llm_rosetta.gateway.stream_trace import StreamTraceLogger
@@ -163,6 +164,24 @@ def _completed(*, with_tool: bool) -> dict[str, Any]:
     }
 
 
+def _failed() -> dict[str, Any]:
+    return {
+        "type": ResponsesEventType.RESPONSE_FAILED,
+        "response": {
+            "id": "resp_1",
+            "status": "failed",
+            "output": [
+                {
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "working"}],
+                }
+            ],
+        },
+    }
+
+
 def _collect(
     buffer: ResponsesPhaseBuffer, events: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -231,7 +250,7 @@ def test_text_before_tool_is_released_as_commentary_before_tool_event():
     assert emitted[4]["item"]["type"] == "function_call"
 
 
-def test_text_without_tool_is_released_at_completed_without_phase():
+def test_text_without_tool_is_released_at_completed_as_final_answer():
     buffer = _buffer()
 
     emitted_before_completed: list[dict[str, Any]] = []
@@ -259,9 +278,9 @@ def test_text_without_tool_is_released_at_completed_without_phase():
         ResponsesEventType.OUTPUT_ITEM_DONE,
         ResponsesEventType.RESPONSE_COMPLETED,
     ]
-    assert "phase" not in _message_item(emitted[1])
-    assert "phase" not in emitted[6]["item"]
-    assert "phase" not in _completed_message(emitted[-1])
+    assert _message_item(emitted[1])["phase"] == FINAL_ANSWER_PHASE
+    assert emitted[6]["item"]["phase"] == FINAL_ANSWER_PHASE
+    assert _completed_message(emitted[-1])["phase"] == FINAL_ANSWER_PHASE
 
 
 def test_tool_without_prior_text_streams_without_empty_message():
@@ -314,6 +333,31 @@ def test_normal_eof_flushes_buffered_text_without_phase():
         ResponsesEventType.OUTPUT_TEXT_DELTA,
     ]
     assert "phase" not in _message_item(emitted[1])
+
+
+def test_failed_terminal_flushes_buffered_text_without_final_answer_phase():
+    buffer = _buffer()
+
+    emitted = _collect(
+        buffer,
+        [
+            _created(),
+            _message_added(),
+            _content_added(),
+            _text_delta(),
+            _failed(),
+        ],
+    )
+
+    assert _event_types(emitted) == [
+        ResponsesEventType.RESPONSE_CREATED,
+        ResponsesEventType.OUTPUT_ITEM_ADDED,
+        ResponsesEventType.CONTENT_PART_ADDED,
+        ResponsesEventType.OUTPUT_TEXT_DELTA,
+        ResponsesEventType.RESPONSE_FAILED,
+    ]
+    assert "phase" not in _message_item(emitted[1])
+    assert "phase" not in _completed_message(emitted[-1])
 
 
 class _FakeStream:
