@@ -12,8 +12,10 @@ instead of nested tool_calls within messages. Tool definitions use a flat
 format with type/name/description/parameters at the top level.
 """
 
+import hashlib
 import json
 import logging
+import re
 from typing import Any, cast
 
 from ..base.helpers.tool_content import (
@@ -31,6 +33,29 @@ from ..base import BaseToolOps
 from ..base.helpers import extract_part_ids, log_orphan_warnings, sanitize_schema
 
 logger = logging.getLogger(__name__)
+
+_CHAT_TOOL_NAME_MAX_LEN = 64
+_CHAT_TOOL_NAME_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
+
+
+def _sanitize_chat_tool_name_part(value: str, fallback: str) -> str:
+    """Return a Chat-compatible tool-name segment."""
+    sanitized = _CHAT_TOOL_NAME_INVALID_CHARS.sub("_", value)
+    return sanitized or fallback
+
+
+def _responses_namespace_chat_tool_name(namespace: str, child_name: str) -> str:
+    """Build a stable unique Chat-visible name for a Responses namespace child."""
+    namespace_part = _sanitize_chat_tool_name_part(namespace, "namespace")
+    child_part = _sanitize_chat_tool_name_part(child_name, "tool")
+    tool_name = f"{namespace_part}__{child_part}"
+    if len(tool_name) <= _CHAT_TOOL_NAME_MAX_LEN:
+        return tool_name
+
+    digest = hashlib.sha1(f"{namespace}\0{child_name}".encode()).hexdigest()[:12]
+    prefix_len = _CHAT_TOOL_NAME_MAX_LEN - len(digest) - 2
+    prefix = tool_name[:prefix_len].rstrip("_-") or "tool"
+    return f"{prefix}__{digest}"
 
 
 # ==================== Orphaned Tool Call Fix ====================
@@ -218,9 +243,13 @@ class OpenAIResponsesToolOps(BaseToolOps):
                             else namespace_description
                         )
                     params = child.get("parameters", {})
+                    child_name = child.get("name", "")
+                    chat_tool_name = _responses_namespace_chat_tool_name(
+                        namespace, child_name
+                    )
                     result = {
                         "type": "function",
-                        "name": child.get("name", ""),
+                        "name": chat_tool_name,
                         "description": description,
                         "parameters": params,
                         "required_parameters": params.get("required", [])
@@ -230,6 +259,8 @@ class OpenAIResponsesToolOps(BaseToolOps):
                             "provider_type": "namespace",
                             "responses_namespace": namespace,
                             "responses_namespace_description": namespace_description,
+                            "responses_namespace_child_name": child_name,
+                            "responses_chat_tool_name": chat_tool_name,
                             "responses_namespace_child": dict(child),
                         },
                     }

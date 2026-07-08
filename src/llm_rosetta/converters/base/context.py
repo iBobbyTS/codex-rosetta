@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 MetadataMode = Literal["strip", "preserve"]
+ResponsesNamespaceToolMapping = str | dict[str, str]
 
 
 @dataclass
@@ -90,11 +91,13 @@ class ConversionContext:
         """
         return self.metadata.get("_output_items_meta", [])
 
-    def store_responses_namespace_tool_map(self, mapping: dict[str, str]) -> None:
+    def store_responses_namespace_tool_map(
+        self, mapping: dict[str, ResponsesNamespaceToolMapping]
+    ) -> None:
         """Store Responses namespace child tool mappings.
 
         Args:
-            mapping: Mapping of child tool name to Responses namespace name.
+            mapping: Mapping of tool name to Responses namespace restore info.
         """
         if not mapping:
             return
@@ -106,8 +109,24 @@ class ConversionContext:
         mapping = self.metadata.get("_responses_namespace_tool_map", {})
         if not isinstance(mapping, dict):
             return None
-        namespace = mapping.get(tool_name)
-        return namespace if isinstance(namespace, str) and namespace else None
+        entry = mapping.get(tool_name)
+        if isinstance(entry, str):
+            return entry or None
+        if isinstance(entry, dict):
+            namespace = entry.get("namespace")
+            return namespace if namespace else None
+        return None
+
+    def get_responses_child_name_for_tool(self, tool_name: str) -> str | None:
+        """Return the original Responses namespace child name, if known."""
+        mapping = self.metadata.get("_responses_namespace_tool_map", {})
+        if not isinstance(mapping, dict):
+            return None
+        entry = mapping.get(tool_name)
+        if isinstance(entry, dict):
+            child_name = entry.get("child_name")
+            return child_name if child_name else None
+        return None
 
 
 @dataclass
