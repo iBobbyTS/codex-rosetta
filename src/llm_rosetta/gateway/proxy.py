@@ -157,6 +157,16 @@ _DIRECT_RESPONSES_NAMESPACE_TOOLS = {
     "multi_agent_v1",
 }
 
+_GITHUB_NAMESPACE_NAME = "mcp__codex_apps__github"
+_GITHUB_OWNER_HINT = (
+    "Do not guess. If the owner is not explicitly provided, inspect the local "
+    "git remote first, for example by running git remote -v."
+)
+_GITHUB_REPO_HINT = (
+    "Do not guess. If the repository name is not explicitly provided, derive "
+    "it from the user request or inspect the local git remote first, for example "
+    "by running git remote -v."
+)
 _TOOL_SEARCH_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -171,6 +181,51 @@ def _should_defer_responses_namespace_tool(tool: Any) -> bool:
         return False
     name = tool.get("name")
     return isinstance(name, str) and name not in _DIRECT_RESPONSES_NAMESPACE_TOOLS
+
+
+def _append_schema_description_hint(schema: dict[str, Any], hint: str) -> None:
+    description = schema.get("description")
+    if isinstance(description, str) and description.strip():
+        if hint not in description:
+            schema["description"] = f"{description.rstrip()} {hint}"
+    else:
+        schema["description"] = hint
+
+
+def _patch_github_namespace_tool_schema_for_chat(
+    tool: dict[str, Any],
+) -> dict[str, Any]:
+    """Add Chat-only GitHub owner/repo hints to loadable namespace tools."""
+    metadata = tool.get("metadata")
+    if not isinstance(metadata, dict):
+        return tool
+    if metadata.get("responses_namespace") != _GITHUB_NAMESPACE_NAME:
+        return tool
+
+    parameters = tool.get("parameters")
+    if not isinstance(parameters, dict):
+        return tool
+    properties = parameters.get("properties")
+    if not isinstance(properties, dict):
+        return tool
+
+    patched = copy.deepcopy(tool)
+    patched_parameters = patched.get("parameters")
+    if not isinstance(patched_parameters, dict):
+        return patched
+    patched_properties = patched_parameters.get("properties")
+    if not isinstance(patched_properties, dict):
+        return patched
+
+    owner_schema = patched_properties.get("owner")
+    if isinstance(owner_schema, dict):
+        _append_schema_description_hint(owner_schema, _GITHUB_OWNER_HINT)
+
+    repo_schema = patched_properties.get("repo")
+    if isinstance(repo_schema, dict):
+        _append_schema_description_hint(repo_schema, _GITHUB_REPO_HINT)
+
+    return patched
 
 
 def _synthetic_responses_tool_search_definition(
@@ -1094,6 +1149,7 @@ class WindowToolSearchStore:
             name = tool.get("name")
             if not isinstance(name, str) or name in existing_names:
                 continue
+            tool = _patch_github_namespace_tool_schema_for_chat(tool)
             existing_tools.append(tool)
             existing_names.add(name)
             added.append(tool)

@@ -1151,6 +1151,137 @@ def test_gateway_deferred_tool_search_limits_namespace_children():
     assert "mcp__codex_apps__gmail___search" not in names
 
 
+def test_gateway_patches_github_owner_repo_descriptions_only_for_chat_tools():
+    captured_bodies: list[dict[str, Any]] = []
+    window_store = WindowToolSearchStore()
+    upstream_body = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_bodies.append(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    initial_body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "check PR"}],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps__github",
+                "description": "GitHub connector.",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "_get_pr_info",
+                        "description": "Get GitHub pull request information.",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "owner": {
+                                    "type": "string",
+                                    "description": "Repository owner.",
+                                },
+                                "repo": {
+                                    "type": "string",
+                                    "description": "Repository name.",
+                                },
+                                "number": {"type": "integer"},
+                            },
+                            "required": ["owner", "repo", "number"],
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+    search_result_body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "tool_search_call",
+                "call_id": "call_search",
+                "arguments": {"query": "github pull request get", "limit": 8},
+            },
+            {
+                "type": "tool_search_output",
+                "call_id": "call_search",
+                "tools": [],
+            },
+            {"role": "user", "content": "inspect PR 34"},
+        ],
+        "tools": [
+            {
+                "type": "tool_search",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        first_response, _ = await handle_non_streaming(
+            _plain_route(),
+            _provider_info(),
+            initial_body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-abc:0",
+            window_tool_search_store=window_store,
+        )
+        second_response, _ = await handle_non_streaming(
+            _plain_route(),
+            _provider_info(),
+            search_result_body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-abc:0",
+            window_tool_search_store=window_store,
+        )
+        return first_response, second_response
+
+    first_response, second_response = asyncio.run(run())
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+
+    loadable_params = search_result_body["input"][1]["tools"][0]["tools"][0][
+        "parameters"
+    ]
+    assert loadable_params["properties"]["owner"]["description"] == "Repository owner."
+    assert loadable_params["properties"]["repo"]["description"] == "Repository name."
+
+    chat_tools = captured_bodies[1]["tools"]
+    github_tool = next(
+        tool
+        for tool in chat_tools
+        if tool.get("function", {}).get("name")
+        == "mcp__codex_apps__github___get_pr_info"
+    )
+    properties = github_tool["function"]["parameters"]["properties"]
+    assert "Do not guess" in properties["owner"]["description"]
+    assert "git remote -v" in properties["owner"]["description"]
+    assert "Do not guess" in properties["repo"]["description"]
+    assert "git remote -v" in properties["repo"]["description"]
+
+
 def test_gateway_deferred_tool_search_matches_nested_schema_metadata():
     captured_body: dict[str, Any] = {}
     window_store = WindowToolSearchStore()
