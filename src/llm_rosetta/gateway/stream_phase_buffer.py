@@ -8,6 +8,7 @@ from typing import Any
 from llm_rosetta.converters.openai_responses._constants import ResponsesEventType
 
 COMMENTARY_PHASE = "commentary"
+FINAL_ANSWER_PHASE = "final_answer"
 
 _MESSAGE_EVENT_TYPES = {
     ResponsesEventType.CONTENT_PART_ADDED,
@@ -57,7 +58,7 @@ class ResponsesPhaseBuffer:
 
         if self._has_tool_signal(event):
             self._commentary = True
-            emitted = self._flush_buffer(commentary=True)
+            emitted = self._flush_buffer(phase=COMMENTARY_PHASE)
             emitted.append(self._annotate_if_needed(event))
             if event.get("type") in _TERMINAL_EVENT_TYPES:
                 self._terminal_seen = True
@@ -66,8 +67,13 @@ class ResponsesPhaseBuffer:
         event_type = event.get("type")
         if event_type in _TERMINAL_EVENT_TYPES:
             self._terminal_seen = True
-            emitted = self._flush_buffer(commentary=self._commentary)
-            emitted.append(self._annotate_if_needed(event))
+            phase = (
+                COMMENTARY_PHASE
+                if self._commentary
+                else _final_buffer_phase_for_terminal(event_type)
+            )
+            emitted = self._flush_buffer(phase=phase)
+            emitted.append(_with_message_phase(event, phase) if phase else event)
             return emitted
 
         if self._should_buffer(event):
@@ -79,17 +85,17 @@ class ResponsesPhaseBuffer:
 
     def flush(self) -> list[dict[str, Any]]:
         """Release buffered events after a normal EOF without a terminal event."""
-        return self._flush_buffer(commentary=False)
+        return self._flush_buffer(phase=None)
 
-    def _flush_buffer(self, *, commentary: bool) -> list[dict[str, Any]]:
+    def _flush_buffer(self, *, phase: str | None) -> list[dict[str, Any]]:
         if not self._buffer:
             return []
 
         buffered = self._buffer
         self._buffer = []
-        if not commentary:
+        if phase is None:
             return list(buffered)
-        return [self._with_commentary_phase(event) for event in buffered]
+        return [_with_message_phase(event, phase) for event in buffered]
 
     def _should_buffer(self, event: dict[str, Any]) -> bool:
         if self._commentary:
@@ -118,26 +124,7 @@ class ResponsesPhaseBuffer:
     def _annotate_if_needed(self, event: dict[str, Any]) -> dict[str, Any]:
         if not self._commentary:
             return event
-        return self._with_commentary_phase(event)
-
-    def _with_commentary_phase(self, event: dict[str, Any]) -> dict[str, Any]:
-        event_type = event.get("type")
-        if event_type in (
-            ResponsesEventType.OUTPUT_ITEM_ADDED,
-            ResponsesEventType.OUTPUT_ITEM_DONE,
-        ):
-            if _item_type(event) != "message":
-                return event
-            annotated = deepcopy(event)
-            item = annotated.get("item")
-            if isinstance(item, dict):
-                item["phase"] = COMMENTARY_PHASE
-            return annotated
-
-        if event_type == ResponsesEventType.RESPONSE_COMPLETED:
-            return _annotate_completed_messages(event)
-
-        return event
+        return _with_message_phase(event, COMMENTARY_PHASE)
 
     def _has_tool_signal(self, event: dict[str, Any]) -> bool:
         event_type = event.get("type")
@@ -177,7 +164,35 @@ def _completed_has_tool_output(event: dict[str, Any]) -> bool:
     )
 
 
-def _annotate_completed_messages(event: dict[str, Any]) -> dict[str, Any]:
+def _final_buffer_phase_for_terminal(event_type: str | None) -> str | None:
+    if event_type == ResponsesEventType.RESPONSE_COMPLETED:
+        return FINAL_ANSWER_PHASE
+    return None
+
+
+def _with_message_phase(event: dict[str, Any], phase: str) -> dict[str, Any]:
+    event_type = event.get("type")
+    if event_type in (
+        ResponsesEventType.OUTPUT_ITEM_ADDED,
+        ResponsesEventType.OUTPUT_ITEM_DONE,
+    ):
+        if _item_type(event) != "message":
+            return event
+        annotated = deepcopy(event)
+        item = annotated.get("item")
+        if isinstance(item, dict):
+            item["phase"] = phase
+        return annotated
+
+    if event_type == ResponsesEventType.RESPONSE_COMPLETED:
+        return _annotate_completed_messages(event, phase=phase)
+
+    return event
+
+
+def _annotate_completed_messages(
+    event: dict[str, Any], *, phase: str
+) -> dict[str, Any]:
     response = event.get("response")
     if not isinstance(response, dict):
         return event
@@ -198,5 +213,5 @@ def _annotate_completed_messages(event: dict[str, Any]) -> dict[str, Any]:
         return annotated
     for item in annotated_output:
         if isinstance(item, dict) and item.get("type") == "message":
-            item["phase"] = COMMENTARY_PHASE
+            item["phase"] = phase
     return annotated
