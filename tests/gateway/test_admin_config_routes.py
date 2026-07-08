@@ -176,3 +176,28 @@ def test_admin_html_exposes_tool_adaptation_switches():
     assert "toolAdaptation.enable_tool_description_optimization !== false" in html
     assert "toolAdaptation.enable_phase_detection !== false" in html
     assert "toolFlattenNestedNamespaceTools" not in html
+
+
+def test_admin_html_uses_page_routes():
+    """Admin navigation uses URL pages instead of tab-local routing."""
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "llm_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    assert 'href="/admin/providers"' in html
+    assert 'href="/admin/models"' in html
+    assert 'href="/admin/keys"' in html
+    assert 'href="/admin/dashboard"' in html
+    assert 'href="/admin/logs"' in html
+    assert 'href="/admin/gateway-logs"' in html
+    assert 'data-page="keys"' in html
+    assert 'id="page-keys"' in html
+    assert "llm-rosetta-tab" not in html
+    assert "data-tab" not in html
+    assert "currentTab" not in html
