@@ -6,8 +6,8 @@ import pytest
 
 from typing import cast
 
-from llm_rosetta.converters.openai_chat.config_ops import OpenAIChatConfigOps
-from llm_rosetta.types.ir import CacheConfig, GenerationConfig
+from codex_rosetta.converters.openai_chat.config_ops import OpenAIChatConfigOps
+from codex_rosetta.types.ir import CacheConfig, GenerationConfig
 
 
 class TestOpenAIChatConfigOps:

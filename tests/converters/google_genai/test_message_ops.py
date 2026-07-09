@@ -6,11 +6,11 @@ from typing import Any, Union, cast
 
 import pytest
 
-from llm_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
-from llm_rosetta.converters.google_genai.message_ops import GoogleGenAIMessageOps
-from llm_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
-from llm_rosetta.types.ir import Message
-from llm_rosetta.types.ir.extensions_experimental import ExtensionItem
+from codex_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
+from codex_rosetta.converters.google_genai.message_ops import GoogleGenAIMessageOps
+from codex_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
+from codex_rosetta.types.ir import Message
+from codex_rosetta.types.ir.extensions_experimental import ExtensionItem
 
 
 class TestGoogleGenAIMessageOps:

@@ -1,9 +1,9 @@
 """
-Benchmark comparing LLM-Rosetta vs LiteLLM request conversion latency.
+Benchmark comparing Codex-Rosetta vs LiteLLM request conversion latency.
 
 Compares one-directional conversion: OpenAI Chat format → provider-native format.
 LiteLLM: transform_request() (OpenAI → Anthropic/Google)
-LLM-Rosetta: request_from_provider() then request_to_provider() (OpenAI → IR → target)
+Codex-Rosetta: request_from_provider() then request_to_provider() (OpenAI → IR → target)
 
 This is an apples-to-apples comparison of the format translation step,
 excluding HTTP calls, SDK initialization, and provider communication.
@@ -175,15 +175,15 @@ def bench_litellm_google(payload: dict, iterations: int) -> list[float]:
     return timings
 
 
-# ── LLM-Rosetta benchmark ───────────────────────────────────────────────
+# ── Codex-Rosetta benchmark ───────────────────────────────────────────────
 
 
 def bench_rosetta_to_anthropic(payload: dict, iterations: int) -> list[float]:
-    """Benchmark LLM-Rosetta's OpenAI Chat → IR → Anthropic conversion."""
+    """Benchmark Codex-Rosetta's OpenAI Chat → IR → Anthropic conversion."""
     import copy
 
-    from llm_rosetta.converters.anthropic import AnthropicConverter
-    from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
     oc_conv = OpenAIChatConverter()
     an_conv = AnthropicConverter()
@@ -205,11 +205,11 @@ def bench_rosetta_to_anthropic(payload: dict, iterations: int) -> list[float]:
 
 
 def bench_rosetta_to_google(payload: dict, iterations: int) -> list[float]:
-    """Benchmark LLM-Rosetta's OpenAI Chat → IR → Google conversion."""
+    """Benchmark Codex-Rosetta's OpenAI Chat → IR → Google conversion."""
     import copy
 
-    from llm_rosetta.converters.google_genai import GoogleGenAIConverter
-    from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+    from codex_rosetta.converters.google_genai import GoogleGenAIConverter
+    from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
     oc_conv = OpenAIChatConverter()
     gg_conv = GoogleGenAIConverter()
@@ -272,7 +272,7 @@ def main():
                 f"p95={litellm_stats['p95_us']:>8.1f} μs"
             )
             print(
-                f"    LLM-Rosetta: median={rosetta_stats['median_us']:>8.1f} μs  "
+                f"    Codex-Rosetta: median={rosetta_stats['median_us']:>8.1f} μs  "
                 f"p95={rosetta_stats['p95_us']:>8.1f} μs"
             )
             ratio = litellm_stats["median_us"] / rosetta_stats["median_us"]

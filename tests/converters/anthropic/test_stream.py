@@ -4,9 +4,9 @@ Anthropic Messages API stream converter unit tests.
 
 from typing import Any, cast
 
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.converters.base.context import StreamContext
-from llm_rosetta.types.ir.stream import (
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.converters.base.context import StreamContext
+from codex_rosetta.types.ir.stream import (
     ContentBlockEndEvent,
     ContentBlockStartEvent,
     FinishEvent,

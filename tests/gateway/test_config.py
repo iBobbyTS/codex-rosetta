@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import GatewayConfig
 
 
 def _minimal_raw(**server_overrides) -> dict:

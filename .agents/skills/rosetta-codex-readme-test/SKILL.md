@@ -1,6 +1,6 @@
 ---
 name: rosetta-codex-readme-test
-description: Run controlled Codex-through-LLM-Rosetta README editing tests in /Users/ibobby/Projects/AGENTS.md-test. Use when Codex needs to enable Rosetta backend logging, route a Codex CLI run through the gateway for a specific model, test whole-file README rewrite versus localized edit behavior, identify the resulting Codex session JSONL and Rosetta log, verify the real working-tree outcome, and then revert the test repository changes.
+description: Run controlled Codex-through-Codex-Rosetta README editing tests in /Users/ibobby/Projects/AGENTS.md-test. Use when Codex needs to enable Rosetta backend logging, route a Codex CLI run through the gateway for a specific model, test whole-file README rewrite versus localized edit behavior, identify the resulting Codex session JSONL and Rosetta log, verify the real working-tree outcome, and then revert the test repository changes.
 ---
 
 # Rosetta Codex README Test
@@ -8,7 +8,7 @@ description: Run controlled Codex-through-LLM-Rosetta README editing tests in /U
 ## Purpose
 
 Use this skill to run repeatable agent-behavior tests against
-`/Users/ibobby/Projects/AGENTS.md-test` through `llm-rosetta-gateway`.
+`/Users/ibobby/Projects/AGENTS.md-test` through `codex-rosetta-gateway`.
 The test repository is disposable for content changes, but preserve diagnostics
 and revert the repository after inspection.
 
@@ -35,7 +35,7 @@ and revert the repository after inspection.
    test -d /Users/ibobby/Projects/AGENTS.md-test
    ```
 
-2. Confirm `llm-rosetta-gateway` is running and locate the active port. The
+2. Confirm `codex-rosetta-gateway` is running and locate the active port. The
    usual local endpoint is `http://127.0.0.1:8765/v1`. When testing current
    uncommitted gateway code, prefer launching a separate gateway instance on a
    free port with a config copied into
@@ -232,7 +232,7 @@ the user asks.
 ## Safety Rules
 
 - Keep this workflow scoped to `/Users/ibobby/Projects/AGENTS.md-test`.
-- Do not run it in the llm-rosetta repository or any production project.
+- Do not run it in the codex-rosetta repository or any production project.
 - Do not leave backend logging enabled.
 - Do not read whole Codex rollout JSONL files or whole Rosetta JSONL logs.
 - Redact API keys, bearer tokens, cookies, and authorization headers from any

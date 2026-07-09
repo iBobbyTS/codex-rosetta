@@ -14,13 +14,13 @@ from __future__ import annotations
 from typing import Any, cast
 
 
-from llm_rosetta.converters.base.helpers.reasoning import (
+from codex_rosetta.converters.base.helpers.reasoning import (
     DEFAULT_REASONING_CAPS,
     apply_reasoning_config,
     normalize_reasoning_input,
 )
-from llm_rosetta.shims.provider_shim import ReasoningCapability
-from llm_rosetta.types.ir.configs import ReasoningConfig
+from codex_rosetta.shims.provider_shim import ReasoningCapability
+from codex_rosetta.types.ir.configs import ReasoningConfig
 
 
 # ── Input normalisation ────────────────────────────────────────────────────

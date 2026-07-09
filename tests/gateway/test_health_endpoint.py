@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from llm_rosetta.gateway.admin.metrics import MetricsCollector, _ProviderStats
+from codex_rosetta.gateway.admin.metrics import MetricsCollector, _ProviderStats
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ class TestHandleHealthFunction:
     """Test handle_health / handle_health_live / handle_health_ready directly."""
 
     def setup_method(self):
-        from llm_rosetta.gateway.app import (
+        from codex_rosetta.gateway.app import (
             handle_health,
             handle_health_live,
             handle_health_ready,

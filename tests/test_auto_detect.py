@@ -6,8 +6,12 @@ from typing import Any, cast
 
 import pytest
 
-from llm_rosetta.auto_detect import convert, detect_provider, get_converter_for_provider
-from llm_rosetta.shims.providers import load_providers
+from codex_rosetta.auto_detect import (
+    convert,
+    detect_provider,
+    get_converter_for_provider,
+)
+from codex_rosetta.shims.providers import load_providers
 
 
 class TestDetectProvider:
@@ -247,28 +251,28 @@ class TestGetConverterForProvider:
 
     def test_get_openai_chat_converter(self):
         """测试获取 OpenAI Chat 转换器"""
-        from llm_rosetta.converters import OpenAIChatConverter
+        from codex_rosetta.converters import OpenAIChatConverter
 
         converter = get_converter_for_provider("openai_chat")
         assert isinstance(converter, OpenAIChatConverter)
 
     def test_get_openai_responses_converter(self):
         """测试获取 OpenAI Responses 转换器"""
-        from llm_rosetta.converters import OpenAIResponsesConverter
+        from codex_rosetta.converters import OpenAIResponsesConverter
 
         converter = get_converter_for_provider("openai_responses")
         assert isinstance(converter, OpenAIResponsesConverter)
 
     def test_get_anthropic_converter(self):
         """测试获取 Anthropic 转换器"""
-        from llm_rosetta.converters import AnthropicConverter
+        from codex_rosetta.converters import AnthropicConverter
 
         converter = get_converter_for_provider("anthropic")
         assert isinstance(converter, AnthropicConverter)
 
     def test_get_google_converter(self):
         """测试获取 Google 转换器"""
-        from llm_rosetta.converters import GoogleConverter
+        from codex_rosetta.converters import GoogleConverter
 
         converter = get_converter_for_provider("google")
         assert isinstance(converter, GoogleConverter)

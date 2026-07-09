@@ -18,7 +18,7 @@ chown -R appuser:appgroup /config
 # Auto-generate a template config if none exists
 if [ ! -f /config/config.jsonc ]; then
 	echo "No config.jsonc found in /config, generating template..."
-	su-exec appuser llm-rosetta-gateway --config /config/config.jsonc init
+	su-exec appuser codex-rosetta-gateway --config /config/config.jsonc init
 	echo "Edit /config/config.jsonc with your API keys and restart the container."
 fi
 

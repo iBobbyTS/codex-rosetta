@@ -1,12 +1,12 @@
 #!/bin/bash
-# Run all llm_api_simple_tests scripts against the llm-rosetta gateway.
+# Run all llm_api_simple_tests scripts against the codex-rosetta gateway.
 #
 # Each SDK format (openai_chat, openai_responses, anthropic, google_genai)
 # is tested against every model configured in the gateway, in both
 # non-streaming and streaming modes.
 #
 # Prerequisites:
-#   - Gateway running (llm-rosetta-gateway)
+#   - Gateway running (codex-rosetta-gateway)
 #   - Submodule initialised (git submodule update --init)
 #
 # Usage:

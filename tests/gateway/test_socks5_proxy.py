@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from llm_rosetta._vendor.httpclient import (
+from codex_rosetta._vendor.httpclient import (
     AsyncClient,
     HttpConnectionError,
     Response as HttpResponse,

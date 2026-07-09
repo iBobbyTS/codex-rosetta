@@ -13,7 +13,7 @@ Requires:
 - Network access
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     python tests/integration/test_openai_chat_rest_e2e.py
 """
 
@@ -30,8 +30,8 @@ import requests
 from typing import cast
 
 from examples.tools import available_tools, tools_spec
-from llm_rosetta.converters.openai_chat import OpenAIChatConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_chat import OpenAIChatConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     ToolCallPart,
     ToolDefinition,

@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from llm_rosetta.gateway.proxy import (
+from codex_rosetta.gateway.proxy import (
     ProviderMetadataStore,
     WindowToolSearchStore,
     handle_non_streaming,
     handle_streaming,
 )
-from llm_rosetta.gateway.tool_adaptation import (
+from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
     LOCALIZATION_CAPABILITIES_KEY,
     LOCALIZED_CODE_TOOL_NAMES,
@@ -30,9 +30,9 @@ from llm_rosetta.gateway.tool_adaptation import (
     localize_code_editing_chat_request,
     translate_localized_tool_call_part,
 )
-from llm_rosetta.observability.persistence import PersistenceManager
-from llm_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
-from llm_rosetta.routing import ResolvedRoute
+from codex_rosetta.observability.persistence import PersistenceManager
+from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
+from codex_rosetta.routing import ResolvedRoute
 
 
 def _route() -> ResolvedRoute:

@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from llm_rosetta.gateway.config import GatewayConfig
-from llm_rosetta.gateway.embeddings import handle_embeddings
-from llm_rosetta.gateway.transport._base import UpstreamResponse
-from llm_rosetta.gateway.transport.http import HttpTransport
+from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.embeddings import handle_embeddings
+from codex_rosetta.gateway.transport._base import UpstreamResponse
+from codex_rosetta.gateway.transport.http import HttpTransport
 
 
 # ---------------------------------------------------------------------------

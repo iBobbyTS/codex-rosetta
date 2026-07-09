@@ -2,7 +2,7 @@
 Tests for strip_orphaned_tool_config — shared function and converter integration.
 
 Covers the third symptom of Codex context compaction breaking request
-structural integrity (see llm-rosetta#87):
+structural integrity (see codex-rosetta#87):
   1. Orphaned tool_calls in messages  → fix_orphaned_tool_calls_ir  (v0.2.4)
   2. Tool messages in wrong position  → _reorder_tool_messages      (v0.2.6)
   3. tool_choice without tools        → strip_orphaned_tool_config   (this)
@@ -10,13 +10,13 @@ structural integrity (see llm-rosetta#87):
 
 from typing import cast
 
-from llm_rosetta.converters.base.helpers import strip_orphaned_tool_config
-from llm_rosetta.converters.anthropic.converter import AnthropicConverter
-from llm_rosetta.converters.google_genai.converter import GoogleGenAIConverter
-from llm_rosetta.converters.openai_chat.converter import OpenAIChatConverter
-from llm_rosetta.converters.openai_responses.converter import OpenAIResponsesConverter
-from llm_rosetta.types.ir import ToolChoice
-from llm_rosetta.types.ir.request import IRRequest
+from codex_rosetta.converters.base.helpers import strip_orphaned_tool_config
+from codex_rosetta.converters.anthropic.converter import AnthropicConverter
+from codex_rosetta.converters.google_genai.converter import GoogleGenAIConverter
+from codex_rosetta.converters.openai_chat.converter import OpenAIChatConverter
+from codex_rosetta.converters.openai_responses.converter import OpenAIResponsesConverter
+from codex_rosetta.types.ir import ToolChoice
+from codex_rosetta.types.ir.request import IRRequest
 
 
 # ==================== Unit tests for shared function ====================

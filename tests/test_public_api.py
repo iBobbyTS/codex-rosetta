@@ -21,7 +21,7 @@ class _ModuleSpec(TypedDict):
 
 # Expected stable exports per module
 EXPECTED_EXPORTS: dict[str, _ModuleSpec] = {
-    "llm_rosetta": {
+    "codex_rosetta": {
         "items": [
             # Converters
             "BaseConverter",
@@ -56,15 +56,15 @@ EXPECTED_EXPORTS: dict[str, _ModuleSpec] = {
         ],
         "max_count": 30,
     },
-    "llm_rosetta.types.ir": {
+    "codex_rosetta.types.ir": {
         "items": None,  # too many to enumerate; just check count
         "max_count": 60,
     },
-    "llm_rosetta.types": {
+    "codex_rosetta.types": {
         "items": None,
         "max_count": 60,
     },
-    "llm_rosetta.converters.base": {
+    "codex_rosetta.converters.base": {
         "items": [
             "BaseConverter",
             "ConversionContext",

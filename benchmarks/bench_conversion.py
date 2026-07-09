@@ -1,4 +1,4 @@
-"""Benchmark script for LLM-Rosetta conversion overhead.
+"""Benchmark script for Codex-Rosetta conversion overhead.
 
 Measures per-request and per-chunk latency across 4 providers × 6 payload types.
 Outputs JSON results suitable for inclusion in the paper's evaluation section.
@@ -14,8 +14,8 @@ import statistics
 import time
 from pathlib import Path
 
-from llm_rosetta.auto_detect import get_converter_for_provider
-from llm_rosetta.converters.base.context import ConversionContext
+from codex_rosetta.auto_detect import get_converter_for_provider
+from codex_rosetta.converters.base.context import ConversionContext
 
 # ---------------------------------------------------------------------------
 # Test Payloads
@@ -792,7 +792,7 @@ def export_latex_table(results):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="LLM-Rosetta conversion benchmarks")
+    parser = argparse.ArgumentParser(description="Codex-Rosetta conversion benchmarks")
     parser.add_argument(
         "--iterations", "-n", type=int, default=1000, help="Iterations per benchmark"
     )

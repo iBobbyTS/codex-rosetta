@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from llm_rosetta.shims.provider_shim import (
+from codex_rosetta.shims.provider_shim import (
     ProviderShim,
     _reset_registry,
     get_shim,
@@ -136,7 +136,7 @@ class TestBuiltinShims:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
         """Load provider shims from the YAML directory."""
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 
@@ -197,27 +197,27 @@ class TestBuiltinShims:
 class TestShimConverterIntegration:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 
     def test_deepseek_resolves_to_openai_chat_converter(self):
-        from llm_rosetta.auto_detect import get_converter_for_provider
-        from llm_rosetta.converters import OpenAIChatConverter
+        from codex_rosetta.auto_detect import get_converter_for_provider
+        from codex_rosetta.converters import OpenAIChatConverter
 
         converter = get_converter_for_provider("deepseek")
         assert isinstance(converter, OpenAIChatConverter)
 
     def test_volcengine_resolves_to_openai_chat_converter(self):
-        from llm_rosetta.auto_detect import get_converter_for_provider
-        from llm_rosetta.converters import OpenAIChatConverter
+        from codex_rosetta.auto_detect import get_converter_for_provider
+        from codex_rosetta.converters import OpenAIChatConverter
 
         converter = get_converter_for_provider("volcengine--openai_chat")
         assert isinstance(converter, OpenAIChatConverter)
 
     def test_base_types_still_work(self):
-        from llm_rosetta.auto_detect import get_converter_for_provider
-        from llm_rosetta.converters import (
+        from codex_rosetta.auto_detect import get_converter_for_provider
+        from codex_rosetta.converters import (
             AnthropicConverter,
             GoogleConverter,
             OpenAIChatConverter,
@@ -230,7 +230,7 @@ class TestShimConverterIntegration:
         assert isinstance(get_converter_for_provider("google"), GoogleConverter)
 
     def test_unknown_provider_raises(self):
-        from llm_rosetta.auto_detect import get_converter_for_provider
+        from codex_rosetta.auto_detect import get_converter_for_provider
 
         with pytest.raises(ValueError, match="Unsupported provider"):
             get_converter_for_provider("totally_unknown")
@@ -245,7 +245,7 @@ class TestGroupedProviders:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
         """Load provider shims from the YAML directory."""
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 

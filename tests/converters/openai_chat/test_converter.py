@@ -6,8 +6,8 @@ from typing import Any, cast
 
 import pytest
 
-from llm_rosetta.converters.openai_chat import OpenAIChatConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_chat import OpenAIChatConverter
+from codex_rosetta.types.ir import (
     FinishEvent,
     IRRequest,
     IRResponse,

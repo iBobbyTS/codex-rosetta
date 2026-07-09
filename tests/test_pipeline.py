@@ -1,7 +1,7 @@
-"""Tests for llm_rosetta.pipeline and llm_rosetta.capabilities.
+"""Tests for codex_rosetta.pipeline and codex_rosetta.capabilities.
 
 Note: This file imports private helpers (resolve_shim, _apply_config_reasoning_override)
-directly from llm_rosetta.capabilities for unit-testing internal logic.
+directly from codex_rosetta.capabilities for unit-testing internal logic.
 """
 
 import copy
@@ -9,20 +9,20 @@ from typing import Any
 
 import pytest
 
-from llm_rosetta.capabilities import (
+from codex_rosetta.capabilities import (
     _apply_config_reasoning_override,
     enforce_reasoning,
 )
-from llm_rosetta.converters.base.context import ConversionContext
-from llm_rosetta.pipeline import apply_ir_transforms
-from llm_rosetta.shims.provider_shim import (
+from codex_rosetta.converters.base.context import ConversionContext
+from codex_rosetta.pipeline import apply_ir_transforms
+from codex_rosetta.shims.provider_shim import (
     ProviderShim,
     ReasoningCapability,
     register_shim,
     resolve_shim,
     unregister_shim,
 )
-from llm_rosetta.shims.transforms import (
+from codex_rosetta.shims.transforms import (
     strip_non_vision_images,
     truncate_images as truncate_images_transform,
     unwind_parallel_tool_calls as unwind_transform,
@@ -439,7 +439,7 @@ class TestConversionPipeline:
 
     def test_convert_request_openai_to_openai(self):
         """Same-format round-trip produces valid target body."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         body = {
@@ -452,7 +452,7 @@ class TestConversionPipeline:
 
     def test_convert_request_openai_responses_preserves_include(self):
         """Responses same-format conversion preserves native include fields."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_responses")
         target = pipeline.convert_request(
@@ -470,7 +470,7 @@ class TestConversionPipeline:
 
     def test_responses_to_deepseek_v4_chat_applies_reasoning_mapping(self):
         """Responses effort maps to DeepSeek V4 thinking and capped effort."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline(
             "openai_responses",
@@ -492,7 +492,7 @@ class TestConversionPipeline:
 
     def test_responses_to_qwen_3_7_chat_auto_mapping_uses_budget(self):
         """Auto mapping detects Qwen 3.7 from the upstream model name."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline(
             "openai_responses",
@@ -515,7 +515,7 @@ class TestConversionPipeline:
 
     def test_anthropic_target_fallback_applies_official_reasoning_format(self):
         """Unknown model on Anthropic target uses Anthropic official fields."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline(
             "openai_chat",
@@ -537,7 +537,7 @@ class TestConversionPipeline:
 
     def test_kimi_mapping_preserves_empty_reasoning_content(self):
         """Kimi mapping is no-op for controls and keeps empty reasoning_content."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline(
             "openai_chat",
@@ -567,7 +567,7 @@ class TestConversionPipeline:
 
     def test_responses_namespace_tools_are_flattened_for_chat_target(self):
         """Responses namespace tools become Chat functions for upstream models."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         target = pipeline.convert_request(
@@ -602,7 +602,7 @@ class TestConversionPipeline:
 
     def test_responses_namespace_duplicate_child_names_are_unique_for_chat_target(self):
         """Namespace child names are disambiguated when flattened for Chat."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         target = pipeline.convert_request(
@@ -651,7 +651,7 @@ class TestConversionPipeline:
 
     def test_responses_goal_tools_get_chat_guidance(self):
         """Codex goal tools get clearer descriptions for Chat targets."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         target = pipeline.convert_request(
@@ -695,7 +695,7 @@ class TestConversionPipeline:
 
     def test_responses_request_user_input_gets_chat_guidance(self):
         """Plan-mode user-input tool gets clearer guidance for Chat targets."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         target = pipeline.convert_request(
@@ -724,7 +724,7 @@ class TestConversionPipeline:
 
     def test_responses_namespace_tools_stay_namespaced_for_responses_target(self):
         """Responses target keeps namespace tools in native shape."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_responses")
         target = pipeline.convert_request(
@@ -775,7 +775,7 @@ class TestConversionPipeline:
 
     def test_chat_response_tool_call_restores_responses_namespace(self):
         """Chat tool calls restore Responses namespace for Codex runtime."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         pipeline.convert_request(
@@ -836,7 +836,7 @@ class TestConversionPipeline:
 
     def test_chat_response_tool_search_call_restores_responses_item(self):
         """Chat tool_search calls restore Responses tool_search_call items."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         pipeline.convert_request(
@@ -895,7 +895,7 @@ class TestConversionPipeline:
         self,
     ):
         """Disambiguated Chat tool calls restore original namespace child names."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         pipeline.convert_request(
@@ -963,7 +963,7 @@ class TestConversionPipeline:
 
     def test_convert_response_openai_to_openai(self):
         """Response round-trip produces valid source response."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         pipeline.convert_request(
@@ -979,7 +979,7 @@ class TestConversionPipeline:
 
     def test_convert_request_raises_conversion_error(self):
         """Completely invalid body should raise ConversionError with phase info."""
-        from llm_rosetta.pipeline import ConversionError, ConversionPipeline
+        from codex_rosetta.pipeline import ConversionError, ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         with pytest.raises(ConversionError) as exc_info:
@@ -989,7 +989,7 @@ class TestConversionPipeline:
 
     def test_convert_request_twice_raises(self):
         """Calling convert_request twice raises RuntimeError (one-shot)."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         pipeline.convert_request(
@@ -1002,7 +1002,7 @@ class TestConversionPipeline:
 
     def test_convert_response_before_request_raises(self):
         """Calling convert_response before convert_request raises RuntimeError."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         with pytest.raises(RuntimeError):
@@ -1010,7 +1010,7 @@ class TestConversionPipeline:
 
     def test_on_ir_ready_callback_request(self):
         """on_ir_ready callback fires after source→IR, before shim transforms."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         captured: list[dict[str, Any]] = []
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
@@ -1023,7 +1023,7 @@ class TestConversionPipeline:
 
     def test_on_ir_ready_callback_response(self):
         """on_ir_ready callback fires after target→IR in convert_response."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         captured: list[dict[str, Any]] = []
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
@@ -1041,7 +1041,7 @@ class TestConversionPipeline:
 
     def test_context_available_after_convert_request(self):
         """Pipeline context should be accessible after convert_request."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         with pytest.raises(RuntimeError):
@@ -1054,7 +1054,7 @@ class TestConversionPipeline:
 
     def test_ir_request_available_after_convert_request(self):
         """Pipeline ir_request should be accessible after convert_request."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         with pytest.raises(RuntimeError):
@@ -1067,7 +1067,7 @@ class TestConversionPipeline:
 
     def test_no_shim_passthrough(self):
         """Pipeline without shim still works — no transforms applied."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat", None)
         target = pipeline.convert_request(
@@ -1077,7 +1077,7 @@ class TestConversionPipeline:
 
     def test_cross_format_openai_to_anthropic(self):
         """Cross-format conversion produces valid target body."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "anthropic")
         target = pipeline.convert_request(
@@ -1088,7 +1088,7 @@ class TestConversionPipeline:
 
     def test_create_stream_processor(self):
         """StreamProcessor should be creatable after convert_request."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         pipeline.convert_request(
@@ -1099,7 +1099,7 @@ class TestConversionPipeline:
 
     def test_create_stream_processor_before_request_raises(self):
         """create_stream_processor before convert_request raises RuntimeError."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
         with pytest.raises(RuntimeError):
@@ -1107,7 +1107,7 @@ class TestConversionPipeline:
 
     def test_stream_processor_on_ir_event_callback(self):
         """StreamProcessor on_ir_event callback fires for each IR event."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         captured: list[dict[str, Any]] = []
         pipeline = ConversionPipeline("openai_chat", "openai_chat")
@@ -1131,7 +1131,7 @@ class TestConversionPipeline:
 
     def test_stream_processor_restores_responses_namespace_for_chat_tool_call(self):
         """Streaming Chat tool calls restore Responses namespace metadata."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         pipeline.convert_request(

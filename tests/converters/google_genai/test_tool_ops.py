@@ -4,10 +4,10 @@ Google GenAI ToolOps unit tests.
 
 import pytest
 
-from llm_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
+from codex_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
 from typing import cast
 
-from llm_rosetta.types.ir import (
+from codex_rosetta.types.ir import (
     ToolCallPart,
     ToolChoice,
     ToolDefinition,

@@ -5,8 +5,8 @@ OpenAI Responses ToolOps unit tests.
 import json
 from typing import Any, cast
 
-from llm_rosetta.converters.openai_responses.tool_ops import OpenAIResponsesToolOps
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_responses.tool_ops import OpenAIResponsesToolOps
+from codex_rosetta.types.ir import (
     ToolCallConfig,
     ToolCallPart,
     ToolChoice,

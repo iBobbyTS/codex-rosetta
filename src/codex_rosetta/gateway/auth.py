@@ -1,0 +1,161 @@
+"""Gateway API key authentication — before-request hook.
+
+Validates incoming requests against the gateway's configured API keys.
+The agent-facing API surface uses OpenAI Responses-compatible Bearer
+authentication:
+
+- ``Authorization: Bearer <key>``
+
+Supports multiple API keys with labels for tracking. If no keys are
+configured, all requests pass through (backward compatible).
+"""
+
+from __future__ import annotations
+
+import contextvars
+from typing import Any
+
+from codex_rosetta._vendor.httpserver import JSONResponse, Response
+
+# Per-request API key label — set by auth hook, read by proxy handler.
+api_key_label_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "api_key_label", default=None
+)
+
+# Paths that never require authentication
+_PUBLIC_PATHS = frozenset({"/health"})
+
+_PROTECTED_API_PATHS = frozenset(
+    {
+        "/v1/embeddings",
+        "/v1/models",
+        "/v1/responses",
+    }
+)
+
+
+def _extract_key(request: Any) -> str | None:
+    """Extract an OpenAI-compatible Bearer token from the request."""
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return None
+
+
+def _error_for_path(path: str, status: int, message: str) -> Response:
+    """Return an OpenAI-compatible error response."""
+    return JSONResponse(
+        {
+            "error": {
+                "message": message,
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+            }
+        },
+        status_code=status,
+    )
+
+
+def _is_protected_api_path(path: str) -> bool:
+    """Return whether gateway API-key auth applies to *path*."""
+    return path in _PROTECTED_API_PATHS
+
+
+def check_admin_auth(request: Any, auth_state: AuthState) -> Response | None:
+    """Authenticate admin panel requests.
+
+    Returns ``None`` to allow the request, or a 401 response to block it.
+    Unauthenticated HTML page requests are allowed through so the JS
+    login UI can render.
+    """
+    if not auth_state.admin_password:
+        return None  # no password configured → pass through
+
+    path = request.path
+
+    # Login and auth-check endpoints are always accessible
+    if path in ("/admin/api/login", "/admin/api/auth-check"):
+        return None
+
+    # Check X-Admin-Token header
+    admin_token = request.headers.get("x-admin-token", "")
+    if admin_token and admin_token == auth_state.admin_token:
+        return None
+
+    # Block unauthenticated API calls
+    if path.startswith("/admin/api/"):
+        return JSONResponse({"error": "Admin authentication required"}, status_code=401)
+
+    # HTML page requests pass through — JS handles login UI
+    return None
+
+
+class AuthState:
+    """Mutable state container for auth hook — allows hot-reload from admin."""
+
+    def __init__(
+        self,
+        key_set: frozenset[str],
+        labels: dict[str, str],
+        internal_token: str | None,
+        admin_password: str | None = None,
+    ) -> None:
+        self.key_set = key_set
+        self.labels = labels
+        self.internal_token = internal_token
+        self.admin_password = admin_password
+        # Derive admin token from password + internal_token via HMAC
+        self.admin_token: str | None = None
+        if admin_password and internal_token:
+            import hashlib
+            import hmac as _hmac
+
+            self.admin_token = _hmac.new(
+                internal_token.encode(),
+                admin_password.encode(),
+                hashlib.sha256,
+            ).hexdigest()
+
+
+def create_auth_hook(auth_state: AuthState) -> Any:
+    """Return a before-request hook that validates API keys.
+
+    The hook reads from ``auth_state`` which can be mutated by the admin
+    panel's hot-reload logic.
+    """
+
+    async def auth_hook(request: Any) -> Response | None:
+        # Reset per-request label
+        api_key_label_var.set(None)
+
+        path = request.path
+
+        # Public paths skip auth
+        if path in _PUBLIC_PATHS:
+            return None
+
+        # Admin panel auth is a separate concern from API key auth
+        if path.startswith("/admin"):
+            return check_admin_auth(request, auth_state)
+
+        if not _is_protected_api_path(path):
+            return None
+
+        if not auth_state.key_set:
+            return None  # no gateway API keys configured → pass through
+
+        key = _extract_key(request)
+
+        # Check internal token first (admin panel test requests)
+        if key and auth_state.internal_token and key == auth_state.internal_token:
+            api_key_label_var.set("internal")
+            return None
+
+        if key not in auth_state.key_set:
+            return _error_for_path(path, 401, "Invalid or missing API key")
+
+        # Attach key label for request logging
+        api_key_label_var.set(auth_state.labels.get(key, ""))
+        return None
+
+    return auth_hook

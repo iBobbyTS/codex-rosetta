@@ -1,11 +1,11 @@
 """Tests for openai_responses utility functions."""
 
-from llm_rosetta.converters.base.context import StreamContext
-from llm_rosetta.converters.openai_responses._constants import ResponsesEventType
-from llm_rosetta.converters.openai_responses.stream_context import (
+from codex_rosetta.converters.base.context import StreamContext
+from codex_rosetta.converters.openai_responses._constants import ResponsesEventType
+from codex_rosetta.converters.openai_responses.stream_context import (
     OpenAIResponsesStreamContext,
 )
-from llm_rosetta.converters.openai_responses.utils import (
+from codex_rosetta.converters.openai_responses.utils import (
     build_message_preamble_events,
     resolve_call_id,
 )

@@ -8,10 +8,10 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock
 
-from llm_rosetta.gateway.proxy import handle_streaming
-from llm_rosetta.gateway.transport._base import UpstreamStream
-from llm_rosetta.gateway.web_search import WebSearchSettings
-from llm_rosetta.routing import ResolvedRoute
+from codex_rosetta.gateway.proxy import handle_streaming
+from codex_rosetta.gateway.transport._base import UpstreamStream
+from codex_rosetta.gateway.web_search import WebSearchSettings
+from codex_rosetta.routing import ResolvedRoute
 
 
 class _ChatStream(UpstreamStream):

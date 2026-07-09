@@ -1,8 +1,8 @@
-# Install llm-rosetta with gateway extras (starlette, uvicorn, httpx)
+# Install codex-rosetta with gateway extras (starlette, uvicorn, httpx)
 # From the repo root:  pip install -e ".[gateway]"
-# Or standalone:       pip install "llm-rosetta[gateway]"
-llm-rosetta[gateway]
+# Or standalone:       pip install "codex-rosetta[gateway]"
+codex-rosetta[gateway]
 
 # Usage:
-#   llm-rosetta-gateway --config config.jsonc
-#   python -m llm_rosetta.gateway --config config.jsonc
+#   codex-rosetta-gateway --config config.jsonc
+#   python -m codex_rosetta.gateway --config config.jsonc

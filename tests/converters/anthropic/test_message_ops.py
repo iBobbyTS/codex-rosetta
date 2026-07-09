@@ -4,12 +4,12 @@ Anthropic MessageOps unit tests.
 
 from typing import Any, Union, cast
 
-from llm_rosetta.converters.anthropic.content_ops import AnthropicContentOps
-from llm_rosetta.converters.anthropic.message_ops import AnthropicMessageOps
-from llm_rosetta.converters.anthropic.tool_ops import AnthropicToolOps
-from llm_rosetta.shims.provider_shim import ReasoningCapability
-from llm_rosetta.types.ir import Message
-from llm_rosetta.types.ir.extensions_experimental import ExtensionItem
+from codex_rosetta.converters.anthropic.content_ops import AnthropicContentOps
+from codex_rosetta.converters.anthropic.message_ops import AnthropicMessageOps
+from codex_rosetta.converters.anthropic.tool_ops import AnthropicToolOps
+from codex_rosetta.shims.provider_shim import ReasoningCapability
+from codex_rosetta.types.ir import Message
+from codex_rosetta.types.ir.extensions_experimental import ExtensionItem
 
 
 class TestAnthropicMessageOps:

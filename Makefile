@@ -1,10 +1,10 @@
-# Makefile for llm-rosetta package
+# Makefile for codex-rosetta package
 
 # Variables
-PACKAGE_NAME := llm-rosetta
-DOCKER_IMAGE := oaklight/llm-rosetta-gateway
+PACKAGE_NAME := codex-rosetta
+DOCKER_IMAGE := oaklight/codex-rosetta-gateway
 DIST_DIR := dist
-VERSION := $(shell grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' src/llm_rosetta/__init__.py | grep -oE '"[^"]+"' | tr -d '"' || echo "0.1.0")
+VERSION := $(shell grep -oE '__version__[[:space:]]*=[[:space:]]*"[^"]+"' src/codex_rosetta/__init__.py | grep -oE '"[^"]+"' | tr -d '"' || echo "0.1.0")
 
 # Optional variables
 V ?= $(VERSION)
@@ -139,8 +139,8 @@ clean-docker:
 # ──────────────────────────────────────────────
 
 SSH_TARGET ?=
-DEVTEST_STACK ?= /dockervol/dockge/stacks/llm-rosetta-devtest
-DEVTEST_CONTAINER ?= llm-rosetta-devtest-llm-rosetta-gateway-devtest-1
+DEVTEST_STACK ?= /dockervol/dockge/stacks/codex-rosetta-devtest
+DEVTEST_CONTAINER ?= codex-rosetta-devtest-codex-rosetta-gateway-devtest-1
 
 deploy-dev:
 ifndef SSH_TARGET
@@ -148,13 +148,13 @@ ifndef SSH_TARGET
 endif
 	@set -e; \
 	COMMIT=$$(git rev-parse --short HEAD); \
-	ORIG_VER=$$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("src/llm_rosetta/__init__.py").read()).group(1))'); \
+	ORIG_VER=$$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("src/codex_rosetta/__init__.py").read()).group(1))'); \
 	DEV_VER="$$ORIG_VER.dev0+g$$COMMIT"; \
 	echo "==> Building dev wheel $$DEV_VER..."; \
-	python -c 'from pathlib import Path; p=Path("src/llm_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$ORIG_VER"'\"", "__version__ = \"'"$$DEV_VER"'\""))'; \
+	python -c 'from pathlib import Path; p=Path("src/codex_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$ORIG_VER"'\"", "__version__ = \"'"$$DEV_VER"'\""))'; \
 	rm -rf dist build; \
-	conda run -n llm-rosetta python -m build --wheel -q; \
-	python -c 'from pathlib import Path; p=Path("src/llm_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$DEV_VER"'\"", "__version__ = \"'"$$ORIG_VER"'\""))'; \
+	conda run -n codex-rosetta python -m build --wheel -q; \
+	python -c 'from pathlib import Path; p=Path("src/codex_rosetta/__init__.py"); s=p.read_text(); p.write_text(s.replace("__version__ = \"'"$$DEV_VER"'\"", "__version__ = \"'"$$ORIG_VER"'\""))'; \
 	WHEEL=$$(ls dist/*.whl | head -1 | xargs basename); \
 	echo "==> Building Docker image from $$WHEEL..."; \
 	docker build -f docker/Dockerfile --build-arg LOCAL_WHEEL=$$WHEEL -t $(DOCKER_IMAGE):dev-test -q .; \
@@ -165,7 +165,7 @@ endif
 		 docker compose up -d --force-recreate && \
 		 sleep 3 && \
 		 curl -sS http://127.0.0.1:54982/health && echo && \
-		 docker exec $(DEVTEST_CONTAINER) python -c "import llm_rosetta; print(llm_rosetta.__version__)"'; \
+		 docker exec $(DEVTEST_CONTAINER) python -c "import codex_rosetta; print(codex_rosetta.__version__)"'; \
 	echo "==> Dev-test deployed successfully."
 
 # Help target
@@ -215,7 +215,7 @@ help:
 	@echo "  deploy-dev     - Build dev image and deploy to remote dev-test gateway"
 	@echo ""
 	@echo "  SSH_TARGET=<host>        - SSH target for deploy-dev (required)"
-	@echo "  DEVTEST_STACK=<path>     - Remote compose stack path (default: /dockervol/dockge/stacks/llm-rosetta-devtest)"
+	@echo "  DEVTEST_STACK=<path>     - Remote compose stack path (default: /dockervol/dockge/stacks/codex-rosetta-devtest)"
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make deploy-dev SSH_TARGET=cloud.usa2"

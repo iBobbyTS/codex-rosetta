@@ -6,8 +6,8 @@ from typing import cast
 
 import pytest
 
-from llm_rosetta.converters.google_genai.config_ops import GoogleGenAIConfigOps
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.google_genai.config_ops import GoogleGenAIConfigOps
+from codex_rosetta.types.ir import (
     CacheConfig,
     GenerationConfig,
     ReasoningConfig,

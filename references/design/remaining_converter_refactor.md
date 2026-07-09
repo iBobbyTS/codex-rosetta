@@ -2,7 +2,7 @@
 
 ## 背景
 
-LLM-Rosetta 项目正在将所有 converter 从旧的单文件架构重构为 Bottom-Up Ops Pattern。
+Codex-Rosetta 项目正在将所有 converter 从旧的单文件架构重构为 Bottom-Up Ops Pattern。
 
 ### 完成状态
 
@@ -20,7 +20,7 @@ LLM-Rosetta 项目正在将所有 converter 从旧的单文件架构重构为 Bo
 每个 converter 拆分为 5 个文件：
 
 ```
-src/llm-rosetta/converters/{provider}/
+src/codex-rosetta/converters/{provider}/
 ├── __init__.py          # 导出所有类
 ├── content_ops.py       # 继承 BaseContentOps
 ├── tool_ops.py          # 继承 BaseToolOps
@@ -62,17 +62,17 @@ tests/integration/
 
 ### Subtask 3: 清理工作 ✅
 
-- 删除 `src/llm-rosetta/utils/` 目录和 `tests/utils/` 目录
-- 删除 `src/llm-rosetta/types/providers/` 空目录
+- 删除 `src/codex-rosetta/utils/` 目录和 `tests/utils/` 目录
+- 删除 `src/codex-rosetta/types/providers/` 空目录
 - 更新 `plans/architecture.md`（移除 DEPRECATED 标记，更新重构状态表）
-- 更新 `src/llm-rosetta/converters/__init__.py`（恢复导出所有 converter）
-- 更新 `src/llm-rosetta/__init__.py`（恢复导出所有 converter）
+- 更新 `src/codex-rosetta/converters/__init__.py`（恢复导出所有 converter）
+- 更新 `src/codex-rosetta/__init__.py`（恢复导出所有 converter）
 
 ## 关键参考文件
 
 - **架构设计**：`plans/architecture.md`
-- **Base ABC**：`src/llm-rosetta/converters/base/`
-- **OpenAI Chat 参考实现**：`src/llm-rosetta/converters/openai_chat/`
-- **Anthropic 参考实现**：`src/llm-rosetta/converters/anthropic/`
-- **IR 类型**：`src/llm-rosetta/types/ir/`
-- **流式事件类型**：`src/llm-rosetta/types/ir/stream.py`
+- **Base ABC**：`src/codex-rosetta/converters/base/`
+- **OpenAI Chat 参考实现**：`src/codex-rosetta/converters/openai_chat/`
+- **Anthropic 参考实现**：`src/codex-rosetta/converters/anthropic/`
+- **IR 类型**：`src/codex-rosetta/types/ir/`
+- **流式事件类型**：`src/codex-rosetta/types/ir/stream.py`

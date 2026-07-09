@@ -4,10 +4,10 @@ OpenAI Chat ToolOps unit tests.
 
 import json
 
-from llm_rosetta.converters.openai_chat.tool_ops import OpenAIChatToolOps
+from codex_rosetta.converters.openai_chat.tool_ops import OpenAIChatToolOps
 from typing import cast
 
-from llm_rosetta.types.ir import (
+from codex_rosetta.types.ir import (
     ToolCallConfig,
     ToolCallPart,
     ToolChoice,

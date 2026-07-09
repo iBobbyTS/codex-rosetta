@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-provider multi-turn conversation: OpenAI Chat <-> OpenAI Responses (REST, Stream).
 
-Demonstrates LLM-Rosetta's ability to maintain conversation context across
+Demonstrates Codex-Rosetta's ability to maintain conversation context across
 different LLM providers using raw HTTP requests via httpx with streaming.
 Odd turns use OpenAI Chat Completions API, even turns use OpenAI Responses API.
 
@@ -46,8 +46,8 @@ from common import (  # noqa: E402
     process_tool_calls,
 )
 
-from llm_rosetta import OpenAIChatConverter, OpenAIResponsesConverter  # noqa: E402
-from llm_rosetta.converters.base.context import StreamContext  # noqa: E402
+from codex_rosetta import OpenAIChatConverter, OpenAIResponsesConverter  # noqa: E402
+from codex_rosetta.converters.base.context import StreamContext  # noqa: E402
 
 # Initialize converters
 oc_converter = OpenAIChatConverter()

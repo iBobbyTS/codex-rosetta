@@ -1,6 +1,5 @@
 # Codex-Rosetta
 
-[![PyPI version](https://img.shields.io/pypi/v/llm-rosetta?color=green)](https://pypi.org/project/llm-rosetta/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 [English Version](README_en.md) | [中文版](README_zh.md)
@@ -16,13 +15,14 @@
 从 PyPI 安装最新预发布版本：
 
 ```bash
-python -m pip install -U --pre "llm-rosetta"
+python -m pip install -U --pre "codex-rosetta"
 ```
 
 启动本地网关：
 
 ```bash
-llm-rosetta-gateway --host 127.0.0.1 -v
+codex-rosetta-gateway init
+codex-rosetta-gateway --host 127.0.0.1 -v
 ```
 
 ## 完整文档

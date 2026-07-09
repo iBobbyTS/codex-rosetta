@@ -2,7 +2,7 @@
 
 ## 概述
 
-本报告对 llm-rosetta 项目的 ty 类型检查结果进行深度分析，将 645 个诊断（644 错误 + 1 警告）按根因分类，并提出系统性的修复策略。
+本报告对 codex-rosetta 项目的 ty 类型检查结果进行深度分析，将 645 个诊断（644 错误 + 1 警告）按根因分类，并提出系统性的修复策略。
 
 ## 错误类型分布回顾
 
@@ -94,7 +94,7 @@ def p_generation_config_to_ir(
 
 ```
 error[invalid-return-type]: Return type does not match returned value
-   --> src/llm_rosetta/converters/anthropic/config_ops.py:135:16
+   --> src/codex_rosetta/converters/anthropic/config_ops.py:135:16
     |
 135 |         return result
     |                ^^^^^^ expected `GenerationConfig`, found `dict[str, Any]`
@@ -142,7 +142,7 @@ for part in message.get("content", []):
 
 ```
 error[invalid-argument-type]: Argument to function `ir_text_to_p` is incorrect
-   --> src/llm_rosetta/converters/anthropic/converter.py:359:80
+   --> src/codex_rosetta/converters/anthropic/converter.py:359:80
     |
 359 |     anthropic_content.append(self.content_ops.ir_text_to_p(part))
     |                                                            ^^^^ Expected `TextPart`, found `TextPart | ImagePart | ToolCallPart | ...`
@@ -631,7 +631,7 @@ T = TypeVar("T", bound=Mapping[str, Any])
 
 ## 总结
 
-llm-rosetta 的 645 个类型错误主要源于以下几个核心问题：
+codex-rosetta 的 645 个类型错误主要源于以下几个核心问题：
 
 1. **联合类型收窄** - ty 无法通过字符串比较收窄 TypedDict 联合类型（~470 个错误）
 2. **TypedDict 构建方式** - 使用 `Dict[str, Any]` 构建然后返回（72 个错误）

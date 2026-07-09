@@ -1,6 +1,6 @@
 """Tests for ProfilerState and profiling admin routes."""
 
-from llm_rosetta.gateway.admin.routes.profiling import ProfilerState
+from codex_rosetta.gateway.admin.routes.profiling import ProfilerState
 
 
 class TestProfilerState:
@@ -126,7 +126,7 @@ class TestRequestLogProfile:
     """Test profile field in RequestLogEntry."""
 
     def test_create_with_profile(self):
-        from llm_rosetta.gateway.admin.request_log import RequestLogEntry
+        from codex_rosetta.gateway.admin.request_log import RequestLogEntry
 
         profile = {"request_conversion_ms": 2.45, "upstream_ms": 150.3}
         entry = RequestLogEntry.create(
@@ -141,7 +141,7 @@ class TestRequestLogProfile:
         assert entry.profile == profile
 
     def test_create_without_profile(self):
-        from llm_rosetta.gateway.admin.request_log import RequestLogEntry
+        from codex_rosetta.gateway.admin.request_log import RequestLogEntry
 
         entry = RequestLogEntry.create(
             model="gpt-4o",
@@ -154,7 +154,7 @@ class TestRequestLogProfile:
         assert entry.profile is None
 
     def test_to_dict_includes_profile(self):
-        from llm_rosetta.gateway.admin.request_log import RequestLogEntry
+        from codex_rosetta.gateway.admin.request_log import RequestLogEntry
 
         profile = {"request_conversion_ms": 2.45}
         entry = RequestLogEntry.create(
@@ -170,7 +170,7 @@ class TestRequestLogProfile:
         assert d["profile"] == profile
 
     def test_to_dict_omits_none_profile(self):
-        from llm_rosetta.gateway.admin.request_log import RequestLogEntry
+        from codex_rosetta.gateway.admin.request_log import RequestLogEntry
 
         entry = RequestLogEntry.create(
             model="gpt-4o",
@@ -184,7 +184,7 @@ class TestRequestLogProfile:
         assert "profile" not in d
 
     def test_update_profile_in_memory(self):
-        from llm_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
+        from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
 
         log = RequestLog()
         entry = RequestLogEntry.create(
@@ -216,7 +216,7 @@ class TestPersistenceProfile:
     """Test profile column in SQLite persistence."""
 
     def test_insert_and_query_with_profile(self, tmp_path):
-        from llm_rosetta.gateway.admin.persistence import PersistenceManager
+        from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
         pm = PersistenceManager(str(tmp_path))
         profile = {"request_conversion_ms": 2.45, "upstream_ms": 150.3}
@@ -242,7 +242,7 @@ class TestPersistenceProfile:
         pm.close()
 
     def test_insert_without_profile(self, tmp_path):
-        from llm_rosetta.gateway.admin.persistence import PersistenceManager
+        from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
         pm = PersistenceManager(str(tmp_path))
         pm.insert_log_entries(
@@ -266,7 +266,7 @@ class TestPersistenceProfile:
         pm.close()
 
     def test_update_entry_profile(self, tmp_path):
-        from llm_rosetta.gateway.admin.persistence import PersistenceManager
+        from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
         pm = PersistenceManager(str(tmp_path))
         pm.insert_log_entries(
@@ -300,7 +300,7 @@ class TestPersistenceProfile:
 
     def test_update_entry_profile_nonexistent(self, tmp_path):
         """Updating a non-existent entry is a no-op."""
-        from llm_rosetta.gateway.admin.persistence import PersistenceManager
+        from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
         pm = PersistenceManager(str(tmp_path))
         pm.update_entry_profile("nonexistent", {"foo": 1})
@@ -333,7 +333,7 @@ class TestPersistenceProfile:
         conn.close()
 
         # PersistenceManager should add the profile column via migration
-        from llm_rosetta.gateway.admin.persistence import PersistenceManager
+        from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
         pm = PersistenceManager(str(tmp_path))
         cursor = pm._conn.execute("PRAGMA table_info(request_log)")

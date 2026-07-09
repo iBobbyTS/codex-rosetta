@@ -1,4 +1,4 @@
-"""Test compatibility between LLM-Rosetta OpenAI Responses type replicas and OpenAI SDK types.
+"""Test compatibility between Codex-Rosetta OpenAI Responses type replicas and OpenAI SDK types.
 
 This module tests:
 - All TypedDict replicas can be correctly instantiated
@@ -11,7 +11,7 @@ Reference: tests/test_types/google_genai/test_type_compatibility.py
 
 import pytest
 
-from llm_rosetta.types.openai.responses import (
+from codex_rosetta.types.openai.responses import (
     Action,
     ActionFind,
     ActionOpenPage,
@@ -997,7 +997,7 @@ class TestResponsesInit:
 
     def test_all_exports(self):
         """Test that __all__ contains all expected exports."""
-        from llm_rosetta.types.openai.responses import __all__
+        from codex_rosetta.types.openai.responses import __all__
 
         expected = [
             # Request types - Input
@@ -1077,7 +1077,7 @@ class TestResponsesInit:
 
     def test_all_types_importable(self):
         """Test that all types in __all__ are importable."""
-        import llm_rosetta.types.openai.responses as mod
+        import codex_rosetta.types.openai.responses as mod
 
         for name in mod.__all__:
             obj = getattr(mod, name)
@@ -1097,13 +1097,13 @@ class TestSDKCompatibility:
     """
 
     def test_sdk_response_validation(self):
-        """Test creating a Response with LLM-Rosetta replica and validating with SDK."""
+        """Test creating a Response with Codex-Rosetta replica and validating with SDK."""
         try:
             from openai.types.responses import Response as SDKResponse
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_response: Response = {
+        codex_rosetta_response: Response = {
             "id": "resp_sdk_test",
             "object": "response",
             "created_at": 1234567890.0,
@@ -1116,7 +1116,7 @@ class TestSDKCompatibility:
                     "content": [
                         {
                             "type": "output_text",
-                            "text": "Hello from LLM-Rosetta!",
+                            "text": "Hello from Codex-Rosetta!",
                             "annotations": [],
                         }
                     ],
@@ -1137,7 +1137,7 @@ class TestSDKCompatibility:
         }
 
         # Validate with SDK Pydantic model
-        sdk_validated = SDKResponse.model_validate(llm_rosetta_response)
+        sdk_validated = SDKResponse.model_validate(codex_rosetta_response)
         assert sdk_validated.id == "resp_sdk_test"
         assert sdk_validated.model == "gpt-4o"
         assert sdk_validated.status == "completed"
@@ -1151,7 +1151,7 @@ class TestSDKCompatibility:
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_call: ResponseFunctionToolCall = {
+        codex_rosetta_call: ResponseFunctionToolCall = {
             "type": "function_call",
             "call_id": "call_sdk_test",
             "name": "get_weather",
@@ -1159,7 +1159,7 @@ class TestSDKCompatibility:
             "status": "completed",
         }
 
-        sdk_validated = SDKFunctionToolCall.model_validate(llm_rosetta_call)
+        sdk_validated = SDKFunctionToolCall.model_validate(codex_rosetta_call)
         assert sdk_validated.name == "get_weather"
         assert sdk_validated.call_id == "call_sdk_test"
 
@@ -1172,7 +1172,7 @@ class TestSDKCompatibility:
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_mcp: McpCall = {
+        codex_rosetta_mcp: McpCall = {
             "type": "mcp_call",
             "id": "mcp_sdk_test",
             "name": "mcp_tool",
@@ -1181,7 +1181,7 @@ class TestSDKCompatibility:
             "status": "completed",
         }
 
-        sdk_validated = SDKMcpCall.model_validate(llm_rosetta_mcp)
+        sdk_validated = SDKMcpCall.model_validate(codex_rosetta_mcp)
         assert sdk_validated.name == "mcp_tool"
         assert sdk_validated.server_label == "server1"
 
@@ -1194,14 +1194,14 @@ class TestSDKCompatibility:
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_reasoning: ResponseReasoningItem = {
+        codex_rosetta_reasoning: ResponseReasoningItem = {
             "type": "reasoning",
             "id": "reason_sdk_test",
             "summary": [{"type": "summary_text", "text": "Analyzed the problem"}],
             "status": "completed",
         }
 
-        sdk_validated = SDKReasoningItem.model_validate(llm_rosetta_reasoning)
+        sdk_validated = SDKReasoningItem.model_validate(codex_rosetta_reasoning)
         assert sdk_validated.id == "reason_sdk_test"
 
     def test_sdk_web_search_validation(self):
@@ -1213,14 +1213,14 @@ class TestSDKCompatibility:
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_search: ResponseFunctionWebSearch = {
+        codex_rosetta_search: ResponseFunctionWebSearch = {
             "type": "web_search_call",
             "id": "search_sdk_test",
             "action": {"type": "search", "query": "test query"},
             "status": "completed",
         }
 
-        sdk_validated = SDKWebSearch.model_validate(llm_rosetta_search)
+        sdk_validated = SDKWebSearch.model_validate(codex_rosetta_search)
         assert sdk_validated.id == "search_sdk_test"
 
     def test_sdk_code_interpreter_validation(self):
@@ -1232,7 +1232,7 @@ class TestSDKCompatibility:
         except ImportError:
             pytest.skip("OpenAI SDK not available")
 
-        llm_rosetta_code: ResponseCodeInterpreterToolCall = {
+        codex_rosetta_code: ResponseCodeInterpreterToolCall = {
             "type": "code_interpreter_call",
             "id": "code_sdk_test",
             "container_id": "container_test",
@@ -1240,7 +1240,7 @@ class TestSDKCompatibility:
             "status": "completed",
         }
 
-        sdk_validated = SDKCodeInterpreter.model_validate(llm_rosetta_code)
+        sdk_validated = SDKCodeInterpreter.model_validate(codex_rosetta_code)
         assert sdk_validated.id == "code_sdk_test"
 
 

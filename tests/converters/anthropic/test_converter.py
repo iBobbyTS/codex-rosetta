@@ -8,8 +8,8 @@ from typing import Any, cast
 
 import pytest
 
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.types.ir import (
     FinishEvent,
     IRRequest,
     IRResponse,

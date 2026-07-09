@@ -4,12 +4,12 @@ OpenAI Responses ContentOps unit tests.
 
 import pytest
 
-from llm_rosetta.converters.openai_responses.content_ops import (
+from codex_rosetta.converters.openai_responses.content_ops import (
     OpenAIResponsesContentOps,
 )
 from typing import cast
 
-from llm_rosetta.types.ir import (
+from codex_rosetta.types.ir import (
     CitationPart,
     FilePart,
     ImagePart,

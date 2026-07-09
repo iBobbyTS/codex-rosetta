@@ -3,7 +3,7 @@
 > Last updated: 2026-05-23
 >
 > This document catalogs parameter support differences across LLM providers
-> relevant to llm-rosetta's translation pipeline. The goal is to inform the
+> relevant to codex-rosetta's translation pipeline. The goal is to inform the
 > design of a lightweight capability/parameter schema that transforms can
 > consult at runtime.
 
@@ -11,7 +11,7 @@
 
 Parameters are compared against the **OpenAI Chat Completions** spec as the
 baseline, since most providers expose OpenAI-compatible endpoints and
-`openai_chat` is the dominant base converter in llm-rosetta.
+`openai_chat` is the dominant base converter in codex-rosetta.
 
 Sources: official API documentation, SDK references, and empirical testing
 via existing shim transforms.
@@ -100,7 +100,7 @@ Legend: ✅ supported | ❌ unsupported (will error) | ⚠️ silently ignored |
 - ✅ `max_completion_tokens` — required (replaces `max_tokens`)
 - Response includes `reasoning_content` in message output
 
-**Key insight for llm-rosetta:** OpenAI itself has model-level parameter
+**Key insight for codex-rosetta:** OpenAI itself has model-level parameter
 incompatibilities within a single provider. The o-series models require
 stripping sampling and penalty parameters that standard models accept.
 This is a strong argument for model-level capability awareness.
@@ -186,7 +186,7 @@ Both `"enabled"` and `"adaptive"` accept optional `display`:
 | Sonnet 4.5 | ✅ required | ❌ | ✅ | `"summarized"` |
 | Haiku 4.5 | ✅ | ❌ | ✅ | `"summarized"` |
 
-**Key insight for llm-rosetta:** Anthropic's thinking mode is the most
+**Key insight for codex-rosetta:** Anthropic's thinking mode is the most
 complex among all providers. The fact that Opus 4.7 **rejects** `enabled`
 mode (only accepts `adaptive`) while older models **require** `enabled`
 (don't support `adaptive`) makes this a critical model-level capability
@@ -461,7 +461,7 @@ is a model-level distinction, not a provider-level one.
   (seed-2.0-lite+, for compressed reasoning round-trip)
 - Thinking models strip: `logprobs`, `top_logprobs`, `logit_bias`, `stop`
 
-**Key insight for llm-rosetta:** Volcengine is the strongest example of
+**Key insight for codex-rosetta:** Volcengine is the strongest example of
 **intra-provider model-level differences** beyond just thinking mode. The
 penalty parameters (`frequency_penalty`, `presence_penalty`) are supported
 by older models but rejected by newer Seed 1.8/2.0 models. The `top_p`
@@ -527,7 +527,7 @@ to override OpenRouter's defaults (e.g., Anthropic models set
 - `only` / `ignore` — provider whitelist/blacklist
 
 **Our approach:** Since OpenRouter handles parameter compatibility itself,
-the llm-rosetta shim should remain a no-op pass-through. The rich
+the codex-rosetta shim should remain a no-op pass-through. The rich
 `supported_parameters` metadata from the models endpoint could be useful
 for future capability-aware routing.
 
@@ -624,7 +624,7 @@ frozenset is a prototype for what a capability table would formalize.
 
 ---
 
-## 4. Implications for llm-rosetta Capability System
+## 4. Implications for codex-rosetta Capability System
 
 ### 4.1 What belongs in a capability table
 

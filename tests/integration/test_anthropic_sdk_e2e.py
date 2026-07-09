@@ -12,7 +12,7 @@ Requires:
 - anthropic Python SDK installed
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     python tests/integration/test_anthropic_sdk_e2e.py
 """
 
@@ -34,8 +34,8 @@ from examples.tools import (
     multimodal_tools_spec,
     tools_spec,
 )
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     ToolCallPart,
     ToolDefinition,

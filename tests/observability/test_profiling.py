@@ -1,6 +1,6 @@
 """Tests for the observability ProfilerState (standalone, no gateway)."""
 
-from llm_rosetta.observability import ProfilerState
+from codex_rosetta.observability import ProfilerState
 
 
 class TestProfilerState:

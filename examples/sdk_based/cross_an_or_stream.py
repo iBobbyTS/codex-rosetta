@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cross-provider multi-turn conversation: Anthropic <-> OpenAI Responses (SDK, Stream).
 
-Demonstrates LLM-Rosetta's ability to maintain conversation context across
+Demonstrates Codex-Rosetta's ability to maintain conversation context across
 different LLM providers using SDK clients with streaming responses.
 Odd turns use Anthropic, even turns use OpenAI Responses.
 
@@ -45,8 +45,8 @@ from common import (  # noqa: E402
     process_tool_calls,
 )
 
-from llm_rosetta import AnthropicConverter, OpenAIResponsesConverter  # noqa: E402
-from llm_rosetta.converters.base.context import StreamContext  # noqa: E402
+from codex_rosetta import AnthropicConverter, OpenAIResponsesConverter  # noqa: E402
+from codex_rosetta.converters.base.context import StreamContext  # noqa: E402
 
 # Initialize converters
 an_converter = AnthropicConverter()

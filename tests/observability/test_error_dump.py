@@ -7,14 +7,14 @@ import zlib
 
 import pytest
 
-from llm_rosetta.observability.error_dump import (
+from codex_rosetta.observability.error_dump import (
     compress_body,
     compute_body_hash,
     decompress_body,
     dump_error,
     offload_images,
 )
-from llm_rosetta.observability.persistence import PersistenceManager
+from codex_rosetta.observability.persistence import PersistenceManager
 
 
 # ------------------------------------------------------------------

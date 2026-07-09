@@ -2,8 +2,8 @@
 
 import pytest
 
-from llm_rosetta._vendor.validate import ValidationError
-from llm_rosetta.types.ir.validation import (
+from codex_rosetta._vendor.validate import ValidationError
+from codex_rosetta.types.ir.validation import (
     validate_ir_request,
     validate_ir_response,
     validate_messages,

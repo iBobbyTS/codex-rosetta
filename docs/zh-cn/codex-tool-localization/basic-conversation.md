@@ -3,7 +3,7 @@
 Codex 通过 OpenAI Responses API 接口与模型通信。许多第三方供应商只暴露 OpenAI Chat Completions 兼容的端点。Codex-Rosetta 根据路由不同，以两种方式填补这一差距：
 
 - Responses 到 Responses 的路由直接透传。
-- Responses 到 Chat 的路由通过 LLM-Rosetta 的 IR 进行转换，然后再转换回 Responses 事件供 Codex 使用。
+- Responses 到 Chat 的路由通过 Codex-Rosetta 的 IR 进行转换，然后再转换回 Responses 事件供 Codex 使用。
 
 目标是保留 Codex 运行时的语义，而不仅仅是让上游请求在语法上有效。
 

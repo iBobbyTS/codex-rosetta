@@ -5,9 +5,9 @@ Google GenAI stream converter unit tests.
 import json
 from typing import Any, cast
 
-from llm_rosetta.converters.base.context import StreamContext
-from llm_rosetta.converters.google_genai import GoogleGenAIConverter
-from llm_rosetta.types.ir.stream import (
+from codex_rosetta.converters.base.context import StreamContext
+from codex_rosetta.converters.google_genai import GoogleGenAIConverter
+from codex_rosetta.types.ir.stream import (
     ContentBlockEndEvent,
     ContentBlockStartEvent,
     FinishEvent,

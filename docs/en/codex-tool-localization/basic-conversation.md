@@ -3,7 +3,7 @@
 Codex talks to models through the OpenAI Responses API surface. Many third-party providers only expose an OpenAI Chat Completions-compatible endpoint. Codex-Rosetta bridges that gap in two different ways depending on the route:
 
 - Responses to Responses routes are passed through directly.
-- Responses to Chat routes are converted through LLM-Rosetta's IR, then converted back to Responses events for Codex.
+- Responses to Chat routes are converted through Codex-Rosetta's IR, then converted back to Responses events for Codex.
 
 The goal is to preserve Codex runtime semantics, not just make the upstream request syntactically valid.
 

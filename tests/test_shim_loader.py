@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from llm_rosetta.shims.provider_shim import (
+from codex_rosetta.shims.provider_shim import (
     _reset_registry,
     get_shim,
 )
-from llm_rosetta.shims.providers import (
+from codex_rosetta.shims.providers import (
     _load_plugin_shims,
     _load_transforms,
     load_providers,
@@ -41,7 +41,7 @@ class TestLoadTransforms:
         tf = tmp_path / "transforms.py"
         tf.write_text(
             textwrap.dedent("""\
-            from llm_rosetta.shims.transforms import strip_fields
+            from codex_rosetta.shims.transforms import strip_fields
             to_transforms = (strip_fields("foo"),)
         """)
         )
@@ -59,7 +59,7 @@ class TestLoadTransforms:
         tf = tmp_path / "transforms.py"
         tf.write_text(
             textwrap.dedent("""\
-            from llm_rosetta.shims.transforms import strip_fields, rename_field
+            from codex_rosetta.shims.transforms import strip_fields, rename_field
             to_transforms = (strip_fields("x"),)
             from_transforms = (rename_field("a", "b"),)
         """)
@@ -300,7 +300,7 @@ class TestLoadProviders:
         """Files in the providers directory are ignored."""
         (tmp_path / "not_a_dir.txt").write_text("hello")
         self._make_provider_dir(tmp_path, "valid", "name: valid\nbase: openai_chat\n")
-        import llm_rosetta.shims.providers as mod
+        import codex_rosetta.shims.providers as mod
 
         monkeypatch.setattr(mod, "_PROVIDERS_DIR", tmp_path)
         shims = load_providers()
@@ -311,7 +311,7 @@ class TestLoadProviders:
         """Directories without provider.yaml are skipped."""
         (tmp_path / "empty_dir").mkdir()
         self._make_provider_dir(tmp_path, "valid", "name: valid\nbase: openai_chat\n")
-        import llm_rosetta.shims.providers as mod
+        import codex_rosetta.shims.providers as mod
 
         monkeypatch.setattr(mod, "_PROVIDERS_DIR", tmp_path)
         shims = load_providers()
@@ -321,7 +321,7 @@ class TestLoadProviders:
         """YAML without 'name' or 'base' is skipped with warning."""
         self._make_provider_dir(tmp_path, "bad", "description: no name or base\n")
         self._make_provider_dir(tmp_path, "good", "name: good\nbase: openai_chat\n")
-        import llm_rosetta.shims.providers as mod
+        import codex_rosetta.shims.providers as mod
 
         monkeypatch.setattr(mod, "_PROVIDERS_DIR", tmp_path)
         shims = load_providers()
@@ -346,7 +346,7 @@ class TestLoadProvidersFromDir:
         d.mkdir()
         (d / "provider.yaml").write_text("name: myplugin\nbase: openai_chat\n")
         (d / "transforms.py").write_text(
-            "from llm_rosetta.shims.transforms import strip_fields\n"
+            "from codex_rosetta.shims.transforms import strip_fields\n"
             'to_transforms = (strip_fields("foo"),)\n'
         )
         shims = load_providers_from_dir(tmp_path)
@@ -377,18 +377,18 @@ class TestPluginEntryPoints:
 
         class FakeEPs:
             def select(self, *, group: str):
-                assert group == "llm_rosetta.shim_providers"
+                assert group == "codex_rosetta.shim_providers"
                 return [FakeEP()]
 
         monkeypatch.setattr(
-            "llm_rosetta.shims.providers.entry_points", lambda: FakeEPs()
+            "codex_rosetta.shims.providers.entry_points", lambda: FakeEPs()
         )
         _load_plugin_shims()
         assert calls == ["called"]
 
     def test_collects_returned_shims(self, monkeypatch):
         """Entry points that return list[ProviderShim] are collected."""
-        from llm_rosetta.shims.provider_shim import ProviderShim
+        from codex_rosetta.shims.provider_shim import ProviderShim
 
         test_shim = ProviderShim(name="ep-test", base="openai_chat")
 
@@ -406,7 +406,7 @@ class TestPluginEntryPoints:
                 return [FakeEP()]
 
         monkeypatch.setattr(
-            "llm_rosetta.shims.providers.entry_points", lambda: FakeEPs()
+            "codex_rosetta.shims.providers.entry_points", lambda: FakeEPs()
         )
         result = _load_plugin_shims()
         assert test_shim in result
@@ -428,7 +428,7 @@ class TestPluginEntryPoints:
                 return [BadEP()]
 
         monkeypatch.setattr(
-            "llm_rosetta.shims.providers.entry_points", lambda: FakeEPs()
+            "codex_rosetta.shims.providers.entry_points", lambda: FakeEPs()
         )
         result = _load_plugin_shims()
         assert result == []

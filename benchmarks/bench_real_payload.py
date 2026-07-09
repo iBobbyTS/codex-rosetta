@@ -81,7 +81,7 @@ ITERATIONS = 500  # fewer iterations since payloads are much larger
 
 def bench_rosetta_anthropic_roundtrip(payload: dict, iterations: int) -> list[float]:
     """Benchmark Anthropic → IR → Anthropic roundtrip."""
-    from llm_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
 
     conv = AnthropicConverter()
 
@@ -103,8 +103,8 @@ def bench_rosetta_anthropic_roundtrip(payload: dict, iterations: int) -> list[fl
 
 def bench_rosetta_responses_to_anthropic(payload: dict, iterations: int) -> list[float]:
     """Benchmark OpenAI Responses → IR → Anthropic conversion."""
-    from llm_rosetta.converters.anthropic import AnthropicConverter
-    from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
 
     resp_conv = OpenAIResponsesConverter()
     anth_conv = AnthropicConverter()
@@ -127,8 +127,8 @@ def bench_rosetta_responses_to_anthropic(payload: dict, iterations: int) -> list
 
 def bench_rosetta_to_openai_chat(payload: dict, iterations: int) -> list[float]:
     """Benchmark Anthropic → IR → OpenAI Chat conversion."""
-    from llm_rosetta.converters.anthropic import AnthropicConverter
-    from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
     anth_conv = AnthropicConverter()
     chat_conv = OpenAIChatConverter()
@@ -151,8 +151,8 @@ def bench_rosetta_to_openai_chat(payload: dict, iterations: int) -> list[float]:
 
 def bench_rosetta_to_google(payload: dict, iterations: int) -> list[float]:
     """Benchmark Anthropic → IR → Google GenAI conversion."""
-    from llm_rosetta.converters.anthropic import AnthropicConverter
-    from llm_rosetta.converters.google_genai import GoogleGenAIConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.google_genai import GoogleGenAIConverter
 
     anth_conv = AnthropicConverter()
     google_conv = GoogleGenAIConverter()

@@ -1,5 +1,5 @@
 """
-Tests for LLM-Rosetta IR Types Module
+Tests for Codex-Rosetta IR Types Module
 
 测试 IR 类型模块的所有组件：
 - 类型定义和验证
@@ -14,7 +14,7 @@ from typing import cast
 import pytest
 
 # 直接从 IR 模块导入，避免通过主模块导入旧的转换器
-from llm_rosetta.types.ir import (
+from codex_rosetta.types.ir import (
     # Content parts
     TextPart,
     ImagePart,
@@ -70,7 +70,7 @@ from llm_rosetta.types.ir import (
     UsageInfo,
     ChoiceInfo,
 )
-from llm_rosetta.types.ir.extensions_experimental import (
+from codex_rosetta.types.ir.extensions_experimental import (
     SystemEvent,
     BatchMarker,
     SessionControl,

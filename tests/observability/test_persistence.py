@@ -2,7 +2,7 @@
 
 import pytest
 
-from llm_rosetta.observability import PersistenceManager, RequestLogEntry
+from codex_rosetta.observability import PersistenceManager, RequestLogEntry
 
 
 @pytest.fixture

@@ -2,17 +2,17 @@
 
 from typing import Any, cast
 
-from llm_rosetta.converters.base import BaseConverter
-from llm_rosetta.converters.base.context import ConversionContext, StreamContext
-from llm_rosetta.converters.openai_chat.converter import OpenAIChatConverter
-from llm_rosetta.converters.openai_responses.converter import OpenAIResponsesConverter
-from llm_rosetta.converters.anthropic.converter import AnthropicConverter
-from llm_rosetta.converters.google_genai.converter import GoogleGenAIConverter
-from llm_rosetta.converters.openai_responses.stream_context import (
+from codex_rosetta.converters.base import BaseConverter
+from codex_rosetta.converters.base.context import ConversionContext, StreamContext
+from codex_rosetta.converters.openai_chat.converter import OpenAIChatConverter
+from codex_rosetta.converters.openai_responses.converter import OpenAIResponsesConverter
+from codex_rosetta.converters.anthropic.converter import AnthropicConverter
+from codex_rosetta.converters.google_genai.converter import GoogleGenAIConverter
+from codex_rosetta.converters.openai_responses.stream_context import (
     OpenAIResponsesStreamContext,
 )
-from llm_rosetta.types.ir import UserMessage
-from llm_rosetta.types.ir.request import IRRequest
+from codex_rosetta.types.ir import UserMessage
+from codex_rosetta.types.ir.request import IRRequest
 
 
 class TestConversionContext:

@@ -11,8 +11,8 @@
 #   "providers": { "my_local": { "base_url": "http://172.17.0.1:11434/v1" } }
 
 services:
-  llm-rosetta-gateway:
-    image: oaklight/llm-rosetta-gateway
+  codex-rosetta-gateway:
+    image: oaklight/codex-rosetta-gateway
     ports:
       - "8765:8765" # Gateway API + admin panel
     volumes:
