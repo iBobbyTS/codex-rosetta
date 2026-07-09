@@ -622,7 +622,9 @@ class OpenAIResponsesConverter(BaseConverter):
             metadata = tool.get("metadata") or {}
             provider_type = metadata.get("provider_type")
             tool_name = tool.get("name")
-            if provider_type == "tool_search" and isinstance(tool_name, str):
+            if provider_type in ("tool_search", "web_search") and isinstance(
+                tool_name, str
+            ):
                 mapping[tool_name] = provider_type
         ctx.store_responses_native_tool_type_map(mapping)
 
@@ -1587,6 +1589,8 @@ class OpenAIResponsesConverter(BaseConverter):
                 if call_id.startswith("call_")
                 else f"tsc_{call_id}"
             )
+        elif provider_metadata.get("responses_tool_type") == "web_search":
+            item_id = provider_metadata.get("responses_item_id") or call_id
         else:
             item_id = provider_metadata.get("responses_item_id") or call_id
 
@@ -1605,6 +1609,12 @@ class OpenAIResponsesConverter(BaseConverter):
         if provider_metadata.get("responses_tool_type") == "tool_search":
             item = self._build_tool_search_call_item(
                 call_id=call_id,
+                item_id=item_id,
+                arguments="",
+                status="in_progress",
+            )
+        elif provider_metadata.get("responses_tool_type") == "web_search":
+            item = self._build_web_search_call_item(
                 item_id=item_id,
                 arguments="",
                 status="in_progress",
@@ -1678,7 +1688,10 @@ class OpenAIResponsesConverter(BaseConverter):
             if context is not None and call_id
             else "function"
         )
-        if provider_metadata.get("responses_tool_type") == "tool_search":
+        if provider_metadata.get("responses_tool_type") in (
+            "tool_search",
+            "web_search",
+        ):
             return {}
         event_type = (
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DELTA
@@ -1804,6 +1817,12 @@ class OpenAIResponsesConverter(BaseConverter):
             if provider_metadata.get("responses_tool_type") == "tool_search":
                 item = self._build_tool_search_call_item(
                     call_id=call_id,
+                    item_id=tc_item_id,
+                    arguments=arguments,
+                    status="completed",
+                )
+            elif provider_metadata.get("responses_tool_type") == "web_search":
+                item = self._build_web_search_call_item(
                     item_id=tc_item_id,
                     arguments=arguments,
                     status="completed",
@@ -2064,6 +2083,19 @@ class OpenAIResponsesConverter(BaseConverter):
                         "item": item,
                     }
                 )
+            elif provider_metadata.get("responses_tool_type") == "web_search":
+                item = self._build_web_search_call_item(
+                    item_id=item_id,
+                    arguments=arguments,
+                    status="completed",
+                )
+                results.append(
+                    {
+                        "type": ResponsesEventType.OUTPUT_ITEM_DONE,
+                        "output_index": output_index,
+                        "item": item,
+                    }
+                )
             elif tool_type == "custom":
                 # response.custom_tool_call_input.done
                 results.append(
@@ -2143,6 +2175,30 @@ class OpenAIResponsesConverter(BaseConverter):
             "execution": "client",
             "arguments": parsed_arguments,
         }
+
+    @staticmethod
+    def _build_web_search_call_item(
+        *,
+        item_id: str,
+        arguments: str,
+        status: str,
+    ) -> dict[str, Any]:
+        try:
+            parsed_arguments = json.loads(arguments) if arguments else {}
+        except (json.JSONDecodeError, TypeError):
+            parsed_arguments = {"query": arguments}
+        if not isinstance(parsed_arguments, dict):
+            parsed_arguments = {"query": str(parsed_arguments)}
+
+        query = parsed_arguments.get("query")
+        item: dict[str, Any] = {
+            "type": "web_search_call",
+            "id": item_id,
+            "status": status,
+        }
+        if isinstance(query, str) and query:
+            item["action"] = {"type": "search", "query": query}
+        return item
 
     def _handle_usage_to_p(
         self,

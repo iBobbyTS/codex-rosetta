@@ -110,6 +110,19 @@ class TestOpenAIResponsesToolOps:
         assert result["required_parameters"] == ["query"]
         assert result["metadata"] == {"provider_type": "tool_search"}
 
+    def test_p_tool_definition_to_ir_web_search_synthesizes_query_schema(self):
+        """Responses web_search degrades to a Chat-callable web_search function."""
+        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(
+            {"type": "web_search", "external_web_access": True}
+        )
+
+        assert result["type"] == "function"
+        assert result["name"] == "web_search"
+        assert result["parameters"]["required"] == ["query"]
+        assert result["parameters"]["properties"]["query"]["type"] == "string"
+        assert result["required_parameters"] == ["query"]
+        assert result["metadata"] == {"provider_type": "web_search"}
+
     def test_p_tool_definition_to_ir_nested(self):
         """Test OpenAI nested format (with function key) → IR ToolDefinition."""
         provider_tool = {
@@ -378,6 +391,25 @@ class TestOpenAIResponsesToolOps:
         assert result["call_id"] == "call_123"
         assert result["execution"] == "client"
         assert result["arguments"] == {"query": "github plugin", "limit": 8}
+
+    def test_ir_tool_call_to_p_restores_web_search_call(self):
+        """Responses web_search calls restore the native output item type."""
+        ir_tc = ToolCallPart(
+            type="tool_call",
+            tool_call_id="call_ws",
+            tool_name="web_search",
+            tool_input={"query": "Codex web search"},
+            provider_metadata={"responses_tool_type": "web_search"},
+        )
+
+        result = OpenAIResponsesToolOps.ir_tool_call_to_p(ir_tc)
+
+        assert result == {
+            "type": "web_search_call",
+            "id": "call_ws",
+            "status": "completed",
+            "action": {"type": "search", "query": "Codex web search"},
+        }
 
     def test_ir_tool_call_to_p_mcp(self):
         """Test IR ToolCallPart with mcp tool_type → mcp_call item."""

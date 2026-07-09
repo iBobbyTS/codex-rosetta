@@ -292,6 +292,7 @@ async def _proxy_handler(
                 persistence=persistence,
                 tool_cache_session_id=tool_cache_session_id,
                 codex_window_id=codex_window_id,
+                web_search_config=_config.web_search,
                 stream_trace_state=getattr(request.app, "stream_trace_state", None),
             )
         else:

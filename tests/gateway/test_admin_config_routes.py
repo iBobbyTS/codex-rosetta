@@ -8,7 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from llm_rosetta.gateway.admin.routes.config import put_model, put_server_settings
+from llm_rosetta.gateway.admin.routes.config import (
+    get_config,
+    put_model,
+    put_server_settings,
+)
 from llm_rosetta.gateway.config import GatewayConfig
 from llm_rosetta.gateway.stream_trace import StreamTraceState
 
@@ -66,6 +70,72 @@ def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
     assert app.stream_trace_state.config.enabled is True
     assert app.stream_trace_state.config.filter == "glm,opencode"
     assert app.stream_trace_state.config.path == "~/trace/log.jsonl"
+
+
+def test_put_server_settings_persists_tavily_api_key(tmp_path):
+    """Admin web search settings persist to server.web_search."""
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
+
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app)
+    request.json = lambda: {"web_search": {"tavily_api_key": "tvly-test-key"}}
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["web_search"] == {"tavily_api_key": "tvly-test-key"}
+
+
+def test_put_server_settings_preserves_masked_tavily_api_key(tmp_path):
+    """Saving the masked admin value keeps the existing Tavily API key."""
+    config = _config_data()
+    config["server"]["web_search"] = {"tavily_api_key": "tvly-1234567890"}
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app)
+    request.json = lambda: {"web_search": {"tavily_api_key": "tvly***7890"}}
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["web_search"] == {"tavily_api_key": "tvly-1234567890"}
+
+
+def test_get_config_masks_tavily_api_key(tmp_path):
+    """Admin config response does not expose the raw Tavily API key."""
+    config = _config_data()
+    config["server"]["web_search"] = {"tavily_api_key": "tvly-1234567890"}
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+    request = SimpleNamespace(app=app)
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode("utf-8"))
+    assert body["server"]["web_search"]["tavily_api_key"] == "tvly***7890"
 
 
 def test_put_model_persists_tool_adaptation_and_reloads_runtime_config(tmp_path):
@@ -193,11 +263,14 @@ def test_admin_html_uses_page_routes():
     assert 'href="/admin/providers"' in html
     assert 'href="/admin/models"' in html
     assert 'href="/admin/keys"' in html
+    assert 'href="/admin/web-search"' in html
     assert 'href="/admin/dashboard"' in html
     assert 'href="/admin/logs"' in html
     assert 'href="/admin/gateway-logs"' in html
     assert 'data-page="keys"' in html
+    assert 'data-page="web-search"' in html
     assert 'id="page-keys"' in html
+    assert 'id="page-web-search"' in html
     assert "llm-rosetta-tab" not in html
     assert "data-tab" not in html
     assert "currentTab" not in html

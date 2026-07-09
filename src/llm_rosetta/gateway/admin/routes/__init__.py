@@ -85,7 +85,15 @@ def register_admin_routes(app: Any) -> None:
     # HTML
     app.route("/admin", methods=["GET"])(serve_admin_html)
     app.route("/admin/", methods=["GET"])(serve_admin_html)
-    for page in ("providers", "models", "keys", "dashboard", "logs", "gateway-logs"):
+    for page in (
+        "providers",
+        "models",
+        "keys",
+        "web-search",
+        "dashboard",
+        "logs",
+        "gateway-logs",
+    ):
         app.route(f"/admin/{page}", methods=["GET"])(serve_admin_html)
         app.route(f"/admin/{page}/", methods=["GET"])(serve_admin_html)
     # Admin auth
