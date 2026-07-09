@@ -27,6 +27,70 @@ PATHS_TO_TRY = [
     os.path.expanduser("~/.llm-rosetta-gateway/config.jsonc"),
 ]
 
+API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
+    "responses": "openai_responses",
+    "chat": "openai_chat",
+    "anthropic": "anthropic",
+    "google": "google",
+}
+
+PROVIDER_API_TYPE_SHIMS: dict[tuple[str, str], str] = {
+    ("anthropic", "anthropic"): "anthropic",
+    ("deepseek", "chat"): "deepseek",
+    ("google", "google"): "google",
+    ("minimax_china", "anthropic"): "minimax--anthropic",
+    ("minimax_china", "chat"): "minimax--openai_chat",
+    ("minimax_international", "anthropic"): "minimax--anthropic",
+    ("minimax_international", "chat"): "minimax--openai_chat",
+    ("moonshot_china", "chat"): "moonshot",
+    ("moonshot_international", "chat"): "moonshot",
+    ("openai", "chat"): "openai",
+    ("openai", "responses"): "openai_responses",
+    ("openrouter", "anthropic"): "openrouter--anthropic",
+    ("openrouter", "chat"): "openrouter--openai_chat",
+    ("qwen", "chat"): "qwen",
+    ("zhipu", "chat"): "zhipu",
+}
+
+
+def api_type_to_provider_type(api_type: Any) -> str | None:
+    """Return the base gateway provider type for an admin protocol value."""
+    if not api_type:
+        return None
+    return API_TYPE_TO_PROVIDER_TYPE.get(str(api_type))
+
+
+def derive_provider_shim_name(provider: Any, api_type: Any) -> str | None:
+    """Return the registered shim for a provider/protocol pair, when available."""
+    if not provider or not api_type:
+        return None
+    shim_name = PROVIDER_API_TYPE_SHIMS.get((str(provider), str(api_type)))
+    if not shim_name:
+        return None
+
+    from llm_rosetta.shims import get_shim
+
+    return shim_name if get_shim(shim_name) is not None else None
+
+
+def resolve_provider_config_type_and_shim(
+    name: str, cfg: dict[str, Any]
+) -> tuple[str, str | None]:
+    """Resolve a provider config entry to its base API type and optional shim."""
+    api_type = cfg.get("api_type")
+    if api_type:
+        provider_type = api_type_to_provider_type(api_type) or str(api_type)
+        return provider_type, derive_provider_shim_name(cfg.get("provider"), api_type)
+
+    from llm_rosetta.shims import resolve_base
+
+    if "shim" in cfg:
+        return resolve_base(cfg["shim"]), cfg["shim"]
+    if "type" in cfg:
+        return resolve_base(cfg["type"]), cfg["type"]
+    return name, name
+
+
 # ---------------------------------------------------------------------------
 # JSONC loader
 # ---------------------------------------------------------------------------
@@ -252,30 +316,23 @@ class GatewayConfig:
     def _resolve_provider_types(
         raw_providers: dict[str, dict[str, str]],
     ) -> tuple[dict[str, str], dict[str, str | None]]:
-        """Resolve each provider's API standard type via shim registry.
+        """Resolve each provider's API standard type via admin protocol or shim.
 
         Resolution order per provider:
-          1. ``shim`` field → resolve via shim registry
-          2. ``type`` field → resolve via shim registry
-          3. provider name itself (backward-compatible fallback)
+          1. ``api_type`` field → resolve to a base protocol and derive shim
+          2. ``shim`` field → resolve via shim registry
+          3. ``type`` field → resolve via shim registry
+          4. provider name itself (backward-compatible fallback)
 
         Returns:
             Tuple of (provider_types, provider_shim_names).
         """
-        from llm_rosetta.shims import resolve_base
-
         provider_types: dict[str, str] = {}
         provider_shim_names: dict[str, str | None] = {}
         for name, cfg in raw_providers.items():
-            if "shim" in cfg:
-                provider_types[name] = resolve_base(cfg["shim"])
-                provider_shim_names[name] = cfg["shim"]
-            elif "type" in cfg:
-                provider_types[name] = resolve_base(cfg["type"])
-                provider_shim_names[name] = cfg["type"]
-            else:
-                provider_types[name] = name
-                provider_shim_names[name] = name
+            provider_type, shim_name = resolve_provider_config_type_and_shim(name, cfg)
+            provider_types[name] = provider_type
+            provider_shim_names[name] = shim_name
         return provider_types, provider_shim_names
 
     @classmethod

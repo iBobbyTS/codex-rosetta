@@ -8,7 +8,12 @@ from llm_rosetta._vendor.httpclient import AsyncClient, Response as HttpResponse
 from llm_rosetta._vendor.httpserver import JSONResponse, Response
 from llm_rosetta.shims import get_shim, list_shims
 
-from ...config import GatewayConfig, load_config_raw, write_config
+from ...config import (
+    GatewayConfig,
+    load_config_raw,
+    resolve_provider_config_type_and_shim,
+    write_config,
+)
 from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_adaptation import (
@@ -170,7 +175,9 @@ def _resolve_model_reasoning(
     """
     provider_name = entry.get("provider", "")
     provider_cfg = providers.get(provider_name, {})
-    shim_name = provider_cfg.get("type") or provider_name
+    _provider_type, shim_name = resolve_provider_config_type_and_shim(
+        provider_name, provider_cfg
+    )
     upstream = entry.get("upstream_model") or model_name
 
     shim = get_shim(shim_name)
@@ -212,15 +219,15 @@ async def get_config(request: Any) -> Response:
     except Exception as exc:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
-    # Mask API keys and ensure each provider has a "type" field
+    # Mask API keys and keep legacy type fallback only for legacy entries.
     providers = raw.get("providers", {})
     masked_providers: dict[str, Any] = {}
     for name, cfg in providers.items():
         masked = dict(cfg)
         if "api_key" in masked:
             masked["api_key"] = _mask_api_key(masked["api_key"])
-        # Ensure explicit type — fall back to provider name for legacy configs
-        if "type" not in masked:
+        # Ensure old provider-name-as-shim configs remain editable in the UI.
+        if "api_type" not in masked and "type" not in masked and "shim" not in masked:
             masked["type"] = name
         masked_providers[name] = masked
 

@@ -11,6 +11,7 @@ from typing import Any
 from llm_rosetta.gateway.admin.routes.config import (
     get_config,
     put_model,
+    put_provider,
     put_server_settings,
 )
 from llm_rosetta.gateway.config import GatewayConfig
@@ -138,6 +139,79 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert body["server"]["web_search"]["tavily_api_key"] == "tvly***7890"
 
 
+def test_put_provider_persists_provider_and_api_type(tmp_path):
+    """New admin provider saves use provider/api_type instead of legacy type."""
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
+
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "DeepSeek"})
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "chat",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-new",
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["DeepSeek"] == {
+        "api_key": "sk-new",
+        "base_url": "https://api.deepseek.com",
+        "provider": "deepseek",
+        "api_type": "chat",
+    }
+    assert "type" not in saved["providers"]["DeepSeek"]
+    assert app.gateway_config.provider_types["DeepSeek"] == "openai_chat"
+    assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
+
+
+def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
+    """Editing a new-style provider with a masked key keeps the old secret."""
+    config = _config_data()
+    config["providers"]["DeepSeek"] = {
+        "api_key": "sk-1234567890",
+        "base_url": "https://api.deepseek.com",
+        "provider": "deepseek",
+        "api_type": "chat",
+    }
+    config["models"]["deepseek-test"] = "DeepSeek"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "DeepSeek"})
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "chat",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-1***7890",
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["DeepSeek"]["api_key"] == "sk-1234567890"
+    assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
+    assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
+    assert "type" not in saved["providers"]["DeepSeek"]
+
+
 def test_put_model_persists_tool_adaptation_and_reloads_runtime_config(tmp_path):
     """Model tool adaptation settings persist and hot-reload into routing."""
     config_path = tmp_path / "config.jsonc"
@@ -246,6 +320,53 @@ def test_admin_html_exposes_tool_adaptation_switches():
     assert "toolAdaptation.enable_tool_description_optimization !== false" in html
     assert "toolAdaptation.enable_phase_detection !== false" in html
     assert "toolFlattenNestedNamespaceTools" not in html
+
+
+def test_admin_html_exposes_provider_preset_protocol_controls():
+    """Provider modal exposes provider/protocol selects and preset behavior."""
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "llm_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    assert 'id="provProvider"' in html
+    assert 'id="provApiType"' in html
+    assert "const PROVIDER_PRESETS" in html
+    assert "PROTOCOL_DIVIDER_VALUE" in html
+    assert "divider.disabled = true" in html
+    assert "opt.dataset.unsupported = 'true'" in html
+    assert "'provider.qwen':'Qwen'" in html
+    assert "'provider.qwen':'\\u901a\\u4e49\\u5343\\u95ee'" in html
+    assert "'provider.zhipu':'Zhipu (GLM)'" in html
+    assert "'provider.zhipu':'\\u667a\\u8c31 GLM'" in html
+    assert "protocol.unsupportedSuffix" in html
+    assert (
+        "const body = {provider, api_type: apiType, base_url: baseUrl, proxy}" in html
+    )
+    assert 'id="provType"' not in html
+
+    provider_order = [
+        "id: 'deepseek'",
+        "id: 'zhipu'",
+        "id: 'moonshot_china'",
+        "id: 'moonshot_international'",
+        "id: 'minimax_china'",
+        "id: 'minimax_international'",
+        "id: 'qwen'",
+        "id: 'openai'",
+        "id: 'google'",
+        "id: 'anthropic'",
+        "id: 'openrouter'",
+        "id: 'opencode_go'",
+        "id: 'custom'",
+    ]
+    positions = [html.index(item) for item in provider_order]
+    assert positions == sorted(positions)
 
 
 def test_admin_html_uses_page_routes():

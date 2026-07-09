@@ -77,6 +77,89 @@ class TestStreamTraceConfig:
         assert cfg.stream_trace.max_string_chars == 5000
 
 
+class TestProviderApiTypeResolution:
+    """Provider entries can use provider/api_type instead of legacy type."""
+
+    def test_api_type_takes_precedence_over_legacy_type(self):
+        raw = {
+            "providers": {
+                "DeepSeek": {
+                    "api_key": "sk-test",
+                    "base_url": "https://api.deepseek.com",
+                    "provider": "deepseek",
+                    "api_type": "chat",
+                    "type": "anthropic",
+                }
+            },
+            "models": {"deepseek-test": "DeepSeek"},
+            "server": {},
+        }
+
+        cfg = GatewayConfig(raw)
+        route, provider = cfg.resolve("openai_responses", "deepseek-test")
+
+        assert cfg.provider_types["DeepSeek"] == "openai_chat"
+        assert cfg.provider_shim_names["DeepSeek"] == "deepseek"
+        assert route.target_provider == "openai_chat"
+        assert route.shim_name == "deepseek"
+        assert provider.base_url == "https://api.deepseek.com"
+
+    def test_provider_api_type_can_derive_mixed_shim(self):
+        raw = {
+            "providers": {
+                "MiniMax": {
+                    "api_key": "sk-test",
+                    "base_url": "https://api.minimaxi.com/anthropic",
+                    "provider": "minimax_china",
+                    "api_type": "anthropic",
+                }
+            },
+            "models": {"minimax-test": "MiniMax"},
+            "server": {},
+        }
+
+        cfg = GatewayConfig(raw)
+        route, _provider = cfg.resolve("openai_responses", "minimax-test")
+
+        assert cfg.provider_types["MiniMax"] == "anthropic"
+        assert cfg.provider_shim_names["MiniMax"] == "minimax--anthropic"
+        assert route.target_provider == "anthropic"
+        assert route.shim_name == "minimax--anthropic"
+
+    def test_custom_api_type_has_no_shim(self):
+        raw = {
+            "providers": {
+                "Pixel": {
+                    "api_key": "sk-test",
+                    "base_url": "https://api.example.com",
+                    "provider": "custom",
+                    "api_type": "responses",
+                }
+            },
+            "models": {"pixel-test": "Pixel"},
+            "server": {},
+        }
+
+        cfg = GatewayConfig(raw)
+        route, _provider = cfg.resolve("openai_chat", "pixel-test")
+
+        assert cfg.provider_types["Pixel"] == "openai_responses"
+        assert cfg.provider_shim_names["Pixel"] is None
+        assert route.target_provider == "openai_responses"
+        assert route.shim_name is None
+
+    def test_legacy_type_config_still_resolves(self):
+        raw = _minimal_raw()
+
+        cfg = GatewayConfig(raw)
+        route, _provider = cfg.resolve("openai_responses", "gpt-test")
+
+        assert cfg.provider_types["test"] == "openai_chat"
+        assert cfg.provider_shim_names["test"] == "openai"
+        assert route.target_provider == "openai_chat"
+        assert route.shim_name == "openai"
+
+
 class TestModelToolAdaptation:
     """Per-model tool adaptation is available on resolved routes."""
 

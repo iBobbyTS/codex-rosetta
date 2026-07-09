@@ -85,8 +85,15 @@ def _build_provider_entry(
 
     entry: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
 
+    provider = body.get("provider")
+    api_type = body.get("api_type")
+    if provider:
+        entry["provider"] = provider
+    if api_type:
+        entry["api_type"] = api_type
+
     provider_type = body.get("type")
-    if provider_type:
+    if provider_type and not api_type:
         entry["type"] = provider_type
 
     if "proxy" in body:
