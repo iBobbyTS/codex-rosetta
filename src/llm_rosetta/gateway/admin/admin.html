@@ -504,6 +504,7 @@ body { padding-bottom: 26px; }
   <a class="nav-link active" href="/admin/providers" data-page="providers" data-i18n="nav.providers">Providers</a>
   <a class="nav-link" href="/admin/models" data-page="models" data-i18n="nav.models">Models</a>
   <a class="nav-link" href="/admin/keys" data-page="keys" data-i18n="nav.keys">API Keys</a>
+  <a class="nav-link" href="/admin/web-search" data-page="web-search" data-i18n="nav.webSearch">Web Search</a>
   <a class="nav-link" href="/admin/dashboard" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</a>
   <a class="nav-link" href="/admin/logs" data-page="logs" data-i18n="nav.logs">Request Log</a>
   <a class="nav-link" href="/admin/gateway-logs" data-page="gateway-logs" data-i18n="nav.gatewayLogs">Gateway Logs</a>
@@ -595,6 +596,24 @@ body { padding-bottom: 26px; }
         </tr></thead>
         <tbody id="keysTable"></tbody>
       </table></div>
+    </div>
+  </div>
+
+  <!-- Web Search Page -->
+  <div class="page-panel" id="page-web-search">
+    <div class="section">
+      <div class="section-header">
+        <h2 data-i18n="section.webSearch">Web Search</h2>
+      </div>
+      <div class="provider-card" style="max-width:560px">
+        <div class="form-group" style="margin-bottom:0">
+          <label data-i18n="label.tavilyApiKey">Tavily API Key</label>
+          <div style="display:flex;gap:8px">
+            <input id="webSearchTavilyApiKey" type="password" placeholder="${TAVILY_API_KEY}" style="flex:1;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:14px;font-family:var(--mono)">
+            <button class="btn btn-primary btn-sm" onclick="saveWebSearchSettings()" data-i18n="btn.save">Save</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -1025,9 +1044,10 @@ function setTheme(name) {
 // ===================== i18n =====================
 const I18N = {
   en: {
-    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys',
+    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys', 'nav.webSearch':'Web Search',
     'nav.dashboard':'Dashboard', 'nav.logs':'Request Log', 'nav.gatewayLogs':'Gateway Logs',
     'section.server':'Server Settings', 'section.providers':'Providers', 'section.models':'Model Routing',
+    'section.webSearch':'Web Search',
     'section.gatewayLogs':'Gateway Logs',
     'label.globalProxy':'Global Proxy URL',
     'label.globalProxy.hint':'Applies to all providers unless overridden per-provider.',
@@ -1038,6 +1058,7 @@ const I18N = {
     'label.streamTraceFilter':'Filter',
     'label.streamTraceFilterHint':'Comma-separated substrings matched against model, provider name, source provider, and target provider. Leave empty to trace all streaming requests.',
     'label.streamTraceMaxChars':'Max String Characters',
+    'label.tavilyApiKey':'Tavily API Key',
     'btn.save':'Save', 'modal.settings':'Settings', 'label.theme':'Theme', 'label.language':'Language', 'theme.light':'Light', 'theme.dark':'Dark', 'btn.cancel':'Cancel', 'btn.close':'Close',
     'btn.addProvider':'+ Add Provider', 'btn.addModel':'+ Add Model',
     'btn.edit':'Edit', 'btn.delete':'Delete', 'btn.rotate':'Rotate', 'btn.resetFilters':'Reset Filters',
@@ -1073,6 +1094,7 @@ const I18N = {
     'empty.providers':'No providers configured.', 'empty.models':'No models configured.',
     'empty.logs':'No requests logged yet', 'empty.data':'No data yet',
     'toast.serverSaved':'Server settings saved',
+    'toast.webSearchSaved':'Web search settings saved',
     'toast.streamTraceSaved':'Gateway log settings saved',
     'toast.providerSaved':"Provider '{name}' saved",
     'toast.providerDeleted':"Provider '{name}' deleted",
@@ -1151,9 +1173,10 @@ const I18N = {
   },
   zh: {
     'btn.logout':'\u9000\u51fa\u767b\u5f55',
-    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5',
+    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5', 'nav.webSearch':'\u8054\u7f51\u641c\u7d22',
     'nav.dashboard':'\u76d1\u63a7\u9762\u677f', 'nav.logs':'\u8bf7\u6c42\u65e5\u5fd7', 'nav.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
     'section.server':'\u670d\u52a1\u5668\u8bbe\u7f6e', 'section.providers':'\u670d\u52a1\u65b9', 'section.models':'\u6a21\u578b\u8def\u7531',
+    'section.webSearch':'\u8054\u7f51\u641c\u7d22',
     'section.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
     'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
     'label.globalProxy.hint':'\u9002\u7528\u4e8e\u6240\u6709\u670d\u52a1\u65b9\uff0c\u9664\u975e\u5355\u72ec\u8bbe\u7f6e\u4e86\u4ee3\u7406\u3002',
@@ -1164,6 +1187,7 @@ const I18N = {
     'label.streamTraceFilter':'\u8fc7\u6ee4\u5668',
     'label.streamTraceFilterHint':'\u9017\u53f7\u5206\u9694\u7684\u5b50\u4e32\uff0c\u7528\u4e8e\u5339\u914d model\u3001provider name\u3001source provider \u548c target provider\u3002\u7559\u7a7a\u5219\u8bb0\u5f55\u6240\u6709\u6d41\u5f0f\u8bf7\u6c42\u3002',
     'label.streamTraceMaxChars':'\u5b57\u7b26\u4e32\u6700\u5927\u957f\u5ea6',
+    'label.tavilyApiKey':'Tavily API Key',
     'modal.settings':'\u8bbe\u7f6e', 'label.theme':'\u4e3b\u9898', 'label.language':'\u8bed\u8a00', 'theme.light':'\u6d45\u8272', 'theme.dark':'\u6df1\u8272',
     'btn.save':'\u4fdd\u5b58', 'btn.cancel':'\u53d6\u6d88', 'btn.close':'\u5173\u95ed',
     'btn.addProvider':'+ \u6dfb\u52a0\u670d\u52a1\u65b9', 'btn.addModel':'+ \u6dfb\u52a0\u6a21\u578b',
@@ -1200,6 +1224,7 @@ const I18N = {
     'empty.providers':'\u6682\u65e0\u670d\u52a1\u65b9\u914d\u7f6e\u3002', 'empty.models':'\u6682\u65e0\u6a21\u578b\u914d\u7f6e\u3002',
     'empty.logs':'\u6682\u65e0\u8bf7\u6c42\u8bb0\u5f55', 'empty.data':'\u6682\u65e0\u6570\u636e',
     'toast.serverSaved':'\u670d\u52a1\u5668\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
+    'toast.webSearchSaved':'\u8054\u7f51\u641c\u7d22\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
     'toast.streamTraceSaved':'\u7f51\u5173\u65e5\u5fd7\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
     'toast.providerSaved':"\u670d\u52a1\u65b9 '{name}' \u5df2\u4fdd\u5b58",
     'toast.providerDeleted':"\u670d\u52a1\u65b9 '{name}' \u5df2\u5220\u9664",
@@ -1309,13 +1334,14 @@ function applyI18n() {
   if (keysData) { renderKeys(); updateKeyFilterOptions(); }
   if (currentPage === 'dashboard') loadMetrics();
   if (currentPage === 'logs') loadLogs();
+  if (currentPage === 'web-search') renderWebSearchSettings();
   if (currentPage === 'gateway-logs') renderStreamTraceSettings();
   // Re-render DB status footer with cached data
   if (_lastPersistence != null) renderPersistence(_lastPersistence, _lastTotalReq);
 }
 
 // ===================== Page Routing =====================
-const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'dashboard', 'logs', 'gateway-logs']);
+const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'web-search', 'dashboard', 'logs', 'gateway-logs']);
 const DEFAULT_ADMIN_PAGE = 'providers';
 
 function getCurrentPageFromLocation() {
@@ -1716,6 +1742,7 @@ async function loadConfig() {
     _credentialVisible = configData.credential_visible !== false;
     document.getElementById('configPath').textContent = configData.config_path || '';
     document.getElementById('globalProxy').value = (configData.server && configData.server.proxy) || '';
+    renderWebSearchSettings();
     renderStreamTraceSettings();
     renderProviders();
     renderModels();
@@ -1737,6 +1764,22 @@ async function saveServerSettings() {
   const proxy = document.getElementById('globalProxy').value.trim();
   const res = await api.put('/admin/api/config/server', {proxy});
   if (res.ok) { showToast(t('toast.serverSaved')); loadConfig(); }
+  else { showToast(res.error || 'Failed', 'error'); }
+}
+
+function renderWebSearchSettings() {
+  if (!configData) return;
+  const input = document.getElementById('webSearchTavilyApiKey');
+  if (!input) return;
+  const webSearch = (configData.server && configData.server.web_search) || {};
+  input.value = webSearch.tavily_api_key || '';
+}
+
+async function saveWebSearchSettings() {
+  const input = document.getElementById('webSearchTavilyApiKey');
+  const tavily_api_key = input.value.trim();
+  const res = await api.put('/admin/api/config/server', {web_search: {tavily_api_key}});
+  if (res.ok) { showToast(t('toast.webSearchSaved')); loadConfig(); }
   else { showToast(res.error || 'Failed', 'error'); }
 }
 

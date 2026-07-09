@@ -273,21 +273,11 @@ class OpenAIResponsesToolOps(BaseToolOps):
             # satisfy validation; ``ir_tool_definition_to_p`` restores the
             # original payload on the outbound leg.
             if tool_type != "function" and tool_type not in _IR_ALLOWED_TYPES:
-                if tool_type == "tool_search":
-                    params = provider_tool.get("parameters")
-                    synth_params = params if isinstance(params, dict) else {}
-                    result = {
-                        "type": "function",
-                        "name": "tool_search",
-                        "description": provider_tool.get("description", ""),
-                        "parameters": synth_params,
-                        "_passthrough": dict(provider_tool),
-                        "metadata": {"provider_type": tool_type},
-                        "required_parameters": synth_params.get("required", [])
-                        if synth_params
-                        else [],
-                    }
-                    return cast(ToolDefinition, result)
+                hosted_tool = OpenAIResponsesToolOps._hosted_tool_definition_to_ir(
+                    provider_tool, tool_type
+                )
+                if hosted_tool is not None:
+                    return hosted_tool
 
                 # Synthesize a minimal JSON Schema for cross-provider
                 # degradation so other providers see "a function that
@@ -486,12 +476,13 @@ class OpenAIResponsesToolOps(BaseToolOps):
             # Recover Responses API item ID from provider_metadata if available;
             # the API requires 'id' to start with 'fc_' prefix.
             metadata = ir_tool_call.get("provider_metadata") or {}
-            if metadata.get("responses_tool_type") == "tool_search":
-                return OpenAIResponsesToolOps._ir_tool_search_call_to_p(
-                    tool_call_id,
-                    tool_input,
-                    metadata,
-                )
+            native_item = OpenAIResponsesToolOps._native_responses_tool_call_to_p(
+                tool_call_id,
+                tool_input,
+                metadata,
+            )
+            if native_item is not None:
+                return native_item
             item_id = metadata.get("responses_item_id")
             if not item_id:
                 # Cross-format: ensure fc_ prefix required by Responses API
@@ -567,6 +558,86 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 "name": f"{tool_type}_{tool_name}",
                 "arguments": arguments,
             }
+
+    @staticmethod
+    def _hosted_tool_definition_to_ir(
+        provider_tool: dict[str, Any],
+        tool_type: str,
+    ) -> ToolDefinition | None:
+        if tool_type == "tool_search":
+            params = provider_tool.get("parameters")
+            synth_params = params if isinstance(params, dict) else {}
+            return cast(
+                ToolDefinition,
+                {
+                    "type": "function",
+                    "name": "tool_search",
+                    "description": provider_tool.get("description", ""),
+                    "parameters": synth_params,
+                    "_passthrough": dict(provider_tool),
+                    "metadata": {"provider_type": tool_type},
+                    "required_parameters": synth_params.get("required", [])
+                    if synth_params
+                    else [],
+                },
+            )
+
+        if tool_type not in ("web_search", "web_search_preview"):
+            return None
+
+        synth_params = {
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "The web search query to run.",
+                }
+            },
+            "required": ["query"],
+        }
+        description = provider_tool.get("description") or (
+            "Search the web for current or external information. "
+            "Use this when the answer depends on recent facts, "
+            "web pages, or source material outside the prompt."
+        )
+        return cast(
+            ToolDefinition,
+            {
+                "type": "function",
+                "name": "web_search",
+                "description": description,
+                "parameters": synth_params,
+                "_passthrough": dict(provider_tool),
+                "metadata": {"provider_type": "web_search"},
+                "required_parameters": ["query"],
+            },
+        )
+
+    @staticmethod
+    def _native_responses_tool_call_to_p(
+        tool_call_id: str,
+        tool_input: Any,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        if metadata.get("responses_tool_type") == "tool_search":
+            return OpenAIResponsesToolOps._ir_tool_search_call_to_p(
+                tool_call_id,
+                tool_input,
+                metadata,
+            )
+        if metadata.get("responses_tool_type") != "web_search":
+            return None
+
+        item_id = metadata.get("responses_item_id") or tool_call_id
+        query = tool_input.get("query", "") if isinstance(tool_input, dict) else ""
+        item: dict[str, Any] = {
+            "type": "web_search_call",
+            "id": item_id,
+            "status": "completed",
+        }
+        if query:
+            item["action"] = {"type": "search", "query": query}
+        return item
 
     @staticmethod
     def _ir_tool_search_call_to_p(

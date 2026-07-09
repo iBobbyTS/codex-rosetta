@@ -30,6 +30,65 @@ import logging
 logger = logging.getLogger("llm-rosetta-gateway")
 
 
+def _mask_web_search_config(value: Any) -> dict[str, Any]:
+    """Return a copy of server.web_search with sensitive values masked."""
+    if not isinstance(value, dict):
+        return {}
+    masked = dict(value)
+    if "tavily_api_key" in masked:
+        masked["tavily_api_key"] = _mask_api_key(str(masked["tavily_api_key"]))
+    return masked
+
+
+def _mask_server_config(value: Any) -> dict[str, Any]:
+    """Return a copy of server config with sensitive admin values masked."""
+    server = dict(value) if isinstance(value, dict) else {}
+    if "api_key" in server:
+        server["api_key"] = _mask_api_key(server["api_key"])
+    if "api_keys" in server:
+        server["api_keys"] = [
+            {**entry, "key": _mask_api_key(entry.get("key", ""))}
+            for entry in server["api_keys"]
+        ]
+    if "web_search" in server:
+        server["web_search"] = _mask_web_search_config(server["web_search"])
+    return server
+
+
+def _apply_web_search_settings(
+    server: dict[str, Any], body: dict[str, Any]
+) -> str | None:
+    """Merge admin web search settings into the server config."""
+    if "web_search" not in body:
+        return None
+
+    web_search = body.get("web_search") or {}
+    if not isinstance(web_search, dict):
+        return "'web_search' must be an object"
+
+    existing_web_search = server.get("web_search", {})
+    if not isinstance(existing_web_search, dict):
+        existing_web_search = {}
+    next_web_search = dict(existing_web_search)
+
+    if "tavily_api_key" in web_search:
+        tavily_api_key = str(web_search.get("tavily_api_key") or "").strip()
+        if "***" in tavily_api_key:
+            existing_key = existing_web_search.get("tavily_api_key")
+            if existing_key:
+                next_web_search["tavily_api_key"] = existing_key
+        elif tavily_api_key:
+            next_web_search["tavily_api_key"] = tavily_api_key
+        else:
+            next_web_search.pop("tavily_api_key", None)
+
+    if next_web_search:
+        server["web_search"] = next_web_search
+    else:
+        server.pop("web_search", None)
+    return None
+
+
 def _get_gateway_config(request: Any) -> GatewayConfig | None:
     """Return the live GatewayConfig from the app module."""
     import llm_rosetta.gateway.app as _app_mod
@@ -190,15 +249,7 @@ async def get_config(request: Any) -> Response:
             model_name, entry, raw_models, providers
         )
 
-    # Mask api_keys in server section for the response
-    server = dict(raw.get("server", {}))
-    if "api_key" in server:
-        server["api_key"] = _mask_api_key(server["api_key"])
-    if "api_keys" in server:
-        server["api_keys"] = [
-            {**entry, "key": _mask_api_key(entry.get("key", ""))}
-            for entry in server["api_keys"]
-        ]
+    server = _mask_server_config(raw.get("server", {}))
 
     config: GatewayConfig = request.app.gateway_config
     return JSONResponse(
@@ -618,6 +669,10 @@ async def put_server_settings(request: Any) -> Response:
         }
         server["stream_trace"] = next_trace
 
+    web_search_error = _apply_web_search_settings(server, body)
+    if web_search_error:
+        return JSONResponse({"error": web_search_error}, status_code=400)
+
     try:
         write_config(config_path, data)
     except Exception as exc:
@@ -637,7 +692,12 @@ async def put_server_settings(request: Any) -> Response:
             status_code=500,
         )
 
-    return JSONResponse({"ok": True, "server": data.get("server", {})})
+    response_server = dict(data.get("server", {}))
+    if "web_search" in response_server:
+        response_server["web_search"] = _mask_web_search_config(
+            response_server["web_search"]
+        )
+    return JSONResponse({"ok": True, "server": response_server})
 
 
 async def reload_config(request: Any) -> Response:

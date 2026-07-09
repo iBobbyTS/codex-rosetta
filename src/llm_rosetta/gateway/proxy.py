@@ -64,6 +64,14 @@ from .transport import (
     UpstreamTransport,
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
+from .web_search import (
+    TavilySearchClient,
+    WebSearchRuntime,
+    WebSearchStreamController,
+    build_web_search_runtime,
+    strip_responses_web_search_tools,
+    web_search_trace_summary,
+)
 
 logger = get_logger()
 
@@ -1561,6 +1569,200 @@ async def _stream_event_generator(
         )
 
 
+async def _web_search_stream_event_generator(  # noqa: C901
+    *,
+    source_provider: ProviderType,
+    initial_stream: Any,
+    processor_factory: Any,
+    model: str,
+    format_sse: Any,
+    transport: UpstreamTransport,
+    provider_info: ProviderInfo,
+    target_provider: ProviderType,
+    target_body: dict[str, Any],
+    web_search_runtime: WebSearchRuntime,
+    extra_headers: dict[str, str] | None = None,
+    event_buffer: ResponsesPhaseBuffer | None = None,
+    entry_id: str | None = None,
+    request_log: Any | None = None,
+    trace: StreamTraceLogger | None = None,
+    max_rounds: int = 5,
+) -> AsyncIterator[str]:
+    """Stream Chat upstream output, executing synthetic web_search calls inline."""
+    chunk_count = 0
+    t0 = time.monotonic()
+    stream_error: str | None = None
+    ttfb_ms: float | None = None
+    t_stream_open = time.perf_counter()
+    controller = WebSearchStreamController()
+    current_stream = initial_stream
+    current_body = target_body
+    round_index = 0
+
+    try:
+        while True:
+            processor = processor_factory()
+            if trace is not None and round_index > 0:
+                trace.log(
+                    "web_search_target_request",
+                    {"round": round_index, "body": current_body},
+                    chunk_index=chunk_count,
+                )
+
+            async with current_stream:
+                async for chunk in current_stream:
+                    if chunk_count == 0:
+                        ttfb_ms = round(
+                            (time.perf_counter() - t_stream_open) * 1000,
+                            2,
+                        )
+                    chunk_count += 1
+                    if trace is not None:
+                        stage = (
+                            "upstream_chunk"
+                            if round_index == 0
+                            else "web_search_upstream_chunk"
+                        )
+                        trace.log(stage, chunk, chunk_index=chunk_count)
+                    for source_event in processor.process_chunk(chunk):
+                        for sse_event in _format_web_search_source_event_sse(
+                            source_event,
+                            controller=controller,
+                            round_index=round_index,
+                            event_buffer=event_buffer,
+                            format_sse=format_sse,
+                            trace=trace,
+                            chunk_count=chunk_count,
+                        ):
+                            yield sse_event
+
+            finalize_stream = getattr(processor, "finalize_stream", None)
+            if finalize_stream is not None:
+                for source_event in finalize_stream():
+                    for sse_event in _format_web_search_source_event_sse(
+                        source_event,
+                        controller=controller,
+                        round_index=round_index,
+                        event_buffer=event_buffer,
+                        format_sse=format_sse,
+                        trace=trace,
+                        chunk_count=chunk_count,
+                    ):
+                        yield sse_event
+
+            calls = controller.pop_pending_calls()
+            if not calls:
+                break
+            if round_index >= max_rounds:
+                raise RuntimeError("web_search loop exceeded maximum rounds")
+
+            for call in calls:
+                if trace is not None:
+                    trace.log(
+                        "web_search_request",
+                        {
+                            "round": round_index,
+                            "query": call.query,
+                            "call_id": call.call_id,
+                            "settings": web_search_runtime.settings,
+                        },
+                        chunk_index=chunk_count,
+                    )
+            results = await web_search_runtime.execute_many(calls)
+            if trace is not None:
+                trace.log(
+                    "web_search_response",
+                    [web_search_trace_summary(result) for result in results],
+                    chunk_index=chunk_count,
+                )
+            for source_event in controller.complete_search_results(results):
+                for sse_event in _format_source_event_sse(
+                    source_event,
+                    event_buffer=event_buffer,
+                    format_sse=format_sse,
+                    trace=trace,
+                    chunk_count=chunk_count,
+                ):
+                    yield sse_event
+
+            current_body = web_search_runtime.append_tool_results(current_body, results)
+            current_stream = await transport.send_streaming(
+                provider_info,
+                target_provider,
+                current_body,
+                model,
+                extra_headers=extra_headers,
+            )
+            if current_stream.is_error:
+                error_text = await current_stream.read_error()
+                await current_stream.close()
+                raise RuntimeError(
+                    f"Upstream request after web_search failed: {error_text}"
+                )
+            round_index += 1
+
+        if event_buffer is not None:
+            for sse_event in _format_buffered_events_sse(
+                event_buffer.flush(),
+                format_sse=format_sse,
+                trace=trace,
+                chunk_count=chunk_count,
+            ):
+                yield sse_event
+
+        if source_provider == "openai_chat":
+            done_event = format_sse_done()
+            if trace is not None:
+                trace.log("downstream_sse_done", done_event, chunk_index=chunk_count)
+            yield done_event
+
+        log_stream_summary(
+            model=model,
+            duration_s=time.monotonic() - t0,
+            chunk_count=chunk_count,
+        )
+    except Exception as exc:
+        stream_error = str(exc)
+        raise
+    finally:
+        _finalize_stream_profile(
+            entry_id=entry_id,
+            request_log=request_log,
+            trace=trace,
+            t0=t0,
+            chunk_count=chunk_count,
+            stream_error=stream_error,
+            ttfb_ms=ttfb_ms,
+        )
+
+
+def _format_web_search_source_event_sse(
+    source_event: dict[str, Any],
+    *,
+    controller: WebSearchStreamController,
+    round_index: int,
+    event_buffer: ResponsesPhaseBuffer | None,
+    format_sse: Any,
+    trace: StreamTraceLogger | None,
+    chunk_count: int,
+) -> list[str]:
+    if trace is not None:
+        trace.log("source_event", source_event, chunk_index=chunk_count)
+    events = controller.process_source_event(source_event, round_index=round_index)
+    return _format_buffered_events_sse(
+        [
+            buffered
+            for event in events
+            for buffered in (
+                event_buffer.process(event) if event_buffer is not None else [event]
+            )
+        ],
+        format_sse=format_sse,
+        trace=trace,
+        chunk_count=chunk_count,
+    )
+
+
 def _format_source_event_sse(
     source_event: dict[str, Any],
     *,
@@ -1598,6 +1800,76 @@ def _format_buffered_events_sse(
             trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
         sse_events.append(sse_event)
     return sse_events
+
+
+def _converted_stream_response_generator(
+    *,
+    source_provider: ProviderType,
+    stream: Any,
+    processor: Any,
+    processor_factory: Any,
+    model: str,
+    format_sse: Any,
+    event_buffer: ResponsesPhaseBuffer | None,
+    entry_id: str | None,
+    request_log: Any | None,
+    trace: StreamTraceLogger | None,
+    web_search_runtime: WebSearchRuntime | None,
+    transport: UpstreamTransport,
+    provider_info: ProviderInfo,
+    target_provider: ProviderType,
+    target_body: dict[str, Any],
+    extra_headers: dict[str, str] | None,
+) -> AsyncIterator[str]:
+    if web_search_runtime is None:
+        return _stream_event_generator(
+            source_provider=source_provider,
+            stream=stream,
+            processor=processor,
+            model=model,
+            format_sse=format_sse,
+            event_buffer=event_buffer,
+            entry_id=entry_id,
+            request_log=request_log,
+            trace=trace,
+        )
+    return _web_search_stream_event_generator(
+        source_provider=source_provider,
+        initial_stream=stream,
+        processor_factory=processor_factory,
+        model=model,
+        format_sse=format_sse,
+        transport=transport,
+        provider_info=provider_info,
+        target_provider=target_provider,
+        target_body=target_body,
+        web_search_runtime=web_search_runtime,
+        extra_headers=extra_headers,
+        event_buffer=event_buffer,
+        entry_id=entry_id,
+        request_log=request_log,
+        trace=trace,
+    )
+
+
+def _prepare_web_search_runtime_and_body(
+    *,
+    route: ResolvedRoute,
+    body: dict[str, Any],
+    web_search_config: dict[str, Any] | None,
+    web_search_client: TavilySearchClient | None,
+) -> tuple[dict[str, Any], WebSearchRuntime | None]:
+    if not _uses_responses_chat_bridge(route):
+        return body, None
+
+    runtime = build_web_search_runtime(
+        body,
+        web_search_config,
+        client=web_search_client,
+    )
+    if runtime is None:
+        return strip_responses_web_search_tools(body), None
+    return body, runtime
 
 
 def _finalize_stream_profile(
@@ -1842,6 +2114,8 @@ async def handle_streaming(
     codex_window_id: str | None = None,
     window_tool_search_store: WindowToolSearchStore | None = None,
     stream_trace_state: StreamTraceState | None = None,
+    web_search_config: dict[str, Any] | None = None,
+    web_search_client: TavilySearchClient | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Streaming proxy: convert -> forward -> stream-convert back -> SSE.
 
@@ -1871,6 +2145,12 @@ async def handle_streaming(
     # model was already injected into body by app.py
     model = body.get("model", "")
     body = _apply_tool_adaptation(body, route)
+    body, web_search_runtime = _prepare_web_search_runtime_and_body(
+        route=route,
+        body=body,
+        web_search_config=web_search_config,
+        web_search_client=web_search_client,
+    )
     source_tool_capabilities = NativeToolCapabilities.from_chat_tools(body.get("tools"))
     use_window_tool_search = _prepare_window_tool_search_request(
         route=route,
@@ -2067,15 +2347,19 @@ async def handle_streaming(
         )
     else:
         stream_transformer = None
-    processor = pipeline.create_stream_processor(
-        on_ir_event=_on_ir_event,
-        transform_ir_event=stream_transformer.transform
-        if stream_transformer is not None
-        else None,
-        finalize_on_finish_eof=route.source_provider
-        in ("openai_responses", "open_responses")
-        and route.target_provider == "openai_chat",
-    )
+
+    def _create_processor():
+        return pipeline.create_stream_processor(
+            on_ir_event=_on_ir_event,
+            transform_ir_event=stream_transformer.transform
+            if stream_transformer is not None
+            else None,
+            finalize_on_finish_eof=route.source_provider
+            in ("openai_responses", "open_responses")
+            and route.target_provider == "openai_chat",
+        )
+
+    processor = _create_processor()
     format_sse = SSE_FORMATTERS[route.source_provider]
     event_buffer = (
         ResponsesPhaseBuffer(window_id=codex_window_id)
@@ -2097,6 +2381,7 @@ async def handle_streaming(
                 "entry_id": entry_id,
                 "codex_window_id": codex_window_id,
                 "phase_buffer_enabled": event_buffer is not None,
+                "web_search_bridge_enabled": web_search_runtime is not None,
             },
         )
         trace.log("source_request", body)
@@ -2104,16 +2389,23 @@ async def handle_streaming(
 
     return (
         StreamingResponse(
-            _stream_event_generator(
+            _converted_stream_response_generator(
                 source_provider=route.source_provider,
                 stream=stream,
                 processor=processor,
+                processor_factory=_create_processor,
                 model=model,
                 format_sse=format_sse,
                 event_buffer=event_buffer,
                 entry_id=entry_id,
                 request_log=request_log,
                 trace=trace,
+                web_search_runtime=web_search_runtime,
+                transport=transport,
+                provider_info=provider_info,
+                target_provider=route.target_provider,
+                target_body=target_body,
+                extra_headers=extra_headers,
             ),
             content_type="text/event-stream",
         ),
