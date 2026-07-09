@@ -765,15 +765,19 @@ body { padding-bottom: 26px; }
       <input id="provName" placeholder="e.g. my-openai, openrouter-claude">
     </div>
     <div class="form-group">
-      <label data-i18n="label.providerType">Provider Type</label>
+      <label data-i18n="label.providerVendor">Provider</label>
       <div class="type-logo-wrapper">
-        <img id="provTypeLogo" class="type-logo-preview" src="" alt="" style="display:none">
-        <select id="provType"></select>
+        <img id="provProviderLogo" class="type-logo-preview" src="" alt="" style="display:none">
+        <select id="provProvider" onchange="onProviderPresetChange()"></select>
       </div>
     </div>
     <div class="form-group">
+      <label data-i18n="label.providerProtocol">Protocol</label>
+      <select id="provApiType" onchange="onProviderProtocolChange()"></select>
+    </div>
+    <div class="form-group">
       <label data-i18n="label.baseUrl">Base URL<span class="hint-icon">?<span class="hint-popup" data-i18n="hint.docker">In Docker, "localhost" refers to the container itself. Use "host.docker.internal" (macOS/Windows) or "172.17.0.1" (Linux) to reach the host machine.</span></span></label>
-      <input id="provBaseUrl" placeholder="https://api.openai.com/v1">
+      <input id="provBaseUrl" placeholder="https://api.openai.com/v1" oninput="onProviderBaseUrlInput()">
     </div>
     <div class="form-group">
       <label data-i18n="label.apiKey">API Key (or ${ENV_VAR} placeholder)</label>
@@ -1064,6 +1068,7 @@ const I18N = {
     'btn.edit':'Edit', 'btn.delete':'Delete', 'btn.rotate':'Rotate', 'btn.resetFilters':'Reset Filters',
     'btn.prev':'Prev', 'btn.next':'Next', 'btn.test':'Test',
     'label.providerName':'Provider Name', 'label.providerType':'Provider Type',
+    'label.providerVendor':'Provider', 'label.providerProtocol':'Protocol',
     'label.selectOne':'— select —',
     'label.baseUrl':'Base URL',
     'label.apiKey':'API Key (or ${ENV_VAR} placeholder)', 'label.keyUnchangedHint':'Leave blank to keep current key',
@@ -1099,6 +1104,14 @@ const I18N = {
     'toast.providerSaved':"Provider '{name}' saved",
     'toast.providerDeleted':"Provider '{name}' deleted",
     'provider.enabled':'Enabled', 'provider.disabled':'Disabled',
+    'provider.anthropic':'Anthropic', 'provider.custom':'Custom', 'provider.deepseek':'DeepSeek', 'provider.google':'Google',
+    'provider.minimaxChina':'MiniMax (China)', 'provider.minimaxInternational':'MiniMax (International)',
+    'provider.moonshotChina':'Moonshot (Kimi, China)', 'provider.moonshotInternational':'Moonshot (Kimi, International)',
+    'provider.openai':'OpenAI', 'provider.openrouter':'Open Router', 'provider.opencodeGo':'Opencode Go',
+    'provider.qwen':'Qwen', 'provider.zhipu':'Zhipu (GLM)',
+    'protocol.responses':'OpenAI Responses', 'protocol.chat':'OpenAI Chat Completions',
+    'protocol.anthropic':'Anthropic', 'protocol.google':'Google',
+    'protocol.unsupportedSuffix':'May not compatible',
     'toast.modelSaved':"Model '{name}' saved",
     'toast.modelDeleted':"Model '{name}' deleted",
     'confirm.deleteProvider':"Delete provider '{name}'?",
@@ -1194,6 +1207,7 @@ const I18N = {
     'btn.edit':'\u7f16\u8f91', 'btn.delete':'\u5220\u9664', 'btn.rotate':'\u8f6e\u6362', 'btn.resetFilters':'\u91cd\u7f6e\u8fc7\u6ee4\u5668',
     'btn.prev':'\u4e0a\u4e00\u9875', 'btn.next':'\u4e0b\u4e00\u9875', 'btn.test':'\u6d4b\u8bd5',
     'label.providerName':'\u670d\u52a1\u65b9\u540d\u79f0', 'label.providerType':'\u670d\u52a1\u65b9\u7c7b\u578b',
+    'label.providerVendor':'\u4f9b\u5e94\u5546', 'label.providerProtocol':'\u534f\u8bae',
     'label.selectOne':'\u2014 \u8bf7\u9009\u62e9 \u2014',
     'label.baseUrl':'Base URL',
     'label.apiKey':'API Key\uff08\u6216 ${ENV_VAR} \u5360\u4f4d\u7b26\uff09', 'label.keyUnchangedHint':'\u7559\u7a7a\u4ee5\u4fdd\u7559\u5f53\u524d\u5bc6\u94a5',
@@ -1229,6 +1243,14 @@ const I18N = {
     'toast.providerSaved':"\u670d\u52a1\u65b9 '{name}' \u5df2\u4fdd\u5b58",
     'toast.providerDeleted':"\u670d\u52a1\u65b9 '{name}' \u5df2\u5220\u9664",
     'provider.enabled':'\u5df2\u542f\u7528', 'provider.disabled':'\u5df2\u7981\u7528',
+    'provider.anthropic':'Anthropic', 'provider.custom':'Custom', 'provider.deepseek':'DeepSeek', 'provider.google':'Google',
+    'provider.minimaxChina':'MiniMax\uff08\u4e2d\u56fd\uff09', 'provider.minimaxInternational':'MiniMax\uff08\u56fd\u9645\uff09',
+    'provider.moonshotChina':'Moonshot\uff08Kimi\uff0c\u4e2d\u56fd\uff09', 'provider.moonshotInternational':'Moonshot\uff08Kimi\uff0c\u56fd\u9645\uff09',
+    'provider.openai':'OpenAI', 'provider.openrouter':'Open Router', 'provider.opencodeGo':'Opencode Go',
+    'provider.qwen':'\u901a\u4e49\u5343\u95ee', 'provider.zhipu':'\u667a\u8c31 GLM',
+    'protocol.responses':'OpenAI Responses', 'protocol.chat':'OpenAI Chat Completions',
+    'protocol.anthropic':'Anthropic', 'protocol.google':'Google',
+    'protocol.unsupportedSuffix':'May not compatible',
     'toast.modelSaved':"\u6a21\u578b '{name}' \u5df2\u4fdd\u5b58",
     'toast.modelDeleted':"\u6a21\u578b '{name}' \u5df2\u5220\u9664",
     'confirm.deleteProvider':"\u786e\u5b9a\u5220\u9664\u670d\u52a1\u65b9 '{name}'\uff1f",
@@ -1310,6 +1332,247 @@ function t(key, params) {
     for (const [k, v] of Object.entries(params)) s = s.replace(`{${k}}`, v);
   }
   return s;
+}
+
+const PROVIDER_PROTOCOLS = [
+  {value: 'responses', labelKey: 'protocol.responses'},
+  {value: 'chat', labelKey: 'protocol.chat'},
+  {value: 'anthropic', labelKey: 'protocol.anthropic'},
+  {value: 'google', labelKey: 'protocol.google'},
+];
+const PROTOCOL_DIVIDER_VALUE = '__protocol_divider__';
+const PROVIDER_PRESETS = [
+  {id: 'deepseek', label: 'DeepSeek', labelKey: 'provider.deepseek', logoShim: 'deepseek', protocols: {chat: 'https://api.deepseek.com', anthropic: 'https://api.deepseek.com/anthropic'}},
+  {id: 'zhipu', label: 'Zhipu (GLM)', labelKey: 'provider.zhipu', logoShim: 'zhipu', protocols: {chat: 'https://open.bigmodel.cn/api/paas/v4'}},
+  {id: 'moonshot_china', label: 'Moonshot (Kimi, China)', labelKey: 'provider.moonshotChina', logoShim: 'moonshot', protocols: {chat: 'https://api.moonshot.cn/v1', anthropic: 'https://api.moonshot.cn/anthropic'}},
+  {id: 'moonshot_international', label: 'Moonshot (Kimi, International)', labelKey: 'provider.moonshotInternational', logoShim: 'moonshot', protocols: {chat: 'https://api.moonshot.ai/v1', anthropic: 'https://api.moonshot.ai/anthropic'}},
+  {id: 'minimax_china', label: 'MiniMax (China)', labelKey: 'provider.minimaxChina', logoShim: 'minimax--openai_chat', protocols: {anthropic: 'https://api.minimaxi.com/anthropic', chat: 'https://api.minimaxi.com/v1', responses: 'https://api.minimaxi.com/v1'}},
+  {id: 'minimax_international', label: 'MiniMax (International)', labelKey: 'provider.minimaxInternational', logoShim: 'minimax--openai_chat', protocols: {anthropic: 'https://api.minimax.io/anthropic', chat: 'https://api.minimax.io/v1', responses: 'https://api.minimax.io/v1'}},
+  {id: 'qwen', label: 'Qwen', labelKey: 'provider.qwen', logoShim: 'qwen', protocols: {responses: 'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1', chat: 'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1', anthropic: 'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/apps/anthropic'}},
+  {id: 'openai', label: 'OpenAI', labelKey: 'provider.openai', logoShim: 'openai', protocols: {responses: 'https://api.openai.com/v1', chat: 'https://api.openai.com/v1'}},
+  {id: 'google', label: 'Google', labelKey: 'provider.google', logoShim: 'google', protocols: {google: 'https://generativelanguage.googleapis.com'}},
+  {id: 'anthropic', label: 'Anthropic', labelKey: 'provider.anthropic', logoShim: 'anthropic', protocols: {anthropic: 'https://api.anthropic.com'}},
+  {id: 'openrouter', label: 'Open Router', labelKey: 'provider.openrouter', logoShim: 'openrouter--openai_chat', protocols: {anthropic: 'https://openrouter.ai/api', chat: 'https://openrouter.ai/api/v1'}},
+  {id: 'opencode_go', label: 'Opencode Go', labelKey: 'provider.opencodeGo', protocols: {chat: 'https://opencode.ai/zen/go/v1'}},
+  {id: 'custom', label: 'Custom', labelKey: 'provider.custom', protocols: {responses: '', chat: '', anthropic: '', google: ''}},
+];
+
+let _providerPresetUrl = '';
+let _providerUrlProgrammatic = false;
+
+function _providerPresetsById() {
+  return Object.fromEntries(PROVIDER_PRESETS.map(p => [p.id, p]));
+}
+
+function _protocolLabelsByValue() {
+  return Object.fromEntries(PROVIDER_PROTOCOLS.map(p => [p.value, t(p.labelKey)]));
+}
+
+function _apiTypeToProviderType(apiType) {
+  return {
+    responses: 'openai_responses',
+    chat: 'openai_chat',
+    anthropic: 'anthropic',
+    google: 'google',
+  }[apiType] || apiType;
+}
+
+function _providerLabel(preset) {
+  return t(preset.labelKey) || preset.label;
+}
+
+function _providerLogoUrl(providerId) {
+  const preset = _providerPresetsById()[providerId];
+  if (!preset || !preset.logoShim) return '';
+  const shim = ((configData && configData.registered_shims) || []).find(s => s.name === preset.logoShim);
+  return shim && shim.logo ? shim.logo : '';
+}
+
+function _providerPresetUrlFor(providerId, apiType) {
+  const preset = _providerPresetsById()[providerId];
+  return (preset && preset.protocols && Object.prototype.hasOwnProperty.call(preset.protocols, apiType))
+    ? preset.protocols[apiType]
+    : '';
+}
+
+function _providerPresetForUrl(apiType, baseUrl) {
+  if (!baseUrl) return '';
+  for (const preset of PROVIDER_PRESETS) {
+    if (preset.id === 'custom') continue;
+    if (_providerPresetUrlFor(preset.id, apiType) === baseUrl) return preset.id;
+  }
+  return '';
+}
+
+function _setProviderBaseUrl(value) {
+  _providerUrlProgrammatic = true;
+  document.getElementById('provBaseUrl').value = value || '';
+  _providerUrlProgrammatic = false;
+}
+
+function _inferProviderSelection(cfg) {
+  const apiTypeByBase = {
+    openai_responses: 'responses',
+    open_responses: 'responses',
+    openai_chat: 'chat',
+    openai: 'chat',
+    anthropic: 'anthropic',
+    google: 'google',
+  };
+  const providerByLegacyType = {
+    anthropic: 'anthropic',
+    deepseek: 'deepseek',
+    google: 'google',
+    'minimax--anthropic': 'minimax_china',
+    'minimax--openai_chat': 'minimax_china',
+    moonshot: 'moonshot_china',
+    openai: 'openai',
+    openai_responses: 'openai',
+    openrouter: 'openrouter',
+    'openrouter--anthropic': 'openrouter',
+    'openrouter--openai_chat': 'openrouter',
+    qwen: 'qwen',
+    zhipu: 'zhipu',
+  };
+  const apiTypeByLegacyType = {
+    anthropic: 'anthropic',
+    deepseek: 'chat',
+    google: 'google',
+    'minimax--anthropic': 'anthropic',
+    'minimax--openai_chat': 'chat',
+    moonshot: 'chat',
+    openai: 'chat',
+    openai_responses: 'responses',
+    open_responses: 'responses',
+    openrouter: 'chat',
+    'openrouter--anthropic': 'anthropic',
+    'openrouter--openai_chat': 'chat',
+    qwen: 'chat',
+    zhipu: 'chat',
+  };
+
+  const legacyType = cfg.type || cfg.shim || '';
+  const apiType = cfg.api_type || apiTypeByLegacyType[legacyType] || apiTypeByBase[legacyType] || 'chat';
+  const genericLegacyType = ['openai', 'openai_chat', 'openai_responses', 'open_responses'].includes(legacyType);
+  const providerId = cfg.provider || (genericLegacyType ? _providerPresetForUrl(apiType, cfg.base_url) : '') || providerByLegacyType[legacyType] || 'custom';
+  return {providerId, apiType};
+}
+
+function _providerDisplayInfo(name, cfg) {
+  const selection = _inferProviderSelection(cfg || {});
+  const preset = _providerPresetsById()[selection.providerId] || _providerPresetsById().custom;
+  const protocolLabels = _protocolLabelsByValue();
+  const legacyType = (cfg && (cfg.type || cfg.shim)) || '';
+  const providerName = _providerLabel(preset);
+  const protocolName = protocolLabels[selection.apiType] || selection.apiType;
+  return {
+    providerId: selection.providerId,
+    apiType: selection.apiType,
+    providerName,
+    protocolName,
+    legacyType,
+    displayType: `${providerName} / ${protocolName}`,
+    logoUrl: _providerLogoUrl(selection.providerId),
+  };
+}
+
+function _renderProviderPresetOptions(selectedProvider) {
+  const providerSel = document.getElementById('provProvider');
+  providerSel.innerHTML = '';
+  for (const preset of PROVIDER_PRESETS) {
+    const opt = document.createElement('option');
+    opt.value = preset.id;
+    opt.textContent = _providerLabel(preset);
+    providerSel.appendChild(opt);
+  }
+  providerSel.value = selectedProvider && _providerPresetsById()[selectedProvider] ? selectedProvider : 'custom';
+}
+
+function _renderProviderProtocolOptions(providerId, selectedApiType) {
+  const protocolSel = document.getElementById('provApiType');
+  const preset = _providerPresetsById()[providerId] || _providerPresetsById().custom;
+  const supported = PROVIDER_PROTOCOLS.filter(p => Object.prototype.hasOwnProperty.call(preset.protocols, p.value));
+  const unsupported = PROVIDER_PROTOCOLS.filter(p => !Object.prototype.hasOwnProperty.call(preset.protocols, p.value));
+  protocolSel.innerHTML = '';
+
+  for (const protocol of supported) {
+    const opt = document.createElement('option');
+    opt.value = protocol.value;
+    opt.textContent = t(protocol.labelKey);
+    protocolSel.appendChild(opt);
+  }
+  if (unsupported.length) {
+    const divider = document.createElement('option');
+    divider.value = PROTOCOL_DIVIDER_VALUE;
+    divider.disabled = true;
+    divider.textContent = '────────';
+    divider.dataset.divider = 'true';
+    protocolSel.appendChild(divider);
+  }
+  for (const protocol of unsupported) {
+    const opt = document.createElement('option');
+    opt.value = protocol.value;
+    opt.textContent = `${t(protocol.labelKey)} (${t('protocol.unsupportedSuffix')})`;
+    opt.dataset.unsupported = 'true';
+    protocolSel.appendChild(opt);
+  }
+
+  const values = PROVIDER_PROTOCOLS.map(p => p.value);
+  protocolSel.value = values.includes(selectedApiType) ? selectedApiType : (supported[0] ? supported[0].value : 'chat');
+}
+
+function _updateProviderLogo() {
+  const logo = document.getElementById('provProviderLogo');
+  const logoUrl = _providerLogoUrl(document.getElementById('provProvider').value);
+  if (logoUrl) { logo.src = logoUrl; logo.style.display = ''; }
+  else { logo.src = ''; logo.style.display = 'none'; }
+}
+
+function _syncPresetBaseUrl(previousPresetUrl) {
+  const providerId = document.getElementById('provProvider').value;
+  const apiType = document.getElementById('provApiType').value;
+  const nextPresetUrl = _providerPresetUrlFor(providerId, apiType);
+  const urlInput = document.getElementById('provBaseUrl');
+  const cur = urlInput.value.trim();
+  if (nextPresetUrl && (!cur || cur === previousPresetUrl)) {
+    _setProviderBaseUrl(nextPresetUrl);
+  } else if (!nextPresetUrl && cur === previousPresetUrl) {
+    _setProviderBaseUrl('');
+  }
+  _providerPresetUrl = nextPresetUrl || '';
+}
+
+function onProviderPresetChange() {
+  const providerId = document.getElementById('provProvider').value;
+  const apiType = document.getElementById('provApiType').value;
+  const previousPresetUrl = _providerPresetUrl;
+  _renderProviderProtocolOptions(providerId, apiType);
+  _updateProviderLogo();
+  _syncPresetBaseUrl(previousPresetUrl);
+}
+
+function onProviderProtocolChange() {
+  const protocolSel = document.getElementById('provApiType');
+  if (protocolSel.value === PROTOCOL_DIVIDER_VALUE) {
+    protocolSel.value = protocolSel.dataset.previousValue || 'chat';
+    return;
+  }
+  protocolSel.dataset.previousValue = protocolSel.value;
+  _syncPresetBaseUrl(_providerPresetUrl);
+}
+
+function onProviderBaseUrlInput() {
+  if (_providerUrlProgrammatic) return;
+  const providerId = document.getElementById('provProvider').value;
+  const apiType = document.getElementById('provApiType').value;
+  const presetUrl = _providerPresetUrlFor(providerId, apiType);
+  const currentUrl = document.getElementById('provBaseUrl').value.trim();
+  if (providerId !== 'custom' && currentUrl !== presetUrl) {
+    document.getElementById('provProvider').value = 'custom';
+    _renderProviderProtocolOptions('custom', apiType);
+    _updateProviderLogo();
+    _providerPresetUrl = _providerPresetUrlFor('custom', apiType);
+  }
 }
 
 function setLang(lang) {
@@ -1552,7 +1815,7 @@ async function copyText(text, toastMsg) {
 function copyProviderEntry(name) {
   const cfg = configData.providers[name] || {};
   // Open Add Provider modal pre-filled with non-sensitive fields; API key is intentionally omitted
-  openProviderModal('', cfg.base_url, '', cfg.proxy, cfg.type || name);
+  openProviderModal('', {...cfg, api_key: ''});
 }
 
 function cloneModel(name) {
@@ -1583,52 +1846,20 @@ function closeModal(id) {
 
 let _editingProviderName = null; // original name when editing (for rename)
 
-function openProviderModal(name, baseUrl, apiKey, proxy, provType) {
+function openProviderModal(name, providerConfig) {
+  const cfg = providerConfig || {};
   _editingProviderName = name || null;
   document.getElementById('providerModalTitle').textContent = name ? t('modal.editProvider') : t('modal.addProvider');
   document.getElementById('provName').value = name || '';
   document.getElementById('provName').readOnly = false;
 
-  const registeredShims = (configData && configData.registered_shims) || [];
-  const shimMap = Object.fromEntries(registeredShims.map(s => [s.name, s]));
-
-  // Populate Provider Type dropdown from registered shims
-  const typeSel = document.getElementById('provType');
-  typeSel.innerHTML = '<option value="">' + t('label.selectOne', '— select —') + '</option>';
-  for (const s of registeredShims) {
-    const opt = document.createElement('option');
-    opt.value = s.name; opt.textContent = s.name;
-    if (s.name === provType) opt.selected = true;
-    typeSel.appendChild(opt);
-  }
-
-  // Update the logo preview beside the dropdown
-  function _updateTypeLogo() {
-    const logo = document.getElementById('provTypeLogo');
-    const s = shimMap[typeSel.value];
-    if (s && s.logo) { logo.src = s.logo; logo.style.display = ''; }
-    else { logo.src = ''; logo.style.display = 'none'; }
-  }
-  _updateTypeLogo();
-
-  // Auto-fill base URL and API key placeholder when selecting a type
-  let _prevShimUrl = (shimMap[provType || ''] || {}).default_base_url || '';
-  typeSel.onchange = () => {
-    _updateTypeLogo();
-    const s = shimMap[typeSel.value];
-    if (!s) return;
-    const urlInput = document.getElementById('provBaseUrl');
-    const cur = urlInput.value.trim();
-    // Only auto-fill when the field is empty or still matches the previous shim's default
-    if (s.default_base_url && (!cur || cur === _prevShimUrl)) {
-      urlInput.value = s.default_base_url;
-    }
-    _prevShimUrl = s.default_base_url || '';
-    const keyInput = document.getElementById('provApiKey');
-    if (!keyInput.value && s.default_api_key_env) keyInput.value = '${' + s.default_api_key_env + '}';
-  };
-
-  document.getElementById('provBaseUrl').value = baseUrl || '';
+  const selection = _inferProviderSelection(cfg);
+  _renderProviderPresetOptions(selection.providerId);
+  _renderProviderProtocolOptions(selection.providerId, selection.apiType);
+  document.getElementById('provApiType').dataset.previousValue = document.getElementById('provApiType').value;
+  _updateProviderLogo();
+  _providerPresetUrl = _providerPresetUrlFor(document.getElementById('provProvider').value, document.getElementById('provApiType').value);
+  _setProviderBaseUrl(cfg.base_url || _providerPresetUrl || '');
   const keyInput = document.getElementById('provApiKey');
   keyInput.type = 'password';
   keyInput.readOnly = false;
@@ -1641,11 +1872,11 @@ function openProviderModal(name, baseUrl, apiKey, proxy, provType) {
     keyInput.value = '';
     keyInput.placeholder = name ? t('label.keyUnchangedHint', 'Leave blank to keep current key') : '${OPENAI_API_KEY}';
   } else {
-    keyInput.value = apiKey || '';
+    keyInput.value = cfg.api_key || '';
     keyInput.placeholder = '${OPENAI_API_KEY}';
     _syncKeyField();
   }
-  document.getElementById('provProxy').value = proxy || '';
+  document.getElementById('provProxy').value = cfg.proxy || '';
   if (window._detectedHostIp) document.getElementById('provProxy').placeholder = `e.g. http://${window._detectedHostIp}:7890`;
   document.getElementById('providerModal').classList.add('open');
   // When editing, fetch the real (unmasked) key
@@ -1881,9 +2112,12 @@ function renderProviders() {
   let entries = allEntries;
   if (query) {
     entries = entries.filter(([name, cfg]) => {
-      const typeName = cfg.type || name;
+      const info = _providerDisplayInfo(name, cfg);
       return name.toLowerCase().includes(query) ||
-        typeName.toLowerCase().includes(query) ||
+        info.providerName.toLowerCase().includes(query) ||
+        info.protocolName.toLowerCase().includes(query) ||
+        info.apiType.toLowerCase().includes(query) ||
+        (info.legacyType || '').toLowerCase().includes(query) ||
         (cfg.base_url || '').toLowerCase().includes(query);
     });
   }
@@ -1897,10 +2131,6 @@ function renderProviders() {
     countEl.textContent = '';
   }
 
-  const shimLogo = Object.fromEntries(
-    (configData.registered_shims || []).map(s => [s.name, s.logo])
-  );
-
   if (entries.length === 0) {
     grid.innerHTML = `<p style="color:var(--text-dim)">${t('empty.searchResults')}</p>`;
     return;
@@ -1909,15 +2139,15 @@ function renderProviders() {
   const isList = _providerViewMode === 'list';
   grid.innerHTML = entries.map(([name, cfg]) => {
     const enabled = cfg.enabled !== false;
-    const typeName = cfg.type || name;
-    const logo = shimLogo[typeName];
-    const logoHtml = logo ? `<img class="provider-logo" src="${esc(logo)}" alt="">` : '';
-    // In list view, always output fixed columns (Type, Base URL, API Key) for alignment
+    const info = _providerDisplayInfo(name, cfg);
+    const logoHtml = info.logoUrl ? `<img class="provider-logo" src="${esc(info.logoUrl)}" alt="">` : '';
+    // In list view, always output fixed columns (Provider/Protocol, Base URL, API Key) for alignment
     const fieldsHtml = isList
-      ? `<div class="field" title="Type: ${esc(typeName)}"><code>${esc(typeName)}</code></div>
+      ? `<div class="field" title="${esc(info.displayType)}"><code>${esc(info.displayType)}</code></div>
          <div class="field" title="${esc(cfg.base_url || '')}"><code>${esc(cfg.base_url || '')}</code></div>
          ${_credentialVisible ? `<div class="field" title="${esc(cfg.api_key || '')}"><code>${esc(cfg.api_key || '')}</code></div>` : '<div class="field"></div>'}`
-      : `<div class="field">Type: <code>${esc(typeName)}</code></div>
+      : `<div class="field">${t('label.providerVendor')}: <code>${esc(info.providerName)}</code></div>
+         <div class="field">${t('label.providerProtocol')}: <code>${esc(info.protocolName)}</code></div>
          <div class="field">Base URL: <code>${esc(cfg.base_url || '')}</code></div>
          ${_credentialVisible ? `<div class="field">API Key: <code>${esc(cfg.api_key || '')}</code></div>` : ''}
          ${cfg.proxy ? `<div class="field">Proxy: <code>${esc(cfg.proxy)}</code></div>` : ''}`;
@@ -2074,12 +2304,13 @@ function renderModels() {
 
 async function saveProvider() {
   const name = document.getElementById('provName').value.trim();
-  const provType = document.getElementById('provType').value;
+  const provider = document.getElementById('provProvider').value;
+  const apiType = document.getElementById('provApiType').value;
   const baseUrl = document.getElementById('provBaseUrl').value.trim();
   const apiKey = _getKeyFieldValue();
   const proxy = document.getElementById('provProxy').value.trim();
-  if (!name || !provType) { showToast(t('error.fieldsRequired'), 'error'); return; }
-  const body = {type: provType, base_url: baseUrl, proxy};
+  if (!name || !provider || !apiType || apiType === PROTOCOL_DIVIDER_VALUE || !baseUrl) { showToast(t('error.fieldsRequired'), 'error'); return; }
+  const body = {provider, api_type: apiType, base_url: baseUrl, proxy};
   // When api_key is empty and we're editing, omit it so backend keeps the original
   if (apiKey) body.api_key = apiKey;
   // If editing and name changed, include rename_from so backend updates model references
@@ -2171,7 +2402,7 @@ async function toggleProvider(name) {
 
 function editProvider(name) {
   const cfg = configData.providers[name] || {};
-  openProviderModal(name, cfg.base_url, cfg.api_key, cfg.proxy, cfg.type);
+  openProviderModal(name, cfg);
 }
 
 // Multi-key field: auto-switch between single input and entry list
@@ -2998,7 +3229,7 @@ async function loadLogs() {
 function resolveProviderName(apiType) {
   if (!configData) return apiType;
   for (const [name, cfg] of Object.entries(configData.providers || {})) {
-    if (cfg.type === apiType) return name;
+    if (cfg.type === apiType || _apiTypeToProviderType(cfg.api_type) === apiType) return name;
   }
   return apiType;
 }
