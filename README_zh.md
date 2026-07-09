@@ -13,7 +13,17 @@
 
 ## 安装
 
-> 之后再补
+从 PyPI 安装最新预发布版本：
+
+```bash
+python -m pip install -U --pre "llm-rosetta"
+```
+
+启动本地网关：
+
+```bash
+llm-rosetta-gateway --host 127.0.0.1 -v
+```
 
 ## 完整文档
 

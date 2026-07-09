@@ -13,7 +13,17 @@ This project is forked from [Oaklight/llm-rosetta](https://github.com/Oaklight/l
 
 ## Installation
 
-> To be documented.
+Install the latest prerelease from PyPI:
+
+```bash
+python -m pip install -U --pre "llm-rosetta"
+```
+
+Start the local gateway:
+
+```bash
+llm-rosetta-gateway --host 127.0.0.1 -v
+```
 
 ## Full Documentation
 
