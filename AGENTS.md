@@ -1,16 +1,16 @@
-# AGENTS.md — LLM-Rosetta
+# AGENTS.md — Codex-Rosetta
 
 > Context file for AI coding assistants. Symlinked as `CLAUDE.md`.
 
 ## What this project is
 
-LLM-Rosetta is a **Python library for converting between different LLM provider
+Codex-Rosetta is a **Python library for converting between different LLM provider
 API formats** using a hub-and-spoke architecture with a central IR (Intermediate
 Representation). It solves the N² provider conversion problem — each provider
 only needs a single converter to/from IR, and any-to-any conversion is
 automatically supported.
 
-The project also ships an **API gateway** (`llm-rosetta-gateway`) that proxies
+The project also ships an **API gateway** (`codex-rosetta-gateway`) that proxies
 requests between providers with live format conversion, streaming, and key
 rotation.
 
@@ -72,7 +72,7 @@ Provider-specific types (for documentation, not runtime) in
 ## Repository layout
 
 ```
-src/llm_rosetta/
+src/codex_rosetta/
 ├── __init__.py              # Public API: convert(), get_converter_for_provider()
 ├── auto_detect.py           # Provider auto-detection from request body
 ├── tool_ops.py              # Cross-provider tool call utilities
@@ -112,7 +112,7 @@ examples/                    # Usage examples
 ## Setup and commands
 
 ```bash
-conda activate llm-rosetta
+conda activate codex-rosetta
 pip install -e ".[all]"
 ```
 
@@ -143,7 +143,7 @@ Tooling config (ruff, ty, complexipy) lives in `pyproject.toml`.
 After gateway or converter changes that affect cross-format conversion,
 run the `agentabi` test matrix to verify end-to-end behavior with real
 agent CLIs. This requires a running proxy (e.g. argo-proxy or
-llm-rosetta-gateway) with upstream access.
+codex-rosetta-gateway) with upstream access.
 
 ### Setup
 
@@ -182,10 +182,10 @@ For deeper validation (file reads, writes, multi-step reasoning):
 
 ```python
 result = run_sync(
-    "Read src/llm_rosetta/shims/provider_shim.py and write a summary to /tmp/test-output.md",
+    "Read src/codex_rosetta/shims/provider_shim.py and write a summary to /tmp/test-output.md",
     agent="codex", model="claude-haiku-4-5",
     env=PROXY_ENV, max_turns=10, timeout=120,
-    working_dir="/path/to/llm-rosetta",
+    working_dir="/path/to/codex-rosetta",
 )
 # Check /tmp/test-output.md was created with meaningful content
 ```
@@ -213,13 +213,13 @@ Releases are triggered manually via GitHub Actions, not by tag push.
 
 ### Steps
 
-1. **Bump version** in `src/llm_rosetta/__init__.py`
+1. **Bump version** in `src/codex_rosetta/__init__.py`
 2. **Update changelogs** — move `[Unreleased]` entries into a versioned section
    (`## vX.Y.Z — YYYY-MM-DD`) in both `docs_en/docs/changelog.md` and
    `docs_zh/docs/changelog.md`. Commit and push both doc worktrees.
 3. **Commit and tag**:
    ```bash
-   git add src/llm_rosetta/__init__.py
+   git add src/codex_rosetta/__init__.py
    git commit -m "release: vX.Y.Z"
    git tag vX.Y.Z
    git push origin master vX.Y.Z
@@ -227,7 +227,7 @@ Releases are triggered manually via GitHub Actions, not by tag push.
 4. **Trigger the Release workflow** (builds wheel → publishes to PyPI →
    triggers Docker build automatically):
    ```bash
-   gh workflow run "Release" --repo Oaklight/llm-rosetta -f version=X.Y.Z
+   gh workflow run "Release" --repo Oaklight/codex-rosetta -f version=X.Y.Z
    ```
 5. **Create GitHub Release** (optional — the Release workflow also creates one,
    but you can create it manually first for custom release notes):
@@ -302,5 +302,5 @@ those branches have no `.pre-commit-config.yaml`.
 
 ## Files to never edit
 
-- `src/llm_rosetta/_vendor/**` — vendored dependencies, managed externally
+- `src/codex_rosetta/_vendor/**` — vendored dependencies, managed externally
 - `docs_en/`, `docs_zh/` — separate git branches, edit inside the worktree only

@@ -27,7 +27,7 @@ RUN apk add --no-cache su-exec
 RUN mkdir -p /tmp/dist/
 COPY dist/ /tmp/dist/
 
-# Install llm-rosetta[gateway,profiling]: local wheel > specific version > latest from PyPI
+# Install codex-rosetta[gateway,profiling]: local wheel > specific version > latest from PyPI
 # Then remove pip/setuptools to save ~10MB
 RUN if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
         echo "Installing from local wheel: $LOCAL_WHEEL"; \
@@ -37,18 +37,18 @@ RUN if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
             pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
         fi; \
     elif [ -n "$PACKAGE_VERSION" ]; then \
-        echo "Installing llm-rosetta version: $PACKAGE_VERSION"; \
+        echo "Installing codex-rosetta version: $PACKAGE_VERSION"; \
         if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
+            pip install -i "$PYPI_MIRROR" --no-cache-dir "codex-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
         else \
-            pip install --no-cache-dir "llm-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
+            pip install --no-cache-dir "codex-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
         fi; \
     else \
-        echo "Installing latest llm-rosetta from PyPI"; \
+        echo "Installing latest codex-rosetta from PyPI"; \
         if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "llm-rosetta[gateway,profiling]"; \
+            pip install -i "$PYPI_MIRROR" --no-cache-dir "codex-rosetta[gateway,profiling]"; \
         else \
-            pip install --no-cache-dir "llm-rosetta[gateway,profiling]"; \
+            pip install --no-cache-dir "codex-rosetta[gateway,profiling]"; \
         fi; \
     fi && \
     pip uninstall -y pip setuptools 2>/dev/null || true && \
@@ -67,4 +67,4 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8765
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["llm-rosetta-gateway", "--config", "/config/config.jsonc", "--host", "0.0.0.0"]
+CMD ["codex-rosetta-gateway", "--config", "/config/config.jsonc", "--host", "0.0.0.0"]

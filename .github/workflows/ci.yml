@@ -40,13 +40,13 @@ jobs:
           - name: core
             extras: ""
             check: |
-              python -c "from llm_rosetta import get_converter_for_provider; print('core import OK')"
-              python -c "from llm_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps; print('google converter OK')"
+              python -c "from codex_rosetta import get_converter_for_provider; print('core import OK')"
+              python -c "from codex_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps; print('google converter OK')"
           - name: gateway
             extras: "[gateway]"
             check: |
-              python -c "from llm_rosetta.gateway import main; print('gateway import OK')"
-              llm-rosetta-gateway --version
+              python -c "from codex_rosetta.gateway import main; print('gateway import OK')"
+              codex-rosetta-gateway --version
 
     name: smoke-test (${{ matrix.variant.name }})
     steps:

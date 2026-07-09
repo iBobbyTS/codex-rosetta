@@ -4,12 +4,12 @@ OpenAI Responses API stream converter unit tests.
 
 from typing import Any, cast
 
-from llm_rosetta.converters.openai_chat import OpenAIChatConverter
-from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
-from llm_rosetta.converters.openai_responses.stream_context import (
+from codex_rosetta.converters.openai_chat import OpenAIChatConverter
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
+from codex_rosetta.converters.openai_responses.stream_context import (
     OpenAIResponsesStreamContext,
 )
-from llm_rosetta.types.ir.stream import (
+from codex_rosetta.types.ir.stream import (
     ContentBlockEndEvent,
     ContentBlockStartEvent,
     FinishEvent,
@@ -1823,7 +1823,7 @@ class TestCustomToolCallStreaming:
 
     def test_chat_tool_search_stream_restores_native_responses_item(self):
         """Chat tool_search stream events serialize as Responses tool_search_call."""
-        from llm_rosetta.pipeline import ConversionPipeline
+        from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline("openai_responses", "openai_chat")
         pipeline.convert_request(

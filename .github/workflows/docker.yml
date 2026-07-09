@@ -59,20 +59,20 @@ jobs:
       - name: Wait for PyPI availability
         run: |
           VERSION="${{ steps.meta.outputs.version }}"
-          echo "Waiting for llm-rosetta==$VERSION on PyPI..."
+          echo "Waiting for codex-rosetta==$VERSION on PyPI..."
           for i in $(seq 1 30); do
             # Query the version-specific JSON endpoint for an exact match
             # (200 = exists, 404 = not yet). Avoids substring false-positives.
             CODE=$(curl -fsS -o /dev/null -w "%{http_code}" \
-              "https://pypi.org/pypi/llm-rosetta/$VERSION/json" || true)
+              "https://pypi.org/pypi/codex-rosetta/$VERSION/json" || true)
             if [ "$CODE" = "200" ]; then
-              echo "✅ llm-rosetta==$VERSION found on PyPI (attempt $i)"
+              echo "✅ codex-rosetta==$VERSION found on PyPI (attempt $i)"
               exit 0
             fi
             echo "  Attempt $i/30: not yet available (HTTP $CODE), waiting 20s..."
             sleep 20
           done
-          echo "❌ llm-rosetta==$VERSION not found on PyPI after 10 minutes"
+          echo "❌ codex-rosetta==$VERSION not found on PyPI after 10 minutes"
           exit 1
 
       - name: Log in to Docker Hub
@@ -91,7 +91,7 @@ jobs:
           build-args: |
             PACKAGE_VERSION=${{ steps.meta.outputs.version }}
           tags: |
-            oaklight/llm-rosetta-gateway:${{ steps.meta.outputs.version }}
-            oaklight/llm-rosetta-gateway:latest
+            oaklight/codex-rosetta-gateway:${{ steps.meta.outputs.version }}
+            oaklight/codex-rosetta-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

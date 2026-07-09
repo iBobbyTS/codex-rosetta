@@ -1,5 +1,5 @@
 """
-Benchmark comparing LLM-Rosetta vs LiteLLM using real-world Claude Code payloads.
+Benchmark comparing Codex-Rosetta vs LiteLLM using real-world Claude Code payloads.
 
 Uses OpenAI Chat format payloads (converted from real Anthropic Claude Code dumps)
 as the common input, then benchmarks OpenAI Chat → Anthropic conversion for both.
@@ -71,8 +71,8 @@ def bench_litellm(payload: dict, iterations: int) -> list[float]:
 
 def bench_rosetta(payload: dict, iterations: int) -> list[float]:
     """Benchmark Rosetta's OpenAI Chat → IR → Anthropic conversion."""
-    from llm_rosetta.converters.anthropic import AnthropicConverter
-    from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+    from codex_rosetta.converters.anthropic import AnthropicConverter
+    from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
     oc = OpenAIChatConverter()
     an = AnthropicConverter()

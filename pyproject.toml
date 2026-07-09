@@ -3,10 +3,10 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "llm-rosetta"
+name = "codex-rosetta"
 dynamic = ["version"]
 authors = [{ name = "Oaklight", email = "oaklight@gmx.com" }]
-description = "LLM-Rosetta: Unified LLM API adapter — bidirectional conversion between OpenAI, Anthropic, and Google formats via intermediate representation (IR)."
+description = "Codex-Rosetta: Unified LLM API adapter — bidirectional conversion between OpenAI, Anthropic, and Google formats via intermediate representation (IR)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
@@ -56,36 +56,36 @@ dev = [
     "twine>=6.1.0",
 ]
 
-all = ["llm-rosetta[openai,anthropic,google,gateway,profiling,dev]"]
+all = ["codex-rosetta[openai,anthropic,google,gateway,profiling,dev]"]
 
 [project.urls]
-Documentation = "https://llm-rosetta.readthedocs.io"
-Repository = "https://github.com/Oaklight/llm-rosetta"
-Issues = "https://github.com/Oaklight/llm-rosetta/issues"
+Documentation = "https://codex-rosetta.readthedocs.io"
+Repository = "https://github.com/Oaklight/codex-rosetta"
+Issues = "https://github.com/Oaklight/codex-rosetta/issues"
 
 [project.scripts]
-llm-rosetta-gateway = "llm_rosetta.gateway:main"
+codex-rosetta-gateway = "codex_rosetta.gateway:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"llm_rosetta" = ["py.typed", "shims/providers/*/provider.yaml", "shims/providers/*/*/provider.yaml"]
-"llm_rosetta.gateway.admin" = ["admin.html"]
+"codex_rosetta" = ["py.typed", "shims/providers/*/provider.yaml", "shims/providers/*/*/provider.yaml"]
+"codex_rosetta.gateway.admin" = ["admin.html"]
 
 [tool.setuptools.dynamic]
-version = { attr = "llm_rosetta.__version__" }
+version = { attr = "codex_rosetta.__version__" }
 
 [tool.ty.environment]
 python-version = "3.10"
 
 [tool.ty.src]
 include = ["src", "tests"]
-exclude = ["src/llm_rosetta/_vendor", "llm_api_simple_tests", "tests/integration"]
+exclude = ["src/codex_rosetta/_vendor", "llm_api_simple_tests", "tests/integration"]
 
 [tool.ruff]
 target-version = "py310"
-exclude = ["src/llm_rosetta/_vendor", "llm_api_simple_tests", "tests/integration"]
+exclude = ["src/codex_rosetta/_vendor", "llm_api_simple_tests", "tests/integration"]
 
 [tool.ruff.lint]
 select = ["E", "F", "UP", "C901"]
@@ -95,9 +95,9 @@ ignore = ["UP007", "E501"]  # Allow Union[X, Y] syntax; tolerate long lines
 max-complexity = 15
 
 [tool.ruff.lint.per-file-ignores]
-"src/llm_rosetta/_vendor/*" = ["C901", "UP"]
+"src/codex_rosetta/_vendor/*" = ["C901", "UP"]
 
 [tool.complexipy]
 paths = ["src"]
 max-complexity-allowed = 25
-exclude = ["src/llm_rosetta/_vendor"]
+exclude = ["src/codex_rosetta/_vendor"]

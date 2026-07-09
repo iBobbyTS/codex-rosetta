@@ -6,12 +6,12 @@ import time
 
 import pytest
 
-from llm_rosetta.gateway.admin.persistence import (
+from codex_rosetta.gateway.admin.persistence import (
     DEFAULT_ERROR_MAX,
     DEFAULT_SUCCESS_MAX,
     PersistenceManager,
 )
-from llm_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
+from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
 
 
 # -- Helpers --

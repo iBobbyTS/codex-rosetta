@@ -6,8 +6,14 @@ from typing import cast
 
 import pytest
 
-from llm_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
-from llm_rosetta.types.ir import AudioPart, FilePart, ImagePart, ReasoningPart, TextPart
+from codex_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
+from codex_rosetta.types.ir import (
+    AudioPart,
+    FilePart,
+    ImagePart,
+    ReasoningPart,
+    TextPart,
+)
 
 
 class TestGoogleGenAIContentOps:
@@ -86,7 +92,7 @@ class TestGoogleGenAIContentOps:
         mock_opener.open.return_value = mock_resp
 
         with patch(
-            "llm_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
+            "codex_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
             return_value=mock_opener,
         ):
             result = GoogleGenAIContentOps.ir_image_to_p(ir_image)
@@ -103,7 +109,7 @@ class TestGoogleGenAIContentOps:
 
         ir_image = ImagePart(type="image", image_url="https://example.com/img.jpg")
         with patch(
-            "llm_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
+            "codex_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
             side_effect=Exception("timeout"),
         ):
             result = GoogleGenAIContentOps.ir_image_to_p(ir_image)

@@ -5,14 +5,14 @@ Verifies that Google thought_signature survives:
   Google → IR → Anthropic → IR → Google
 
 Covers tool_call, tool_result, and reasoning parts.
-Refs: https://github.com/Oaklight/llm-rosetta/issues/225
+Refs: https://github.com/Oaklight/codex-rosetta/issues/225
 """
 
-from llm_rosetta.converters.anthropic.content_ops import AnthropicContentOps
-from llm_rosetta.converters.anthropic.tool_ops import AnthropicToolOps
-from llm_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
-from llm_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
-from llm_rosetta.types.ir import ToolCallPart, ToolResultPart, ReasoningPart
+from codex_rosetta.converters.anthropic.content_ops import AnthropicContentOps
+from codex_rosetta.converters.anthropic.tool_ops import AnthropicToolOps
+from codex_rosetta.converters.google_genai.content_ops import GoogleGenAIContentOps
+from codex_rosetta.converters.google_genai.tool_ops import GoogleGenAIToolOps
+from codex_rosetta.types.ir import ToolCallPart, ToolResultPart, ReasoningPart
 
 
 class TestGoogleAnthropicToolCallRoundTrip:

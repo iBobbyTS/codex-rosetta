@@ -6,19 +6,19 @@ prompt_tokens_details, and completion_tokens_details survive a
 stream_response_from_provider → stream_response_to_provider round-trip
 for all four converters.
 
-Ref: https://github.com/Oaklight/llm-rosetta/issues/247 §1
+Ref: https://github.com/Oaklight/codex-rosetta/issues/247 §1
 """
 
 from __future__ import annotations
 
 from typing import Any, cast
 
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.converters.base.context import StreamContext
-from llm_rosetta.converters.google_genai import GoogleGenAIConverter
-from llm_rosetta.converters.openai_chat import OpenAIChatConverter
-from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
-from llm_rosetta.types.ir.stream import IRStreamEvent
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.converters.base.context import StreamContext
+from codex_rosetta.converters.google_genai import GoogleGenAIConverter
+from codex_rosetta.converters.openai_chat import OpenAIChatConverter
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
+from codex_rosetta.types.ir.stream import IRStreamEvent
 
 
 # ---------------------------------------------------------------------------

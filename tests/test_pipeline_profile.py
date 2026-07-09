@@ -1,6 +1,6 @@
 """Tests for ConversionPipeline.profile timing data."""
 
-from llm_rosetta.pipeline import ConversionPipeline
+from codex_rosetta.pipeline import ConversionPipeline
 
 
 class TestPipelineProfile:

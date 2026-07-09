@@ -1,16 +1,16 @@
 """Tests verifying backward-compatible imports from gateway.admin still work."""
 
-from llm_rosetta.gateway.admin.metrics import MetricsCollector, _RollingWindow
-from llm_rosetta.gateway.admin.persistence import (
+from codex_rosetta.gateway.admin.metrics import MetricsCollector, _RollingWindow
+from codex_rosetta.gateway.admin.persistence import (
     DEFAULT_ERROR_MAX,
     DEFAULT_SUCCESS_MAX,
     PersistenceManager,
 )
-from llm_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
-from llm_rosetta.gateway.admin.routes.profiling import ProfilerState
+from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
+from codex_rosetta.gateway.admin.routes.profiling import ProfilerState
 
 # Also verify they are the same objects (not copies)
-import llm_rosetta.observability as obs
+import codex_rosetta.observability as obs
 
 
 class TestBackwardCompatImports:
@@ -20,7 +20,7 @@ class TestBackwardCompatImports:
         assert MetricsCollector is obs.MetricsCollector
 
     def test_rolling_window_identity(self):
-        from llm_rosetta.observability.metrics import _RollingWindow as _RW
+        from codex_rosetta.observability.metrics import _RollingWindow as _RW
 
         assert _RollingWindow is _RW
 

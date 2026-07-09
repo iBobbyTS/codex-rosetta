@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from llm_rosetta.converters.base.context import ConversionContext
-from llm_rosetta.reasoning_mapping import (
+from codex_rosetta.converters.base.context import ConversionContext
+from codex_rosetta.reasoning_mapping import (
     apply_reasoning_mapping_to_provider_request,
     normalize_reasoning_effort,
     resolve_reasoning_mapping,

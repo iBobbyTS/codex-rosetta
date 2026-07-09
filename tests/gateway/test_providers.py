@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from llm_rosetta.gateway.providers import build_provider_info
-from llm_rosetta.shims.providers import load_providers
+from codex_rosetta.gateway.providers import build_provider_info
+from codex_rosetta.shims.providers import load_providers
 
 
 class TestBuildProviderInfo:

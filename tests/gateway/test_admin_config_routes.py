@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from llm_rosetta.gateway.admin.routes.config import (
+from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     get_config,
     put_model,
@@ -16,8 +16,8 @@ from llm_rosetta.gateway.admin.routes.config import (
     put_provider,
     put_server_settings,
 )
-from llm_rosetta.gateway.config import GatewayConfig
-from llm_rosetta.gateway.stream_trace import StreamTraceState
+from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.stream_trace import StreamTraceState
 
 
 def _run(coro: Any) -> Any:
@@ -548,7 +548,7 @@ def test_admin_html_exposes_tool_adaptation_switches():
     html_path = (
         Path(__file__).parents[2]
         / "src"
-        / "llm_rosetta"
+        / "codex_rosetta"
         / "gateway"
         / "admin"
         / "admin.html"
@@ -570,7 +570,7 @@ def test_admin_html_exposes_reasoning_mapping_controls():
     html_path = (
         Path(__file__).parents[2]
         / "src"
-        / "llm_rosetta"
+        / "codex_rosetta"
         / "gateway"
         / "admin"
         / "admin.html"
@@ -596,7 +596,7 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
     html_path = (
         Path(__file__).parents[2]
         / "src"
-        / "llm_rosetta"
+        / "codex_rosetta"
         / "gateway"
         / "admin"
         / "admin.html"
@@ -653,7 +653,7 @@ def test_admin_html_exposes_model_group_controls():
     html_path = (
         Path(__file__).parents[2]
         / "src"
-        / "llm_rosetta"
+        / "codex_rosetta"
         / "gateway"
         / "admin"
         / "admin.html"
@@ -687,7 +687,7 @@ def test_admin_html_uses_page_routes():
     html_path = (
         Path(__file__).parents[2]
         / "src"
-        / "llm_rosetta"
+        / "codex_rosetta"
         / "gateway"
         / "admin"
         / "admin.html"
@@ -705,6 +705,6 @@ def test_admin_html_uses_page_routes():
     assert 'data-page="web-search"' in html
     assert 'id="page-keys"' in html
     assert 'id="page-web-search"' in html
-    assert "llm-rosetta-tab" not in html
+    assert "codex-rosetta-tab" not in html
     assert "data-tab" not in html
     assert "currentTab" not in html

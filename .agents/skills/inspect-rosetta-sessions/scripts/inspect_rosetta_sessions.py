@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Inspect LLM-Rosetta gateway logs and Codex rollout sessions.
+"""Inspect Codex-Rosetta gateway logs and Codex rollout sessions.
 
 The script streams JSONL files and prints bounded, redacted summaries. It is
 intended for investigation, not mutation.
@@ -459,7 +459,7 @@ def command_log_summary(args: argparse.Namespace) -> int:
         if stage_filter and isinstance(obj, dict) and str(obj.get("stage")) not in stage_filter:
             continue
         record_summary(summary, line_no, obj, raw, args)
-    print_summary("LLM-Rosetta gateway log summary", path, summary, args.max_items)
+    print_summary("Codex-Rosetta gateway log summary", path, summary, args.max_items)
     return 0
 
 
@@ -487,7 +487,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_summary_args(session_parser)
     session_parser.set_defaults(func=command_session_summary)
 
-    log_parser = subparsers.add_parser("log-summary", help="Summarize an LLM-Rosetta gateway JSONL log.")
+    log_parser = subparsers.add_parser("log-summary", help="Summarize an Codex-Rosetta gateway JSONL log.")
     log_parser.add_argument("log", help="Path to a gateway JSONL log.")
     log_parser.add_argument("--session-id", help="Filter lines containing this session id.")
     log_parser.add_argument("--stage", action="append", help="Only include a gateway log stage. May be repeated.")

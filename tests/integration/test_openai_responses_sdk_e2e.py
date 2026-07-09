@@ -11,7 +11,7 @@ Requires:
 - openai Python SDK installed
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     python tests/integration/test_openai_responses_sdk_e2e.py
 """
 
@@ -32,8 +32,8 @@ from examples.tools import (
     multimodal_tools_spec,
     tools_spec,
 )
-from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     Message,
     ToolCallPart,

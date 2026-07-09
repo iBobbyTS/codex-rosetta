@@ -6,10 +6,10 @@ import asyncio
 from typing import Any
 from unittest.mock import MagicMock
 
-import llm_rosetta.gateway.app as app_module
-from llm_rosetta._vendor.httpserver import JSONResponse, StreamingResponse
-from llm_rosetta.gateway.headers import build_upstream_extra_headers
-from llm_rosetta.routing import ResolvedRoute
+import codex_rosetta.gateway.app as app_module
+from codex_rosetta._vendor.httpserver import JSONResponse, StreamingResponse
+from codex_rosetta.gateway.headers import build_upstream_extra_headers
+from codex_rosetta.routing import ResolvedRoute
 
 
 def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version():

@@ -12,7 +12,7 @@ Requires:
 - Network access (uses proxychains if direct access fails)
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     python tests/integration/test_anthropic_e2e.py
 """
 
@@ -29,8 +29,8 @@ import requests
 from typing import cast
 
 from examples.tools import available_tools, tools_spec
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     ToolCallPart,
     ToolDefinition,

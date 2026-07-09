@@ -1,4 +1,4 @@
-# Contributing to LLM-Rosetta
+# Contributing to Codex-Rosetta
 
 ## Getting Started
 
@@ -36,15 +36,15 @@ Keep commit messages concise and focused on *why*, not *what*. One logical chang
 
 ## Adding a New Converter
 
-LLM-Rosetta uses a hub-and-spoke architecture. To add support for a new API standard:
+Codex-Rosetta uses a hub-and-spoke architecture. To add support for a new API standard:
 
-1. Create a converter directory under `src/llm_rosetta/converters/<name>/`
+1. Create a converter directory under `src/codex_rosetta/converters/<name>/`
 2. Implement bidirectional conversion (request/response) to/from IR
-3. Add a shim in `src/llm_rosetta/shims/builtins.py` if needed
+3. Add a shim in `src/codex_rosetta/shims/builtins.py` if needed
 4. Add tests under `tests/converters/`
 5. Submit a PR
 
-See existing converters under `src/llm_rosetta/converters/` for reference.
+See existing converters under `src/codex_rosetta/converters/` for reference.
 
 ## AI-Assisted Contributions
 
@@ -60,7 +60,7 @@ Using AI tools (e.g. Claude, Cursor, Copilot) to assist with development is welc
 - Docstrings use Google style
 - Comments and docstrings in English
 - Type hints are encouraged
-- Do not edit files under `src/llm_rosetta/_vendor/` — those are managed externally
+- Do not edit files under `src/codex_rosetta/_vendor/` — those are managed externally
 
 ## License
 

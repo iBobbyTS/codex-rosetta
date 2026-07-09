@@ -6,8 +6,10 @@ from typing import Any, cast
 
 import pytest
 
-from llm_rosetta.converters.openai_responses.config_ops import OpenAIResponsesConfigOps
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_responses.config_ops import (
+    OpenAIResponsesConfigOps,
+)
+from codex_rosetta.types.ir import (
     CacheConfig,
     GenerationConfig,
     ReasoningConfig,

@@ -9,15 +9,15 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from llm_rosetta.converters.openai_responses._constants import ResponsesEventType
-from llm_rosetta.gateway.proxy import _stream_event_generator, handle_streaming
-from llm_rosetta.gateway.stream_phase_buffer import (
+from codex_rosetta.converters.openai_responses._constants import ResponsesEventType
+from codex_rosetta.gateway.proxy import _stream_event_generator, handle_streaming
+from codex_rosetta.gateway.stream_phase_buffer import (
     COMMENTARY_PHASE,
     FINAL_ANSWER_PHASE,
     ResponsesPhaseBuffer,
 )
-from llm_rosetta.gateway.stream_trace import StreamTraceLogger
-from llm_rosetta.routing import ResolvedRoute
+from codex_rosetta.gateway.stream_trace import StreamTraceLogger
+from codex_rosetta.routing import ResolvedRoute
 
 
 def _buffer() -> ResponsesPhaseBuffer:

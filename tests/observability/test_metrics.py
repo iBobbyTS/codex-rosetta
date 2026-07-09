@@ -1,7 +1,7 @@
 """Tests for the observability MetricsCollector (standalone, no gateway)."""
 
-from llm_rosetta.observability import MetricsCollector
-from llm_rosetta.observability.metrics import _RollingWindow
+from codex_rosetta.observability import MetricsCollector
+from codex_rosetta.observability.metrics import _RollingWindow
 
 
 class TestRollingWindow:

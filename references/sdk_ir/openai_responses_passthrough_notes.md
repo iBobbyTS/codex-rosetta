@@ -1,6 +1,6 @@
 # OpenAI Responses Passthrough Notes
 
-This note records Responses API fields and event details that llm-rosetta has
+This note records Responses API fields and event details that codex-rosetta has
 already had to preserve while converting through IR. It exists so future
 cross-protocol conversions into Responses do not need to rediscover the same
 Responses-specific behavior.

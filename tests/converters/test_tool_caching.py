@@ -9,14 +9,14 @@ import copy
 
 import pytest
 
-from llm_rosetta.converters.anthropic import AnthropicConverter
-from llm_rosetta.converters.base.helpers.cache import (
+from codex_rosetta.converters.anthropic import AnthropicConverter
+from codex_rosetta.converters.base.helpers.cache import (
     cache_info,
     clear_all_caches,
 )
-from llm_rosetta.converters.google_genai import GoogleConverter
-from llm_rosetta.converters.openai_chat import OpenAIChatConverter
-from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
+from codex_rosetta.converters.google_genai import GoogleConverter
+from codex_rosetta.converters.openai_chat import OpenAIChatConverter
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
 
 # ---------------------------------------------------------------------------
 # Fixtures — provider-specific tool definitions and minimal requests

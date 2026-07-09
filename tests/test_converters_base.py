@@ -1,5 +1,5 @@
 """
-Tests for LLM-Rosetta Converters Base Module
+Tests for Codex-Rosetta Converters Base Module
 
 测试 converters/base 模块的所有组件：
 - BaseConverter 抽象基类
@@ -15,8 +15,8 @@ from typing import Any, Union, cast
 
 import pytest
 
-from llm_rosetta.converters.base.context import ConversionContext
-from llm_rosetta.converters.base import (
+from codex_rosetta.converters.base.context import ConversionContext
+from codex_rosetta.converters.base import (
     BaseConfigOps,
     BaseContentOps,
     BaseConverter,
@@ -24,7 +24,7 @@ from llm_rosetta.converters.base import (
     BaseToolOps,
     StreamContext,
 )
-from llm_rosetta.types.ir import (
+from codex_rosetta.types.ir import (
     AssistantMessage,
     AudioPart,
     CacheConfig,
@@ -53,8 +53,8 @@ from llm_rosetta.types.ir import (
     ToolResultPart,
     UserMessage,
 )
-from llm_rosetta.types.ir.response import UsageInfo
-from llm_rosetta.types.ir.stream import IRStreamEvent
+from codex_rosetta.types.ir.response import UsageInfo
+from codex_rosetta.types.ir.stream import IRStreamEvent
 
 # ============================================================================
 # Mock implementations for testing

@@ -1,13 +1,13 @@
 ---
 name: inspect-rosetta-sessions
-description: Inspect LLM-Rosetta gateway JSONL logs and Codex rollout session JSONL files without reading huge prompts or logs into context. Use when Codex needs to locate a Codex session by id, summarize a rollout session, analyze Rosetta request/stream logs, compare direct vs gateway behavior, inspect tool definitions/tool calls/reasoning/phase fields, or diagnose Codex agent-loop and tool-adaptation issues.
+description: Inspect Codex-Rosetta gateway JSONL logs and Codex rollout session JSONL files without reading huge prompts or logs into context. Use when Codex needs to locate a Codex session by id, summarize a rollout session, analyze Rosetta request/stream logs, compare direct vs gateway behavior, inspect tool definitions/tool calls/reasoning/phase fields, or diagnose Codex agent-loop and tool-adaptation issues.
 ---
 
 # Inspect Rosetta Sessions
 
 ## Overview
 
-Use this skill for read-only investigation of LLM-Rosetta gateway behavior against Codex sessions. Prefer the bundled script for JSONL inspection so large system prompts, full contexts, and verbose gateway logs are streamed and summarized instead of dumped into the model context.
+Use this skill for read-only investigation of Codex-Rosetta gateway behavior against Codex sessions. Prefer the bundled script for JSONL inspection so large system prompts, full contexts, and verbose gateway logs are streamed and summarized instead of dumped into the model context.
 
 ## Local Test Paths
 

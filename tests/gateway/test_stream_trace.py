@@ -9,19 +9,19 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from llm_rosetta.gateway.proxy import (
+from codex_rosetta.gateway.proxy import (
     _raw_stream_event_generator,
     _stream_event_generator,
     handle_streaming,
 )
-from llm_rosetta.gateway.stream_trace import (
+from codex_rosetta.gateway.stream_trace import (
     DEFAULT_TRACE_PATH,
     StreamTraceConfig,
     StreamTraceLogger,
     StreamTraceState,
 )
-from llm_rosetta.gateway.transport._base import UpstreamStream
-from llm_rosetta.routing import ResolvedRoute
+from codex_rosetta.gateway.transport._base import UpstreamStream
+from codex_rosetta.routing import ResolvedRoute
 
 
 class _FakeStream:

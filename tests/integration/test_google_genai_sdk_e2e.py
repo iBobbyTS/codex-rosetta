@@ -12,7 +12,7 @@ Requires:
 - Network access (uses proxychains if direct access fails)
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     proxychains -q python tests/integration/test_google_genai_sdk_e2e.py
 """
 
@@ -35,8 +35,8 @@ from examples.tools import (
     multimodal_tools_spec,
     tools_spec,
 )
-from llm_rosetta.converters.google_genai import GoogleGenAIConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.google_genai import GoogleGenAIConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     Message,
     ToolCallPart,

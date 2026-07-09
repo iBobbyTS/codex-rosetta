@@ -112,7 +112,7 @@ The core request/response shape, item model, streaming event types, and tool inv
 
 ---
 
-## 3. Recommendation for llm-rosetta
+## 3. Recommendation for codex-rosetta
 
 ### OpenAPI Spec Strategy
 
@@ -130,7 +130,7 @@ Rather than building a completely separate Open Responses converter, **extend th
 2. **Slug-prefixed extension items**: passthrough or strip `implementor:type_name` items gracefully
 3. **`allowed_tools` field**: map to/from IR (new field on `IRRequest.generation_config` or similar)
 4. **`OpenResponses-Version` header**: handle in gateway header management
-5. **Stateless default**: already compatible (llm-rosetta doesn't assume server-side state)
+5. **Stateless default**: already compatible (codex-rosetta doesn't assume server-side state)
 
 This could be exposed as:
 - A flag: `output_format="open_responses"` on the converter
@@ -207,9 +207,9 @@ Ollama is also listed as an **Open Responses early adopter** — the `/v1/respon
 - Defaults `stream: true` in native API
 - Supports `think` parameter and `reasoning_effort` for reasoning models
 
-### Relevance to llm-rosetta
+### Relevance to codex-rosetta
 
-Ollama's OpenAI-compatible endpoints work with llm-rosetta's `openai_chat` converter, and its `/v1/responses` works with the `openai_responses` converter. The `/v1/messages` endpoint works with the `anthropic` converter. **All three of llm-rosetta's major converters are already compatible with Ollama out of the box.** A dedicated Ollama native converter would only be needed for the `/api/` endpoints.
+Ollama's OpenAI-compatible endpoints work with codex-rosetta's `openai_chat` converter, and its `/v1/responses` works with the `openai_responses` converter. The `/v1/messages` endpoint works with the `anthropic` converter. **All three of codex-rosetta's major converters are already compatible with Ollama out of the box.** A dedicated Ollama native converter would only be needed for the `/api/` endpoints.
 
 ---
 
@@ -283,9 +283,9 @@ Note: TGI itself does NOT implement Responses API — only the cloud Inference P
 - HF auth via `hf_XXX` Bearer token
 - Inference Providers uses HF Hub model IDs (e.g., `Qwen/Qwen2.5-VL-7B-Instruct`)
 
-### Relevance to llm-rosetta
+### Relevance to codex-rosetta
 
-TGI's OpenAI-compatible endpoints work with llm-rosetta's `openai_chat` converter. The Inference Providers router's Responses API endpoint works with the `openai_responses` converter. Native TGI format (`/generate`) is simpler (just `inputs` string + `parameters` dict) and would only need a converter if targeting the native API directly.
+TGI's OpenAI-compatible endpoints work with codex-rosetta's `openai_chat` converter. The Inference Providers router's Responses API endpoint works with the `openai_responses` converter. Native TGI format (`/generate`) is simpler (just `inputs` string + `parameters` dict) and would only need a converter if targeting the native API directly.
 
 ---
 
@@ -303,11 +303,11 @@ TGI's OpenAI-compatible endpoints work with llm-rosetta's `openai_chat` converte
 - **CI/CD**: Yes (type checking, docs deployment, PyPI publishing as `llmir`)
 - **Tests**: None visible
 - **License**: MIT
-- **Key difference**: Users must construct messages in the llmir IR type system, then serialize out. Unlike llm-rosetta which converts between native provider formats bidirectionally
+- **Key difference**: Users must construct messages in the llmir IR type system, then serialize out. Unlike codex-rosetta which converts between native provider formats bidirectionally
 
-### bitlab-tech/llm-rosetta
+### bitlab-tech/codex-rosetta
 
-- **URL**: https://github.com/bitlab-tech/llm-rosetta
+- **URL**: https://github.com/bitlab-tech/codex-rosetta
 - **What it does**: Strategy-pattern based translation from OpenAI format to other providers
 - **Language**: TypeScript (uses `@huggingface/transformers` for chat templates)
 - **Direction**: **Unidirectional** — OpenAI → provider format only
@@ -315,13 +315,13 @@ TGI's OpenAI-compatible endpoints work with llm-rosetta's `openai_chat` converte
 - **Stars**: 0, **Forks**: 0
 - **Created**: 2025-10-08, **Last commit**: 2025-10-20 (**dormant — 5 months inactive**)
 - **Tests**: None (`"test": "echo \"Error: no test specified\" && exit 1"`)
-- **Published on npm**: `llm-rosetta` (name collision in the npm ecosystem)
+- **Published on npm**: `codex-rosetta` (name collision in the npm ecosystem)
 - **License**: MIT
 - **Key difference**: TypeScript (different ecosystem entirely), unidirectional, appears abandoned
 
 ### Comparison Summary
 
-| Dimension | Oaklight/llm-rosetta | mathisxy/llmir | bitlab-tech/llm-rosetta |
+| Dimension | Oaklight/codex-rosetta | mathisxy/llmir | bitlab-tech/codex-rosetta |
 |---|---|---|---|
 | **Language** | Python | Python | TypeScript |
 | **Direction** | Bidirectional (any ↔ any via IR) | IR → provider only | OpenAI → provider only |
@@ -330,6 +330,6 @@ TGI's OpenAI-compatible endpoints work with llm-rosetta's `openai_chat` converte
 | **Tests** | Comprehensive | None | None |
 | **Gateway** | Yes | No | No |
 | **Activity** | Very active | Active | Dormant |
-| **Package** | `llm-rosetta` on PyPI | `llmir` on PyPI | `llm-rosetta` on **npm** |
+| **Package** | `codex-rosetta` on PyPI | `llmir` on PyPI | `codex-rosetta` on **npm** |
 
-Neither poses a competitive threat. Oaklight/llm-rosetta is the only project with bidirectional conversion, streaming, a gateway, and comprehensive tests.
+Neither poses a competitive threat. Oaklight/codex-rosetta is the only project with bidirectional conversion, streaming, a gateway, and comprehensive tests.

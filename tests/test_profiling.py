@@ -2,7 +2,7 @@
 
 import pytest
 
-from llm_rosetta.profiling import DeepProfiler
+from codex_rosetta.profiling import DeepProfiler
 
 
 class TestDeepProfilerWithoutPyinstrument:

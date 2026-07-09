@@ -8,9 +8,9 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
-from llm_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
-from llm_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
-from llm_rosetta.routing import ResolvedRoute
+from codex_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
+from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
+from codex_rosetta.routing import ResolvedRoute
 
 
 def _responses_route(*, tool_adaptation: dict[str, Any] | None = None) -> ResolvedRoute:

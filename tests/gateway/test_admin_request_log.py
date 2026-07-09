@@ -1,6 +1,6 @@
 """Tests for the admin panel RequestLog."""
 
-from llm_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
+from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
 
 
 class TestRequestLogEntry:

@@ -2,12 +2,12 @@
 Tests for the shared tool content conversion helpers.
 """
 
-from llm_rosetta.converters.base.helpers.tool_content import (
+from codex_rosetta.converters.base.helpers.tool_content import (
     convert_content_blocks_to_ir,
     convert_ir_content_blocks_to_p,
 )
-from llm_rosetta.converters.anthropic.content_ops import AnthropicContentOps
-from llm_rosetta.converters.openai_responses.content_ops import (
+from codex_rosetta.converters.anthropic.content_ops import AnthropicContentOps
+from codex_rosetta.converters.openai_responses.content_ops import (
     OpenAIResponsesContentOps,
 )
 

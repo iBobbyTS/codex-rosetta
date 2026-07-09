@@ -1,6 +1,6 @@
 """Tests for the observability RequestLog (standalone, no gateway)."""
 
-from llm_rosetta.observability import RequestLog, RequestLogEntry
+from codex_rosetta.observability import RequestLog, RequestLogEntry
 
 
 class TestRequestLogEntry:

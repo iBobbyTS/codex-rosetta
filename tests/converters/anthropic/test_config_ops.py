@@ -6,8 +6,8 @@ from typing import cast
 
 import pytest
 
-from llm_rosetta.converters.anthropic.config_ops import AnthropicConfigOps
-from llm_rosetta.types.ir import GenerationConfig, ReasoningConfig
+from codex_rosetta.converters.anthropic.config_ops import AnthropicConfigOps
+from codex_rosetta.types.ir import GenerationConfig, ReasoningConfig
 
 
 class TestAnthropicConfigOps:

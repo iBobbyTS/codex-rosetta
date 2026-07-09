@@ -6,9 +6,9 @@ import asyncio
 
 import pytest
 
-from llm_rosetta._vendor.httpserver import Request
-from llm_rosetta.gateway.app import create_app
-from llm_rosetta.gateway.config import GatewayConfig
+from codex_rosetta._vendor.httpserver import Request
+from codex_rosetta.gateway.app import create_app
+from codex_rosetta.gateway.config import GatewayConfig
 
 
 def _make_app():

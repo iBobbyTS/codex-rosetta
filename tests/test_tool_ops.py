@@ -2,8 +2,8 @@
 
 import pytest
 
-from llm_rosetta import tool_ops
-from llm_rosetta.types.ir.tools import ToolDefinition
+from codex_rosetta import tool_ops
+from codex_rosetta.types.ir.tools import ToolDefinition
 
 # Shared fixture: a minimal IR tool definition
 IR_TOOL: ToolDefinition = {

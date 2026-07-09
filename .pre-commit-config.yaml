@@ -21,6 +21,6 @@ repos:
   #   rev: v5.1.0
   #   hooks:
   #     - id: complexipy
-  #       files: ^src/llm_rosetta/
-  #       exclude: ^src/llm_rosetta/_vendor/
+  #       files: ^src/codex_rosetta/
+  #       exclude: ^src/codex_rosetta/_vendor/
   #       args: [-mx, "25"]

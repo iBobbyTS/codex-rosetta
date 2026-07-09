@@ -9,20 +9,20 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from llm_rosetta.gateway.proxy import (
+from codex_rosetta.gateway.proxy import (
     ProviderMetadataStore,
     handle_non_streaming,
 )
-from llm_rosetta.auto_detect import ProviderType
-from llm_rosetta.pipeline import ConversionPipeline
-from llm_rosetta.routing import ResolvedRoute
-from llm_rosetta.gateway.transport._base import UpstreamResponse
-from llm_rosetta.shims.provider_shim import (
+from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.pipeline import ConversionPipeline
+from codex_rosetta.routing import ResolvedRoute
+from codex_rosetta.gateway.transport._base import UpstreamResponse
+from codex_rosetta.shims.provider_shim import (
     ProviderShim,
     _reset_registry,
     register_shim,
 )
-from llm_rosetta.shims.transforms import rename_field, strip_fields
+from codex_rosetta.shims.transforms import rename_field, strip_fields
 
 
 # ---------------------------------------------------------------------------

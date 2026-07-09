@@ -1,6 +1,6 @@
 """Tests for the admin panel MetricsCollector."""
 
-from llm_rosetta.gateway.admin.metrics import MetricsCollector, _RollingWindow
+from codex_rosetta.gateway.admin.metrics import MetricsCollector, _RollingWindow
 
 
 class TestRollingWindow:

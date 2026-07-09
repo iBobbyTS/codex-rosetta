@@ -316,7 +316,7 @@ graph LR
 ## 4. 文件结构
 
 ```
-src/llm-rosetta/converters/
+src/codex-rosetta/converters/
 ├── base/
 │   ├── __init__.py
 │   ├── converter.py      # BaseConverter（显式接口）

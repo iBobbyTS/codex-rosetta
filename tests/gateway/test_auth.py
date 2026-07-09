@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from llm_rosetta.gateway.auth import (
+from codex_rosetta.gateway.auth import (
     AuthState,
     api_key_label_var,
     create_auth_hook,

@@ -14,7 +14,7 @@ full-context mode:
   prompt caching could reduce repeated processing cost, but it did not reduce
   request payload size or context-window usage.
 
-This means LLM-Rosetta did not need to reconstruct conversation state for these
+This means Codex-Rosetta did not need to reconstruct conversation state for these
 requests. For `openai_responses -> openai_responses`, it passed the request and
 raw SSE stream through. For `openai_responses -> openai_chat`, it converted the
 full current Responses `input` payload into Chat Completions `messages`.
@@ -23,9 +23,9 @@ full current Responses `input` payload into Chat Completions `messages`.
 
 The main local evidence came from:
 
-- `/Users/ibobby/.config/llm-rosetta-gateway/log.jsonl`
-- `/Users/ibobby/.config/llm-rosetta-gateway/chat-responses.jsonl`
-- `/Users/ibobby/.config/llm-rosetta-gateway/responses-responses.jsonl`
+- `/Users/ibobby/.config/codex-rosetta-gateway/log.jsonl`
+- `/Users/ibobby/.config/codex-rosetta-gateway/chat-responses.jsonl`
+- `/Users/ibobby/.config/codex-rosetta-gateway/responses-responses.jsonl`
 - `/Users/ibobby/.codex/sessions/2026/07/06/rollout-2026-07-06T19-46-23-019f3a41-42ec-7301-95c0-5931e634b691.jsonl`
 - `/Users/ibobby/.codex/sessions/2026/07/06/rollout-2026-07-06T19-48-45-019f3a43-6d55-74b1-a13b-6d5c1f430284.jsonl`
 
@@ -57,9 +57,9 @@ conversation, including:
 That matches the observed token usage: later requests were not short deltas,
 but full-context requests rebuilt from the local Codex transcript.
 
-## Implications For LLM-Rosetta
+## Implications For Codex-Rosetta
 
-LLM-Rosetta should not assume that Responses clients will use server-side
+Codex-Rosetta should not assume that Responses clients will use server-side
 Responses state. A Responses request with `previous_response_id: null` and
 `store: false` can still be a valid full-context request.
 
@@ -74,7 +74,7 @@ For Responses-to-Chat conversion:
 - Conversion can only preserve conversation context that is already present in
   the current Responses request body.
 - If a future client sends only incremental `input` plus
-  `previous_response_id`, LLM-Rosetta cannot convert that to Chat Completions
+  `previous_response_id`, Codex-Rosetta cannot convert that to Chat Completions
   correctly unless it also maintains or can retrieve the missing conversation
   history.
 - Supporting that mode would require an explicit conversation-state store keyed

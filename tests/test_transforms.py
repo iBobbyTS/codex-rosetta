@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
-from llm_rosetta.shims.provider_shim import (
+from codex_rosetta.shims.provider_shim import (
     ProviderShim,
     _reset_registry,
     get_shim,
     register_shim,
 )
-from llm_rosetta.shims.transforms import (
+from codex_rosetta.shims.transforms import (
     apply_transforms,
     default_message_field,
     rename_field,
@@ -202,7 +202,7 @@ class TestShimWithTransforms:
 class TestBuiltinTransforms:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 
@@ -343,7 +343,7 @@ class TestBuiltinTransforms:
 class TestConvertWithTransforms:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 
@@ -356,7 +356,7 @@ class TestConvertWithTransforms:
         )
         register_shim(custom)
 
-        from llm_rosetta import convert
+        from codex_rosetta import convert
 
         body = {
             "custom_field": "gpt-4",
@@ -374,7 +374,7 @@ class TestConvertWithTransforms:
         )
         register_shim(custom)
 
-        from llm_rosetta import convert
+        from codex_rosetta import convert
 
         body = {
             "model": "test",
@@ -385,7 +385,7 @@ class TestConvertWithTransforms:
 
     def test_convert_without_shim_still_works(self):
         """Base type conversion without shim should work as before."""
-        from llm_rosetta import convert
+        from codex_rosetta import convert
 
         body = {
             "model": "gpt-4",
@@ -404,7 +404,7 @@ class TestConvertWithTransforms:
         )
         register_shim(custom)
 
-        from llm_rosetta import convert
+        from codex_rosetta import convert
 
         body = {
             "model": "test",
@@ -561,7 +561,7 @@ class TestStripFieldsForModel:
 class TestArgoOpenaiChatTransforms:
     @pytest.fixture(autouse=True)
     def _load_builtins(self):
-        from llm_rosetta.shims.providers import load_providers
+        from codex_rosetta.shims.providers import load_providers
 
         load_providers()
 

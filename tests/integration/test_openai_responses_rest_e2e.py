@@ -12,7 +12,7 @@ Requires:
 - Network access
 
 Usage:
-    conda activate llm_rosetta
+    conda activate codex_rosetta
     python tests/integration/test_openai_responses_rest_e2e.py
 """
 
@@ -29,8 +29,8 @@ import requests
 from typing import cast
 
 from examples.tools import available_tools, tools_spec
-from llm_rosetta.converters.openai_responses import OpenAIResponsesConverter
-from llm_rosetta.types.ir import (
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
+from codex_rosetta.types.ir import (
     IRRequest,
     Message,
     ToolCallPart,

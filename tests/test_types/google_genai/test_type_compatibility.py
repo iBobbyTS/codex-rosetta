@@ -1,4 +1,4 @@
-"""Test compatibility between LLM-Rosetta Google GenAI type replicas and Google SDK types.
+"""Test compatibility between Codex-Rosetta Google GenAI type replicas and Google SDK types.
 
 This module tests:
 - All TypedDict replicas can be correctly instantiated
@@ -13,7 +13,7 @@ from typing import Any, cast
 
 import pytest
 
-from llm_rosetta.types.google import (
+from codex_rosetta.types.google import (
     Blob,
     Candidate,
     Citation,
@@ -626,7 +626,7 @@ class TestGoogleInit:
 
     def test_all_exports(self):
         """Test that all expected types are exported from __init__."""
-        from llm_rosetta.types.google import __all__
+        from codex_rosetta.types.google import __all__
 
         expected = [
             # Content types

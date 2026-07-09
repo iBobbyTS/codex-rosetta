@@ -5,11 +5,11 @@ Covers MiniMax, OpenRouter reasoning field normalization transforms.
 
 from __future__ import annotations
 
-from llm_rosetta.shims.providers.minimax.openai_chat.transforms import (
+from codex_rosetta.shims.providers.minimax.openai_chat.transforms import (
     _inject_reasoning_split,
     _parse_think_tags,
 )
-from llm_rosetta.shims.providers.openrouter.openai_chat.transforms import (
+from codex_rosetta.shims.providers.openrouter.openai_chat.transforms import (
     _rename_reasoning_field,
 )
 
@@ -172,7 +172,7 @@ class TestOpenAIChatReasoningMetadataRoundTrip:
     """Test reasoning_details and encrypted_content survive IR round-trip."""
 
     def test_reasoning_details_preserved(self):
-        from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+        from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
         conv = OpenAIChatConverter()
         resp = {
@@ -209,7 +209,7 @@ class TestOpenAIChatReasoningMetadataRoundTrip:
         assert msg["reasoning_details"][0]["signature"] == "sig_abc123"
 
     def test_encrypted_content_preserved(self):
-        from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+        from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
         conv = OpenAIChatConverter()
         resp = {
@@ -237,7 +237,7 @@ class TestOpenAIChatReasoningMetadataRoundTrip:
         assert msg["encrypted_content"] == "gAAAAABq_encrypted_data_here"
 
     def test_no_metadata_when_absent(self):
-        from llm_rosetta.converters.openai_chat import OpenAIChatConverter
+        from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 
         conv = OpenAIChatConverter()
         resp = {
