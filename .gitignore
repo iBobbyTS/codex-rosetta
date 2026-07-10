@@ -210,10 +210,6 @@ __marimo__/
 .vscode/
 .kilocode/
 
-# Worktrees and local directories
-docs_en/
-docs_zh/
-
 # AI coding agents
 .claude/
 .opencode/

@@ -59,9 +59,9 @@ dev = [
 all = ["codex-rosetta[openai,anthropic,google,gateway,profiling,dev]"]
 
 [project.urls]
-Documentation = "https://codex-rosetta.readthedocs.io"
-Repository = "https://github.com/Oaklight/codex-rosetta"
-Issues = "https://github.com/Oaklight/codex-rosetta/issues"
+Documentation = "https://github.com/iBobbyTS/codex-rosetta/tree/master/docs"
+Repository = "https://github.com/iBobbyTS/codex-rosetta"
+Issues = "https://github.com/iBobbyTS/codex-rosetta/issues"
 
 [project.scripts]
 codex-rosetta-gateway = "codex_rosetta.gateway:main"
@@ -71,7 +71,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "codex_rosetta" = ["py.typed", "shims/providers/*/provider.yaml", "shims/providers/*/*/provider.yaml"]
-"codex_rosetta.gateway.admin" = ["admin.html"]
+"codex_rosetta.gateway.admin" = ["admin.html", "tool_catalog.json"]
 
 [tool.setuptools.dynamic]
 version = { attr = "codex_rosetta.__version__" }

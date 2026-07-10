@@ -18,6 +18,8 @@ SCHEMA_VERSION = 1
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "openai-codex-src"
 DEFAULT_BASELINE = (
     Path(__file__).resolve().parents[1]
+    / "docs"
+    / "dev"
     / "version-compatibility"
     / "codex-source-contract.json"
 )
@@ -39,23 +41,25 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
 }
 
 HIGH_CONFIDENCE_DESCRIPTIONS = {
-    "apply_patch": "tool 名称、format、syntax 与 grammar SHA-256 一致",
-    "approval_messages_fields": "ApprovalMessages 字段名、Rust 类型与属性一致",
-    "codex_header_constants": "已提取的 Codex HTTP header 名称和值一致",
-    "endpoints": "已提取的 endpoint 常量一致",
-    "model_messages_fields": "ModelMessages 字段名、Rust 类型与属性一致",
+    "apply_patch": "tool name, format, syntax, and grammar SHA-256 match",
+    "approval_messages_fields": "ApprovalMessages field names, Rust types, and attributes match",
+    "codex_header_constants": "extracted Codex HTTP header names and values match",
+    "endpoints": "extracted endpoint constants match",
+    "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "response_item_additional_tools_fields": (
-        "ResponseItem::AdditionalTools 字段名、Rust 类型与属性一致"
+        "ResponseItem::AdditionalTools field names, Rust types, and attributes match"
     ),
     "responses_lite_model_capabilities": (
-        "use_responses_lite 模型列表与关键协议能力快照一致"
+        "use_responses_lite model list and key protocol capability snapshot match"
     ),
-    "responses_metadata_keys": "已提取的 turn metadata key 名称和值一致",
-    "sse_event_names": "SSE parser 处理的 event 名称集合一致",
-    "tool_spec_web_search_fields": ("ToolSpec::WebSearch 字段名、Rust 类型与属性一致"),
-    "tool_spec_wire_types": "tool spec 的 serde wire type 映射一致",
-    "transport_constants": "已提取的 transport 常量一致",
-    "websocket_client_metadata_keys": "WebSocket client metadata key 一致",
+    "responses_metadata_keys": "extracted turn metadata key names and values match",
+    "sse_event_names": "SSE parser event name set matches",
+    "tool_spec_web_search_fields": (
+        "ToolSpec::WebSearch field names, Rust types, and attributes match"
+    ),
+    "tool_spec_wire_types": "tool spec serde wire type mapping matches",
+    "transport_constants": "extracted transport constants match",
+    "websocket_client_metadata_keys": "WebSocket client metadata keys match",
 }
 
 RESPONSES_LITE_MODEL_CAPABILITY_KEYS = (
@@ -574,7 +578,9 @@ def classify_snapshots(
     if baseline_commit == current_commit:
         high_confidence.append(f"codex_source_commit: {current_commit}")
     else:
-        ignored = "（已忽略，不影响退出码）" if not check_source_commit else ""
+        ignored = (
+            " (ignored; does not affect exit status)" if not check_source_commit else ""
+        )
         changed.append(
             "codex_source_commit: "
             f"{baseline_commit or '<missing>'} -> {current_commit or '<missing>'}{ignored}"
@@ -585,7 +591,7 @@ def classify_snapshots(
     if not isinstance(baseline_contract, dict) or not isinstance(
         current_contract, dict
     ):
-        changed.append("contract: baseline 或 current 不是对象")
+        changed.append("contract: baseline or current is not an object")
         return {
             "high_confidence_unchanged": high_confidence,
             "possibly_unchanged": possibly_unchanged,
@@ -595,21 +601,24 @@ def classify_snapshots(
     for key in sorted(baseline_contract.keys() | current_contract.keys()):
         path = f"contract.{key}"
         if key not in baseline_contract:
-            changed.append(f"{path}: 新增检查项（见详细 diff）")
+            changed.append(f"{path}: new contract check (see detailed diff)")
             continue
         if key not in current_contract:
-            changed.append(f"{path}: 当前源码未提取到该检查项（见详细 diff）")
+            changed.append(
+                f"{path}: current source did not produce this contract check "
+                "(see detailed diff)"
+            )
             continue
         if baseline_contract[key] != current_contract[key]:
-            changed.append(f"{path}: 已提取值发生变化（见详细 diff）")
+            changed.append(f"{path}: extracted value changed (see detailed diff)")
             continue
         if key in HIGH_CONFIDENCE_CONTRACT_KEYS:
             description = HIGH_CONFIDENCE_DESCRIPTIONS[key]
             high_confidence.append(f"{path}: {description}")
         else:
             possibly_unchanged.append(
-                f"{path}: 已提取的名称/成员集合一致；"
-                "类型、默认值或 serde 语义尚未完整覆盖"
+                f"{path}: extracted name/member set matches; "
+                "types, defaults, or serde semantics are not yet fully covered"
             )
 
     return {
@@ -622,18 +631,18 @@ def classify_snapshots(
 def render_classification(classification: dict[str, list[str]]) -> str:
     """Render a stable three-section compatibility report."""
     sections = (
-        ("高置信度没有变化的", "high_confidence_unchanged"),
-        ("可能没有变化的", "possibly_unchanged"),
-        ("有变化的", "changed"),
+        ("High-confidence unchanged", "high_confidence_unchanged"),
+        ("Possibly unchanged", "possibly_unchanged"),
+        ("Changed", "changed"),
     )
     lines: list[str] = []
     for title, key in sections:
-        lines.append(f"{title}：")
+        lines.append(f"{title}:")
         entries = classification.get(key, [])
         if entries:
             lines.extend(f"  - {entry}" for entry in entries)
         else:
-            lines.append("  - 无")
+            lines.append("  - None")
     return "\n".join(lines)
 
 
@@ -703,11 +712,11 @@ def main() -> int:
             check_source_commit=not args.ignore_source_commit,
         )
         if diff:
-            print("\n详细 diff：", file=sys.stderr)
+            print("\nDetailed diff:", file=sys.stderr)
             sys.stderr.write(diff)
             return 1
         print(
-            "结论：未发现会阻断兼容性检查的变化 "
+            "Conclusion: no changes block the compatibility check "
             f"({current['codex_source_commit'][:12]})."
         )
         return 0

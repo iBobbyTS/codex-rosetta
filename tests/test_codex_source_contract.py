@@ -7,7 +7,9 @@ import runpy
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASELINE_PATH = REPO_ROOT / "version-compatibility" / "codex-source-contract.json"
+BASELINE_PATH = (
+    REPO_ROOT / "docs" / "dev" / "version-compatibility" / "codex-source-contract.json"
+)
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_codex_compatibility.py"
 SCRIPT = runpy.run_path(str(SCRIPT_PATH))
 
@@ -210,9 +212,9 @@ def test_snapshot_classification_always_uses_three_result_categories():
         for item in classification["possibly_unchanged"]
     )
     assert classification["changed"] == []
-    assert "高置信度没有变化的：" in rendered
-    assert "可能没有变化的：" in rendered
-    assert "有变化的：\n  - 无" in rendered
+    assert "High-confidence unchanged:" in rendered
+    assert "Possibly unchanged:" in rendered
+    assert "Changed:\n  - None" in rendered
 
 
 def test_new_complete_value_contracts_are_high_confidence():
@@ -267,6 +269,6 @@ def test_snapshot_classification_reports_commit_and_contract_changes():
     assert classification["high_confidence_unchanged"] == []
     assert classification["possibly_unchanged"] == []
     assert classification["changed"] == [
-        "codex_source_commit: old -> new（已忽略，不影响退出码）",
-        "contract.endpoints: 已提取值发生变化（见详细 diff）",
+        "codex_source_commit: old -> new (ignored; does not affect exit status)",
+        "contract.endpoints: extracted value changed (see detailed diff)",
     ]

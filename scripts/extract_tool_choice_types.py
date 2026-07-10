@@ -1,8 +1,8 @@
-"""
-提取各个LLM提供商的工具选择类型定义
+"""Extract tool-choice type definitions from supported LLM providers.
 
-此脚本用于提取OpenAI、Anthropic和Google GenAI的工具选择相关类型定义，
-包括ChatCompletionToolChoiceOptionParam、ToolChoiceParam和ToolConfig。
+This script extracts the tool-choice types used by OpenAI, Anthropic, and
+Google GenAI, including ChatCompletionToolChoiceOptionParam, ToolChoiceParam,
+and ToolConfig.
 """
 
 import inspect
@@ -11,7 +11,7 @@ import os
 import sys
 from typing import Any, get_type_hints
 
-# 添加conda环境路径
+# Add the conda environment path.
 sys.path.append(
     os.path.expanduser("~/miniforge3/envs/l_t_c/lib/python3.10/site-packages")
 )
@@ -21,7 +21,7 @@ from google import genai
 
 
 def get_class_info(cls: type) -> dict[str, Any]:
-    """获取类的详细信息，包括字段、类型注解和文档字符串"""
+    """Return class details, including fields, annotations, and docstrings."""
     result = {
         "name": getattr(cls, "__name__", str(cls)),
         "module": getattr(cls, "__module__", "unknown"),
@@ -29,7 +29,7 @@ def get_class_info(cls: type) -> dict[str, Any]:
         "annotations": {},
     }
 
-    # 尝试获取基类
+    # Try to inspect base classes.
     try:
         if hasattr(cls, "__bases__"):
             result["bases"] = [
@@ -41,7 +41,7 @@ def get_class_info(cls: type) -> dict[str, Any]:
     except Exception as e:
         result["bases_error"] = str(e)
 
-    # 获取类型注解
+    # Collect type annotations.
     try:
         type_hints = get_type_hints(cls)
         for name, type_hint in type_hints.items():
@@ -49,7 +49,7 @@ def get_class_info(cls: type) -> dict[str, Any]:
     except Exception as e:
         result["annotations_error"] = str(e)
 
-    # 尝试获取__dict__属性
+    # Try to inspect the __dict__ attribute.
     try:
         if hasattr(cls, "__dict__"):
             attrs = {}
@@ -65,27 +65,27 @@ def get_class_info(cls: type) -> dict[str, Any]:
 
 
 def find_classes_by_name(module: Any, name_patterns: list[str]) -> list[type]:
-    """在模块中查找名称匹配指定模式的类"""
+    """Find classes whose names match any requested pattern in a module."""
     classes = []
     visited = set()
 
-    # 递归查找模块中的所有类
+    # Recursively search for all classes in the module.
     def search_module(obj, path=""):
-        # 避免循环引用
+        # Avoid reference cycles.
         obj_id = id(obj)
         if obj_id in visited:
             return
         visited.add(obj_id)
 
         if inspect.ismodule(obj):
-            # 使用list复制字典的键值对，避免在迭代过程中修改字典
+            # Copy the dictionary items to avoid mutation during iteration.
             try:
                 for key, value in list(obj.__dict__.items()):
-                    if not key.startswith("_"):  # 跳过私有属性
+                    if not key.startswith("_"):  # Skip private attributes.
                         try:
                             search_module(value, f"{path}.{key}" if path else key)
                         except Exception:
-                            # 忽略访问某些属性时可能出现的错误
+                            # Ignore errors raised while accessing some attributes.
                             pass
             except Exception:
                 pass
@@ -98,14 +98,14 @@ def find_classes_by_name(module: Any, name_patterns: list[str]) -> list[type]:
     try:
         search_module(module)
     except Exception as e:
-        print(f"警告：搜索模块时出错: {e}")
+        print(f"Warning: error while searching module: {e}")
 
     return classes
 
 
 def extract_openai_tool_choice_types() -> list[dict[str, Any]]:
-    """提取OpenAI的工具选择相关类型"""
-    # 只提取特定的类型
+    """Extract OpenAI tool-choice types."""
+    # Extract only the selected types.
     target_classes = [
         "ChatCompletionToolChoiceOptionParam",
         "ChatCompletionToolChoiceParam",
@@ -114,7 +114,7 @@ def extract_openai_tool_choice_types() -> list[dict[str, Any]]:
     ]
     classes = []
 
-    # 直接在openai.types模块中查找
+    # Look directly in the openai.types module.
     try:
         import openai.types.chat
 
@@ -122,9 +122,9 @@ def extract_openai_tool_choice_types() -> list[dict[str, Any]]:
             if hasattr(openai.types.chat, name):
                 classes.append(getattr(openai.types.chat, name))
     except (ImportError, AttributeError) as e:
-        print(f"警告：无法从openai.types.chat导入类: {e}")
+        print(f"Warning: could not import classes from openai.types.chat: {e}")
 
-    # 如果没有找到，则在整个openai包中搜索
+    # Search the full OpenAI package if no classes were found directly.
     if not classes:
         patterns = ["ToolChoice", "Tool"]
         classes = find_classes_by_name(openai, patterns)
@@ -133,20 +133,20 @@ def extract_openai_tool_choice_types() -> list[dict[str, Any]]:
 
 
 def extract_anthropic_tool_choice_types() -> list[dict[str, Any]]:
-    """提取Anthropic的工具选择相关类型"""
-    # 只提取特定的类型
+    """Extract Anthropic tool-choice types."""
+    # Extract only the selected types.
     target_classes = ["ToolChoiceParam", "ToolParam"]
     classes = []
 
-    # 直接在anthropic.types模块中查找
+    # Look directly in the anthropic.types module.
     try:
         for name in target_classes:
             if hasattr(anthropic, name):
                 classes.append(getattr(anthropic, name))
     except AttributeError as e:
-        print(f"警告：无法从anthropic导入类: {e}")
+        print(f"Warning: could not import classes from anthropic: {e}")
 
-    # 如果没有找到，则在整个anthropic包中搜索
+    # Search the full Anthropic package if no classes were found directly.
     if not classes:
         patterns = ["ToolChoice", "Tool"]
         classes = find_classes_by_name(anthropic, patterns)
@@ -155,20 +155,20 @@ def extract_anthropic_tool_choice_types() -> list[dict[str, Any]]:
 
 
 def extract_google_tool_config_types() -> list[dict[str, Any]]:
-    """提取Google GenAI的工具配置相关类型"""
-    # 只提取特定的类型
+    """Extract Google GenAI tool-configuration types."""
+    # Extract only the selected types.
     target_classes = ["ToolConfig", "Tool", "FunctionDeclaration"]
     classes = []
 
-    # 直接在genai.types模块中查找
+    # Look directly in the genai.types module.
     try:
         for name in target_classes:
             if hasattr(genai.types, name):
                 classes.append(getattr(genai.types, name))
     except AttributeError as e:
-        print(f"警告：无法从genai.types导入类: {e}")
+        print(f"Warning: could not import classes from genai.types: {e}")
 
-    # 如果没有找到，则在整个genai包中搜索
+    # Search the full Google GenAI package if no classes were found directly.
     if not classes:
         patterns = ["ToolConfig", "Tool"]
         classes = find_classes_by_name(genai, patterns)
@@ -177,33 +177,35 @@ def extract_google_tool_config_types() -> list[dict[str, Any]]:
 
 
 def main():
-    """主函数"""
-    # 提取各提供商的工具选择类型
-    print("正在提取OpenAI工具选择类型...")
+    """Extract and save tool-choice types for all supported providers."""
+    # Extract each provider's tool-choice types.
+    print("Extracting OpenAI tool-choice types...")
     openai_types = extract_openai_tool_choice_types()
-    print(f"找到 {len(openai_types)} 个OpenAI相关类")
+    print(f"Found {len(openai_types)} OpenAI-related classes")
 
-    print("正在提取Anthropic工具选择类型...")
+    print("Extracting Anthropic tool-choice types...")
     anthropic_types = extract_anthropic_tool_choice_types()
-    print(f"找到 {len(anthropic_types)} 个Anthropic相关类")
+    print(f"Found {len(anthropic_types)} Anthropic-related classes")
 
-    print("正在提取Google工具选择类型...")
+    print("Extracting Google tool-choice types...")
     google_types = extract_google_tool_config_types()
-    print(f"找到 {len(google_types)} 个Google相关类")
+    print(f"Found {len(google_types)} Google-related classes")
 
-    # 合并结果
+    # Combine the results.
     result = {
         "openai": openai_types,
         "anthropic": anthropic_types,
         "google": google_types,
     }
 
-    # 保存为JSON文件
-    output_path = "docs/provider_messages_typing_schemas/tool_choice_types_info.json"
+    # Save the result as JSON.
+    output_dir = "docs/dev/sdk_ir/provider_messages_typing_schemas"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, "tool_choice_types_info.json")
     with open(output_path, "w") as f:
         json.dump(result, f, indent=2)
 
-    print(f"已将工具选择类型定义保存到 {output_path}")
+    print(f"Saved tool-choice type definitions to {output_path}")
 
 
 if __name__ == "__main__":

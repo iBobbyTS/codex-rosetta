@@ -14,3 +14,6 @@ package metadata normalizes it to the PEP 440 equivalent `.postN`.
 ## Current Compatibility
 
 Codex-Rosetta `0.144.0.r0` is compatible with Codex CLI `0.144.0`.
+
+See the [developer compatibility record](../dev/version-compatibility/README.md)
+for the reviewed Codex source commit, contract checks, and upgrade procedure.

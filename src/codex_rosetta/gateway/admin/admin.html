@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" href="data:,">
 <title>codex-rosetta Gateway — Admin</title>
 <style>
 :root {
@@ -84,7 +85,7 @@ a { color: var(--accent); text-decoration: none; }
 /* Navigation */
 .admin-nav {
   display: flex; gap: 0; border-bottom: 1px solid var(--border);
-  padding: 0 24px; align-items: center;
+  padding: 0 24px; align-items: center; overflow-x: auto;
 }
 .nav-link {
   padding: 12px 20px; cursor: pointer; font-size: 14px; color: var(--text-dim);
@@ -428,6 +429,40 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .fetch-caps-row > label:first-child { font-size:13px;font-weight:500;white-space:nowrap; }
 .fetch-caps-row label { font-size:13px;cursor:pointer;display:flex;align-items:center;gap:4px; }
 
+/* Read-only tools catalog */
+.tools-toolbar { display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:14px 0 16px; }
+.tool-filter-btn { border:1px solid var(--border);background:var(--bg-card);color:var(--text-dim);padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer; }
+.tool-filter-btn:hover { border-color:var(--accent);color:var(--text); }
+.tool-filter-btn.active { background:var(--accent);border-color:var(--accent);color:#fff; }
+.tools-notice { padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);color:var(--text-dim);font-size:12px;line-height:1.5; }
+.tools-meta { color:var(--text-dim);font:12px var(--mono);margin-top:8px; }
+.tool-catalog-groups { display:grid;gap:14px; }
+.tool-group { border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);overflow:hidden; }
+.tool-group-title { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600; }
+.tool-group-count { color:var(--text-dim);font-size:11px;font-weight:400; }
+.tool-list { display:grid; }
+.tool-item { display:grid;grid-template-columns:minmax(180px,1fr) auto minmax(260px,1.4fr);gap:12px;align-items:center;padding:9px 12px;border-bottom:1px solid var(--border); }
+.tool-item:last-child { border-bottom:none; }
+.tool-item.nested { padding-left:34px;background:var(--bg); }
+.tool-name { min-width:0;font:12px var(--mono);overflow-wrap:anywhere; }
+.tool-badges { display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end; }
+.tool-badge { display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:10px;line-height:1.4;color:var(--text-dim);background:var(--bg);white-space:nowrap; }
+.tool-badge.kind { color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--border)); }
+.tool-badge.default { color:var(--green);border-color:color-mix(in srgb,var(--green) 45%,var(--border)); }
+.tool-badge.default.disabled { color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,var(--border)); }
+.tool-policy { display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--text-dim); }
+.tool-policy-label { white-space:nowrap; }
+.tool-route-defaults { width:100%;display:grid;gap:2px;text-align:right;font-size:10px;color:var(--text-dim); }
+.tool-route-default.has-fallback { color:var(--orange); }
+.tool-namespace { border-bottom:1px solid var(--border); }
+.tool-namespace:last-child { border-bottom:none; }
+.tool-namespace-head { display:grid;grid-template-columns:auto minmax(160px,1fr) auto minmax(260px,1.4fr);gap:10px;align-items:center;padding:9px 12px; }
+.tool-namespace-toggle { width:24px;height:24px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);cursor:pointer;line-height:1; }
+.tool-namespace-toggle:hover { border-color:var(--accent); }
+.tool-namespace-children[hidden] { display:none; }
+.tool-catalog-status { padding:28px;text-align:center;color:var(--text-dim);font-size:13px; }
+.tool-catalog-status.error { color:var(--red); }
+
 /* Login overlay */
 .login-overlay {
   position:fixed;inset:0;background:var(--bg);z-index:9999;
@@ -464,6 +499,11 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); }
   .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
   .section-header { flex-wrap: wrap; gap: 8px; }
+  .tool-item { grid-template-columns:1fr;gap:6px; }
+  .tool-badges, .tool-policy { justify-content:flex-start; }
+  .tool-route-defaults { text-align:left; }
+  .tool-namespace-head { grid-template-columns:auto 1fr; }
+  .tool-namespace-head .tool-badges, .tool-namespace-head .tool-policy { grid-column:2;justify-content:flex-start; }
 }
 
 /* DB status footer */
@@ -527,6 +567,7 @@ body { padding-bottom: 26px; }
   <a class="nav-link" href="/admin/models" data-page="models" data-i18n="nav.models">Models</a>
   <a class="nav-link" href="/admin/keys" data-page="keys" data-i18n="nav.keys">API Keys</a>
   <a class="nav-link" href="/admin/web-search" data-page="web-search" data-i18n="nav.webSearch">Web Search</a>
+  <a class="nav-link" href="/admin/tools" data-page="tools" data-i18n="nav.tools">Tools</a>
   <a class="nav-link" href="/admin/dashboard" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</a>
   <a class="nav-link" href="/admin/logs" data-page="logs" data-i18n="nav.logs">Request Log</a>
   <a class="nav-link" href="/admin/gateway-logs" data-page="gateway-logs" data-i18n="nav.gatewayLogs">Gateway Logs</a>
@@ -638,6 +679,30 @@ body { padding-bottom: 26px; }
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- Tools Catalog Page -->
+  <div class="page-panel" id="page-tools">
+    <div class="section">
+      <div class="section-header">
+        <h2 data-i18n="section.tools">Tool Catalog</h2>
+      </div>
+      <div class="tools-notice">
+        <div data-i18n="tools.notice">This static catalog includes conditionally enabled tools and does not describe the tools available to the current request.</div>
+        <div style="margin-top:4px" data-i18n="tools.disabledHint">Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.</div>
+      </div>
+      <div class="tools-meta" id="toolCatalogMeta"></div>
+      <div class="tools-toolbar" role="toolbar" data-i18n-aria-label="tools.filterLabel" aria-label="Filter tool types">
+        <button type="button" class="tool-filter-btn active" data-tool-filter="all" onclick="setToolCatalogFilter('all')" data-i18n="tools.filter.all">All</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="function" onclick="setToolCatalogFilter('function')" data-i18n="tools.filter.function">Function</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="namespace" onclick="setToolCatalogFilter('namespace')" data-i18n="tools.filter.namespace">Namespace</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="hosted" onclick="setToolCatalogFilter('hosted')" data-i18n="tools.filter.hosted">Hosted</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="custom" onclick="setToolCatalogFilter('custom')" data-i18n="tools.filter.custom">Custom</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="custom_injection" onclick="setToolCatalogFilter('custom_injection')" data-i18n="tools.filter.injection">Custom Tool Injection</button>
+      </div>
+      <div class="tool-catalog-status" id="toolCatalogStatus" data-i18n="tools.loading">Loading tool catalog...</div>
+      <div class="tool-catalog-groups" id="toolCatalogGroups" hidden></div>
     </div>
   </div>
 
@@ -771,10 +836,8 @@ body { padding-bottom: 26px; }
       <div style="font-size:15px;font-weight:600;margin-bottom:2px">codex-rosetta</div>
       <div id="settingsVersion" style="font-size:11px;color:var(--text-dim);margin-bottom:8px"></div>
       <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
-        <a href="https://github.com/Oaklight/codex-rosetta" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 20.86c-3.37.73-4.08-1.63-4.08-1.63-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.73.08-.73 1.21.08 1.85 1.24 1.85 1.24 1.08 1.85 2.83 1.32 3.52 1 .1-.78.42-1.32.76-1.62-2.69-.3-5.52-1.34-5.52-5.98 0-1.32.47-2.4 1.24-3.24-.12-.3-.54-1.54.12-3.2 0 0 1.01-.33 3.3 1.24a11.5 11.5 0 0 1 6.02 0c2.3-1.57 3.3-1.24 3.3-1.24.66 1.66.24 2.9.12 3.2a4.65 4.65 0 0 1 1.24 3.24c0 4.65-2.83 5.67-5.53 5.97.43.37.82 1.1.82 2.22l-.01 3.29c0 .31.22.69.83.57A12 12 0 0 0 12 .3"/></svg> GitHub</a>
-        <a href="https://pypi.org/project/codex-rosetta/" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M14.25.18l.9.2.73.26.59.3.45.32.34.34.25.34.16.33.1.3.04.26.02.2-.01.13V8.5l-.05.63-.13.55-.21.46-.26.38-.3.31-.33.25-.35.19-.35.14-.33.1-.3.07-.26.04-.21.02H8.77l-.69.05-.59.14-.5.22-.41.27-.33.32-.27.35-.2.36-.15.37-.1.35-.07.32-.04.27-.02.21v3.06H3.17l-.21-.03-.28-.07-.32-.12-.35-.18-.36-.26-.36-.36-.35-.46-.32-.59-.28-.73-.21-.88-.14-1.05-.05-1.23.06-1.22.16-1.04.24-.87.32-.71.36-.57.4-.44.42-.33.42-.24.4-.16.36-.1.32-.05.24-.01h.16l.06.01h8.16v-.83H6.18l-.01-2.75-.02-.37.05-.34.11-.31.17-.28.25-.26.31-.23.38-.2.44-.18.51-.15.58-.12.64-.1.71-.06.77-.04.84-.02 1.27.05zm-6.3 1.98l-.23.33-.08.41.08.41.23.34.33.22.41.09.41-.09.33-.22.23-.34.08-.41-.08-.41-.23-.33-.33-.22-.41-.09-.41.09zm13.09 3.95l.28.06.32.12.35.18.36.27.36.35.35.47.32.59.28.73.21.88.14 1.04.05 1.23-.06 1.23-.16 1.04-.24.86-.32.71-.36.57-.4.45-.42.33-.42.24-.4.16-.36.09-.32.05-.24.02-.16-.01h-8.22v.82h5.84l.01 2.76.02.36-.05.34-.11.31-.17.29-.25.25-.31.24-.38.2-.44.17-.51.15-.58.13-.64.09-.71.07-.77.04-.84.01-1.27-.04-1.07-.14-.9-.2-.73-.25-.59-.3-.45-.33-.34-.34-.25-.34-.16-.33-.1-.3-.04-.25-.02-.2.01-.13v-5.34l.05-.64.13-.54.21-.46.26-.38.3-.32.33-.24.35-.2.35-.14.33-.1.3-.06.26-.04.21-.02.13-.01h5.84l.69-.05.59-.14.5-.21.41-.28.33-.32.27-.35.2-.36.15-.36.1-.35.07-.32.04-.28.02-.21V6.07h2.09l.14.01zm-6.47 14.25l-.23.33-.08.41.08.41.23.33.33.23.41.08.41-.08.33-.23.23-.33.08-.41-.08-.41-.23-.33-.33-.23-.41-.08-.41.08z"/></svg> PyPI</a>
-        <a href="https://hub.docker.com/r/oaklight/codex-rosetta-gateway" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M13.983 11.078h2.119a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.119a.185.185 0 00-.185.185v1.888c0 .102.083.185.185.185m-2.954-5.43h2.118a.186.186 0 00.186-.186V3.574a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m0 2.716h2.118a.187.187 0 00.186-.186V6.29a.186.186 0 00-.186-.185h-2.118a.185.185 0 00-.185.185v1.887c0 .102.082.185.185.186m-2.93 0h2.12a.186.186 0 00.184-.186V6.29a.185.185 0 00-.185-.185H8.1a.185.185 0 00-.185.185v1.887c0 .102.083.185.185.186m-2.964 0h2.119a.186.186 0 00.185-.186V6.29a.185.185 0 00-.185-.185H5.136a.186.186 0 00-.186.185v1.887c0 .102.084.185.186.186m5.893 2.715h2.118a.186.186 0 00.186-.185V9.006a.186.186 0 00-.186-.186h-2.118a.185.185 0 00-.185.185v1.888c0 .102.082.185.185.185m-2.93 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.083.185.185.185m-2.964 0h2.119a.185.185 0 00.185-.185V9.006a.185.185 0 00-.184-.186h-2.12a.186.186 0 00-.186.186v1.887c0 .102.084.185.186.185m-2.92 0h2.12a.185.185 0 00.184-.185V9.006a.185.185 0 00-.184-.186h-2.12a.185.185 0 00-.184.185v1.888c0 .102.082.185.185.185M23.763 9.89c-.065-.051-.672-.51-1.954-.51-.338.001-.676.03-1.01.087-.248-1.7-1.653-2.53-1.716-2.566l-.344-.199-.226.327c-.284.438-.49.922-.612 1.43-.23.97-.09 1.882.403 2.661-.595.332-1.55.413-1.744.42H.751a.751.751 0 00-.75.748 11.376 11.376 0 00.692 4.062c.545 1.428 1.355 2.48 2.41 3.124 1.18.723 3.1 1.137 5.275 1.137.983.003 1.963-.086 2.93-.266a12.248 12.248 0 003.823-1.389c.98-.567 1.86-1.288 2.61-2.136 1.252-1.418 1.998-2.997 2.553-4.4h.221c1.372 0 2.215-.549 2.68-1.009.309-.293.55-.65.707-1.046l.098-.288Z"/></svg> Docker</a>
-        <a href="https://codex-rosetta.readthedocs.io" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Docs</a>
+        <a href="https://github.com/iBobbyTS/codex-rosetta" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 .3a12 12 0 0 0-3.8 23.38c.6.12.83-.26.83-.57L9 20.86c-3.37.73-4.08-1.63-4.08-1.63-.55-1.4-1.34-1.77-1.34-1.77-1.1-.75.08-.73.08-.73 1.21.08 1.85 1.24 1.85 1.24 1.08 1.85 2.83 1.32 3.52 1 .1-.78.42-1.32.76-1.62-2.69-.3-5.52-1.34-5.52-5.98 0-1.32.47-2.4 1.24-3.24-.12-.3-.54-1.54.12-3.2 0 0 1.01-.33 3.3 1.24a11.5 11.5 0 0 1 6.02 0c2.3-1.57 3.3-1.24 3.3-1.24.66 1.66.24 2.9.12 3.2a4.65 4.65 0 0 1 1.24 3.24c0 4.65-2.83 5.67-5.53 5.97.43.37.82 1.1.82 2.22l-.01 3.29c0 .31.22.69.83.57A12 12 0 0 0 12 .3"/></svg> GitHub</a>
+        <a href="https://github.com/iBobbyTS/codex-rosetta/tree/master/docs" target="_blank" rel="noopener" class="about-link"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg> Docs</a>
       </div>
     </div>
   </div>
@@ -1090,11 +1153,29 @@ function setTheme(name) {
 // ===================== i18n =====================
 const I18N = {
   en: {
-    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys', 'nav.webSearch':'Web Search',
+    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys', 'nav.webSearch':'Web Search', 'nav.tools':'Tools',
     'nav.dashboard':'Dashboard', 'nav.logs':'Request Log', 'nav.gatewayLogs':'Gateway Logs',
     'section.server':'Server Settings', 'section.providers':'Providers', 'section.models':'Model Routing',
-    'section.webSearch':'Web Search',
+    'section.webSearch':'Web Search', 'section.tools':'Tool Catalog',
     'section.gatewayLogs':'Gateway Logs',
+    'tools.notice':'This static catalog includes feature-, model-, provider-, and environment-gated tools. It does not describe the tools available to the current request.',
+    'tools.disabledHint':'Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.',
+    'tools.filterLabel':'Filter tool types',
+    'tools.filter.all':'All', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
+    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Custom Tool Injection',
+    'tools.group.function':'Functions', 'tools.group.namespace':'Namespaces', 'tools.group.hosted':'Hosted Tools',
+    'tools.group.custom':'Custom Tools', 'tools.group.custom_injection':'Custom Tool Injection',
+    'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
+    'tools.type.custom':'Custom', 'tools.type.custom_injection':'Injection',
+    'tools.policy.disabled':'Disabled', 'tools.policy.passthrough':'Passthrough',
+    'tools.policy.modified':'Modified', 'tools.policy.expanded':'Expanded',
+    'tools.default':'Default', 'tools.supported':'Supports', 'tools.defaultInjected':'Injected by default',
+    'tools.route.responses_to_responses':'Responses → Responses', 'tools.route.responses_to_chat':'Responses → Chat',
+    'tools.condition.tavily_unavailable':'when Tavily is unavailable',
+    'tools.routeDefault':'{route}: {policy}', 'tools.routeFallback':' ({condition}: {policy})',
+    'tools.loading':'Loading tool catalog...', 'tools.empty':'No tools match this filter.',
+    'tools.error':'Unable to load the tool catalog: {error}',
+    'tools.catalogMeta':'Codex {version} · source {commit}',
     'label.globalProxy':'Global Proxy URL',
     'label.globalProxy.hint':'Applies to all providers unless overridden per-provider.',
     'label.streamTraceEnabled':'Enable stream trace JSONL',
@@ -1240,11 +1321,29 @@ const I18N = {
   },
   zh: {
     'btn.logout':'\u9000\u51fa\u767b\u5f55',
-    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5', 'nav.webSearch':'\u8054\u7f51\u641c\u7d22',
+    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5', 'nav.webSearch':'\u8054\u7f51\u641c\u7d22', 'nav.tools':'\u5de5\u5177',
     'nav.dashboard':'\u76d1\u63a7\u9762\u677f', 'nav.logs':'\u8bf7\u6c42\u65e5\u5fd7', 'nav.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
     'section.server':'\u670d\u52a1\u5668\u8bbe\u7f6e', 'section.providers':'\u670d\u52a1\u65b9', 'section.models':'\u6a21\u578b\u8def\u7531',
-    'section.webSearch':'\u8054\u7f51\u641c\u7d22',
+    'section.webSearch':'\u8054\u7f51\u641c\u7d22', 'section.tools':'\u5de5\u5177\u76ee\u5f55',
     'section.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
+    'tools.notice':'\u6b64\u9759\u6001\u76ee\u5f55\u5305\u542b\u53d7\u529f\u80fd\u3001\u6a21\u578b\u3001\u670d\u52a1\u65b9\u6216\u73af\u5883\u6761\u4ef6\u63a7\u5236\u7684\u5de5\u5177\uff0c\u4e0d\u4ee3\u8868\u5f53\u524d\u8bf7\u6c42\u5b9e\u9645\u53ef\u7528\u7684\u5de5\u5177\u3002',
+    'tools.disabledHint':'\u201c\u7981\u7528\u201d\u4ec5\u8868\u793a\u4e0d\u5411\u4e0a\u6e38\u6a21\u578b\u76f4\u63a5\u66b4\u9732\uff1b\u5185\u90e8\u8f6c\u6362\u4ecd\u53ef\u5c06\u8c03\u7528\u6620\u5c04\u5230\u8be5\u5de5\u5177\u3002',
+    'tools.filterLabel':'\u8fc7\u6ee4\u5de5\u5177\u7c7b\u578b',
+    'tools.filter.all':'\u5168\u90e8', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
+    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'\u81ea\u5b9a\u4e49\u5de5\u5177\u6ce8\u5165',
+    'tools.group.function':'Function \u5de5\u5177', 'tools.group.namespace':'Namespace \u5de5\u5177', 'tools.group.hosted':'Hosted \u5de5\u5177',
+    'tools.group.custom':'Custom \u5de5\u5177', 'tools.group.custom_injection':'\u81ea\u5b9a\u4e49\u5de5\u5177\u6ce8\u5165',
+    'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
+    'tools.type.custom':'Custom', 'tools.type.custom_injection':'\u6ce8\u5165',
+    'tools.policy.disabled':'\u7981\u7528', 'tools.policy.passthrough':'\u76f4\u4f20',
+    'tools.policy.modified':'\u4fee\u6539', 'tools.policy.expanded':'\u5c55\u5f00',
+    'tools.default':'\u9ed8\u8ba4', 'tools.supported':'\u652f\u6301', 'tools.defaultInjected':'\u9ed8\u8ba4\u6ce8\u5165',
+    'tools.route.responses_to_responses':'Responses \u2192 Responses', 'tools.route.responses_to_chat':'Responses \u2192 Chat',
+    'tools.condition.tavily_unavailable':'Tavily \u4e0d\u53ef\u7528\u65f6',
+    'tools.routeDefault':'{route}\uff1a{policy}', 'tools.routeFallback':'\uff08{condition}\uff1a{policy}\uff09',
+    'tools.loading':'\u6b63\u5728\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\u2026', 'tools.empty':'\u6ca1\u6709\u5339\u914d\u5f53\u524d\u8fc7\u6ee4\u6761\u4ef6\u7684\u5de5\u5177\u3002',
+    'tools.error':'\u65e0\u6cd5\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\uff1a{error}',
+    'tools.catalogMeta':'Codex {version} \u00b7 \u6e90\u7801 {commit}',
     'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
     'label.globalProxy.hint':'\u9002\u7528\u4e8e\u6240\u6709\u670d\u52a1\u65b9\uff0c\u9664\u975e\u5355\u72ec\u8bbe\u7f6e\u4e86\u4ee3\u7406\u3002',
     'label.streamTraceEnabled':'\u542f\u7528\u6d41\u5f0f trace JSONL',
@@ -1745,6 +1844,7 @@ function onProviderBaseUrlInput() {
 function setLang(lang) {
   currentLang = lang;
   localStorage.setItem('codex-rosetta-lang', lang);
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
   // Sync settings popup dropdown if open
   const ls = document.getElementById('settingsLangSelect');
   if (ls) ls.value = lang;
@@ -1759,19 +1859,26 @@ function applyI18n() {
   document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     el.placeholder = t(el.dataset.i18nPlaceholder);
   });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  document.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+    el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel));
+  });
   // Re-render dynamic content
   if (configData) { renderProviders(); renderModels(); }
   if (keysData) { renderKeys(); updateKeyFilterOptions(); }
   if (currentPage === 'dashboard') loadMetrics();
   if (currentPage === 'logs') loadLogs();
   if (currentPage === 'web-search') renderWebSearchSettings();
+  if (currentPage === 'tools') renderToolCatalog();
   if (currentPage === 'gateway-logs') renderStreamTraceSettings();
   // Re-render DB status footer with cached data
   if (_lastPersistence != null) renderPersistence(_lastPersistence, _lastTotalReq);
 }
 
 // ===================== Page Routing =====================
-const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'web-search', 'dashboard', 'logs', 'gateway-logs']);
+const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'web-search', 'tools', 'dashboard', 'logs', 'gateway-logs']);
 const DEFAULT_ADMIN_PAGE = 'providers';
 
 function getCurrentPageFromLocation() {
@@ -1815,6 +1922,10 @@ const LOG_LIMIT = 30;
 let dashboardTimer = null;
 let logTimer = null;
 const expandedLogRows = new Set();  // track expanded error detail rows by timestamp
+let toolCatalogData = null;
+let toolCatalogError = '';
+let toolCatalogFilter = 'all';
+const expandedToolNamespaces = new Set();
 
 // Apply saved theme now that state vars are declared
 setTheme(currentTheme);
@@ -1855,6 +1966,192 @@ const api = {
     return r.json();
   }
 };
+
+// ===================== Read-only Tools Catalog =====================
+function setToolCatalogFilter(filter) {
+  toolCatalogFilter = filter;
+  renderToolCatalog();
+}
+
+function toggleToolNamespace(namespaceId) {
+  if (expandedToolNamespaces.has(namespaceId)) expandedToolNamespaces.delete(namespaceId);
+  else expandedToolNamespaces.add(namespaceId);
+  renderToolCatalog();
+}
+
+async function loadToolCatalog() {
+  if (toolCatalogData) {
+    renderToolCatalog();
+    return;
+  }
+  toolCatalogError = '';
+  const status = document.getElementById('toolCatalogStatus');
+  const groups = document.getElementById('toolCatalogGroups');
+  status.className = 'tool-catalog-status';
+  status.textContent = t('tools.loading');
+  status.hidden = false;
+  groups.hidden = true;
+  try {
+    toolCatalogData = await api.get('/admin/api/tools/catalog');
+    for (const item of toolCatalogData.items || []) {
+      if (item.type === 'namespace' && item.default_expanded) {
+        expandedToolNamespaces.add(item.id);
+      }
+    }
+    renderToolCatalog();
+  } catch (error) {
+    toolCatalogError = error?.message || String(error);
+    renderToolCatalog();
+  }
+}
+
+function toolCatalogIndex() {
+  const items = new Map((toolCatalogData?.items || []).map(item => [item.id, item]));
+  const policies = new Map((toolCatalogData?.policies || []).map(policy => [policy.id, policy]));
+  const groups = new Map((toolCatalogData?.placements?.groups || []).map(group => [group.id, group]));
+  const namespaces = new Map((toolCatalogData?.placements?.namespaces || []).map(namespace => [namespace.namespace_id, namespace]));
+  return {items, policies, groups, namespaces};
+}
+
+function toolPolicyModes(item, policy) {
+  if (!policy) return [];
+  if (item.type === 'namespace' && Array.isArray(policy.namespace_supported)) {
+    return policy.namespace_supported;
+  }
+  return policy.supported || [];
+}
+
+function renderToolKindBadge(item) {
+  return `<span class="tool-badge kind">${esc(t('tools.type.' + item.type))}</span>`;
+}
+
+function renderToolRouteDefaults(policy) {
+  if (!Array.isArray(policy.route_defaults)) return '';
+  const rows = policy.route_defaults.map(routeDefault => {
+    let text = t('tools.routeDefault', {
+      route: t('tools.route.' + routeDefault.route),
+      policy: t('tools.policy.' + routeDefault.policy),
+    });
+    const fallback = routeDefault.fallback;
+    if (fallback) {
+      text += t('tools.routeFallback', {
+        condition: t('tools.condition.' + fallback.when),
+        policy: t('tools.policy.' + fallback.policy),
+      });
+    }
+    return `<span class="tool-route-default${fallback ? ' has-fallback' : ''}">${esc(text)}</span>`;
+  }).join('');
+  return rows ? `<div class="tool-route-defaults">${rows}</div>` : '';
+}
+
+function renderToolPolicy(item, policy) {
+  if (item.type === 'custom_injection') {
+    return `<div class="tool-policy"><span class="tool-badge default">${esc(t('tools.defaultInjected'))}</span></div>`;
+  }
+  if (!policy) return '<div class="tool-policy"></div>';
+  const defaultMode = policy.default;
+  const supported = toolPolicyModes(item, policy);
+  const supportedBadges = supported.map(mode => `<span class="tool-badge">${esc(t('tools.policy.' + mode))}</span>`).join('');
+  const routeDefaults = renderToolRouteDefaults(policy);
+  return `<div class="tool-policy"><span class="tool-policy-label">${esc(t('tools.supported'))}</span>${supportedBadges}<span class="tool-badge default ${esc(defaultMode)}">${esc(t('tools.default'))}: ${esc(t('tools.policy.' + defaultMode))}</span>${routeDefaults}</div>`;
+}
+
+function renderToolItem(item, policies, nested=false) {
+  const policy = item.policy_id ? policies.get(item.policy_id) : null;
+  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${esc(item.id)}"><div class="tool-name">${esc(item.name)}</div><div class="tool-badges">${renderToolKindBadge(item)}</div>${renderToolPolicy(item, policy)}</div>`;
+}
+
+function renderToolNamespace(namespaceItem, childIds, index) {
+  const children = childIds.map(id => index.items.get(id)).filter(Boolean);
+  const visibleChildren = toolCatalogFilter === 'function'
+    ? children.filter(item => item.type === 'function')
+    : children;
+  if (toolCatalogFilter === 'function' && visibleChildren.length === 0) return '';
+
+  const isExpanded = toolCatalogFilter === 'function' || expandedToolNamespaces.has(namespaceItem.id);
+  const policy = index.policies.get(namespaceItem.policy_id);
+  const childrenHtml = visibleChildren.map(item => renderToolItem(item, index.policies, true)).join('');
+  return `<div class="tool-namespace" data-namespace-id="${esc(namespaceItem.id)}"><div class="tool-namespace-head"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${esc(namespaceItem.id)}" onclick="toggleToolNamespace('${esc(namespaceItem.id)}')">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div>${renderToolPolicy(namespaceItem, policy)}</div><div class="tool-namespace-children" id="tool-children-${esc(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
+}
+
+function renderToolGroup(groupId, itemIds, index) {
+  const items = itemIds.map(id => index.items.get(id)).filter(Boolean);
+  if (items.length === 0) return '';
+  const body = items.map(item => renderToolItem(item, index.policies)).join('');
+  return `<section class="tool-group" data-tool-group="${esc(groupId)}"><div class="tool-group-title"><span>${esc(t('tools.group.' + groupId))}</span><span class="tool-group-count">${items.length}</span></div><div class="tool-list">${body}</div></section>`;
+}
+
+function renderNamespaceGroup(index) {
+  const namespaceGroup = index.groups.get('namespace');
+  if (!namespaceGroup) return '';
+  const rendered = namespaceGroup.item_ids.map(id => {
+    const namespaceItem = index.items.get(id);
+    const placement = index.namespaces.get(id);
+    if (!namespaceItem || !placement) return '';
+    return renderToolNamespace(namespaceItem, placement.child_ids, index);
+  }).filter(Boolean);
+  if (rendered.length === 0) return '';
+  return `<section class="tool-group" data-tool-group="namespace"><div class="tool-group-title"><span>${esc(t('tools.group.namespace'))}</span><span class="tool-group-count">${rendered.length}</span></div><div class="tool-list">${rendered.join('')}</div></section>`;
+}
+
+function renderToolCatalog() {
+  const status = document.getElementById('toolCatalogStatus');
+  const groupsEl = document.getElementById('toolCatalogGroups');
+  const meta = document.getElementById('toolCatalogMeta');
+  if (!status || !groupsEl || !meta) return;
+
+  document.querySelectorAll('[data-tool-filter]').forEach(button => {
+    button.classList.toggle('active', button.dataset.toolFilter === toolCatalogFilter);
+  });
+
+  if (toolCatalogError) {
+    status.className = 'tool-catalog-status error';
+    status.textContent = t('tools.error', {error: toolCatalogError});
+    status.hidden = false;
+    groupsEl.hidden = true;
+    meta.textContent = '';
+    return;
+  }
+  if (!toolCatalogData) {
+    status.className = 'tool-catalog-status';
+    status.textContent = t('tools.loading');
+    status.hidden = false;
+    groupsEl.hidden = true;
+    return;
+  }
+
+  const metadata = toolCatalogData.metadata || {};
+  meta.textContent = t('tools.catalogMeta', {
+    version: metadata.codex_cli_version || '?',
+    commit: String(metadata.codex_source_commit || '?').slice(0, 12),
+  });
+  const index = toolCatalogIndex();
+  const sections = [];
+  const include = id => toolCatalogFilter === 'all' || toolCatalogFilter === id;
+
+  if (include('function')) {
+    const group = index.groups.get('function');
+    if (group) sections.push(renderToolGroup('function', group.item_ids, index));
+  }
+  if (toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace' || toolCatalogFilter === 'function') {
+    sections.push(renderNamespaceGroup(index));
+  }
+  for (const groupId of ['hosted', 'custom']) {
+    if (!include(groupId)) continue;
+    const group = index.groups.get(groupId);
+    if (group) sections.push(renderToolGroup(groupId, group.item_ids, index));
+  }
+  if (include('custom_injection')) {
+    sections.push(renderToolGroup('custom_injection', toolCatalogData.custom_injection?.item_ids || [], index));
+  }
+
+  const html = sections.filter(Boolean).join('');
+  groupsEl.innerHTML = html;
+  groupsEl.hidden = !html;
+  status.className = 'tool-catalog-status';
+  status.textContent = t('tools.empty');
+  status.hidden = Boolean(html);
+}
 
 // ===================== Inactivity auto-logout =====================
 const INACTIVITY_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes
@@ -3761,6 +4058,9 @@ function loadActivePageData() {
   }
   if (currentPage === 'gateway-logs') {
     renderStreamTraceSettings();
+  }
+  if (currentPage === 'tools') {
+    loadToolCatalog();
   }
 }
 
