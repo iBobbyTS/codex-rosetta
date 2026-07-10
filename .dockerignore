@@ -55,9 +55,8 @@ htmlcov/
 .tox/
 .nox/
 
-# ── Documentation (git worktrees) ────────────────────
-docs_en/
-docs_zh/
+# ── Documentation ────────────────────────────────────
+docs/
 
 # ── Tests (not needed in production image) ───────────
 tests/

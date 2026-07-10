@@ -1,0 +1,634 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "catalog_version": "codex-0.144.0",
+    "codex_cli_version": "0.144.0",
+    "codex_source_commit": "2e8c3756f95789c215d9ea9a5ade6ec377934b3f",
+    "static_catalog": true,
+    "future_policy_precedence": [
+      "built_in",
+      "global",
+      "model"
+    ]
+  },
+  "policies": [
+    {
+      "id": "passthrough",
+      "default": "passthrough",
+      "supported": [
+        "disabled",
+        "passthrough"
+      ]
+    },
+    {
+      "id": "namespace_passthrough",
+      "default": "passthrough",
+      "supported": [
+        "disabled",
+        "passthrough"
+      ],
+      "namespace_supported": [
+        "disabled",
+        "passthrough",
+        "expanded"
+      ]
+    },
+    {
+      "id": "targeted_shell",
+      "default": "modified",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ]
+    },
+    {
+      "id": "targeted_chat_guidance",
+      "default": "modified",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ]
+    },
+    {
+      "id": "web_search_bridge",
+      "default": "modified",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ],
+      "route_defaults": [
+        {
+          "route": "responses_to_responses",
+          "policy": "passthrough"
+        },
+        {
+          "route": "responses_to_chat",
+          "policy": "modified",
+          "fallback": {
+            "when": "tavily_unavailable",
+            "policy": "disabled"
+          }
+        }
+      ]
+    },
+    {
+      "id": "native_apply_patch",
+      "default": "disabled",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ],
+      "disabled_scope": "direct_model_exposure_only"
+    },
+    {
+      "id": "image_generation",
+      "default": "disabled",
+      "supported": [
+        "disabled",
+        "passthrough"
+      ],
+      "namespace_supported": [
+        "disabled",
+        "passthrough",
+        "expanded"
+      ]
+    },
+    {
+      "id": "multi_agent_expansion",
+      "default": "expanded",
+      "supported": [
+        "disabled",
+        "passthrough"
+      ],
+      "namespace_supported": [
+        "disabled",
+        "passthrough",
+        "expanded"
+      ]
+    }
+  ],
+  "items": [
+    {
+      "id": "function.exec_command",
+      "name": "exec_command",
+      "type": "function",
+      "policy_id": "targeted_shell"
+    },
+    {
+      "id": "function.write_stdin",
+      "name": "write_stdin",
+      "type": "function",
+      "policy_id": "targeted_shell"
+    },
+    {
+      "id": "function.shell_command",
+      "name": "shell_command",
+      "type": "function",
+      "policy_id": "targeted_shell"
+    },
+    {
+      "id": "function.update_plan",
+      "name": "update_plan",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.wait_for_environment",
+      "name": "wait_for_environment",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.request_user_input",
+      "name": "request_user_input",
+      "type": "function",
+      "policy_id": "targeted_chat_guidance"
+    },
+    {
+      "id": "function.request_permissions",
+      "name": "request_permissions",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.new_context",
+      "name": "new_context",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.get_context_remaining",
+      "name": "get_context_remaining",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.list_available_plugins_to_install",
+      "name": "list_available_plugins_to_install",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.request_plugin_install",
+      "name": "request_plugin_install",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.test_sync_tool",
+      "name": "test_sync_tool",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.view_image",
+      "name": "view_image",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.list_mcp_resources",
+      "name": "list_mcp_resources",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.list_mcp_resource_templates",
+      "name": "list_mcp_resource_templates",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.read_mcp_resource",
+      "name": "read_mcp_resource",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.spawn_agents_on_csv",
+      "name": "spawn_agents_on_csv",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.report_agent_job_result",
+      "name": "report_agent_job_result",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.wait",
+      "name": "wait",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.get_goal",
+      "name": "get_goal",
+      "type": "function",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "function.create_goal",
+      "name": "create_goal",
+      "type": "function",
+      "policy_id": "targeted_chat_guidance"
+    },
+    {
+      "id": "function.update_goal",
+      "name": "update_goal",
+      "type": "function",
+      "policy_id": "targeted_chat_guidance"
+    },
+    {
+      "id": "custom.apply_patch",
+      "name": "apply_patch",
+      "type": "custom",
+      "policy_id": "native_apply_patch"
+    },
+    {
+      "id": "custom.exec",
+      "name": "exec",
+      "type": "custom",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "hosted.web_search",
+      "name": "web_search",
+      "type": "hosted",
+      "policy_id": "web_search_bridge",
+      "aliases": [
+        "web_search_preview"
+      ]
+    },
+    {
+      "id": "hosted.image_generation",
+      "name": "image_generation",
+      "type": "hosted",
+      "policy_id": "image_generation"
+    },
+    {
+      "id": "namespace.multi_agent_v1",
+      "name": "multi_agent_v1",
+      "type": "namespace",
+      "policy_id": "multi_agent_expansion",
+      "default_expanded": true
+    },
+    {
+      "id": "namespace.multi_agent_v2",
+      "name": "collaboration",
+      "type": "namespace",
+      "policy_id": "multi_agent_expansion",
+      "stable_name": "multi_agent_v2",
+      "default_namespace": "collaboration",
+      "namespace_configurable": true,
+      "default_expanded": true
+    },
+    {
+      "id": "namespace.clock",
+      "name": "clock",
+      "type": "namespace",
+      "policy_id": "namespace_passthrough",
+      "default_expanded": false
+    },
+    {
+      "id": "namespace.image_gen",
+      "name": "image_gen",
+      "type": "namespace",
+      "policy_id": "image_generation",
+      "default_expanded": false
+    },
+    {
+      "id": "namespace.web",
+      "name": "web",
+      "type": "namespace",
+      "policy_id": "namespace_passthrough",
+      "default_expanded": false
+    },
+    {
+      "id": "namespace.memories",
+      "name": "memories",
+      "type": "namespace",
+      "policy_id": "namespace_passthrough",
+      "default_expanded": false
+    },
+    {
+      "id": "namespace.skills",
+      "name": "skills",
+      "type": "namespace",
+      "policy_id": "namespace_passthrough",
+      "default_expanded": false
+    },
+    {
+      "id": "namespace.multi_agent_v1.close_agent",
+      "name": "close_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v1",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v1.resume_agent",
+      "name": "resume_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v1",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v1.send_input",
+      "name": "send_input",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v1",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v1.spawn_agent",
+      "name": "spawn_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v1",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v1.wait_agent",
+      "name": "wait_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v1",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.followup_task",
+      "name": "followup_task",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.interrupt_agent",
+      "name": "interrupt_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.list_agents",
+      "name": "list_agents",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.send_message",
+      "name": "send_message",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.spawn_agent",
+      "name": "spawn_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.multi_agent_v2.wait_agent",
+      "name": "wait_agent",
+      "type": "function",
+      "namespace_id": "namespace.multi_agent_v2",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.clock.curr_time",
+      "name": "curr_time",
+      "type": "function",
+      "namespace_id": "namespace.clock",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.clock.sleep",
+      "name": "sleep",
+      "type": "function",
+      "namespace_id": "namespace.clock",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.image_gen.imagegen",
+      "name": "imagegen",
+      "type": "function",
+      "namespace_id": "namespace.image_gen",
+      "policy_id": "image_generation",
+      "aliases": [
+        "image_gen",
+        "imagegen",
+        "image_gen__imagegen"
+      ]
+    },
+    {
+      "id": "namespace.web.run",
+      "name": "run",
+      "type": "function",
+      "namespace_id": "namespace.web",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.memories.add_ad_hoc_note",
+      "name": "add_ad_hoc_note",
+      "type": "function",
+      "namespace_id": "namespace.memories",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.memories.list",
+      "name": "list",
+      "type": "function",
+      "namespace_id": "namespace.memories",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.memories.read",
+      "name": "read",
+      "type": "function",
+      "namespace_id": "namespace.memories",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.memories.search",
+      "name": "search",
+      "type": "function",
+      "namespace_id": "namespace.memories",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.skills.list",
+      "name": "list",
+      "type": "function",
+      "namespace_id": "namespace.skills",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "namespace.skills.read",
+      "name": "read",
+      "type": "function",
+      "namespace_id": "namespace.skills",
+      "policy_id": "passthrough"
+    },
+    {
+      "id": "injection.claude_code.read",
+      "name": "Read",
+      "type": "custom_injection"
+    },
+    {
+      "id": "injection.claude_code.edit",
+      "name": "Edit",
+      "type": "custom_injection"
+    },
+    {
+      "id": "injection.claude_code.write",
+      "name": "Write",
+      "type": "custom_injection"
+    },
+    {
+      "id": "injection.claude_code.glob",
+      "name": "Glob",
+      "type": "custom_injection"
+    },
+    {
+      "id": "injection.claude_code.grep",
+      "name": "Grep",
+      "type": "custom_injection"
+    },
+    {
+      "id": "injection.claude_code.bash",
+      "name": "Bash",
+      "type": "custom_injection"
+    }
+  ],
+  "placements": {
+    "groups": [
+      {
+        "id": "function",
+        "item_ids": [
+          "function.exec_command",
+          "function.write_stdin",
+          "function.shell_command",
+          "function.update_plan",
+          "function.wait_for_environment",
+          "function.request_user_input",
+          "function.request_permissions",
+          "function.new_context",
+          "function.get_context_remaining",
+          "function.list_available_plugins_to_install",
+          "function.request_plugin_install",
+          "function.test_sync_tool",
+          "function.view_image",
+          "function.list_mcp_resources",
+          "function.list_mcp_resource_templates",
+          "function.read_mcp_resource",
+          "function.spawn_agents_on_csv",
+          "function.report_agent_job_result",
+          "function.wait",
+          "function.get_goal",
+          "function.create_goal",
+          "function.update_goal"
+        ]
+      },
+      {
+        "id": "namespace",
+        "item_ids": [
+          "namespace.multi_agent_v1",
+          "namespace.multi_agent_v2",
+          "namespace.clock",
+          "namespace.image_gen",
+          "namespace.web",
+          "namespace.memories",
+          "namespace.skills"
+        ]
+      },
+      {
+        "id": "hosted",
+        "item_ids": [
+          "hosted.web_search",
+          "hosted.image_generation"
+        ]
+      },
+      {
+        "id": "custom",
+        "item_ids": [
+          "custom.apply_patch",
+          "custom.exec"
+        ]
+      }
+    ],
+    "namespaces": [
+      {
+        "namespace_id": "namespace.multi_agent_v1",
+        "child_ids": [
+          "namespace.multi_agent_v1.close_agent",
+          "namespace.multi_agent_v1.resume_agent",
+          "namespace.multi_agent_v1.send_input",
+          "namespace.multi_agent_v1.spawn_agent",
+          "namespace.multi_agent_v1.wait_agent"
+        ]
+      },
+      {
+        "namespace_id": "namespace.multi_agent_v2",
+        "child_ids": [
+          "namespace.multi_agent_v2.followup_task",
+          "namespace.multi_agent_v2.interrupt_agent",
+          "namespace.multi_agent_v2.list_agents",
+          "namespace.multi_agent_v2.send_message",
+          "namespace.multi_agent_v2.spawn_agent",
+          "namespace.multi_agent_v2.wait_agent"
+        ]
+      },
+      {
+        "namespace_id": "namespace.clock",
+        "child_ids": [
+          "namespace.clock.curr_time",
+          "namespace.clock.sleep"
+        ]
+      },
+      {
+        "namespace_id": "namespace.image_gen",
+        "child_ids": [
+          "namespace.image_gen.imagegen"
+        ]
+      },
+      {
+        "namespace_id": "namespace.web",
+        "child_ids": [
+          "namespace.web.run"
+        ]
+      },
+      {
+        "namespace_id": "namespace.memories",
+        "child_ids": [
+          "namespace.memories.add_ad_hoc_note",
+          "namespace.memories.list",
+          "namespace.memories.read",
+          "namespace.memories.search"
+        ]
+      },
+      {
+        "namespace_id": "namespace.skills",
+        "child_ids": [
+          "namespace.skills.list",
+          "namespace.skills.read"
+        ]
+      }
+    ]
+  },
+  "custom_injection": {
+    "item_ids": [
+      "injection.claude_code.read",
+      "injection.claude_code.edit",
+      "injection.claude_code.write",
+      "injection.claude_code.glob",
+      "injection.claude_code.grep",
+      "injection.claude_code.bash"
+    ]
+  }
+}

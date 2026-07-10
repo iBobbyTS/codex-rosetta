@@ -11,3 +11,6 @@ Codex 版本时从 `r0` 开始；只包含 Rosetta 修复的后续发布递增 `
 ## 当前兼容性
 
 Codex-Rosetta `0.144.0.r0` 兼容 Codex CLI `0.144.0`。
+
+已审查的 Codex 源码 commit、契约检查和升级流程请参阅
+[开发者兼容性记录（英文）](../dev/version-compatibility/README.md)。

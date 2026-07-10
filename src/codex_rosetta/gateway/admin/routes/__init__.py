@@ -8,6 +8,7 @@ This package splits the admin route handlers into focused modules:
 - observability — Metrics, request log, network diagnostics
 - testing     — Async model test tasks
 - profiling   — On-demand pyinstrument profiling
+- tools       — Read-only bundled tools catalog
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ from .testing import (
     get_test_result,
     start_test,
 )
+from .tools import get_tool_catalog
 
 
 def register_admin_routes(app: Any) -> None:
@@ -92,6 +94,7 @@ def register_admin_routes(app: Any) -> None:
         "models",
         "keys",
         "web-search",
+        "tools",
         "dashboard",
         "logs",
         "gateway-logs",
@@ -125,6 +128,8 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/models", methods=["POST"])(bulk_add_models)
     app.route("/admin/api/config/server", methods=["PUT"])(put_server_settings)
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)
+    # Read-only tool catalog
+    app.route("/admin/api/tools/catalog", methods=["GET"])(get_tool_catalog)
     # Metrics
     app.route("/admin/api/metrics", methods=["GET"])(get_metrics)
     app.route("/admin/api/metrics/rebuild", methods=["POST"])(rebuild_metrics)

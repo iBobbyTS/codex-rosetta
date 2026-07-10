@@ -104,7 +104,10 @@ tests/
 ├── test_auto_detect.py
 └── test_tool_ops.py
 
-docs_en/, docs_zh/           # Documentation (git worktrees, orphan branches)
+docs/
+├── en/                      # English user documentation
+├── zh-cn/                   # Chinese user documentation (matching paths)
+└── dev/                     # English-only developer documentation
 docker/                      # Dockerfile for gateway image
 examples/                    # Usage examples
 ```
@@ -207,98 +210,26 @@ result = run_sync(
 - **No AI co-author tags in commits.** Do not add `Co-authored-by` lines for AI
   tools in git commit messages. Disclose AI usage in PR descriptions instead.
 
-## Release process
-
-Releases are triggered manually via GitHub Actions, not by tag push.
-
-### Version naming
-
-Codex-Rosetta release versions use `{codex_version}.r{patch_number}`. The
-three-part Codex version identifies the supported Codex release, while `rN`
-is the Rosetta patch number for that same Codex version. Start a newly adopted
-Codex release at `r0` and increment only `rN` for subsequent Rosetta-only
-patches. For example, the first compatibility release for Codex `0.144.0` is
-`0.144.0.r0`.
-
-The source version intentionally keeps the `rN` spelling. Python packaging
-tools normalize it to the PEP 440 equivalent `.postN` in distribution
-metadata; do not rewrite the source string merely to match normalized metadata.
-
-### Steps
-
-1. **Bump version** in `src/codex_rosetta/__init__.py`
-2. **Update changelogs** — move `[Unreleased]` entries into a versioned section
-   (`## vX.Y.Z.rN — YYYY-MM-DD`) in both `docs_en/docs/changelog.md` and
-   `docs_zh/docs/changelog.md`. Commit and push both doc worktrees.
-3. **Commit and tag**:
-   ```bash
-   git add src/codex_rosetta/__init__.py
-   git commit -m "release: vX.Y.Z.rN"
-   git tag vX.Y.Z.rN
-   git push origin master vX.Y.Z.rN
-   ```
-4. **Trigger the Release workflow** (builds wheel → publishes to PyPI →
-   triggers Docker build automatically):
-   ```bash
-   gh workflow run "Release" --repo Oaklight/codex-rosetta -f version=X.Y.Z.rN
-   ```
-5. **Create GitHub Release** (optional — the Release workflow also creates one,
-   but you can create it manually first for custom release notes):
-   ```bash
-   gh release create vX.Y.Z.rN --title "vX.Y.Z.rN" --notes "..."
-   ```
-
-### Dev deployment (pre-release testing)
-
-```bash
-make deploy-dev SSH_TARGET=cloud.usa2
-```
-
-Builds a dev wheel from the current working tree, packages it into a Docker
-image tagged `dev-test`, and deploys to the remote host via `docker save |
-zstd | ssh`. The dev image version includes the git commit hash (e.g.
-`0.6.11.dev0+gaa73770`).
-
-**Important**: `make deploy-dev` builds from the **working tree**, not from
-the committed state. Always `git pull` and verify no dirty files in `src/`
-before deploying — otherwise the image may not contain the expected code.
-
 ## Documentation
 
-User-facing docs live on **orphan branches** (`docs-en`, `docs-zh`), mounted
-as git worktrees at `./docs_en/` and `./docs_zh/`. Built with zensical,
-deployed to ReadTheDocs.
+Documentation is versioned on `master` under `docs/`:
 
-### When to update docs worktrees
-
-Update `docs_en/` and `docs_zh/` whenever any of the following happens:
-
-- **New public API added or signature changed**: update the relevant API
-  reference pages in both languages.
-- **Behavior change or bug fix affecting documented functionality**: update
-  affected guide/reference pages.
-- **Changelog-worthy change merged to main branch**: update
-  `docs_en/docs/changelog.md` and `docs_zh/docs/changelog.md` under the
-  `[Unreleased]` section. Follow the [Keep a Changelog](https://keepachangelog.com/)
-  format. Entries should cover: features, enhancements, bug fixes,
-  breaking changes, and infrastructure.
-- **Release published**: move `[Unreleased]` entries into a new versioned
-  section in both changelogs.
+- `docs/en/` contains English user documentation.
+- `docs/zh-cn/` contains the matching Chinese user documentation.
+- `docs/dev/` contains developer documentation and is English only.
 
 ### Cross-language consistency (enforced)
 
 **Both language versions must be updated in the same task/agent run.** Never
 update only one language and leave the other for later. The workflow is:
 
-1. Make changes to `docs_en/` first (English is the source of truth).
-2. In the same task, apply equivalent changes to `docs_zh/` before committing.
-3. Commit and push both worktrees before the task is considered done.
+1. Make user-facing changes under `docs/en/` first (English is the source of truth).
+2. Apply the equivalent change at the same relative path under `docs/zh-cn/`.
+3. Update related English developer references under `docs/dev/` when needed.
 
-Splitting the two languages across separate agents or separate sessions is not
-allowed — it leads to drift and missed pages.
-
-Commits in doc worktrees use `PRE_COMMIT_ALLOW_NO_CONFIG=1 git commit` since
-those branches have no `.pre-commit-config.yaml`.
+The existing co-located module and example READMEs remain outside this
+centralized documentation workflow. Manual development deployment guidance is
+in `docs/dev/README.md`.
 
 ## Escalation
 
@@ -316,7 +247,6 @@ those branches have no `.pre-commit-config.yaml`.
 ## Files to never edit
 
 - `src/codex_rosetta/_vendor/**` — vendored dependencies, managed externally
-- `docs_en/`, `docs_zh/` — separate git branches, edit inside the worktree only
 
 ## Codex source and version compatibility
 
@@ -326,15 +256,19 @@ those branches have no `.pre-commit-config.yaml`.
   separate compatibility identifiers. The source manifests can contain
   development placeholders, so never infer the source revision from the CLI
   version alone.
+- Codex-Rosetta versions use `{codex_version}.r{patch_number}`. Start each newly
+  adopted Codex release at `r0` and increment `rN` only for Rosetta-only fixes.
+  Keep the `rN` spelling in source; Python package metadata may normalize it to
+  the equivalent PEP 440 `.postN` form.
 - Before changing a Codex-facing request, response, stream, tool, session, or
-  model-catalog behavior, read `version-compatibility/README.md` and
-  `version-compatibility/compatibility-points.md`.
+  model-catalog behavior, read `docs/dev/version-compatibility/README.md` and
+  `docs/dev/version-compatibility/compatibility-points.md`.
 - Every Codex version update requires a source-contract review and the tests in
-  `version-compatibility/upgrade-checklist.md`. Record the new CLI version,
+  `docs/dev/version-compatibility/upgrade-checklist.md`. Record the new CLI version,
   Codex source commit, reviewed contract changes, test results, and any accepted
   gaps before claiming compatibility.
 - During normal development, every Codex-specific compatibility point must be
-  recorded in `version-compatibility/compatibility-points.md` with both its
+  recorded in `docs/dev/version-compatibility/compatibility-points.md` with both its
   automatable checks and the real Codex/API tests required when triggered.
 - For a Codex upgrade, first record the previous source commit, then update
   `../openai-codex-src` with a fast-forward-only pull. Classify every recorded

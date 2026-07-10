@@ -36,7 +36,8 @@ codex-rosetta-gateway --host 127.0.0.1 -v
 
 ## 完整文档
 
-暂无
+- [中文用户文档](docs/zh-cn/README.md)
+- [开发者文档（英文）](docs/dev/README.md)
 
 ## 解决的问题
 

@@ -36,7 +36,8 @@ codex-rosetta-gateway --host 127.0.0.1 -v
 
 ## Full Documentation
 
-Not available yet.
+- [English user documentation](docs/en/README.md)
+- [Developer documentation](docs/dev/README.md)
 
 ## Problems This Project Addresses
 

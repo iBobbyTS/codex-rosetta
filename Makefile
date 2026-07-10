@@ -11,7 +11,7 @@ V ?= $(VERSION)
 PYPI_MIRROR ?=
 REGISTRY_MIRROR ?=
 CODEX_SOURCE ?= ../openai-codex-src
-CODEX_CONTRACT_BASELINE ?= version-compatibility/codex-source-contract.json
+CODEX_CONTRACT_BASELINE ?= docs/dev/version-compatibility/codex-source-contract.json
 CODEX_CONTRACT_SCRIPT := scripts/check_codex_compatibility.py
 
 # Default target
@@ -218,7 +218,7 @@ help:
 	@echo ""
 	@echo "Usage examples:"
 	@echo "  make build-docker                  # build from local wheel or PyPI, tag=VERSION"
-	@echo "  make build-docker V=0.5.0          # install 0.5.0 from PyPI, tag=0.5.0"
+	@echo "  make build-docker V=0.144.0.r0     # install 0.144.0.r0 from PyPI, tag=0.144.0.r0"
 	@echo "  make build-docker V=dev-test       # use local wheel in dist/, tag=dev-test"
 	@echo "  make build-docker PYPI_MIRROR=https://pypi.tuna.tsinghua.edu.cn/simple"
 	@echo "  make build-docker REGISTRY_MIRROR=docker.1ms.run"
