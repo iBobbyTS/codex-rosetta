@@ -821,6 +821,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert "standalone_models" not in body
     assert body["model_groups"]["OpenAI"]["provider"] == "openai"
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
+    assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "grouped-upstream"
     )
@@ -871,6 +872,8 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.provider_name == "openai"
     assert route.upstream_model == "gpt-upstream"
     assert route.model_capabilities == ["text"]
+    assert route.tool_profile_name == "builtin"
+    assert route.tool_profile
 
 
 def test_delete_model_group_removes_group_and_runtime_models(tmp_path):
@@ -969,6 +972,23 @@ def test_admin_html_splits_responses_internal_handling_options():
     assert 'id="provProtocolHint"' in html
     assert "responses_passthrough: 'protocol.responsesPassthroughHint'" in html
     assert "responses_rosetta: 'protocol.responsesRosettaHint'" in html
+
+
+def test_admin_html_hides_model_group_profile_only_for_responses_pass_through():
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    assert 'id="modelGroupProvider" onchange="onModelGroupProviderChange()"' in html
+    assert "api_type !== 'responses_passthrough'" in html
+    assert "groupType === 'llm' && _modelGroupProviderUsesToolProfiles()" in html
+    assert "if (groupType === 'llm' && _modelGroupProviderUsesToolProfiles())" in html
 
 
 def test_admin_html_exposes_request_body_limit_options():

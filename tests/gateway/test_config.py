@@ -536,3 +536,37 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
         "tool_profile": "builtin",
         "models": {"gpt-test": {}},
     }
+
+
+def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "test": {
+                        "api_key": "sk-test",
+                        "base_url": "https://api.example.test",
+                        "provider": "custom",
+                        "api_type": "responses_rosetta",
+                    }
+                },
+                "tool_profiles": {},
+                "model_groups": {},
+                "server": _secure_server(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _cmd_add_model_group(
+        Namespace(
+            config=str(config_path),
+            name="Test Rosetta",
+            provider="test",
+            type="llm",
+        )
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Test Rosetta"]["tool_profile"] == "builtin"

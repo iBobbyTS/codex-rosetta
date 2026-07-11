@@ -22,6 +22,7 @@ from .config import (
     discover_config,
     load_config,
     load_config_raw,
+    provider_supports_tool_profiles,
     write_config,
 )
 from .logging import get_logger, setup_logging
@@ -243,7 +244,12 @@ def _cmd_add_model_group(args: argparse.Namespace) -> None:
     groups[args.name] = {
         "provider": args.provider,
         "type": args.type,
-        **({"tool_profile": "builtin"} if args.type == "llm" else {}),
+        **(
+            {"tool_profile": "builtin"}
+            if args.type == "llm"
+            and provider_supports_tool_profiles(providers[args.provider])
+            else {}
+        ),
         "models": {},
     }
     _write_jsonc(path, data)

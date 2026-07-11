@@ -175,6 +175,39 @@ def provider_responses_processing(
     return "rosetta" if cfg.get("api_type") == "responses_rosetta" else "passthrough"
 
 
+def provider_supports_tool_profiles(cfg: Any) -> bool:
+    """Return whether a provider is allowed to use model-group Tool Profiles."""
+    return isinstance(cfg, dict) and cfg.get("api_type") != "responses_passthrough"
+
+
+def resolve_model_tool_profile_names(
+    raw_model_groups: Any,
+    raw_providers: dict[str, dict[str, str]],
+    tool_profiles: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Resolve Profile names for every model except Responses pass-through."""
+    result: dict[str, str] = {}
+    if not isinstance(raw_model_groups, dict):
+        return result
+    for group_name, group in raw_model_groups.items():
+        if not isinstance(group, dict) or group.get("type") != "llm":
+            continue
+        if not provider_supports_tool_profiles(
+            raw_providers.get(group.get("provider"))
+        ):
+            continue
+        profile_name = validate_tool_profile_reference(
+            group.get("tool_profile", BUILTIN_TOOL_PROFILE),
+            tool_profiles,
+            field=f"config: model_groups.{group_name}.tool_profile",
+        )
+        group_models = group.get("models", {})
+        if isinstance(group_models, dict):
+            for model_name in group_models:
+                result[model_name] = profile_name
+    return result
+
+
 def derive_provider_shim_name(provider: Any, api_type: Any) -> str | None:
     """Return the registered shim for a provider/protocol pair, when available."""
     if not provider or not api_type:
@@ -455,21 +488,9 @@ class GatewayConfig:
             self._parse_models(self._expanded_raw_models, self._raw_providers)
         )
         self.tool_profiles = normalize_tool_profiles(raw.get("tool_profiles"))
-        self.model_tool_profile_names: dict[str, str] = {}
-        raw_model_groups = raw.get("model_groups", {})
-        if isinstance(raw_model_groups, dict):
-            for group_name, group in raw_model_groups.items():
-                if not isinstance(group, dict) or group.get("type") != "llm":
-                    continue
-                profile_name = validate_tool_profile_reference(
-                    group.get("tool_profile", BUILTIN_TOOL_PROFILE),
-                    self.tool_profiles,
-                    field=f"config: model_groups.{group_name}.tool_profile",
-                )
-                group_models = group.get("models", {})
-                if isinstance(group_models, dict):
-                    for model_name in group_models:
-                        self.model_tool_profile_names[model_name] = profile_name
+        self.model_tool_profile_names = resolve_model_tool_profile_names(
+            raw.get("model_groups", {}), self._raw_providers, self.tool_profiles
+        )
 
         _server = raw.get("server", {})
         self.host: str = _server.get("host", "127.0.0.1")
@@ -811,9 +832,7 @@ class GatewayConfig:
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
         caps = self.model_capabilities.get(model, list(self.DEFAULT_CAPABILITIES))
-        tool_profile_name = self.model_tool_profile_names.get(
-            model, BUILTIN_TOOL_PROFILE
-        )
+        tool_profile_name = self.model_tool_profile_names.get(model)
 
         route = ResolvedRoute(
             source_provider=source_provider,
@@ -823,7 +842,11 @@ class GatewayConfig:
             upstream_model=upstream_model,
             model_capabilities=caps,
             tool_profile_name=tool_profile_name,
-            tool_profile=resolve_tool_profile(tool_profile_name, self.tool_profiles),
+            tool_profile=(
+                resolve_tool_profile(tool_profile_name, self.tool_profiles)
+                if tool_profile_name is not None
+                else {}
+            ),
             responses_processing=self.provider_responses_processing[provider_name],
         )
         return route, self.providers[provider_name]

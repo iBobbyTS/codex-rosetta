@@ -179,7 +179,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Responses→Responses Pass-through mode retains unknown fields, original JSON and original SSE bytes below the transport safety envelope, while Rosetta mode selects Responses→IR→Responses without changing the wire protocol;
 - header allowlist; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
-- Verify model-group Tool Profiles on Responses→Responses and Responses→Chat routes, including Disabled filtering, Modified localization/restoration, Namespace expansion, Rosetta injection selection, and Built-in defaults;
+- Verify model-group Tool Profiles on Responses Rosetta, Chat, Anthropic, and Google routes, including Disabled filtering, Modified handling, Namespace expansion, Rosetta injection selection, and Built-in defaults; verify only Responses Pass through omits and ignores Profiles;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
 - The order of `response.created`, item added/delta/done, completed/failed/incomplete;

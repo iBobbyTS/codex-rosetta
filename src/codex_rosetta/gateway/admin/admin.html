@@ -941,7 +941,7 @@ body { padding-bottom: 26px; }
     </div>
     <div class="form-group">
       <label data-i18n="label.provider">Provider</label>
-      <select id="modelGroupProvider"></select>
+      <select id="modelGroupProvider" onchange="onModelGroupProviderChange()"></select>
     </div>
     <div class="form-group">
       <label data-i18n="label.modelType">Model Type</label>
@@ -2496,12 +2496,22 @@ function openModelGroupModal(groupName) {
   document.getElementById('modelGroupModal').classList.add('open');
 }
 
+function _modelGroupProviderUsesToolProfiles() {
+  const providerName = document.getElementById('modelGroupProvider').value;
+  const provider = configData?.providers?.[providerName];
+  return !!provider && provider.api_type !== 'responses_passthrough';
+}
+
+function onModelGroupProviderChange() {
+  onModelGroupTypeChange();
+}
+
 function onModelGroupTypeChange() {
   const groupType = document.querySelector('input[name="modelGroupType"]:checked')?.value || 'llm';
   document.querySelectorAll('#modelGroupRows .group-cap-wrap').forEach(el => {
     el.style.display = groupType === 'llm' ? '' : 'none';
   });
-  document.getElementById('modelGroupToolProfileGroup').style.display = groupType === 'llm' ? '' : 'none';
+  document.getElementById('modelGroupToolProfileGroup').style.display = groupType === 'llm' && _modelGroupProviderUsesToolProfiles() ? '' : 'none';
 }
 
 function addModelGroupRow(modelName, info) {
@@ -2551,7 +2561,9 @@ async function saveModelGroup() {
     return;
   }
   const body = {provider, type: groupType, models};
-  if (groupType === 'llm') body.tool_profile = document.getElementById('modelGroupToolProfile').value || 'builtin';
+  if (groupType === 'llm' && _modelGroupProviderUsesToolProfiles()) {
+    body.tool_profile = document.getElementById('modelGroupToolProfile').value || 'builtin';
+  }
   const originalName = document.getElementById('modelGroupName').dataset.originalName;
   if (originalName && originalName !== name) {
     body.rename_from = originalName;
@@ -2924,7 +2936,7 @@ function renderModels() {
       <div class="model-group-head">
         <div class="model-group-title">
           <button type="button" class="key-btn model-group-toggle" onclick="toggleModelGroup(${handlerArg(groupName)})" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '&#9656;' : '&#9662;'}</button>
-          <code>${esc(groupName)}</code><span class="model-group-meta">${esc(group.type)} · ${esc(provider)} · ${esc(group.tool_profile || 'builtin')} · ${modelEntries.length}</span>
+          <code>${esc(groupName)}</code><span class="model-group-meta">${esc([group.type, provider, ...(group.tool_profile ? [group.tool_profile] : []), String(modelEntries.length)].join(' · '))}</span>
         </div>
         <div class="model-group-actions">
           <button class="btn btn-sm" onclick="openModelGroupModal(${handlerArg(groupName)})">${t('btn.edit')}</button>

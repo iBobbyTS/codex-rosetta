@@ -47,14 +47,17 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     assert contract["builtin"]["injection.claude_code.read"] == "injected"
 
 
-def test_gateway_config_resolves_group_profile_into_route():
+@pytest.mark.parametrize(
+    "api_type", ["responses_rosetta", "chat", "anthropic", "google"]
+)
+def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
     tools = _profile(**{"function.update_plan": "disabled"})
     raw = {
         "providers": {
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "api_type": "chat",
+                "api_type": api_type,
             }
         },
         "tool_profiles": {"custom": {"tools": tools}},
@@ -73,9 +76,12 @@ def test_gateway_config_resolves_group_profile_into_route():
     }
 
     route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+    body = {"tools": [{"type": "function", "name": "update_plan", "parameters": {}}]}
+    adapted = _apply_tool_adaptation(body, route)
 
     assert route.tool_profile_name == "custom"
     assert route.tool_profile["function.update_plan"] == "disabled"
+    assert "tools" not in adapted
 
 
 def test_gateway_config_rejects_unknown_group_profile():
@@ -84,7 +90,7 @@ def test_gateway_config_rejects_unknown_group_profile():
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "api_type": "chat",
+                "api_type": "responses_rosetta",
             }
         },
         "tool_profiles": {},
@@ -104,6 +110,41 @@ def test_gateway_config_rejects_unknown_group_profile():
 
     with pytest.raises(ValueError, match="unknown tool profile 'missing'"):
         GatewayConfig(raw)
+
+
+def test_pass_through_provider_ignores_group_profile_completely():
+    tools = _profile(**{"function.update_plan": "disabled"})
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": "responses_passthrough",
+            }
+        },
+        "tool_profiles": {"custom": {"tools": tools}},
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "custom",
+                "models": {"gpt-test": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+    body = {"tools": [{"type": "function", "name": "update_plan", "parameters": {}}]}
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert route.responses_processing == "passthrough"
+    assert route.tool_profile_name is None
+    assert route.tool_profile == {}
+    assert adapted is body
 
 
 def test_profile_filters_top_level_lite_and_namespace_children():

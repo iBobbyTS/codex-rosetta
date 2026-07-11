@@ -6,7 +6,7 @@ from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
-from ...config import load_config_raw
+from ...config import load_config_raw, provider_supports_tool_profiles
 from ...tool_profiles import (
     BUILTIN_TOOL_PROFILE,
     normalize_tool_profile_tools,
@@ -38,6 +38,23 @@ def _load_profile_config(request: Any) -> tuple[str, dict[str, Any]] | Response:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
 
+def _tool_profile_references(data: dict[str, Any]) -> dict[str, list[str]]:
+    """Return references from model groups whose provider enables profiles."""
+    references: dict[str, list[str]] = {}
+    providers = data.get("providers", {}) or {}
+    model_groups = data.get("model_groups", {}) or {}
+    if not isinstance(providers, dict) or not isinstance(model_groups, dict):
+        return references
+    for group_name, group in model_groups.items():
+        if not isinstance(group, dict) or group.get("type") != "llm":
+            continue
+        if not provider_supports_tool_profiles(providers.get(group.get("provider"))):
+            continue
+        profile_name = group.get("tool_profile", BUILTIN_TOOL_PROFILE)
+        references.setdefault(profile_name, []).append(group_name)
+    return references
+
+
 async def get_tool_profiles(request: Any) -> Response:
     """Return the built-in and persisted user tool profiles."""
     loaded = _load_profile_config(request)
@@ -49,15 +66,6 @@ async def get_tool_profiles(request: Any) -> Response:
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
-    references: dict[str, list[str]] = {}
-    model_groups = data.get("model_groups", {})
-    if isinstance(model_groups, dict):
-        for group_name, group in model_groups.items():
-            if not isinstance(group, dict) or group.get("type") != "llm":
-                continue
-            profile_name = group.get("tool_profile", BUILTIN_TOOL_PROFILE)
-            references.setdefault(profile_name, []).append(group_name)
-
     return JSONResponse(
         {
             "profiles": tool_profiles_for_admin(profiles),
@@ -65,7 +73,7 @@ async def get_tool_profiles(request: Any) -> Response:
                 item_id: list(states)
                 for item_id, states in tool_profile_contract()["supported"].items()
             },
-            "references": references,
+            "references": _tool_profile_references(data),
         }
     )
 
@@ -120,11 +128,7 @@ async def delete_tool_profile(request: Any, **kwargs: Any) -> Response:
     if not isinstance(profiles, dict) or name not in profiles:
         return JSONResponse({"error": f"Tool profile '{name}' not found"}, 404)
 
-    references = sorted(
-        group_name
-        for group_name, group in (data.get("model_groups", {}) or {}).items()
-        if isinstance(group, dict) and group.get("tool_profile") == name
-    )
+    references = sorted(_tool_profile_references(data).get(name, []))
     if references:
         return JSONResponse(
             {
