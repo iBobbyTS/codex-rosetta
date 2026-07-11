@@ -203,7 +203,12 @@ def detect_stream_request(source_provider: ProviderType, body: dict[str, Any]) -
 
 def extract_model(source_provider: ProviderType, body: dict[str, Any]) -> str | None:
     """Extract the model name from a source-format request body."""
-    return body.get("model")
+    model = body.get("model")
+    if model is None:
+        return None
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("'model' must be a non-empty string")
+    return model
 
 
 def _is_openai_responses_direct(route: ResolvedRoute) -> bool:

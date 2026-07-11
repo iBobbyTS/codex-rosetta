@@ -18,6 +18,7 @@ from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from .config import GatewayConfig
 from .headers import build_upstream_extra_headers
 from .logging import get_logger, record_request_stat
+from .proxy import extract_model
 from .transport import UpstreamConnectionError, UpstreamTransport
 
 logger = get_logger()
@@ -63,7 +64,18 @@ async def handle_embeddings(
             status_code=400,
         )
 
-    model = body.get("model")
+    try:
+        model = extract_model("openai_chat", body)
+    except ValueError as exc:
+        return JSONResponse(
+            {
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                }
+            },
+            status_code=400,
+        )
     if not model:
         return JSONResponse(
             {

@@ -493,7 +493,12 @@ async def _proxy_handler(
         return resp
 
     # Determine model
-    model = model_override or extract_model(source_provider, body)
+    try:
+        model = model_override or extract_model(source_provider, body)
+    except ValueError as exc:
+        resp = error_response_for_source(source_provider, 400, str(exc))
+        resp.headers["x-request-id"] = request_id
+        return resp
     if not model:
         resp = error_response_for_source(
             source_provider, 400, "Missing 'model' in request body"
