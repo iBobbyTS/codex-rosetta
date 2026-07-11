@@ -87,6 +87,31 @@ def test_redaction_preserves_non_token_secrets_and_redacts_token_boundary():
     assert "Bearer <redacted>" in redacted
 
 
+def test_redaction_covers_bare_gateway_internal_and_google_keys_only():
+    gateway_key = "rsk-" + "a" * 48
+    internal_key = "rsk-internal-" + "b" * 32
+    google_key = "AIza" + "C" * 35
+    preserved = (
+        "password=keep-password; secret=keep-secret; "
+        "client_secret=keep-client-secret; prompt=keep-prompt"
+    )
+
+    redacted = SCRIPT["redact_text"](
+        f"{gateway_key} {internal_key} {google_key}; {preserved}"
+    )
+
+    assert redacted.count("<redacted-key>") == 3
+    for token in (gateway_key, internal_key, google_key):
+        assert token not in redacted
+    for content in (
+        "password=keep-password",
+        "secret=keep-secret",
+        "client_secret=keep-client-secret",
+        "prompt=keep-prompt",
+    ):
+        assert content in redacted
+
+
 def test_deduplicates_same_session_id_by_largest_copy(tmp_path: Path):
     session_id = "019f3cbf-be45-7813-9d46-ff29d2773507"
     first = tmp_path / "active" / f"rollout-{session_id}.jsonl"
