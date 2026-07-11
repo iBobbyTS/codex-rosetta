@@ -711,7 +711,7 @@ body { padding-bottom: 26px; }
         <button type="button" class="tool-filter-btn" data-tool-filter="namespace" onclick="setToolCatalogFilter('namespace')" data-i18n="tools.filter.namespace">Namespace</button>
         <button type="button" class="tool-filter-btn" data-tool-filter="hosted" onclick="setToolCatalogFilter('hosted')" data-i18n="tools.filter.hosted">Hosted</button>
         <button type="button" class="tool-filter-btn" data-tool-filter="custom" onclick="setToolCatalogFilter('custom')" data-i18n="tools.filter.custom">Custom</button>
-        <button type="button" class="tool-filter-btn" data-tool-filter="custom_injection" onclick="setToolCatalogFilter('custom_injection')" data-i18n="tools.filter.injection">Custom Tool Injection</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="custom_injection" onclick="setToolCatalogFilter('custom_injection')" data-i18n="tools.filter.injection">Custom Tools (injected by Codex Rosetta)</button>
       </div>
       <div class="tool-catalog-status" id="toolCatalogStatus" data-i18n="tools.loading">Loading tool catalog...</div>
       <div class="tool-catalog-groups" id="toolCatalogGroups" hidden></div>
@@ -1172,9 +1172,9 @@ const I18N = {
     'tools.disabledHint':'Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.',
     'tools.filterLabel':'Filter tool types',
     'tools.filter.all':'All', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
-    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Custom Tool Injection',
+    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Custom Tools (injected by Codex Rosetta)',
     'tools.group.function':'Functions', 'tools.group.namespace':'Namespaces', 'tools.group.hosted':'Hosted Tools',
-    'tools.group.custom':'Custom Tools', 'tools.group.custom_injection':'Custom Tool Injection',
+    'tools.group.custom':'Custom Tools (from Codex)', 'tools.group.custom_injection':'Custom Tools (injected by Codex Rosetta)',
     'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
     'tools.type.custom':'Custom', 'tools.type.custom_injection':'Injection',
     'tools.policy.disabled':'Disabled', 'tools.policy.passthrough':'Passthrough',
@@ -1343,9 +1343,9 @@ const I18N = {
     'tools.disabledHint':'\u201c\u7981\u7528\u201d\u4ec5\u8868\u793a\u4e0d\u5411\u4e0a\u6e38\u6a21\u578b\u76f4\u63a5\u66b4\u9732\uff1b\u5185\u90e8\u8f6c\u6362\u4ecd\u53ef\u5c06\u8c03\u7528\u6620\u5c04\u5230\u8be5\u5de5\u5177\u3002',
     'tools.filterLabel':'\u8fc7\u6ee4\u5de5\u5177\u7c7b\u578b',
     'tools.filter.all':'\u5168\u90e8', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
-    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'\u81ea\u5b9a\u4e49\u5de5\u5177\u6ce8\u5165',
+    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Codex Rosetta \u6ce8\u5165\u7684 Custom \u5de5\u5177',
     'tools.group.function':'Function \u5de5\u5177', 'tools.group.namespace':'Namespace \u5de5\u5177', 'tools.group.hosted':'Hosted \u5de5\u5177',
-    'tools.group.custom':'Custom \u5de5\u5177', 'tools.group.custom_injection':'\u81ea\u5b9a\u4e49\u5de5\u5177\u6ce8\u5165',
+    'tools.group.custom':'\u6765\u81ea Codex \u7684 Custom \u5de5\u5177', 'tools.group.custom_injection':'Codex Rosetta \u6ce8\u5165\u7684 Custom \u5de5\u5177',
     'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
     'tools.type.custom':'Custom', 'tools.type.custom_injection':'\u6ce8\u5165',
     'tools.policy.disabled':'\u7981\u7528', 'tools.policy.passthrough':'\u76f4\u4f20',
