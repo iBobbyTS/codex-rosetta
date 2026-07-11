@@ -31,8 +31,8 @@ make check-codex-compat
 python -m build
 ```
 
-Install the wheel into clean Python 3.10 and current-supported-Python virtual
-environments, then verify the core import and `codex-rosetta-gateway --version`.
+Install the wheel into a clean Python 3.13 virtual environment, then verify the
+core import and `codex-rosetta-gateway --version`.
 Complete any real Codex/API tests triggered by the version-compatibility
 checklist before claiming compatibility.
 
