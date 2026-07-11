@@ -480,7 +480,7 @@ def _build_provider_entry(
 def _handle_provider_rename(
     data: dict[str, Any], rename_from: str, name: str
 ) -> Response | None:
-    """Handle provider rename: remove old entry, update model refs."""
+    """Handle provider rename and update model-group references."""
     providers = data.get("providers", {})
     if rename_from not in providers:
         return JSONResponse(
@@ -493,12 +493,6 @@ def _handle_provider_rename(
             status_code=409,
         )
     del providers[rename_from]
-    models = data.get("models", {})
-    for model_name, model_val in models.items():
-        if isinstance(model_val, str) and model_val == rename_from:
-            models[model_name] = name
-        elif isinstance(model_val, dict) and model_val.get("provider") == rename_from:
-            model_val["provider"] = name
     model_groups = data.get("model_groups", {})
     if isinstance(model_groups, dict):
         for group_val in model_groups.values():

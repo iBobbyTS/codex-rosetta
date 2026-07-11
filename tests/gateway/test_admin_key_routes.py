@@ -20,7 +20,7 @@ from codex_rosetta.gateway.config import GatewayConfig
 def _config() -> dict:
     return {
         "providers": {},
-        "models": {},
+        "model_groups": {},
         "server": {
             "admin_password": "test-admin-password",
             "api_keys": [
@@ -94,7 +94,7 @@ def test_create_key_activation_failure_rolls_back_exact_file(
     monkeypatch: pytest.MonkeyPatch,
 ):
     config_path = tmp_path / "config.jsonc"
-    original = b'{\n  "providers": {},\n  "models": {},\n  "server": {\n    "admin_password": "test-admin-password",\n    "api_keys": [{"id": "only-client", "label": "Only client", "key": "test-gateway-key"}]\n  }\n}\n'
+    original = b'{\n  "providers": {},\n  "model_groups": {},\n  "server": {\n    "admin_password": "test-admin-password",\n    "api_keys": [{"id": "only-client", "label": "Only client", "key": "test-gateway-key"}]\n  }\n}\n'
     config_path.write_bytes(original)
 
     def _fail_activation(*args, **kwargs):

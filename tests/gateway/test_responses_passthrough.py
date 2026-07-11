@@ -14,13 +14,12 @@ from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStre
 from codex_rosetta.routing import ResolvedRoute
 
 
-def _responses_route(*, tool_adaptation: dict[str, Any] | None = None) -> ResolvedRoute:
+def _responses_route() -> ResolvedRoute:
     return ResolvedRoute(
         source_provider="openai_responses",
         target_provider="openai_responses",
         provider_name="test-provider",
         upstream_model="gpt-test",
-        tool_adaptation=tool_adaptation,
     )
 
 
@@ -89,8 +88,8 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert "request_conversion_ms" not in profile
 
 
-def test_tool_adaptation_removes_image_generation_before_passthrough():
-    """Configured models can hide the image_generation tool from upstream."""
+def test_direct_passthrough_preserves_image_generation_tools():
+    """Responses passthrough bypasses every Chat-only tool adaptation."""
     captured_body: dict[str, Any] = {}
     upstream_body = {
         "id": "resp_123",
@@ -130,12 +129,7 @@ def test_tool_adaptation_removes_image_generation_before_passthrough():
 
     async def run():
         return await handle_non_streaming(
-            _responses_route(
-                tool_adaptation={
-                    "localize_code_editing_tools": False,
-                    "remove_image_generation": True,
-                }
-            ),
+            _responses_route(),
             _provider_info(),
             body,
             transport=transport,
@@ -145,17 +139,13 @@ def test_tool_adaptation_removes_image_generation_before_passthrough():
 
     assert response.status_code == 200
     assert profile["passthrough"] is True
-    assert captured_body["tools"] == [
-        {"type": "web_search_preview"},
-        {"type": "function", "name": "apply_patch", "parameters": {}},
-    ]
-    assert "tool_choice" not in captured_body
+    assert captured_body == body
     assert captured_body["tool_config"] == {"disable_parallel": True}
     assert body["tools"][1] == {"type": "image_generation"}
 
 
-def test_tool_adaptation_removes_responses_lite_image_generation():
-    """Image generation is removed from Responses Lite embedded tools."""
+def test_direct_passthrough_preserves_responses_lite_tools():
+    """Responses Lite embedded tools also pass through unchanged."""
     captured_body: dict[str, Any] = {}
 
     async def send_request(
@@ -213,12 +203,7 @@ def test_tool_adaptation_removes_responses_lite_image_generation():
 
     async def run():
         return await handle_non_streaming(
-            _responses_route(
-                tool_adaptation={
-                    "localize_code_editing_tools": False,
-                    "remove_image_generation": True,
-                }
-            ),
+            _responses_route(),
             _provider_info(),
             body,
             transport=transport,
@@ -227,12 +212,7 @@ def test_tool_adaptation_removes_responses_lite_image_generation():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert captured_body["input"][0]["tools"] == [
-        {"type": "function", "name": "exec_command", "parameters": {}}
-    ]
-    assert "tool_choice" not in captured_body
-    assert captured_body["tool_config"] == {"disable_parallel": True}
-    assert body["input"][0]["tools"][0]["name"] == "image_gen"
+    assert captured_body == body
 
 
 class _RawStream(UpstreamStream):
@@ -296,11 +276,7 @@ def test_openai_responses_streaming_direct_raw_passthrough():
 
     async def run():
         response, profile = await handle_streaming(
-            _responses_route(
-                tool_adaptation={
-                    "remove_image_generation": True,
-                }
-            ),
+            _responses_route(),
             _provider_info(),
             body,
             transport=transport,
@@ -318,17 +294,6 @@ def test_openai_responses_streaming_direct_raw_passthrough():
     assert response.status_code == 200
     assert response.content_type == "text/event-stream"
     assert chunks == raw_chunks
-    assert captured_body == {
-        "model": "gpt-test",
-        "input": [
-            {
-                "type": "additional_tools",
-                "tools": [{"type": "web_search_preview"}],
-            },
-            {"type": "message", "role": "user", "content": "hello"},
-        ],
-        "stream": True,
-    }
-    assert body["input"][0]["tools"][0] == {"type": "image_generation"}
+    assert captured_body == body
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile

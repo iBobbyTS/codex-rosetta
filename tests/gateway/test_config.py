@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import json
 import sys
+from argparse import Namespace
 
 import pytest
 
-from codex_rosetta.gateway.cli import _empty_config_template
+from codex_rosetta.gateway.cli import (
+    _cmd_add_model,
+    _cmd_add_model_group,
+    _empty_config_template,
+)
 from codex_rosetta.gateway.config import GatewayConfig, load_config
 
 
@@ -30,7 +35,13 @@ def _minimal_raw(**server_overrides) -> dict:
                 "type": "openai",
             }
         },
-        "models": {"gpt-test": "test"},
+        "model_groups": {
+            "test-llm": {
+                "provider": "test",
+                "type": "llm",
+                "models": {"gpt-test": {"capabilities": ["text"]}},
+            }
+        },
         "server": _secure_server(),
     }
     raw["server"].update(server_overrides)
@@ -284,7 +295,13 @@ class TestProviderApiTypeResolution:
                     "type": "anthropic",
                 }
             },
-            "models": {"deepseek-test": "DeepSeek"},
+            "model_groups": {
+                "DeepSeek": {
+                    "provider": "DeepSeek",
+                    "type": "llm",
+                    "models": {"deepseek-test": {}},
+                }
+            },
             "server": _secure_server(),
         }
 
@@ -307,7 +324,13 @@ class TestProviderApiTypeResolution:
                     "api_type": "anthropic",
                 }
             },
-            "models": {"minimax-test": "MiniMax"},
+            "model_groups": {
+                "MiniMax": {
+                    "provider": "MiniMax",
+                    "type": "llm",
+                    "models": {"minimax-test": {}},
+                }
+            },
             "server": _secure_server(),
         }
 
@@ -329,7 +352,13 @@ class TestProviderApiTypeResolution:
                     "api_type": "responses",
                 }
             },
-            "models": {"pixel-test": "Pixel"},
+            "model_groups": {
+                "Pixel": {
+                    "provider": "Pixel",
+                    "type": "llm",
+                    "models": {"pixel-test": {}},
+                }
+            },
             "server": _secure_server(),
         }
 
@@ -353,187 +382,128 @@ class TestProviderApiTypeResolution:
         assert route.shim_name == "openai"
 
 
-class TestModelToolAdaptation:
-    """Per-model tool adaptation is available on resolved routes."""
-
-    def test_resolve_includes_tool_adaptation(self):
-        raw = _minimal_raw()
-        raw["models"] = {
-            "gpt-test": {
-                "provider": "test",
-                "capabilities": ["text", "tools"],
-                "tool_adaptation": {
-                    "localize_code_editing_tools": False,
-                    "use_apply_patch_for_code_edits": False,
-                    "remove_image_generation": True,
-                    "enable_tool_description_optimization": False,
-                    "enable_phase_detection": False,
-                    "tool_call_cache_ttl_hours": 12,
-                },
-            }
-        }
-
-        cfg = GatewayConfig(raw)
-        route, _provider = cfg.resolve("openai_responses", "gpt-test")
-
-        assert cfg.model_tool_adaptations["gpt-test"] == {
-            "localize_code_editing_tools": False,
-            "use_apply_patch_for_code_edits": False,
-            "remove_image_generation": True,
-            "enable_tool_description_optimization": False,
-            "enable_phase_detection": False,
-            "tool_call_cache_ttl_hours": 12,
-        }
-        assert route.tool_adaptation == {
-            "localize_code_editing_tools": False,
-            "use_apply_patch_for_code_edits": False,
-            "remove_image_generation": True,
-            "enable_tool_description_optimization": False,
-            "enable_phase_detection": False,
-            "tool_call_cache_ttl_hours": 12,
-        }
-
-    @pytest.mark.parametrize(
-        "value",
-        [True, False, "nan", "inf", "1e999", 721, 1e100],
-    )
-    def test_rejects_invalid_tool_mapping_ttl(self, value):
-        raw = _minimal_raw()
-        raw["models"] = {
-            "gpt-test": {
-                "provider": "test",
-                "tool_adaptation": {"tool_call_cache_ttl_hours": value},
-            }
-        }
-
-        with pytest.raises(ValueError, match="at most 720 hours"):
-            GatewayConfig(raw)
-
-    @pytest.mark.parametrize("value", ["0.5", "720", 720.0])
-    def test_accepts_valid_string_and_boundary_tool_mapping_ttl(self, value):
-        raw = _minimal_raw()
-        raw["models"] = {
-            "gpt-test": {
-                "provider": "test",
-                "tool_adaptation": {"tool_call_cache_ttl_hours": value},
-            }
-        }
-
-        cfg = GatewayConfig(raw)
-
-        assert cfg.model_tool_adaptations["gpt-test"][
-            "tool_call_cache_ttl_hours"
-        ] == float(value)
-
-    def test_env_substituted_tool_mapping_ttl_uses_same_validator(
-        self, monkeypatch: pytest.MonkeyPatch
-    ):
-        raw = _minimal_raw()
-        raw["models"] = {
-            "gpt-test": {
-                "provider": "test",
-                "tool_adaptation": {"tool_call_cache_ttl_hours": "${TOOL_TTL}"},
-            }
-        }
-        monkeypatch.setenv("TOOL_TTL", "720")
-
-        cfg = GatewayConfig.from_raw_with_env(raw)
-
-        assert (
-            cfg.model_tool_adaptations["gpt-test"]["tool_call_cache_ttl_hours"] == 720.0
-        )
-
-
 class TestModelGroups:
-    """Model groups expand into the existing flat runtime routing table."""
+    """Model groups are the only persisted routing definition."""
 
-    def test_group_string_mapping_uses_group_provider_and_upstream_model(self):
+    def test_top_level_models_are_ignored(self):
         raw = _minimal_raw()
-        raw["models"] = {}
+        raw["models"] = {"ignored": "test"}
+        cfg = GatewayConfig(raw)
+        assert "ignored" not in cfg.models
+        assert cfg.models == {"gpt-test": "test"}
+
+    def test_llm_group_preserves_text_vision_and_upstream_model(self):
+        raw = _minimal_raw()
         raw["model_groups"] = {
             "OpenAI": {
                 "provider": "test",
+                "type": "llm",
                 "models": {
-                    "gpt-public": "gpt-upstream",
+                    "gpt-public": {
+                        "upstream_model": "gpt-upstream",
+                        "capabilities": ["text", "vision"],
+                    }
                 },
             }
         }
-
         cfg = GatewayConfig(raw)
         route, _provider = cfg.resolve("openai_responses", "gpt-public")
-
         assert cfg.models == {"gpt-public": "test"}
-        assert cfg.model_upstream_names == {"gpt-public": "gpt-upstream"}
-        assert cfg.model_capabilities == {"gpt-public": ["text"]}
-        assert route.provider_name == "test"
         assert route.upstream_model == "gpt-upstream"
+        assert route.model_capabilities == ["text", "vision"]
 
-    def test_group_dict_mapping_preserves_capabilities_and_model_settings(self):
-        raw = _minimal_raw()
-        raw["models"] = {}
-        raw["model_groups"] = {
-            "OpenAI": {
-                "provider": "test",
-                "models": {
-                    "gpt-tools": {
-                        "upstream_model": "gpt-tools-upstream",
-                        "capabilities": ["text", "tools", "reasoning"],
-                        "reasoning_mapping": "qwen_3_7",
-                        "tool_adaptation": {"remove_image_generation": True},
-                    },
-                },
-            }
-        }
-
-        cfg = GatewayConfig(raw)
-        route, _provider = cfg.resolve("openai_responses", "gpt-tools")
-
-        assert cfg.models == {"gpt-tools": "test"}
-        assert cfg.model_upstream_names == {"gpt-tools": "gpt-tools-upstream"}
-        assert cfg.model_capabilities == {"gpt-tools": ["text", "tools", "reasoning"]}
-        assert route.reasoning_mapping == "qwen_3_7"
-        assert route.tool_adaptation == {"remove_image_generation": True}
-
-    def test_legacy_reasoning_override_is_ignored(self):
-        raw = _minimal_raw()
-        raw["models"] = {
-            "gpt-test": {
-                "provider": "test",
-                "capabilities": ["text", "reasoning"],
-                "reasoning_override": {"thinking_type": "adaptive"},
-            }
-        }
-
-        cfg = GatewayConfig(raw)
-        route, _provider = cfg.resolve("openai_responses", "gpt-test")
-
-        assert not hasattr(route, "reasoning_override")
-        assert route.reasoning_mapping is None
-        assert cfg.model_reasoning_mappings == {}
-
-    def test_duplicate_model_names_across_flat_and_group_config_are_rejected(self):
+    def test_embedding_group_sets_embedding_capability_for_every_model(self):
         raw = _minimal_raw()
         raw["model_groups"] = {
-            "OpenAI": {
+            "Embeddings": {
                 "provider": "test",
-                "models": {"gpt-test": "gpt-upstream"},
+                "type": "embedding",
+                "models": {"embed-public": "embed-upstream"},
             }
         }
+        cfg = GatewayConfig(raw)
+        route, _provider = cfg.resolve("openai_chat", "embed-public")
+        assert route.upstream_model == "embed-upstream"
+        assert route.model_capabilities == ["embedding"]
 
+    @pytest.mark.parametrize("group_type", [None, "chat", ""])
+    def test_group_requires_supported_type(self, group_type):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["type"] = group_type
+        with pytest.raises(ValueError, match="type must be"):
+            GatewayConfig(raw)
+
+    def test_rejects_advanced_model_fields(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["models"]["gpt-test"] = {
+            "reasoning_mapping": "auto"
+        }
+        with pytest.raises(ValueError, match="unsupported fields"):
+            GatewayConfig(raw)
+
+    def test_rejects_non_text_vision_llm_capabilities(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["models"]["gpt-test"] = {
+            "capabilities": ["text", "tools"]
+        }
+        with pytest.raises(ValueError, match="unsupported capabilities"):
+            GatewayConfig(raw)
+
+    def test_duplicate_names_across_groups_are_rejected(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["second"] = {
+            "provider": "test",
+            "type": "llm",
+            "models": {"gpt-test": {}},
+        }
         with pytest.raises(ValueError, match="defined more than once"):
             GatewayConfig(raw)
 
     def test_models_from_disabled_group_provider_are_skipped(self):
         raw = _minimal_raw()
         raw["providers"]["test"]["enabled"] = False
-        raw["models"] = {}
-        raw["model_groups"] = {
-            "OpenAI": {
-                "provider": "test",
-                "models": {"gpt-public": "gpt-upstream"},
-            }
-        }
-
         cfg = GatewayConfig(raw)
-
         assert cfg.models == {}
+
+
+def test_cli_add_model_group_then_grouped_model(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(
+        json.dumps(
+            {
+                "providers": {
+                    "test": {
+                        "api_key": "sk-test",
+                        "base_url": "https://api.example.test",
+                        "type": "openai",
+                    }
+                },
+                "model_groups": {},
+                "server": _secure_server(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    _cmd_add_model_group(
+        Namespace(
+            config=str(config_path),
+            name="Test LLMs",
+            provider="test",
+            type="llm",
+        )
+    )
+    _cmd_add_model(
+        Namespace(
+            config=str(config_path),
+            name="gpt-test",
+            group="Test LLMs",
+        )
+    )
+
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Test LLMs"] == {
+        "provider": "test",
+        "type": "llm",
+        "models": {"gpt-test": {}},
+    }

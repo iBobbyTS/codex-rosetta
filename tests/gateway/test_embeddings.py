@@ -73,10 +73,7 @@ def echo_embedding_server():
 
 def _make_config(base_url: str, upstream_model: str | None = None) -> GatewayConfig:
     """Build a minimal GatewayConfig for embedding tests."""
-    model_entry: dict[str, Any] = {
-        "provider": "test-provider",
-        "capabilities": ["embedding"],
-    }
+    model_entry: dict[str, Any] = {}
     if upstream_model:
         model_entry["upstream_model"] = upstream_model
 
@@ -88,8 +85,12 @@ def _make_config(base_url: str, upstream_model: str | None = None) -> GatewayCon
                 "type": "openai",
             }
         },
-        "models": {
-            "my-embed": model_entry,
+        "model_groups": {
+            "embeddings": {
+                "provider": "test-provider",
+                "type": "embedding",
+                "models": {"my-embed": model_entry},
+            }
         },
         "server": {
             "admin_password": "test-admin-password",

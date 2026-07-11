@@ -179,6 +179,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Responses→Responses direct path retains unknown fields, original JSON and original SSE bytes below the transport safety envelope;
 - header allowlist; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
+- Verify protocol-fixed tool behavior: Responses→Responses is unchanged passthrough, while every Responses→Chat route applies the complete tool localization/restoration policy without model-level switches;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
 - The order of `response.created`, item added/delta/done, completed/failed/incomplete;

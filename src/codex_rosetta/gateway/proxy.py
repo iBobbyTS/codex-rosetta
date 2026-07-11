@@ -60,20 +60,17 @@ from .state_scope import GatewayStateScope
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
+    DEFAULT_TOOL_CALL_CACHE_TTL_HOURS,
     LOCALIZATION_CAPABILITIES_KEY,
     READ_OUTPUT_CACHE_KEY,
     LocalizedToolMapping,
     LocalizedToolCallStreamTransformer,
     NativeToolCapabilities,
     ReadOutputCache,
-    enable_phase_detection,
-    enable_tool_description_optimization,
     localized_mapping_from_tool_calls,
     localize_code_editing_chat_request,
     should_localize_code_tools,
-    tool_call_cache_ttl_hours,
     translate_localized_ir_response,
-    use_apply_patch_for_code_edits,
 )
 from .transport import (
     ProviderInfo,
@@ -586,9 +583,8 @@ def _remove_tool_definition(
 def _apply_tool_adaptation(
     body: dict[str, Any], route: ResolvedRoute
 ) -> dict[str, Any]:
-    """Apply per-model tool adaptation before passthrough or conversion."""
-    tool_adaptation = route.tool_adaptation or {}
-    if tool_adaptation.get("remove_image_generation"):
+    """Apply the fixed Chat-bridge tool policy before conversion."""
+    if route.target_provider == "openai_chat":
         return _remove_tool_definition(
             body,
             "image_generation",
@@ -745,7 +741,7 @@ def _translate_and_persist_localized_response_tools(
 ) -> None:
     if not should_localize_code_tools(route):
         return
-    ttl_hours = tool_call_cache_ttl_hours(route.tool_adaptation)
+    ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
     def _remember_mapping(mapping: LocalizedToolMapping) -> None:
         _persist_tool_mapping(
@@ -761,7 +757,7 @@ def _translate_and_persist_localized_response_tools(
         on_mapping=_remember_mapping if state_scope.persistent else None,
         capabilities=capabilities,
         read_cache=read_cache,
-        use_apply_patch=use_apply_patch_for_code_edits(route.tool_adaptation),
+        use_apply_patch=True,
     )
 
 
@@ -2116,9 +2112,7 @@ def _prepare_window_tool_search_request(
         return False
     deferred_tools = _defer_responses_namespace_tools_for_chat(
         body,
-        optimize_tool_descriptions=enable_tool_description_optimization(
-            route.tool_adaptation
-        ),
+        optimize_tool_descriptions=True,
     )
     window_tools.prepare_request(codex_window_id, deferred_tools, body)
     return True
@@ -2299,12 +2293,10 @@ async def handle_non_streaming(
         route.shim_name,
         upstream_model=model,
         model_capabilities=route.model_capabilities,
-        reasoning_mapping=route.reasoning_mapping,
+        reasoning_mapping=None,
         provider_name=route.provider_name,
         conversion_options={
-            "enable_tool_description_optimization": (
-                enable_tool_description_optimization(route.tool_adaptation)
-            ),
+            "enable_tool_description_optimization": True,
             "image_fetch_policy": image_fetch_policy,
         },
     )
@@ -2317,9 +2309,7 @@ async def handle_non_streaming(
                 codex_window_id,
                 ir_request,
                 pipeline,
-                optimize_tool_descriptions=enable_tool_description_optimization(
-                    route.tool_adaptation
-                ),
+                optimize_tool_descriptions=True,
             )
 
     try:
@@ -3169,12 +3159,10 @@ async def handle_streaming(
         route.shim_name,
         upstream_model=model,
         model_capabilities=route.model_capabilities,
-        reasoning_mapping=route.reasoning_mapping,
+        reasoning_mapping=None,
         provider_name=route.provider_name,
         conversion_options={
-            "enable_tool_description_optimization": (
-                enable_tool_description_optimization(route.tool_adaptation)
-            ),
+            "enable_tool_description_optimization": True,
             "image_fetch_policy": image_fetch_policy,
         },
     )
@@ -3187,9 +3175,7 @@ async def handle_streaming(
                 codex_window_id,
                 ir_request,
                 pipeline,
-                optimize_tool_descriptions=enable_tool_description_optimization(
-                    route.tool_adaptation
-                ),
+                optimize_tool_descriptions=True,
             )
 
     try:
@@ -3328,7 +3314,7 @@ async def handle_streaming(
             trace.log("ir_event", ir_event)
 
     if should_localize_code_tools(route):
-        ttl_hours = tool_call_cache_ttl_hours(route.tool_adaptation)
+        ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
         def _persist_stream_mapping(mapping: LocalizedToolMapping) -> None:
             _persist_tool_mapping(
@@ -3343,7 +3329,7 @@ async def handle_streaming(
             on_mapping=_persist_stream_mapping,
             capabilities=tool_capabilities,
             read_cache=read_cache,
-            use_apply_patch=use_apply_patch_for_code_edits(route.tool_adaptation),
+            use_apply_patch=True,
         )
     else:
         stream_transformer = None
@@ -3366,7 +3352,6 @@ async def handle_streaming(
         if route.source_provider in ("openai_responses", "open_responses")
         and route.target_provider == "openai_chat"
         and codex_window_id
-        and enable_phase_detection(route.tool_adaptation)
         else None
     )
 

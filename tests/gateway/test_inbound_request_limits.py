@@ -25,7 +25,13 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
                     "type": "openai",
                 }
             },
-            "models": {"gpt-test": "test-provider"},
+            "model_groups": {
+                "test": {
+                    "provider": "test-provider",
+                    "type": "llm",
+                    "models": {"gpt-test": {}},
+                }
+            },
             "server": {
                 "admin_password": "test-admin-password",
                 "api_keys": [

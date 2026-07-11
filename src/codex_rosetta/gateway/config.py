@@ -16,12 +16,10 @@ from urllib.parse import urlsplit
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.redaction import collect_token_values
 from codex_rosetta.observability.retention import resolve_request_log_caps
-from codex_rosetta.reasoning_mapping import normalize_reasoning_mapping
 from codex_rosetta.routing import ResolvedRoute
 
 from .providers import build_provider_info
 from .stream_trace import StreamTraceConfig
-from .tool_adaptation import validate_tool_call_cache_ttl_hours
 from .transport import ProviderInfo
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -427,40 +425,14 @@ class GatewayConfig:
             self._raw_providers
         )
 
+        # Top-level ``models`` is intentionally ignored. Model groups are the
+        # only persisted routing definition; this flat mapping is runtime-only.
         self._expanded_raw_models = self._expand_model_groups(
-            raw.get("models", {}), raw.get("model_groups", {})
+            raw.get("model_groups", {})
         )
         self.models, self.model_capabilities, self.model_upstream_names = (
             self._parse_models(self._expanded_raw_models, self._raw_providers)
         )
-
-        # Per-model reasoning mappings from config.jsonc (admin UI edits).
-        # Keyed by gateway model name (same as self.models keys).
-        self.model_reasoning_mappings: dict[str, str] = {}
-        self.model_tool_adaptations: dict[str, dict[str, Any]] = {}
-        for model_name, value in self._expanded_raw_models.items():
-            if isinstance(value, dict) and "reasoning_mapping" in value:
-                self.model_reasoning_mappings[model_name] = normalize_reasoning_mapping(
-                    value.get("reasoning_mapping")
-                )
-            if isinstance(value, dict) and value.get("tool_adaptation"):
-                tool_adaptation = value["tool_adaptation"]
-                if not isinstance(tool_adaptation, dict):
-                    raise ValueError(
-                        f"config: model '{model_name}' tool_adaptation must be an object"
-                    )
-                normalized_tool_adaptation = dict(tool_adaptation)
-                if "tool_call_cache_ttl_hours" in normalized_tool_adaptation:
-                    normalized_tool_adaptation["tool_call_cache_ttl_hours"] = (
-                        validate_tool_call_cache_ttl_hours(
-                            normalized_tool_adaptation["tool_call_cache_ttl_hours"],
-                            field=(
-                                f"config: model '{model_name}' "
-                                "tool_adaptation.tool_call_cache_ttl_hours"
-                            ),
-                        )
-                    )
-                self.model_tool_adaptations[model_name] = normalized_tool_adaptation
 
         _server = raw.get("server", {})
         self.host: str = _server.get("host", "127.0.0.1")
@@ -605,7 +577,7 @@ class GatewayConfig:
             return
         if not self.models:
             logger.warning(
-                "config: no routable models — models may reference disabled providers"
+                "config: no routable models — model groups may reference disabled providers"
             )
             return
         for model, provider in self.models.items():
@@ -638,13 +610,59 @@ class GatewayConfig:
         return provider_types, provider_shim_names
 
     @classmethod
+    def _expand_group_model(
+        cls,
+        *,
+        group_name: str,
+        group_type: str,
+        provider_name: str,
+        model_name: str,
+        model_value: Any,
+    ) -> dict[str, Any]:
+        """Normalize one persisted group member into a runtime route entry."""
+        if isinstance(model_value, str):
+            entry: dict[str, Any] = {"provider": provider_name}
+            if model_value:
+                entry["upstream_model"] = model_value
+        elif isinstance(model_value, dict):
+            entry = dict(model_value)
+            entry["provider"] = provider_name
+        else:
+            raise ValueError(
+                f"config: invalid model entry for '{model_name}' "
+                f"in model group '{group_name}'"
+            )
+
+        unsupported = set(entry) - {"provider", "upstream_model", "capabilities"}
+        if unsupported:
+            raise ValueError(
+                f"config: model '{model_name}' in model group "
+                f"'{group_name}' has unsupported fields: {sorted(unsupported)}"
+            )
+        if group_type == "embedding":
+            entry["capabilities"] = ["embedding"]
+            return entry
+
+        capabilities = entry.get("capabilities", ["text"])
+        if not isinstance(capabilities, list) or not capabilities:
+            capabilities = ["text"]
+        invalid_capabilities = set(capabilities) - {"text", "vision"}
+        if invalid_capabilities:
+            raise ValueError(
+                f"config: model '{model_name}' in model group "
+                f"'{group_name}' has unsupported capabilities: "
+                f"{sorted(invalid_capabilities)}"
+            )
+        entry["capabilities"] = list(dict.fromkeys(capabilities))
+        return entry
+
+    @classmethod
     def _expand_model_groups(
         cls,
-        raw_models: dict[str, Any],
         raw_model_groups: dict[str, Any],
     ) -> dict[str, Any]:
-        """Expand admin model groups into the flat routing table shape."""
-        expanded = dict(raw_models) if isinstance(raw_models, dict) else {}
+        """Expand the only supported routing definition into a runtime table."""
+        expanded: dict[str, Any] = {}
         if not raw_model_groups:
             return expanded
         if not isinstance(raw_model_groups, dict):
@@ -660,6 +678,12 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: model group '{group_name}' requires a provider"
                 )
+            group_type = group_value.get("type")
+            if group_type not in ("llm", "embedding"):
+                raise ValueError(
+                    f"config: model group '{group_name}' type must be "
+                    "'llm' or 'embedding'"
+                )
             group_models = group_value.get("models", {})
             if not isinstance(group_models, dict):
                 raise ValueError(
@@ -671,19 +695,13 @@ class GatewayConfig:
                     raise ValueError(
                         f"config: model '{model_name}' is defined more than once"
                     )
-                if isinstance(model_value, str):
-                    entry: dict[str, Any] = {"provider": provider_name}
-                    if model_value:
-                        entry["upstream_model"] = model_value
-                elif isinstance(model_value, dict):
-                    entry = dict(model_value)
-                    entry["provider"] = provider_name
-                else:
-                    raise ValueError(
-                        f"config: invalid model entry for '{model_name}' "
-                        f"in model group '{group_name}'"
-                    )
-                expanded[model_name] = entry
+                expanded[model_name] = cls._expand_group_model(
+                    group_name=group_name,
+                    group_type=group_type,
+                    provider_name=provider_name,
+                    model_name=model_name,
+                    model_value=model_value,
+                )
         return expanded
 
     @classmethod
@@ -694,10 +712,7 @@ class GatewayConfig:
     ) -> tuple[dict[str, ProviderType], dict[str, list[str]], dict[str, str]]:
         """Parse model routing entries from config.
 
-        Supports both string and dict formats:
-          - ``"model": "provider"`` (legacy)
-          - ``"model": {"provider": "p", "capabilities": [...]}``
-          - ``"model": {"provider": "p", "upstream_model": "actual_name"}``
+        Entries have already been normalized from model groups.
 
         Models referencing disabled/missing providers are silently skipped.
 
@@ -708,26 +723,20 @@ class GatewayConfig:
         model_capabilities: dict[str, list[str]] = {}
         model_upstream_names: dict[str, str] = {}
         for name, value in raw_models.items():
-            if isinstance(value, str):
-                provider_name = value
-            elif isinstance(value, dict):
-                provider_name = value["provider"]
-            else:
+            if not isinstance(value, dict):
                 raise ValueError(f"config: invalid model entry for '{name}'")
+            provider_name = value["provider"]
 
             if provider_name not in raw_providers:
                 continue
 
             models[name] = provider_name
-            if isinstance(value, str):
-                model_capabilities[name] = list(cls.DEFAULT_CAPABILITIES)
-            else:
-                model_capabilities[name] = value.get(
-                    "capabilities", list(cls.DEFAULT_CAPABILITIES)
-                )
-                upstream = value.get("upstream_model")
-                if upstream:
-                    model_upstream_names[name] = upstream
+            model_capabilities[name] = value.get(
+                "capabilities", list(cls.DEFAULT_CAPABILITIES)
+            )
+            upstream = value.get("upstream_model")
+            if upstream:
+                model_upstream_names[name] = upstream
         return models, model_capabilities, model_upstream_names
 
     @property
@@ -765,8 +774,6 @@ class GatewayConfig:
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
         caps = self.model_capabilities.get(model, list(self.DEFAULT_CAPABILITIES))
-        reasoning_mapping = self.model_reasoning_mappings.get(model)
-        tool_adaptation = self.model_tool_adaptations.get(model)
 
         route = ResolvedRoute(
             source_provider=source_provider,
@@ -775,7 +782,5 @@ class GatewayConfig:
             shim_name=shim_name,
             upstream_model=upstream_model,
             model_capabilities=caps,
-            reasoning_mapping=reasoning_mapping,
-            tool_adaptation=tool_adaptation,
         )
         return route, self.providers[provider_name]

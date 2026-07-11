@@ -639,7 +639,6 @@ body { padding-bottom: 26px; }
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm" onclick="openFetchModelsModal()" data-i18n="btn.fetchModels">&#x2B07; Fetch from Provider</button>
           <button class="btn btn-sm" onclick="openModelGroupModal()" data-i18n="btn.addModelGroup">+ Add Model Group</button>
-          <button class="btn btn-primary btn-sm" onclick="openModelModal()" data-i18n="btn.addModel">+ Add Model</button>
         </div>
       </div>
       <div class="model-toolbar">
@@ -650,14 +649,6 @@ body { padding-bottom: 26px; }
         <span class="model-count" id="modelCount"></span>
       </div>
       <div class="model-group-list" id="modelGroupList"></div>
-      <div class="table-scroll"><table>
-        <thead><tr>
-          <th class="sortable" onclick="sortModels('name')" id="sortName" data-i18n="col.model">Model</th>
-          <th class="sortable" onclick="sortModels('provider')" id="sortProvider" data-i18n="col.provider">Provider</th>
-          <th></th>
-        </tr></thead>
-        <tbody id="modelTable"></tbody>
-      </table></div>
     </div>
   </div>
 
@@ -909,80 +900,6 @@ body { padding-bottom: 26px; }
   </div>
 </div>
 
-<!-- Model Modal -->
-<div class="modal-overlay" id="modelModal">
-  <div class="modal">
-    <h3 id="modelModalTitle" data-i18n="modal.addModel">Add Model</h3>
-    <div class="form-group">
-      <label data-i18n="label.modelName">Model Name</label>
-      <input id="modelName" placeholder="e.g. gpt-4o, claude-sonnet-4-20250514" oninput="updateReasoningAutoResult()">
-    </div>
-    <div class="form-group">
-      <label data-i18n="label.provider">Provider</label>
-      <select id="modelProvider" onchange="updateReasoningAutoResult()"></select>
-    </div>
-    <div class="form-group">
-      <label data-i18n="label.upstreamModel">Upstream Model <span style="font-weight:normal;color:var(--text-dim)">(optional)</span></label>
-      <input id="modelUpstream" placeholder="e.g. claudeopus45 (leave blank if same as model name)" oninput="updateReasoningAutoResult()">
-    </div>
-    <div class="form-group">
-      <label data-i18n="label.modelType">Model Type</label>
-      <div class="fetch-type-radios">
-        <label><input type="radio" name="modelType" value="llm" checked onchange="onModelTypeChange()"> <span data-i18n="label.llm">LLM</span></label>
-        <label><input type="radio" name="modelType" value="embedding" onchange="onModelTypeChange()"> <span data-i18n="label.embedding">Embedding</span></label>
-      </div>
-    </div>
-    <div class="form-group" id="modelCapsGroup">
-      <label data-i18n="label.capabilities">Capabilities</label>
-      <div class="checkbox-group">
-        <label><input type="checkbox" id="capText" checked> text</label>
-        <label><input type="checkbox" id="capVision"> vision</label>
-      </div>
-    </div>
-    <div class="form-group" id="modelReasoningGroup">
-      <label><span data-i18n="label.reasoningConfig">Reasoning Config</span>
-        <span class="badge badge-sm" id="reasoningSourceBadge" style="margin-left:6px"></span>
-      </label>
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-        <label style="min-width:140px;margin:0;font-size:0.85em;color:var(--text-dim);text-transform:none;letter-spacing:0" data-i18n="label.reasoningMapping">Reasoning Mapping</label>
-        <select id="reasoningMapping" style="flex:1;min-width:220px" onchange="updateReasoningAutoResult()">
-          <option value="auto">auto</option>
-          <option value="openai_chat">openai_chat</option>
-          <option value="openai_responses">openai_responses</option>
-          <option value="anthropic">anthropic</option>
-          <option value="deepseek_v4">deepseek_v4</option>
-          <option value="glm_5_2">glm_5_2</option>
-          <option value="qwen_3_7">qwen_3_7</option>
-          <option value="kimi_k2_7_code">kimi_k2_7_code</option>
-          <option value="minimax_m3">minimax_m3</option>
-          <option value="mimo_v2_5">mimo_v2_5</option>
-        </select>
-        <span id="reasoningAutoResult" style="font-size:12px;color:var(--text-dim)"></span>
-      </div>
-    </div>
-    <details class="config-details" id="modelToolAdaptationGroup">
-      <summary data-i18n="label.toolAdaptionCodex">Tool Adaption for Codex</summary>
-      <div class="detail-body">
-        <div class="checkbox-group">
-          <label><input type="checkbox" id="toolLocalizeCodeEditing" onchange="updateToolAdaptationVisibility()"> <span data-i18n="label.localizeCodeEditingTools">Localize code editing tools</span></label>
-          <label id="toolUseApplyPatchRow" style="display:none;margin-left:20px"><input type="checkbox" id="toolUseApplyPatchForCodeEdits" checked> <span data-i18n="label.useApplyPatchForCodeEdits">Use apply_patch instead of python for code edits</span></label>
-          <label><input type="checkbox" id="toolRemoveImageGeneration"> <span data-i18n="label.removeImageGeneration">Remove `image_generation`</span></label>
-          <label><input type="checkbox" id="toolDescriptionOptimization" checked> <span data-i18n="label.toolDescriptionOptimization">Enable tool description optimization</span></label>
-          <label><input type="checkbox" id="toolPhaseDetection" checked> <span data-i18n="label.phaseDetection">Enable phase detection to collapse work before final answer</span></label>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:10px">
-          <label style="min-width:180px;margin:0;font-size:0.85em;color:var(--text-dim);text-transform:none;letter-spacing:0" data-i18n="label.toolCallCacheTtl">Tool call mapping cache TTL (hours)</label>
-          <input id="toolCallCacheTtlHours" type="number" step="1" min="1" placeholder="24" style="flex:1">
-        </div>
-      </div>
-    </details>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal('modelModal')" data-i18n="btn.cancel">Cancel</button>
-      <button class="btn btn-primary" onclick="saveModel()" data-i18n="btn.save">Save</button>
-    </div>
-  </div>
-</div>
-
 <!-- Model Group Modal -->
 <div class="modal-overlay" id="modelGroupModal">
   <div class="modal modal-wide">
@@ -994,6 +911,13 @@ body { padding-bottom: 26px; }
     <div class="form-group">
       <label data-i18n="label.provider">Provider</label>
       <select id="modelGroupProvider"></select>
+    </div>
+    <div class="form-group">
+      <label data-i18n="label.modelType">Model Type</label>
+      <div class="fetch-type-radios">
+        <label><input type="radio" name="modelGroupType" value="llm" checked onchange="onModelGroupTypeChange()"> <span data-i18n="label.llm">LLM</span></label>
+        <label><input type="radio" name="modelGroupType" value="embedding" onchange="onModelGroupTypeChange()"> <span data-i18n="label.embedding">Embedding</span></label>
+      </div>
     </div>
     <div class="form-group">
       <label data-i18n="label.modelMappings">Model Mappings</label>
@@ -1013,7 +937,12 @@ body { padding-bottom: 26px; }
     <h3 data-i18n="modal.fetchModels">Fetch Models from Provider</h3>
     <div class="form-group">
       <label data-i18n="label.selectProvider">Select Provider</label>
-      <select id="fetchProvider" onchange="doFetchModels()"></select>
+      <select id="fetchProvider" onchange="onFetchProviderChange()"></select>
+    </div>
+    <div class="form-group">
+      <label data-i18n="label.modelGroupName">Model Group Name</label>
+      <select id="fetchModelGroup" onchange="onFetchModelGroupChange()"></select>
+      <input id="fetchNewGroupName" placeholder="New model group name" style="display:none;margin-top:8px">
     </div>
     <div id="fetchModelsContent" style="display:none">
       <div class="fetch-toolbar">
@@ -1025,7 +954,7 @@ body { padding-bottom: 26px; }
       <div class="fetch-models-list" id="fetchModelsList"></div>
       <div class="prefix-group">
         <label data-i18n="label.modelPrefix">Prefix:</label>
-        <input id="fetchPrefix" placeholder="e.g. myprefix/">
+        <input id="fetchPrefix" placeholder="e.g. myprefix/" oninput="renderFetchedModels()">
       </div>
       <div class="fetch-type-group">
         <label data-i18n="label.modelType">Model Type</label>
@@ -2289,19 +2218,6 @@ function copyProviderEntry(name) {
   openProviderModal('', {...cfg, api_key: ''});
 }
 
-function cloneModel(name) {
-  // Open the model modal pre-filled from an existing model, with a blank
-  // name so the user picks a new one. Mirrors copyProviderEntry's behavior.
-  const models = configData.models || {};
-  const info = models[name];
-  const provider = typeof info === 'string' ? info : (info.provider || '');
-  const caps = typeof info === 'string' ? ['text'] : (info.capabilities || ['text']);
-  const upstream = (typeof info === 'object' && info.upstream_model) ? info.upstream_model : '';
-  // name blank ('') → modal opens in "add" mode; sourceModel feeds reasoning config
-  openModelModal('', provider, caps, upstream, name);
-}
-
-// ===================== Toast =====================
 function showToast(msg, type='success') {
   const t = document.getElementById('toast');
   t.textContent = msg;
@@ -2363,108 +2279,6 @@ function openProviderModal(name, providerConfig) {
   }
 }
 
-function openModelModal(model, provider, capabilities, upstreamModel, sourceModel) {
-  // sourceModel: when cloning, the original model name to read reasoning from
-  // (the visible name field is left blank so the user picks a new name).
-  document.getElementById('modelModalTitle').textContent = model ? t('modal.editModel') : t('modal.addModel');
-  document.getElementById('modelName').value = model || '';
-  document.getElementById('modelName').dataset.originalName = model || '';
-  document.getElementById('modelUpstream').value = upstreamModel || '';
-  // Populate provider dropdown from config
-  const sel = document.getElementById('modelProvider');
-  sel.innerHTML = '';
-  if (configData) {
-    for (const p of Object.keys(configData.providers)) {
-      const opt = document.createElement('option');
-      opt.value = p; opt.textContent = p;
-      if (p === provider) opt.selected = true;
-      sel.appendChild(opt);
-    }
-  }
-  // Set model type and capability checkboxes
-  const caps = capabilities || ['text'];
-  const isEmbedding = caps.includes('embedding') && !caps.includes('text');
-  document.querySelector('input[name="modelType"][value="' + (isEmbedding ? 'embedding' : 'llm') + '"]').checked = true;
-  document.getElementById('capText').checked = caps.includes('text');
-  document.getElementById('capVision').checked = caps.includes('vision');
-  onModelTypeChange();
-
-  // Populate reasoning config section.
-  // Read from the edited model, or the source model when cloning.
-  const lookupName = model || sourceModel;
-  const info = lookupName && configData ? configData.models[lookupName] : null;
-  const reasoning = (info && info.reasoning) || {};
-  document.getElementById('reasoningMapping').value = (info && info.reasoning_mapping) || reasoning.requested || 'auto';
-  updateReasoningAutoResult();
-  const toolAdaptation = (info && info.tool_adaptation) || {};
-  document.getElementById('toolLocalizeCodeEditing').checked = !!toolAdaptation.localize_code_editing_tools;
-  document.getElementById('toolUseApplyPatchForCodeEdits').checked = toolAdaptation.use_apply_patch_for_code_edits !== false;
-  document.getElementById('toolRemoveImageGeneration').checked = !!toolAdaptation.remove_image_generation;
-  document.getElementById('toolDescriptionOptimization').checked = toolAdaptation.enable_tool_description_optimization !== false;
-  document.getElementById('toolPhaseDetection').checked = toolAdaptation.enable_phase_detection !== false;
-  document.getElementById('toolCallCacheTtlHours').value = toolAdaptation.tool_call_cache_ttl_hours != null ? toolAdaptation.tool_call_cache_ttl_hours : 24;
-  updateToolAdaptationVisibility();
-
-  document.getElementById('modelModal').classList.add('open');
-}
-
-function onModelTypeChange() {
-  const isLLM = document.querySelector('input[name="modelType"]:checked').value === 'llm';
-  document.getElementById('modelCapsGroup').style.display = isLLM ? '' : 'none';
-  updateReasoningVisibility();
-}
-function updateReasoningVisibility() {
-  const isLLM = document.querySelector('input[name="modelType"]:checked').value === 'llm';
-  document.getElementById('modelReasoningGroup').style.display = isLLM ? '' : 'none';
-  updateReasoningAutoResult();
-}
-function updateToolAdaptationVisibility() {
-  const localize = document.getElementById('toolLocalizeCodeEditing').checked;
-  document.getElementById('toolUseApplyPatchRow').style.display = localize ? '' : 'none';
-}
-
-function _cleanReasoningModelKey(value) {
-  return String(value || '').trim().toLowerCase().replace(/-/g, '_');
-}
-
-function _detectReasoningMappingByModelName(modelName) {
-  const key = _cleanReasoningModelKey(modelName);
-  if (/\bdeepseek[_ ]?v?4(?:[_ ]?(?:flash|pro))?\b/.test(key)) return 'deepseek_v4';
-  if (/\bglm[_ ]?5[._]?2\b/.test(key)) return 'glm_5_2';
-  if (/\bqwen[_ ]?3[._]?7(?:[_ ]?(?:plus|max))?\b/.test(key)) return 'qwen_3_7';
-  if (/\bkimi[_ ]?k2[._]?7(?:[_ ]?code)?\b/.test(key)) return 'kimi_k2_7_code';
-  if (/\bminimax[_ ]?m3\b/.test(key)) return 'minimax_m3';
-  if (/\bmimo[_ ]?v?2[._]?5\b/.test(key)) return 'mimo_v2_5';
-  return null;
-}
-
-function _reasoningTargetFallback(providerName) {
-  const cfg = (configData && configData.providers && configData.providers[providerName]) || {};
-  const raw = String(cfg.api_type || cfg.type || cfg.shim || '').toLowerCase();
-  if (raw.includes('responses')) return 'openai_responses';
-  if (raw.includes('anthropic')) return 'anthropic';
-  return 'openai_chat';
-}
-
-function _autoReasoningMappingForForm() {
-  const modelName = document.getElementById('modelUpstream').value.trim()
-    || document.getElementById('modelName').value.trim();
-  return _detectReasoningMappingByModelName(modelName)
-    || _reasoningTargetFallback(document.getElementById('modelProvider').value);
-}
-
-function updateReasoningAutoResult() {
-  const select = document.getElementById('reasoningMapping');
-  const output = document.getElementById('reasoningAutoResult');
-  const badge = document.getElementById('reasoningSourceBadge');
-  if (!select || !output || !badge) return;
-  const selected = select.value || 'auto';
-  const auto = _autoReasoningMappingForForm();
-  output.textContent = selected === 'auto' ? `auto -> ${auto}` : `override -> ${selected}`;
-  badge.textContent = selected === 'auto' ? 'auto' : 'config';
-  badge.className = 'badge badge-sm' + (selected === 'auto' ? ' badge-cap-reasoning' : ' badge-cap-tools');
-}
-
 function _populateProviderSelect(selectId, selectedProvider) {
   const sel = document.getElementById(selectId);
   sel.innerHTML = '';
@@ -2488,6 +2302,8 @@ function openModelGroupModal(groupName) {
   document.getElementById('modelGroupName').dataset.originalName = groupName || '';
   const provider = group ? group.provider : Object.keys((configData && configData.providers) || {})[0] || '';
   _populateProviderSelect('modelGroupProvider', provider);
+  const groupType = group ? group.type : 'llm';
+  document.querySelector(`input[name="modelGroupType"][value="${groupType}"]`).checked = true;
   document.getElementById('modelGroupRows').innerHTML = '';
   const models = group ? (group.models || {}) : {};
   const entries = Object.entries(models);
@@ -2496,40 +2312,28 @@ function openModelGroupModal(groupName) {
   } else {
     addModelGroupRow();
   }
+  onModelGroupTypeChange();
   document.getElementById('modelGroupModal').classList.add('open');
 }
 
-function _modelGroupRowType(caps) {
-  return caps.includes('embedding') && !caps.includes('text') ? 'embedding' : 'llm';
-}
-
-function onModelGroupRowTypeChange(input) {
-  const row = input.closest('.model-group-row');
-  const capsWrap = row.querySelector('.group-cap-wrap');
-  capsWrap.style.display = input.value === 'llm' ? '' : 'none';
+function onModelGroupTypeChange() {
+  const groupType = document.querySelector('input[name="modelGroupType"]:checked')?.value || 'llm';
+  document.querySelectorAll('#modelGroupRows .group-cap-wrap').forEach(el => {
+    el.style.display = groupType === 'llm' ? '' : 'none';
+  });
 }
 
 function addModelGroupRow(modelName, info) {
   const row = document.createElement('div');
   row.className = 'model-group-row';
   const caps = _modelCaps(info || {});
-  const rowType = _modelGroupRowType(caps);
-  const typeName = `modelGroupType-${++_modelGroupRowSeq}`;
-  row._modelExtra = {
-    reasoning_mapping: info && info.reasoning_mapping ? info.reasoning_mapping : null,
-    tool_adaptation: info && info.tool_adaptation ? info.tool_adaptation : null,
-  };
+  _modelGroupRowSeq++;
   const checked = cap => caps.includes(cap) ? ' checked' : '';
-  const typeChecked = type => rowType === type ? ' checked' : '';
   row.innerHTML = `
     <input class="group-model-name" value="${escAttr(modelName || '')}" placeholder="exposed model name">
     <input class="group-upstream-model" value="${escAttr(_modelUpstream(info || {}))}" placeholder="upstream model (optional)">
     <div>
-      <div class="fetch-type-radios group-model-type">
-        <label><input type="radio" class="group-model-type-input" name="${typeName}" value="llm"${typeChecked('llm')} onchange="onModelGroupRowTypeChange(this)"> <span>${t('label.llm')}</span></label>
-        <label><input type="radio" class="group-model-type-input" name="${typeName}" value="embedding"${typeChecked('embedding')} onchange="onModelGroupRowTypeChange(this)"> <span>${t('label.embedding')}</span></label>
-      </div>
-      <div class="checkbox-group group-cap-wrap" style="${rowType === 'embedding' ? 'display:none' : ''}">
+      <div class="checkbox-group group-cap-wrap">
         <label><input type="checkbox" class="group-cap" value="text"${checked('text')}> text</label>
         <label><input type="checkbox" class="group-cap" value="vision"${checked('vision')}> vision</label>
       </div>
@@ -2543,6 +2347,7 @@ function addModelGroupRow(modelName, info) {
 async function saveModelGroup() {
   const name = document.getElementById('modelGroupName').value.trim();
   const provider = document.getElementById('modelGroupProvider').value;
+  const groupType = document.querySelector('input[name="modelGroupType"]:checked')?.value || 'llm';
   const rows = [...document.querySelectorAll('#modelGroupRows .model-group-row')];
   const models = {};
   for (const row of rows) {
@@ -2552,23 +2357,19 @@ async function saveModelGroup() {
       showToast(`Duplicate model: ${modelName}`, 'error');
       return;
     }
-    const modelType = row.querySelector('.group-model-type-input:checked')?.value || 'llm';
-    const caps = modelType === 'embedding'
-      ? ['embedding']
-      : [...row.querySelectorAll('.group-cap:checked')].map(cb => cb.value);
-    if (modelType !== 'embedding' && caps.length === 0) caps.push('text');
+    const caps = [...row.querySelectorAll('.group-cap:checked')].map(cb => cb.value);
+    if (groupType === 'llm' && caps.length === 0) caps.push('text');
     const upstream = row.querySelector('.group-upstream-model').value.trim();
-    const entry = {capabilities: caps.length ? caps : ['text']};
+    const entry = {};
+    if (groupType === 'llm') entry.capabilities = caps;
     if (upstream) entry.upstream_model = upstream;
-    if (row._modelExtra && row._modelExtra.reasoning_mapping) entry.reasoning_mapping = row._modelExtra.reasoning_mapping;
-    if (row._modelExtra && row._modelExtra.tool_adaptation) entry.tool_adaptation = row._modelExtra.tool_adaptation;
     models[modelName] = entry;
   }
   if (!name || !provider || Object.keys(models).length === 0) {
     showToast(t('error.modelGroupRequired'), 'error');
     return;
   }
-  const body = {provider, models};
+  const body = {provider, type: groupType, models};
   const originalName = document.getElementById('modelGroupName').dataset.originalName;
   if (originalName && originalName !== name) {
     body.rename_from = originalName;
@@ -2879,9 +2680,7 @@ function _modelMatchesQuery(name, provider, info, query) {
 }
 
 function renderModels() {
-  const tbody = document.getElementById('modelTable');
   const models = configData.models || {};
-  const standaloneModels = configData.standalone_models || models;
   const modelGroups = configData.model_groups || {};
   const totalCount = Object.keys(models).length;
 
@@ -2896,12 +2695,8 @@ function renderModels() {
     [...provSet].sort().map(p => `<option value="${escAttr(p)}"${p === prevProv ? ' selected' : ''}>${esc(p)}</option>`).join('');
 
   // Update sort header indicators
-  document.getElementById('sortName').className = 'sortable' + (_modelSortKey === 'name' ? ` ${_modelSortDir}` : '');
-  document.getElementById('sortProvider').className = 'sortable' + (_modelSortKey === 'provider' ? ` ${_modelSortDir}` : '');
-
   if (totalCount === 0) {
     document.getElementById('modelGroupList').innerHTML = `<div style="color:var(--text-dim);font-size:13px">${t('empty.modelGroups')}</div>`;
-    tbody.innerHTML = `<tr><td colspan="3" style="color:var(--text-dim)">${t('empty.models')}</td></tr>`;
     document.getElementById('modelCount').textContent = '';
     return;
   }
@@ -2909,28 +2704,7 @@ function renderModels() {
   // Filter by provider dropdown and search query
   const selectedProv = provFilter.value;
   const query = (document.getElementById('modelSearch').value || '').trim().toLowerCase();
-  let entries = Object.entries(standaloneModels).map(([name, info]) => {
-    const prov = typeof info === 'string' ? info : info.provider;
-    return {name, prov, info};
-  });
-  if (selectedProv) {
-    entries = entries.filter(e => e.prov === selectedProv);
-  }
-  if (query) {
-    entries = entries.filter(e => _modelMatchesQuery(e.name, e.prov, e.info, query));
-  }
-
-  // Sort
-  const dir = _modelSortDir === 'asc' ? 1 : -1;
-  entries.sort((a, b) => {
-    const va = _modelSortKey === 'provider' ? a.prov : a.name;
-    const vb = _modelSortKey === 'provider' ? b.prov : b.name;
-    return va.localeCompare(vb) * dir;
-  });
-
-  // Update count
   const countEl = document.getElementById('modelCount');
-  countEl.textContent = t('model.count', {shown: entries.length, total: totalCount});
 
   // Determine which providers are disabled
   const providers = configData.providers || {};
@@ -2968,7 +2742,7 @@ function renderModels() {
       <div class="model-group-head">
         <div class="model-group-title">
           <button type="button" class="key-btn model-group-toggle" onclick="toggleModelGroup(${handlerArg(groupName)})" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '&#9656;' : '&#9662;'}</button>
-          <code>${esc(groupName)}</code><span class="model-group-meta">${esc(provider)} · ${modelEntries.length}</span>
+          <code>${esc(groupName)}</code><span class="model-group-meta">${esc(group.type)} · ${esc(provider)} · ${modelEntries.length}</span>
         </div>
         <div class="model-group-actions">
           <button class="btn btn-sm" onclick="openModelGroupModal(${handlerArg(groupName)})">${t('btn.edit')}</button>
@@ -2982,26 +2756,7 @@ function renderModels() {
     ? groupCards.join('')
     : `<div style="color:var(--text-dim);font-size:13px">${Object.keys(modelGroups).length ? t('empty.searchResults') : t('empty.modelGroups')}</div>`;
 
-  tbody.innerHTML = entries.map(({name, prov, info}) => {
-    const provDisabled = disabledProviders.has(prov);
-    const caps = _modelCaps(info);
-    const upstream = _modelUpstream(info);
-    const upstreamTag = upstream ? ` <span style="font-size:11px;color:var(--text-dim)" title="Upstream: ${escAttr(upstream)}">→ ${esc(upstream)}</span>` : '';
-    return `<tr${provDisabled ? ' style="opacity:0.4"' : ''}>
-      <td><code class="copyable" title="Click to copy" onclick="copyText(${handlerArg(name)})">${esc(name)}</code>${upstreamTag} ${_modelCapBadges(caps)}</td>
-      <td>${esc(prov)}${provDisabled ? ` <span style="color:var(--text-dim);font-size:11px">(${t('provider.disabled')})</span>` : ''}</td>
-      <td style="text-align:right; white-space:nowrap">
-        ${_modelTestControls(name, caps)}
-        <button class="btn btn-sm" onclick="cloneModel(${handlerArg(name)})">${t('btn.clone')}</button>
-        <button class="btn btn-sm" onclick="editModel(${handlerArg(name)},${handlerArg(prov)})">${t('btn.edit')}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteModel(${handlerArg(name)}, this)">${t('btn.delete')}</button>
-      </td>
-    </tr>`;
-  }).join('');
-  if (entries.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="3" style="color:var(--text-dim)">${Object.keys(standaloneModels).length ? t('empty.searchResults') : t('empty.standaloneModels')}</td></tr>`;
-  }
-  countEl.textContent = t('model.count', {shown: entries.length + groupShownCount, total: totalCount});
+  countEl.textContent = t('model.count', {shown: groupShownCount, total: totalCount});
 
   // Update filter dropdowns
   updateFilterOptions();
@@ -3246,53 +3001,6 @@ async function copyModalKey() {
   }
 }
 
-async function saveModel() {
-  const name = document.getElementById('modelName').value.trim();
-  const provider = document.getElementById('modelProvider').value;
-  if (!name || !provider) { showToast(t('error.modelRequired'), 'error'); return; }
-  const modelType = document.querySelector('input[name="modelType"]:checked').value;
-  let capabilities;
-  if (modelType === 'embedding') {
-    capabilities = ['embedding'];
-  } else {
-    capabilities = [];
-    if (document.getElementById('capText').checked) capabilities.push('text');
-    if (document.getElementById('capVision').checked) capabilities.push('vision');
-    if (capabilities.length === 0) capabilities.push('text');
-  }
-  const body = {provider, capabilities};
-  const upstreamModel = document.getElementById('modelUpstream').value.trim();
-  if (upstreamModel) body.upstream_model = upstreamModel;
-  const localizeCodeEditingTools = document.getElementById('toolLocalizeCodeEditing').checked;
-  const toolAdaptation = {
-    localize_code_editing_tools: localizeCodeEditingTools,
-    use_apply_patch_for_code_edits: localizeCodeEditingTools ? document.getElementById('toolUseApplyPatchForCodeEdits').checked : true,
-    remove_image_generation: document.getElementById('toolRemoveImageGeneration').checked,
-    enable_tool_description_optimization: document.getElementById('toolDescriptionOptimization').checked,
-    enable_phase_detection: document.getElementById('toolPhaseDetection').checked,
-    tool_call_cache_ttl_hours: Number(document.getElementById('toolCallCacheTtlHours').value) || 24,
-  };
-  if (toolAdaptation.localize_code_editing_tools || toolAdaptation.remove_image_generation ||
-      !toolAdaptation.use_apply_patch_for_code_edits ||
-      !toolAdaptation.enable_tool_description_optimization ||
-      !toolAdaptation.enable_phase_detection ||
-      toolAdaptation.tool_call_cache_ttl_hours !== 24) {
-    body.tool_adaptation = toolAdaptation;
-  }
-  if (modelType !== 'embedding') {
-    body.reasoning_mapping = document.getElementById('reasoningMapping').value || 'auto';
-  }
-  const originalName = document.getElementById('modelName').dataset.originalName;
-  if (originalName && originalName !== name) {
-    body.rename_from = originalName;
-  }
-  const res = await api.put(`/admin/api/config/models/${encodeURIComponent(name)}`, body);
-  if (res.ok) { showToast(t('toast.modelSaved',{name})); closeModal('modelModal'); loadConfig(); }
-  else { showToast(res.error || 'Failed', 'error'); }
-}
-
-
-// Inline two-step delete confirmation — replaces native confirm()
 function inlineConfirm(btn, action) {
   if (btn.dataset.confirming) return;
   btn.dataset.confirming = '1';
@@ -3308,18 +3016,7 @@ function inlineConfirm(btn, action) {
   btn.onclick = (e) => { e.stopPropagation(); clearTimeout(timer); revert(); action(); };
 }
 
-async function _doDeleteModel(name) {
-  const res = await api.del(`/admin/api/config/models/${encodeURIComponent(name)}`);
-  if (res.ok) { showToast(t('toast.modelDeleted',{name})); loadConfig(); }
-  else { showToast(res.error || 'Failed', 'error'); }
-}
 
-function editModel(name, provider) {
-  const info = configData.models[name];
-  const caps = (typeof info === 'object' && info.capabilities) ? info.capabilities : ['text'];
-  const upstream = (typeof info === 'object' && info.upstream_model) ? info.upstream_model : '';
-  openModelModal(name, provider, caps, upstream);
-}
 
 // ===================== Fetch Models from Provider =====================
 let _fetchedModels = [];  // raw model IDs from upstream
@@ -3338,6 +3035,9 @@ function openFetchModelsModal() {
   // Reset state
   _fetchedModels = [];
   _fetchProvider = '';
+  document.getElementById('fetchModelGroup').innerHTML = '';
+  document.getElementById('fetchNewGroupName').value = '';
+  document.getElementById('fetchNewGroupName').style.display = 'none';
   document.getElementById('fetchModelsContent').style.display = 'none';
   document.getElementById('fetchModelsLoading').style.display = 'none';
   document.getElementById('fetchModelsError').style.display = 'none';
@@ -3350,6 +3050,29 @@ function openFetchModelsModal() {
   document.getElementById('fetchCapVision').checked = false;
   document.getElementById('fetchCapsRow').style.display = '';
   document.getElementById('fetchModelsModal').classList.add('open');
+}
+
+function onFetchProviderChange() {
+  const provider = document.getElementById('fetchProvider').value;
+  const groupSelect = document.getElementById('fetchModelGroup');
+  const groups = Object.entries((configData && configData.model_groups) || {})
+    .filter(([, group]) => group.provider === provider);
+  groupSelect.innerHTML = groups.map(([name]) => `<option value="${escAttr(name)}">${esc(name)}</option>`).join('') +
+    `<option value="__new__">+ ${t('btn.addModelGroup')}</option>`;
+  onFetchModelGroupChange();
+  doFetchModels();
+}
+
+function onFetchModelGroupChange() {
+  const selected = document.getElementById('fetchModelGroup').value;
+  const isNew = selected === '__new__';
+  document.getElementById('fetchNewGroupName').style.display = isNew ? '' : 'none';
+  const group = isNew ? null : ((configData && configData.model_groups) || {})[selected];
+  const groupType = group ? group.type : 'llm';
+  document.querySelector(`input[name="fetchModelType"][value="${groupType}"]`).checked = true;
+  document.querySelectorAll('input[name="fetchModelType"]').forEach(input => { input.disabled = !!group; });
+  onFetchTypeChange();
+  if (_fetchedModels.length) renderFetchedModels();
 }
 
 function onFetchTypeChange() {
@@ -3404,7 +3127,10 @@ async function doFetchModels() {
 function renderFetchedModels() {
   const list = document.getElementById('fetchModelsList');
   const query = (document.getElementById('fetchModelSearch').value || '').trim().toLowerCase();
-  const existingModels = configData.models || {};
+  const selectedGroup = document.getElementById('fetchModelGroup').value;
+  const targetGroup = selectedGroup === '__new__' ? null : (configData.model_groups || {})[selectedGroup];
+  const existingModels = (targetGroup && targetGroup.models) || {};
+  const allModels = configData.models || {};
   const prefix = document.getElementById('fetchPrefix').value || '';
 
   let models = _fetchedModels;
@@ -3415,9 +3141,10 @@ function renderFetchedModels() {
   list.innerHTML = models.map(m => {
     const displayName = prefix ? prefix + m : m;
     const exists = displayName in existingModels;
-    return `<label${exists ? ' style="opacity:0.6"' : ''}>
-      <input type="checkbox" value="${escAttr(m)}" onchange="updateFetchCount()"${exists ? ' checked data-exists="true"' : ''}>
-      <span>${esc(m)}</span>${exists ? ' <span class="exists-tag" style="font-size:11px;color:var(--text-dim)">(exists)</span>' : ''}
+    const belongsElsewhere = !exists && displayName in allModels;
+    return `<label${exists || belongsElsewhere ? ' style="opacity:0.6"' : ''}>
+      <input type="checkbox" value="${escAttr(m)}" onchange="updateFetchCount()"${exists ? ' checked data-exists="true"' : ''}${belongsElsewhere ? ' disabled' : ''}>
+      <span>${esc(m)}</span>${exists || belongsElsewhere ? ' <span class="exists-tag" style="font-size:11px;color:var(--text-dim)">(exists)</span>' : ''}
     </label>`;
   }).join('');
 
@@ -3461,29 +3188,29 @@ async function bulkAddFetchedModels() {
       return prefix ? prefix + cb.value : cb.value;
     });
 
-    let addedCount = 0;
-    let removedCount = 0;
-
-    // Add new models
-    if (toAdd.length > 0) {
-      const res = await api.post('/admin/api/config/models', {
-        provider: _fetchProvider,
-        models: toAdd,
-        prefix: prefix,
-        capabilities: _getFetchCapabilities(),
-      });
-      if (res.ok) {
-        addedCount = (res.added || []).length;
-      } else {
-        showToast(res.error || 'Failed to add models', 'error');
-      }
+    const selectedGroup = document.getElementById('fetchModelGroup').value;
+    const isNew = selectedGroup === '__new__';
+    const groupName = isNew ? document.getElementById('fetchNewGroupName').value.trim() : selectedGroup;
+    if (!groupName) throw new Error('Model group name is required');
+    const currentGroup = isNew ? null : configData.model_groups[groupName];
+    const groupType = currentGroup ? currentGroup.type : document.querySelector('input[name="fetchModelType"]:checked').value;
+    const models = {...((currentGroup && currentGroup.models) || {})};
+    for (const modelId of toAdd) {
+      const displayName = prefix ? prefix + modelId : modelId;
+      const entry = {};
+      if (prefix) entry.upstream_model = modelId;
+      if (groupType === 'llm') entry.capabilities = _getFetchCapabilities();
+      models[displayName] = entry;
     }
-
-    // Remove deselected existing models
-    for (const name of toRemove) {
-      const res = await api.del(`/admin/api/config/models/${encodeURIComponent(name)}`);
-      if (res.ok) removedCount++;
-    }
+    toRemove.forEach(name => { delete models[name]; });
+    const res = await api.put(`/admin/api/config/model-groups/${encodeURIComponent(groupName)}`, {
+      provider: _fetchProvider,
+      type: groupType,
+      models,
+    });
+    if (!res.ok) throw new Error(res.error || 'Failed to update model group');
+    const addedCount = toAdd.length;
+    const removedCount = toRemove.length;
 
     // Show result
     const msgs = [];
@@ -3984,10 +3711,6 @@ function changePage(dir) {
 }
 
 
-function deleteModel(name, btn) {
-  if (!btn) { _doDeleteModel(name); return; }
-  inlineConfirm(btn, () => _doDeleteModel(name));
-}
 
 function deleteKey(id, label, btn) {
   if (!btn) { _doDeleteKey(id, label); return; }

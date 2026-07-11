@@ -32,7 +32,13 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
                 "type": "openai",
             }
         },
-        "models": {"gpt-test": "test-provider"},
+        "model_groups": {
+            "test": {
+                "provider": "test-provider",
+                "type": "llm",
+                "models": {"gpt-test": {}},
+            }
+        },
         "server": {
             "admin_password": "test-admin-password",
             "api_keys": [
