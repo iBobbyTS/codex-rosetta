@@ -445,12 +445,13 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-group-title { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600; }
 .tool-group-count { color:var(--text-dim);font-size:11px;font-weight:400; }
 .tool-list { display:grid; }
-.tool-card-grid { grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px; }
-.tool-item { display:flex;align-items:center;justify-content:space-between;gap:10px;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg); }
+.tool-card-grid { grid-template-columns:repeat(4,minmax(0,1fr));align-items:start;gap:10px;padding:12px; }
+.tool-item { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 10px;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg); }
 .tool-state-select { max-width:130px;min-width:105px;padding:4px 6px;background:var(--bg-card);border:1px solid var(--border);border-radius:999px;color:var(--text);font-size:10px; }
 .tool-state-select:disabled { opacity:.75;cursor:not-allowed; }
 .tool-item.nested { background:var(--bg-card); }
 .tool-name { min-width:0;font:12px var(--mono);overflow-wrap:anywhere; }
+.tool-description { grid-column:1 / -1;color:var(--text-dim);font-size:11px;line-height:1.45; }
 .tool-badges { display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end; }
 .tool-badge { display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:10px;line-height:1.4;color:var(--text-dim);background:var(--bg);white-space:nowrap; }
 .tool-badge.kind { color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--border)); }
@@ -465,7 +466,7 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-namespace-head { display:grid;grid-template-columns:auto minmax(160px,1fr) auto minmax(260px,1.4fr);gap:10px;align-items:center;padding:9px 12px; }
 .tool-namespace-toggle { width:24px;height:24px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);cursor:pointer;line-height:1; }
 .tool-namespace-toggle:hover { border-color:var(--accent); }
-.tool-namespace-children { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px;border-top:1px solid var(--border);background:var(--bg); }
+.tool-namespace-children { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start;gap:10px;padding:12px;border-top:1px solid var(--border);background:var(--bg); }
 .tool-namespace-children[hidden] { display:none; }
 .tool-catalog-status { padding:28px;text-align:center;color:var(--text-dim);font-size:13px; }
 .tool-catalog-status.error { color:var(--red); }
@@ -1161,6 +1162,9 @@ const I18N = {
     'tools.loading':'Loading tool catalog...', 'tools.empty':'No tools match this filter.',
     'tools.error':'Unable to load the tool catalog: {error}',
     'tools.catalogMeta':'Codex {version} · source {commit}',
+    'tools.description.request_user_input':'Adds Chat guidance to prevent Plan mode from prefixing options with A/B/C or asking for confirmation before writing the plan. It should only ask about decisions that materially affect the plan.',
+    'tools.description.create_goal':'Adds Chat guidance to create a Goal only when the user explicitly requests Goal state but none exists, and to omit token_budget unless the user provides a numeric budget.',
+    'tools.description.update_goal':'Adds Chat guidance to check Goal state first and create a missing Goal before updating it, preventing update_goal from running before a Goal exists.',
     'label.globalProxy':'Global Proxy URL',
     'label.globalProxy.hint':'Applies to all providers unless overridden per-provider.',
     'label.requestBodyLimit':'Maximum Request Body',
@@ -1341,6 +1345,9 @@ const I18N = {
     'tools.loading':'\u6b63\u5728\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\u2026', 'tools.empty':'\u6ca1\u6709\u5339\u914d\u5f53\u524d\u8fc7\u6ee4\u6761\u4ef6\u7684\u5de5\u5177\u3002',
     'tools.error':'\u65e0\u6cd5\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\uff1a{error}',
     'tools.catalogMeta':'Codex {version} \u00b7 \u6e90\u7801 {commit}',
+    'tools.description.request_user_input':'\u8ffd\u52a0 Chat \u4f7f\u7528\u6307\u5bfc\uff0c\u907f\u514d Plan \u6a21\u5f0f\u7ed9\u9009\u9879\u6dfb\u52a0 A/B/C \u524d\u7f00\uff0c\u6216\u5728\u5199\u8ba1\u5212\u524d\u8be2\u95ee\u662f\u5426\u786e\u8ba4\u3002\u5b83\u53ea\u5e94\u8be2\u95ee\u4f1a\u5b9e\u8d28\u5f71\u54cd\u65b9\u6848\u7684\u51b3\u7b56\u3002',
+    'tools.description.create_goal':'\u8ffd\u52a0 Chat \u4f7f\u7528\u6307\u5bfc\uff1a\u53ea\u6709\u7528\u6237\u660e\u786e\u8981\u6c42\u8bbe\u7f6e Goal \u72b6\u6001\u4e14\u5f53\u524d\u6ca1\u6709 Goal \u65f6\u624d\u521b\u5efa\uff1b\u9664\u975e\u7528\u6237\u63d0\u4f9b\u6570\u503c\u9884\u7b97\uff0c\u5426\u5219\u4e0d\u8bbe\u7f6e token_budget\u3002',
+    'tools.description.update_goal':'\u8ffd\u52a0 Chat \u4f7f\u7528\u6307\u5bfc\uff1a\u5148\u68c0\u67e5 Goal \u72b6\u6001\uff0c\u7f3a\u5c11 Goal \u65f6\u5148\u521b\u5efa\u518d\u66f4\u65b0\uff0c\u907f\u514d\u5728 Goal \u5c1a\u672a\u521b\u5efa\u65f6\u6267\u884c update_goal\u3002',
     'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
     'label.globalProxy.hint':'\u9002\u7528\u4e8e\u6240\u6709\u670d\u52a1\u65b9\uff0c\u9664\u975e\u5355\u72ec\u8bbe\u7f6e\u4e86\u4ee3\u7406\u3002',
     'label.requestBodyLimit':'\u6700\u5927\u8bf7\u6c42\u4f53',
@@ -2192,7 +2199,8 @@ function renderToolStateSelect(item) {
 }
 
 function renderToolItem(item, policies, nested=false) {
-  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}</div>`;
+  const description = item.description_i18n ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
+  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}${description}</div>`;
 }
 
 function renderToolNamespace(namespaceItem, childIds, index) {
