@@ -43,10 +43,10 @@ Start the local gateway each time you use it:
 codex-rosetta-gateway --host 127.0.0.1 --log-level warning
 ```
 
-Use `--log-level info` (the default) to print request summaries, `warning` to
-show only warnings and errors, or `error` to show only errors. Use the WebUI
-**Request Log** for complete request history and **Gateway Logs** for streaming
-trace diagnostics.
+The default `warning` level shows only warnings and errors. Use
+`--log-level info` to also print request summaries, or `error` to show only
+errors. Use the WebUI **Request Log** for complete request history and
+**Gateway Logs** for streaming trace diagnostics.
 
 ## Full Documentation
 

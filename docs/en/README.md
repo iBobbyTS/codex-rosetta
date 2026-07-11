@@ -16,10 +16,10 @@ codex-rosetta-gateway --log-level warning
 codex-rosetta-gateway --log-level error
 ```
 
-`info` is the default and prints request summaries. `warning` suppresses normal
-per-request output while retaining warnings and errors; `error` prints errors
-only. For complete request history, use **Request Log** in the WebUI. For
-streaming trace diagnostics, use **Gateway Logs** in the WebUI.
+`warning` is the default and suppresses normal per-request output while
+retaining warnings and errors. `info` also prints request summaries; `error`
+prints errors only. For complete request history, use **Request Log** in the
+WebUI. For streaming trace diagnostics, use **Gateway Logs** in the WebUI.
 
 ## Codex tool localization
 

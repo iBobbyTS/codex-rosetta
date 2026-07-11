@@ -11,11 +11,20 @@ from codex_rosetta.gateway import app as gateway_app
 from codex_rosetta.gateway import cli
 
 
-@pytest.mark.parametrize("log_level", ["info", "warning", "error"])
+@pytest.mark.parametrize(
+    ("log_level_args", "expected_level"),
+    [
+        ([], "warning"),
+        (["--log-level", "info"], "info"),
+        (["--log-level", "warning"], "warning"),
+        (["--log-level", "error"], "error"),
+    ],
+)
 def test_main_passes_selected_log_level_to_logging_setup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    log_level: str,
+    log_level_args: list[str],
+    expected_level: str,
 ) -> None:
     config_path = tmp_path / "config.jsonc"
     config_path.write_text("{}", encoding="utf-8")
@@ -37,8 +46,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
             "--no-banner",
             "--config",
             str(config_path),
-            "--log-level",
-            log_level,
+            *log_level_args,
         ],
     )
     monkeypatch.setattr(cli, "discover_config", lambda _path: str(config_path))
@@ -58,7 +66,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
 
     cli.main()
 
-    assert selected_levels == [log_level]
+    assert selected_levels == [expected_level]
 
 
 @pytest.mark.parametrize("removed_option", ["--verbose", "-v"])
