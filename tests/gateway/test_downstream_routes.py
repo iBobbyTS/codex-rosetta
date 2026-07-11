@@ -72,6 +72,40 @@ def test_public_post_endpoints_reject_non_object_json(path: str, value: object):
     assert b"JSON body must be an object" in response.body
 
 
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/embeddings"])
+@pytest.mark.parametrize("model", [[], {}, 42, 0, True, False, "", " \t\n"])
+def test_public_post_endpoints_reject_invalid_model_types(path: str, model: object):
+    app = _make_app()
+
+    response = asyncio.run(
+        app._dispatch(
+            _request(
+                app,
+                path,
+                body=json.dumps({"model": model, "input": []}).encode(),
+            )
+        )
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.body)
+    assert payload["error"]["type"] == "invalid_request_error"
+    assert payload["error"]["message"] == "'model' must be a non-empty string"
+
+
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/embeddings"])
+def test_public_post_endpoints_keep_missing_model_error(path: str):
+    app = _make_app()
+
+    response = asyncio.run(
+        app._dispatch(_request(app, path, body=json.dumps({"input": []}).encode()))
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.body)
+    assert payload["error"]["message"] == "Missing 'model' in request body"
+
+
 @pytest.mark.parametrize(
     "path",
     [
