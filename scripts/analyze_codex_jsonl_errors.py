@@ -57,6 +57,10 @@ SENSITIVE_ASSIGNMENT_RE = re.compile(
 )
 BEARER_RE = re.compile(r"(?i)(bearer\s+)[^\s,;]+")
 OPENAI_KEY_RE = re.compile(r"\b(?:sk|rk|sess)-[A-Za-z0-9_-]{8,}\b")
+BARE_PROVIDER_KEY_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])(?:rsk-internal-[0-9a-fA-F]{32}|"
+    r"rsk-[0-9a-fA-F]{48}|AIza[A-Za-z0-9_-]{35})(?![A-Za-z0-9_-])"
+)
 ABSOLUTE_PATH_RE = re.compile(r"(?<![\w.-])/(?:[^\s'\"`]+/)+[^\s'\"`]+")
 UUID_RE = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
@@ -331,7 +335,8 @@ def redact_text(value: str) -> str:
 
     value = SENSITIVE_ASSIGNMENT_RE.sub(replace_assignment, value)
     value = BEARER_RE.sub(r"\1<redacted>", value)
-    return OPENAI_KEY_RE.sub("<redacted-key>", value)
+    value = OPENAI_KEY_RE.sub("<redacted-key>", value)
+    return BARE_PROVIDER_KEY_RE.sub("<redacted-key>", value)
 
 
 def normalize_signature(value: str) -> str:
