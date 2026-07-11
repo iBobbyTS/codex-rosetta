@@ -29,6 +29,8 @@ DEFAULT_ROOTS = (
 ROLLOUT_TRACE_ROOT_ENV = "CODEX_ROLLOUT_TRACE_ROOT"
 DEFAULT_MAX_LINE_BYTES = 1_048_576
 DEFAULT_SAMPLE_LIMIT = 3
+MAX_CANDIDATE_FILES = 20_000
+MAX_ERROR_GROUPS = 10_000
 MAX_TEXT_CHARS = 12_000
 MAX_TEXT_FIELDS_PER_RECORD = 256
 SESSION_ID_RE = re.compile(
@@ -267,6 +269,8 @@ class ScanStats:
     """Counters collected while scanning files without retaining their payloads."""
 
     files_discovered: int = 0
+    candidate_files_retained: int = 0
+    candidate_files_dropped: int = 0
     files_selected: int = 0
     duplicate_files_skipped: int = 0
     missing_roots: list[str] = field(default_factory=list)
@@ -275,6 +279,8 @@ class ScanStats:
     lines_parsed: int = 0
     malformed_lines: int = 0
     oversized_lines_skipped: int = 0
+    error_group_occurrences_dropped: int = 0
+    error_group_overflow_by_category: Counter[str] = field(default_factory=Counter)
 
 
 @dataclass
@@ -378,8 +384,26 @@ def trace_roots_from_env() -> tuple[Path, ...]:
     return (Path(value).expanduser(),) if value else ()
 
 
+def _iter_jsonl_paths(root: Path) -> Iterator[Path]:
+    """Yield JSONL paths in deterministic order without retaining a path list."""
+
+    if root.is_file():
+        if root.suffix == ".jsonl":
+            yield root
+        return
+    for directory, subdirs, names in os.walk(root, followlinks=False):
+        subdirs.sort()
+        for name in sorted(names):
+            if name.endswith(".jsonl"):
+                yield Path(directory) / name
+
+
 def discover_jsonl_files(
-    roots: Iterable[Path], stats: ScanStats, *, source_kind: str = "session"
+    roots: Iterable[Path],
+    stats: ScanStats,
+    *,
+    source_kind: str = "session",
+    max_files: int = MAX_CANDIDATE_FILES,
 ) -> list[CandidateFile]:
     """Discover files using metadata only; JSONL contents are not opened here."""
 
@@ -389,20 +413,15 @@ def discover_jsonl_files(
         if not root.exists():
             stats.missing_roots.append(str(root))
             continue
-        if root.is_file():
-            candidate_paths = [root] if root.suffix == ".jsonl" else []
-        else:
-            candidate_paths = []
-            for directory, subdirs, names in os.walk(root, followlinks=False):
-                subdirs.sort()
-                for name in sorted(names):
-                    if name.endswith(".jsonl"):
-                        candidate_paths.append(Path(directory) / name)
-        for path in candidate_paths:
+        for path in _iter_jsonl_paths(root):
             try:
                 size = path.stat().st_size
             except OSError:
                 stats.unreadable_files += 1
+                continue
+            stats.files_discovered += 1
+            if stats.candidate_files_retained >= max_files:
+                stats.candidate_files_dropped += 1
                 continue
             files.append(
                 CandidateFile(
@@ -414,7 +433,7 @@ def discover_jsonl_files(
                     source_kind=source_kind,
                 )
             )
-    stats.files_discovered += len(files)
+            stats.candidate_files_retained += 1
     return files
 
 
@@ -710,6 +729,24 @@ def _malformed_signature(exc: Exception) -> str:
     return f"JSONL parse failed: {type(exc).__name__}"
 
 
+def _validate_analysis_limits(
+    max_line_bytes: int,
+    sample_limit: int,
+    max_candidate_files: int,
+    max_error_groups: int,
+) -> None:
+    """Validate caller-controlled analyzer resource limits."""
+
+    if max_line_bytes <= 0:
+        raise ValueError("max_line_bytes must be positive")
+    if sample_limit < 0:
+        raise ValueError("sample_limit cannot be negative")
+    if max_candidate_files <= 0:
+        raise ValueError("max_candidate_files must be positive")
+    if max_error_groups <= 0:
+        raise ValueError("max_error_groups must be positive")
+
+
 def analyze_paths(
     roots: Iterable[Path],
     *,
@@ -717,24 +754,39 @@ def analyze_paths(
     max_line_bytes: int = DEFAULT_MAX_LINE_BYTES,
     sample_limit: int = DEFAULT_SAMPLE_LIMIT,
     include_duplicates: bool = False,
+    max_candidate_files: int = MAX_CANDIDATE_FILES,
+    max_error_groups: int = MAX_ERROR_GROUPS,
 ) -> dict[str, Any]:
     """Return an aggregated, bounded-memory analysis of all discovered JSONL files."""
 
-    if max_line_bytes <= 0:
-        raise ValueError("max_line_bytes must be positive")
-    if sample_limit < 0:
-        raise ValueError("sample_limit cannot be negative")
+    _validate_analysis_limits(
+        max_line_bytes,
+        sample_limit,
+        max_candidate_files,
+        max_error_groups,
+    )
 
     roots = tuple(Path(root).expanduser() for root in roots)
     trace_roots = tuple(Path(root).expanduser() for root in trace_roots)
     stats = ScanStats()
     candidates = [
-        *discover_jsonl_files(roots, stats, source_kind="session"),
-        *discover_jsonl_files(trace_roots, stats, source_kind="trace"),
+        *discover_jsonl_files(
+            roots,
+            stats,
+            source_kind="session",
+            max_files=max_candidate_files,
+        ),
+        *discover_jsonl_files(
+            trace_roots,
+            stats,
+            source_kind="trace",
+            max_files=max_candidate_files,
+        ),
     ]
     selected = select_files(candidates, stats, include_duplicates=include_duplicates)
     groups: dict[tuple[str, str, str, bool], ErrorGroup] = {}
     category_counts: Counter[str] = Counter()
+    provider_actionable_counts: Counter[str] = Counter()
 
     def add_error(
         rule: ErrorRule,
@@ -748,13 +800,24 @@ def analyze_paths(
         signature = normalize_signature(text)
         if not signature:
             return
-        key = (rule.key, signature, evidence, provider_failover_eligible)
-        group = groups.setdefault(
-            key,
-            ErrorGroup(rule.key, signature, evidence, provider_failover_eligible),
-        )
-        group.add(str(root), path, line, sample_limit)
         category_counts[rule.key] += 1
+        if (
+            provider_failover_eligible
+            and rule.retry_advice.provider_failover.startswith("是")
+        ):
+            provider_actionable_counts[rule.key] += 1
+        key = (rule.key, signature, evidence, provider_failover_eligible)
+        group = groups.get(key)
+        if group is None:
+            if len(groups) >= max_error_groups:
+                stats.error_group_occurrences_dropped += 1
+                stats.error_group_overflow_by_category[rule.key] += 1
+                return
+            group = ErrorGroup(
+                rule.key, signature, evidence, provider_failover_eligible
+            )
+            groups[key] = group
+        group.add(str(root), path, line, sample_limit)
 
     for candidate in selected:
         try:
@@ -809,22 +872,24 @@ def analyze_paths(
             category_counts.items(), key=lambda item: (-item[1], item[0])
         )
     ]
-    provider_actionable_counts = {
-        key: sum(
-            group.count
-            for group in groups.values()
-            if group.provider_failover_eligible
-            and group.category == key
-            and RULES[key].retry_advice.provider_failover.startswith("是")
-        )
-        for key in RULES
-    }
     return {
         "schema_version": 1,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "inputs": [str(root) for root in roots],
         "trace_inputs": [str(root) for root in trace_roots],
         "scan": asdict(stats),
+        "retention": {
+            "candidate_file_limit": max_candidate_files,
+            "error_group_limit": max_error_groups,
+            "truncated": bool(
+                stats.candidate_files_dropped or stats.error_group_occurrences_dropped
+            ),
+            "candidate_files_dropped": stats.candidate_files_dropped,
+            "error_group_occurrences_dropped": (stats.error_group_occurrences_dropped),
+            "error_group_overflow_by_category": dict(
+                stats.error_group_overflow_by_category
+            ),
+        },
         "categories": categories,
         "structured_provider_failover_candidates": {
             key: count for key, count in provider_actionable_counts.items() if count
@@ -865,11 +930,30 @@ def render_markdown(report: dict[str, Any], *, top_groups: int = 20) -> str:
         f"- 发现文件：{scan['files_discovered']}；实际扫描：{scan['files_selected']}；按 session UUID 去重跳过：{scan['duplicate_files_skipped']}",
         f"- 已解析行：{scan['lines_parsed']} / {scan['lines_seen']}；损坏行：{scan['malformed_lines']}；超限跳过：{scan['oversized_lines_skipped']}",
         f"- 不可读文件：{scan['unreadable_files']}",
+        f"- 内存保留上限：候选文件 {report['retention']['candidate_file_limit']}；错误签名组 {report['retention']['error_group_limit']}",
         "- Raw rollout trace 根目录："
         + (", ".join(report["trace_inputs"]) if report["trace_inputs"] else "未启用"),
     ]
     if scan["missing_roots"]:
         lines.append(f"- 不存在的根目录：{', '.join(scan['missing_roots'])}")
+    retention = report["retention"]
+    if retention["candidate_files_dropped"]:
+        lines.append(
+            "- 文件列表已截断：未保留 "
+            f"{retention['candidate_files_dropped']} 个候选文件。"
+        )
+    if retention["error_group_occurrences_dropped"]:
+        overflow = ", ".join(
+            f"{RULES[key].label} {count}"
+            for key, count in sorted(
+                retention["error_group_overflow_by_category"].items()
+            )
+        )
+        lines.append(
+            "- 错误签名组已截断：未保留 "
+            f"{retention['error_group_occurrences_dropped']} 次溢出记录"
+            f"（{overflow}）。"
+        )
     provider_candidates = report["structured_provider_failover_candidates"]
     lines.append(
         "- 可作为 Rosetta provider 故障切换依据的结构化上游失败："
