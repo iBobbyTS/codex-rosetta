@@ -110,6 +110,7 @@ class _PreparedGatewayActivation:
     persistence: tuple[Any, Any] | None
     metrics: tuple[Any, Any] | None
     admin_cors_origins: tuple[str, ...]
+    max_body_size: int
 
 
 @dataclass
@@ -118,6 +119,7 @@ class _GatewayActivationRollback:
 
     gateway_config: Any
     admin_cors_origins: tuple[str, ...]
+    max_body_size: int
     auth: tuple[Any, dict[str, str], dict[str, str], Any, Any] | None
     stream_trace: tuple[Any, Any, Any] | None
     upstream_error_log: tuple[Any, Any] | None
@@ -211,6 +213,7 @@ def _prepare_gateway_activation(
         persistence=prepared_persistence,
         metrics=prepared_metrics,
         admin_cors_origins=_prepare_admin_cors_origins(new_config),
+        max_body_size=new_config.request_body_limit_bytes,
     )
 
 
@@ -236,6 +239,11 @@ def _activate_gateway_config(
     rollback = _GatewayActivationRollback(
         gateway_config=app.gateway_config,
         admin_cors_origins=tuple(getattr(app, "admin_cors_origins", ())),
+        max_body_size=getattr(
+            app,
+            "max_body_size",
+            app.gateway_config.request_body_limit_bytes,
+        ),
         auth=(
             auth_state,
             auth_state.principals,
@@ -293,6 +301,7 @@ def _activate_gateway_config(
             state, value = activation.metrics
             state._redactor = value
         app.admin_cors_origins = activation.admin_cors_origins
+        app.max_body_size = activation.max_body_size
         app.gateway_config = new_config
     except BaseException:
         _rollback_gateway_activation(request, rollback)
@@ -327,6 +336,7 @@ def _rollback_gateway_activation(
         state, redactor = rollback.metrics
         state._redactor = redactor
     app.admin_cors_origins = rollback.admin_cors_origins
+    app.max_body_size = rollback.max_body_size
     app.gateway_config = rollback.gateway_config
     if rollback.persistence is not None:
         state, value = rollback.persistence

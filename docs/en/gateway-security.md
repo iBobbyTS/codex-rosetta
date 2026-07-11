@@ -36,10 +36,15 @@ than waiting for capacity.
 For protected `/v1` and Admin API requests, credentials are checked after the
 bounded headers but before body bytes are consumed. Invalid credentials are
 therefore rejected without buffering a declared large body. Valid requests
-retain the 50,000,000-byte body limit. Public Admin login/auth-check endpoints
-and browser `OPTIONS` preflight remain intentionally unauthenticated; any body
-they carry is still covered by the same body deadline, size limit, and parser
-capacity.
+default to a 128 MiB body limit. The Admin Server Settings page can change
+`server.request_body_limit_mb` at runtime to `64`, `128`, `256`, `512`, `1024`,
+or `"unlimited"`; a config reload applies the same setting without restarting
+the gateway. Public Admin login/auth-check endpoints and browser `OPTIONS`
+preflight remain intentionally unauthenticated; any body they carry is still
+covered by the same body deadline, configured size limit, and parser capacity.
+The unlimited setting removes Rosetta's practical body-size ceiling but still
+buffers each body in memory, so use it only on a trusted, memory-controlled
+deployment.
 
 Each access-key entry needs a stable, unique `id`. Rosetta uses that ID as the
 authenticated principal for cross-turn state isolation; changing a label does

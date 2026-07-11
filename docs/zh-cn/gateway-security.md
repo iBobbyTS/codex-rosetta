@@ -30,9 +30,13 @@ Authorization: Bearer rsk-...
 
 对于受保护的 `/v1` 和 Admin API 请求，网关会在有界 headers 之后、读取 body bytes
 之前检查凭证，因此无效凭证不会导致网关缓冲声明的大 body。有效请求继续执行
-50,000,000-byte body 上限。公开的 Admin login/auth-check endpoint 和浏览器 `OPTIONS`
-预检仍按设计保持无需认证；即使这些请求携带 body，也仍受同一 body deadline、大小
-上限和 parser capacity 约束。
+默认 128 MiB 的 body 上限。Admin 的“服务器设置”页面可以在运行时把
+`server.request_body_limit_mb` 切换为 `64`、`128`、`256`、`512`、`1024` 或
+`"unlimited"`，重新加载配置也会在不重启网关的情况下应用同一设置。公开的 Admin
+login/auth-check endpoint 和浏览器 `OPTIONS` 预检仍按设计保持无需认证；即使这些请求
+携带 body，也仍受同一 body deadline、已配置大小上限和 parser capacity 约束。
+“不限制”会移除 Rosetta 实际可触发的 body 大小上限，但每个 body 仍会完整缓冲到内存，
+因此只应在可信且内存受控的部署中使用。
 
 每条访问密钥记录都必须有稳定且唯一的 `id`。Rosetta 使用该 ID 作为认证主体，
 隔离跨轮状态；修改显示标签不会改变身份。Admin UI 会拒绝删除最后一条访问密钥。

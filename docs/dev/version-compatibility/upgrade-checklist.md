@@ -202,6 +202,9 @@ The following behavior can be automatically verified using the fixed Codex reque
   no-delimiter events, converted/raw/web-search client cancellation, upstream
   4xx/5xx and retry boundaries; verify that below-limit raw Responses SSE is
   byte-identical and that overflow closes the upstream;
+- Inbound request-body default, fixed tiers, Admin persistence/hot reload,
+  rollback, unlimited mapping, and a real Codex image-history request above the
+  former 50 MB ceiling;
 - `/v1/models` current universal response, and future separately implemented Codex `ModelInfo` catalog contract;
 - Configuration/admin UI saving, defaults and runtime loading of Codex tool-adaptation switches.
 - Static tool-catalog contract: unique IDs, valid placement/policy references, required fixed tools, excluded dynamic tools, policy defaults, and exact CLI/source metadata binding.

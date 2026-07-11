@@ -16,7 +16,12 @@ from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.config import GatewayConfig
 
 
-def _config(label: str, *, proxy: str | None = None) -> GatewayConfig:
+def _config(
+    label: str,
+    *,
+    proxy: str | None = None,
+    request_body_limit_mb: int | str = 128,
+) -> GatewayConfig:
     return GatewayConfig(
         {
             "providers": {
@@ -37,6 +42,7 @@ def _config(label: str, *, proxy: str | None = None) -> GatewayConfig:
                     }
                 ],
                 "proxy": proxy,
+                "request_body_limit_mb": request_body_limit_mb,
                 "web_search": {"tavily_api_key": f"tvly-{label}"},
             },
         }
@@ -141,7 +147,7 @@ def test_request_handlers_keep_their_own_config_after_second_app_creation(
 
 def test_admin_config_helpers_and_activation_are_app_scoped():
     config_a = _config("a")
-    config_b = _config("b")
+    config_b = _config("b", request_body_limit_mb=64)
     app_a = cast(Any, app_module.create_app(config_a))
     app_b = cast(Any, app_module.create_app(config_b))
     request_a = _request(app_a)
@@ -150,14 +156,19 @@ def test_admin_config_helpers_and_activation_are_app_scoped():
     assert config_routes._get_gateway_config(request_a) is config_a
     assert testing_routes._get_gateway_config(request_a) is config_a
 
-    updated_a = _config("a-updated")
+    assert app_a.max_body_size == 128 * 1024 * 1024
+    assert app_b.max_body_size == 64 * 1024 * 1024
+
+    updated_a = _config("a-updated", request_body_limit_mb=256)
     _shared._activate_gateway_config(request_a, updated_a)
 
     assert app_a.gateway_config is updated_a
     assert config_routes._get_gateway_config(request_a) is updated_a
     assert testing_routes._get_gateway_config(request_a) is updated_a
     assert app_a.admin_runtime_state is runtime_a
+    assert app_a.max_body_size == 256 * 1024 * 1024
     assert app_b.gateway_config is config_b
+    assert app_b.max_body_size == 64 * 1024 * 1024
 
 
 def test_create_and_hot_reload_do_not_mutate_process_proxy_environment(monkeypatch):

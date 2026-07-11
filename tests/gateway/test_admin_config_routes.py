@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -131,6 +132,65 @@ def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
     assert app.stream_trace_state.config.path == "~/trace/log.jsonl"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected_bytes"),
+    [
+        (64, 64 * 1024 * 1024),
+        (128, 128 * 1024 * 1024),
+        (256, 256 * 1024 * 1024),
+        (512, 512 * 1024 * 1024),
+        (1024, 1024 * 1024 * 1024),
+        ("unlimited", sys.maxsize),
+    ],
+)
+def test_put_server_settings_updates_request_body_limit_at_runtime(
+    tmp_path, value, expected_bytes
+):
+    """Admin body-limit settings persist and affect new requests immediately."""
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        max_body_size=initial_config.request_body_limit_bytes,
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(app=app, json=lambda: {"request_body_limit_mb": value})
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["request_body_limit_mb"] == value
+    assert app.gateway_config.request_body_limit_config_value == value
+    assert app.max_body_size == expected_bytes
+
+
+def test_put_server_settings_rejects_invalid_request_body_limit(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(_config_data()).encode()
+    config_path.write_bytes(original)
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        max_body_size=initial_config.request_body_limit_bytes,
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(app=app, json=lambda: {"request_body_limit_mb": 129})
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 400
+    assert b"request_body_limit_mb must be one of" in response.body
+    assert config_path.read_bytes() == original
+    assert app.gateway_config is initial_config
+    assert app.max_body_size == 128 * 1024 * 1024
+
+
 def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     config_path = tmp_path / "config.jsonc"
     initial_data = _config_data()
@@ -161,6 +221,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     updated_data["server"]["admin_password"] = "rotated-admin-password"
     updated_data["server"]["api_keys"][0]["key"] = "rotated-gateway-token"
     updated_data["server"]["proxy"] = "http://user:ordinary-proxy-password@example.test"
+    updated_data["server"]["request_body_limit_mb"] = 512
     updated_data["providers"]["openai"]["api_key"] = "rotated-provider-token"
     updated_data["providers"]["openai"]["client_secret"] = "ordinary-client-secret"
     config_path.write_text(json.dumps(updated_data), encoding="utf-8")
@@ -171,6 +232,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     assert auth_state.admin_password == "rotated-admin-password"
     assert auth_state.admin_token is not None
     assert auth_state.admin_token != previous_token
+    assert app.max_body_size == 512 * 1024 * 1024
     assert persistence._redactor == {
         "internal-token",
         "rotated-gateway-token",
@@ -435,6 +497,7 @@ def test_config_write_failure_after_activation_restores_runtime_and_pruned_rows(
     candidate = _config_data()
     candidate["server"]["admin_password"] = "new-admin-password"
     candidate["server"]["request_log"] = {"success_max": 1, "error_max": 1}
+    candidate["server"]["request_body_limit_mb"] = 256
     candidate["debug"] = {"log_bodies": True}
 
     def activate_then_fail(
@@ -462,6 +525,7 @@ def test_config_write_failure_after_activation_restores_runtime_and_pruned_rows(
         assert app.auth_state.admin_password == "test-admin-password"
         assert app.auth_state.admin_token == old_admin_token
         assert app.body_log_state.enabled is False
+        assert app.max_body_size == 128 * 1024 * 1024
         assert "test-gateway-key" not in app.body_log_state.render("test-gateway-key")
         assert app.persistence.success_max == 10
         assert app.persistence.error_max == 10
@@ -574,6 +638,7 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
     assert body["server"]["web_search"]["tavily_api_key"] == "tvly***7890"
+    assert body["server"]["request_body_limit_mb"] == 128
 
 
 @pytest.mark.parametrize("credential_visible", [False, True])
@@ -1089,6 +1154,24 @@ def test_admin_html_exposes_tool_adaptation_switches():
     assert "toolAdaptation.enable_tool_description_optimization !== false" in html
     assert "toolAdaptation.enable_phase_detection !== false" in html
     assert "toolFlattenNestedNamespaceTools" not in html
+
+
+def test_admin_html_exposes_request_body_limit_options():
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    assert 'id="requestBodyLimitMb"' in html
+    for value in (64, 128, 256, 512, 1024):
+        assert f'<option value="{value}">{value} MB</option>' in html
+    assert '<option value="unlimited"' in html
+    assert "request_body_limit_mb" in html
 
 
 def test_admin_html_exposes_reasoning_mapping_controls():

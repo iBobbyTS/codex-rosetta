@@ -906,7 +906,7 @@ def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
     transport = HttpTransport()
 
     app = App(
-        max_body_size=50_000_000,
+        max_body_size=config.request_body_limit_bytes,
         request_line_timeout=_INBOUND_REQUEST_LINE_TIMEOUT_SECONDS,
         header_timeout=_INBOUND_HEADER_TIMEOUT_SECONDS,
         body_timeout=_INBOUND_BODY_TIMEOUT_SECONDS,

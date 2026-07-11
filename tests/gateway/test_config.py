@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 
 import pytest
 
@@ -161,6 +162,7 @@ class TestGatewayAccessKeys:
         assert first_config.api_keys[0]["key"] != second_config.api_keys[0]["key"]
         assert first_config.host == "127.0.0.1"
         assert first_config.credential_visible is False
+        assert first["server"]["request_body_limit_mb"] == 128
 
 
 class TestAdminCorsOrigins:
@@ -204,6 +206,39 @@ class TestAdminCorsOrigins:
             "http://localhost",
             "http://localhost:8765",
         ]
+
+
+class TestRequestBodyLimit:
+    """Inbound request body limits use fixed, validated size tiers."""
+
+    def test_defaults_to_128_mb(self):
+        config = GatewayConfig(_minimal_raw())
+
+        assert config.request_body_limit_mb == 128
+        assert config.request_body_limit_config_value == 128
+        assert config.request_body_limit_bytes == 128 * 1024 * 1024
+
+    @pytest.mark.parametrize("value", [64, 128, 256, 512, 1024])
+    def test_accepts_supported_size_tiers(self, value):
+        config = GatewayConfig(_minimal_raw(request_body_limit_mb=value))
+
+        assert config.request_body_limit_mb == value
+        assert config.request_body_limit_config_value == value
+        assert config.request_body_limit_bytes == value * 1024 * 1024
+
+    def test_accepts_unlimited(self):
+        config = GatewayConfig(_minimal_raw(request_body_limit_mb="unlimited"))
+
+        assert config.request_body_limit_mb is None
+        assert config.request_body_limit_config_value == "unlimited"
+        assert config.request_body_limit_bytes == sys.maxsize
+
+    @pytest.mark.parametrize(
+        "value", [None, True, False, 0, 63, 129, 2048, "128", "none", {}]
+    )
+    def test_rejects_unsupported_values(self, value):
+        with pytest.raises(ValueError, match="request_body_limit_mb must be one of"):
+            GatewayConfig(_minimal_raw(request_body_limit_mb=value))
 
 
 class TestStreamTraceConfig:
