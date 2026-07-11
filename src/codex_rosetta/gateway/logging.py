@@ -149,6 +149,55 @@ class ColoredFormatter(logging.Formatter):
         return formatted
 
 
+class StatsStreamHandler(logging.StreamHandler):
+    """Render per-model request counts on one reusable terminal line."""
+
+    def __init__(self, stream: Any = None, *, stats_enabled: bool = False) -> None:
+        super().__init__(stream)
+        self.stats_enabled = stats_enabled
+        self._model_counts: dict[str, int] = {}
+        self._stats_line_active = False
+
+    def record_request(self, model: str) -> None:
+        """Increment one model count and redraw the shared stats line."""
+        if not self.stats_enabled:
+            return
+        safe_model = _single_line(str(model)).strip() or "<unknown>"
+        self.acquire()
+        try:
+            self._model_counts[safe_model] = self._model_counts.get(safe_model, 0) + 1
+            summary = ", ".join(
+                f"{name}: {count}" for name, count in self._model_counts.items()
+            )
+            self.stream.write(f"\r{summary}")
+            self.flush()
+            self._stats_line_active = True
+        finally:
+            self.release()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        """Move ordinary records below an active stats line before emitting."""
+        try:
+            if self._stats_line_active:
+                self.stream.write(self.terminator)
+                self._stats_line_active = False
+            super().emit(record)
+        except Exception:
+            self.handleError(record)
+
+    def close(self) -> None:
+        """Terminate an active stats line before the terminal is released."""
+        self.acquire()
+        try:
+            if self._stats_line_active:
+                self.stream.write(self.terminator)
+                self.flush()
+                self._stats_line_active = False
+        finally:
+            self.release()
+        super().close()
+
+
 # ---------------------------------------------------------------------------
 # Module-level logger
 # ---------------------------------------------------------------------------
@@ -323,6 +372,12 @@ def get_logger() -> logging.Logger:
     return _logger
 
 
+def record_request_stat(model: str) -> None:
+    """Record one request when terminal stats mode is active."""
+    if isinstance(_handler, StatsStreamHandler):
+        _handler.record_request(model)
+
+
 # ---------------------------------------------------------------------------
 # setup_logging
 # ---------------------------------------------------------------------------
@@ -335,7 +390,7 @@ def setup_logging(
     """Configure the gateway logger.
 
     Args:
-        log_level: Minimum terminal log level: ``info``, ``warning``, or
+        log_level: Terminal output mode: ``info``, ``stats``, ``warning``, or
             ``error``.
         use_colors: Whether to use ANSI colours in output.
     Returns:
@@ -348,6 +403,7 @@ def setup_logging(
 
     levels = {
         "info": logging.INFO,
+        "stats": 25,
         "warning": logging.WARNING,
         "error": logging.ERROR,
     }
@@ -355,7 +411,8 @@ def setup_logging(
         level = levels[log_level.lower()]
     except (AttributeError, KeyError) as exc:
         raise ValueError(
-            f"Unsupported log level {log_level!r}; expected info, warning, or error"
+            f"Unsupported log level {log_level!r}; expected info, stats, warning, "
+            "or error"
         ) from exc
 
     logger = get_logger()
@@ -364,8 +421,12 @@ def setup_logging(
     # Remove existing handler if present
     if _handler is not None:
         logger.removeHandler(_handler)
+        _handler.close()
 
-    _handler = logging.StreamHandler(sys.stderr)
+    _handler = StatsStreamHandler(
+        sys.stderr,
+        stats_enabled=log_level.lower() == "stats",
+    )
     _handler.setLevel(logging.DEBUG)
 
     formatter = ColoredFormatter(

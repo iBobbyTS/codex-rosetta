@@ -277,7 +277,7 @@ def main() -> None:
     parser.add_argument(
         "--log-level",
         default="warning",
-        choices=["info", "warning", "error"],
+        choices=["info", "stats", "warning", "error"],
         help="Terminal log level (default: warning)",
     )
 

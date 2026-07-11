@@ -16,6 +16,7 @@ from codex_rosetta.gateway import cli
     [
         ([], "warning"),
         (["--log-level", "info"], "info"),
+        (["--log-level", "stats"], "stats"),
         (["--log-level", "warning"], "warning"),
         (["--log-level", "error"], "error"),
     ],

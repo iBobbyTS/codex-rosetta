@@ -44,9 +44,11 @@ codex-rosetta-gateway --host 127.0.0.1 --log-level warning
 ```
 
 The default `warning` level shows only warnings and errors. Use
-`--log-level info` to also print request summaries, or `error` to show only
-errors. Use the WebUI **Request Log** for complete request history and
-**Gateway Logs** for streaming trace diagnostics.
+`--log-level stats` to maintain request counts by original upstream model name
+on one terminal line, `info` to print request summaries, or `error` to show only
+errors. In stats mode, warnings and errors start on a new line; the counters
+resume on the next request. Use the WebUI **Request Log** for complete request
+history and **Gateway Logs** for streaming trace diagnostics.
 
 ## Full Documentation
 

@@ -30,7 +30,12 @@ from .embeddings import handle_embeddings as _handle_embeddings
 from .headers import build_upstream_extra_headers
 from .health import build_health_payload, build_readiness_payload
 from .image_workers import ImageFetchWorkerPool
-from .logging import BodyLogState, UpstreamErrorLogState, get_logger
+from .logging import (
+    BodyLogState,
+    UpstreamErrorLogState,
+    get_logger,
+    record_request_stat,
+)
 
 from .proxy import (
     ProviderMetadataCapacityError,
@@ -539,6 +544,7 @@ async def _proxy_handler(
     model_label = (
         f"{model} (upstream={route.upstream_model})" if route.upstream_model else model
     )
+    record_request_stat(route.upstream_model or model)
     logger.info(
         "[%s] %s -> %s | model=%s stream=%s",
         request_id,

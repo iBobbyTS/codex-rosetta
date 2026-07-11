@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import io
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -62,6 +63,8 @@ def isolated_gateway_loggers():
     [
         ("info", False, True, True, False),
         ("info", True, True, True, True),
+        ("stats", False, False, True, False),
+        ("stats", True, False, True, True),
         ("warning", False, False, True, False),
         ("warning", True, False, True, True),
         ("error", False, False, False, False),
@@ -106,7 +109,7 @@ def test_console_and_file_handlers_honor_logging_matrix(
 def test_setup_logging_rejects_unsupported_level(
     isolated_gateway_loggers: logging.Logger,
 ) -> None:
-    with pytest.raises(ValueError, match="expected info, warning, or error"):
+    with pytest.raises(ValueError, match="expected info, stats, warning, or error"):
         gateway_logging.setup_logging(log_level="debug", use_colors=False)
 
 
@@ -124,6 +127,63 @@ def test_setup_logging_defaults_to_warning(
     output = console.getvalue()
     assert "hidden-info" not in output
     assert "visible-warning" in output
+
+
+def test_stats_logging_refreshes_one_line_and_breaks_before_warning_or_error(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(gateway_logging.sys, "stderr", console)
+    gateway_logging.setup_logging(log_level="stats", use_colors=False)
+
+    gateway_logging.record_request_stat("model-1")
+    gateway_logging.record_request_stat("model-1")
+    gateway_logging.record_request_stat("model-2")
+    isolated_gateway_loggers.info("hidden-info")
+    isolated_gateway_loggers.warning("visible-warning")
+    gateway_logging.record_request_stat("model-2")
+    isolated_gateway_loggers.error("visible-error")
+
+    output = console.getvalue()
+    assert "hidden-info" not in output
+    assert output.startswith("\rmodel-1: 1\rmodel-1: 2\rmodel-1: 2, model-2: 1\n")
+    assert "WARNING  | visible-warning\n\rmodel-1: 2, model-2: 2\n" in output
+    assert "ERROR    | visible-error" in output
+
+
+def test_stats_logging_escapes_model_control_characters(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(gateway_logging.sys, "stderr", console)
+    gateway_logging.setup_logging(log_level="stats", use_colors=False)
+
+    gateway_logging.record_request_stat("unsafe\r\nmodel")
+
+    assert console.getvalue() == "\runsafe\\r\\nmodel: 1"
+
+
+def test_stats_logging_serializes_concurrent_counter_updates(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(gateway_logging.sys, "stderr", console)
+    gateway_logging.setup_logging(log_level="stats", use_colors=False)
+    models = ["model-1"] * 80 + ["model-2"] * 60
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(gateway_logging.record_request_stat, models))
+
+    final_summary = console.getvalue().rsplit("\r", maxsplit=1)[-1]
+    counts = {
+        model: int(count)
+        for item in final_summary.split(", ")
+        for model, count in [item.rsplit(": ", maxsplit=1)]
+    }
+    assert counts == {"model-1": 80, "model-2": 60}
 
 
 def test_body_log_redacts_tokens_before_serialization_and_preserves_other_data(
