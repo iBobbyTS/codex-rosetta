@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 
 import pytest
 
@@ -11,6 +12,7 @@ from codex_rosetta._vendor.httpserver import Request, StreamingResponse
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.app import _proxy_handler, create_app, handle_google_genai
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.headers import MAX_REQUEST_ID_BYTES
 from codex_rosetta.gateway.proxy import MAX_MODEL_ID_BYTES
 
 
@@ -175,6 +177,68 @@ def test_all_proxy_source_formats_share_model_byte_limit(
     assert error["message"] == (
         f"'model' must be at most {MAX_MODEL_ID_BYTES} UTF-8 bytes"
     )
+
+
+@pytest.mark.parametrize(
+    "source_provider",
+    ["openai_chat", "openai_responses", "open_responses", "anthropic", "google"],
+)
+@pytest.mark.parametrize(
+    ("request_id", "expected_message"),
+    [
+        ("", "'x-request-id' must be a non-empty visible ASCII string"),
+        (" ", "'x-request-id' must be a non-empty visible ASCII string"),
+        ("req\x1b[2J", "'x-request-id' must be a non-empty visible ASCII string"),
+        ("请求", "'x-request-id' must be a non-empty visible ASCII string"),
+        (
+            "r" * (MAX_REQUEST_ID_BYTES + 1),
+            f"'x-request-id' must be at most {MAX_REQUEST_ID_BYTES} ASCII bytes",
+        ),
+    ],
+)
+def test_all_proxy_source_formats_reject_invalid_request_id_at_ingress(
+    source_provider: ProviderType,
+    request_id: str,
+    expected_message: str,
+) -> None:
+    app = _make_app()
+    request = _request(
+        app,
+        "/unused",
+        body=json.dumps({"model": "gpt-test", "input": []}).encode(),
+        headers={"x-request-id": request_id},
+    )
+
+    response = asyncio.run(_proxy_handler(request, source_provider))
+
+    assert response.status_code == 400
+    assert not isinstance(response, StreamingResponse)
+    payload = json.loads(response.body)
+    assert payload["error"]["message"] == expected_message
+    assert request_id not in response.headers.values()
+    uuid.UUID(response.headers["x-request-id"])
+
+
+@pytest.mark.parametrize(
+    "source_provider",
+    ["openai_chat", "openai_responses", "open_responses", "anthropic", "google"],
+)
+def test_all_proxy_source_formats_accept_exact_request_id_limit(
+    source_provider: ProviderType,
+) -> None:
+    app = _make_app()
+    request_id = "r" * MAX_REQUEST_ID_BYTES
+    request = _request(
+        app,
+        "/unused",
+        body=json.dumps({"model": "unknown-model", "input": []}).encode(),
+        headers={"x-request-id": request_id},
+    )
+
+    response = asyncio.run(_proxy_handler(request, source_provider))
+
+    assert response.status_code == 404
+    assert response.headers["x-request-id"] == request_id
 
 
 @pytest.mark.parametrize(

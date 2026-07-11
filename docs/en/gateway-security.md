@@ -56,6 +56,12 @@ IDs use `{UUID}:{window_number}` and are normally about 40 bytes. Requests over
 either semantic limit receive a format-appropriate HTTP 400 before routing or
 state allocation. These limits prevent request-error reflection and state-key
 memory from bypassing the larger body/header and cache-value byte budgets.
+External `x-request-id` values are correlation metadata only and must be 1–128
+visible ASCII bytes (`!` through `~`). Missing IDs receive a Gateway-generated
+UUID. Blank, control-containing, non-ASCII, or oversized IDs receive a
+format-appropriate HTTP 400 before body parsing, logging, tracing, persistence,
+state allocation, or upstream forwarding. This prevents terminal-control
+injection and repeated trace metadata from amplifying diagnostic storage.
 
 Cross-turn in-memory state has principal-fair hard limits. Provider continuation
 metadata is limited to 1 MiB per entry, 8 MiB per scope, 1,024 entries and

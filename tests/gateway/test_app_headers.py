@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -14,7 +15,11 @@ from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.admin.routes.config import reload_config
-from codex_rosetta.gateway.headers import build_upstream_extra_headers
+from codex_rosetta.gateway.headers import (
+    MAX_REQUEST_ID_BYTES,
+    build_upstream_extra_headers,
+    resolve_request_id,
+)
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -83,6 +88,71 @@ def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version
         "User-Agent": "codex-cli/1.2.3",
         "OpenResponses-Version": "2025-06-18",
     }
+
+
+def test_request_id_boundary_accepts_exact_limit_and_generates_missing_id():
+    exact = "r" * MAX_REQUEST_ID_BYTES
+    generated = resolve_request_id(None)
+
+    assert resolve_request_id(exact) == exact
+    assert str(uuid.UUID(generated)) == generated
+
+
+@pytest.mark.parametrize(
+    "request_id",
+    ["", " ", "req\x1b[2J", "req\x7f", "请求", "r" * (MAX_REQUEST_ID_BYTES + 1)],
+)
+def test_request_id_boundary_rejects_unsafe_external_values(request_id: str):
+    with pytest.raises(ValueError, match="x-request-id"):
+        resolve_request_id(request_id)
+
+
+@pytest.mark.parametrize("mode", ["normal", "error", "stream"])
+@pytest.mark.parametrize(
+    "request_id",
+    ["req\x1b[2J", "r" * (MAX_REQUEST_ID_BYTES + 1)],
+)
+def test_invalid_request_id_is_rejected_before_gateway_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    request_id: str,
+) -> None:
+    gateway_logger = MagicMock()
+    stats = MagicMock()
+    monkeypatch.setattr(app_module, "logger", gateway_logger)
+    monkeypatch.setattr(app_module, "record_request_stat", stats)
+
+    request = MagicMock()
+    request.headers = {"x-request-id": request_id}
+    request.json.return_value = {
+        "model": "gpt-test",
+        "messages": [],
+        "stream": mode == "stream",
+    }
+    if mode == "error":
+        request.json.side_effect = ValueError("body must remain unread")
+    request.app.gateway_config = MagicMock()
+    request.app.persistence = MagicMock()
+    request.app.stream_trace_state = MagicMock()
+    request.app.metadata_store = MagicMock()
+    request.app.codex_tool_store = MagicMock()
+    request.app.window_tool_search_store = MagicMock()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
+
+    assert response.status_code == 400
+    assert not isinstance(response, StreamingResponse)
+    assert request_id not in response.headers.values()
+    uuid.UUID(response.headers["x-request-id"])
+    request.json.assert_not_called()
+    request.app.gateway_config.resolve.assert_not_called()
+    assert request.app.persistence.mock_calls == []
+    assert request.app.stream_trace_state.mock_calls == []
+    assert request.app.metadata_store.mock_calls == []
+    assert request.app.codex_tool_store.mock_calls == []
+    assert request.app.window_tool_search_store.mock_calls == []
+    assert gateway_logger.mock_calls == []
+    stats.assert_not_called()
 
 
 def test_request_log_client_ip_ignores_untrusted_forwarded_headers():
