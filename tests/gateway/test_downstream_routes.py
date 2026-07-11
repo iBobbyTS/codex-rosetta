@@ -7,7 +7,8 @@ import json
 
 import pytest
 
-from codex_rosetta._vendor.httpserver import Request
+from codex_rosetta._vendor.httpserver import Request, StreamingResponse
+from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.app import _proxy_handler, create_app, handle_google_genai
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.proxy import MAX_MODEL_ID_BYTES
@@ -153,7 +154,9 @@ def test_public_post_endpoints_bound_model_utf8_bytes(
     "source_provider",
     ["openai_chat", "openai_responses", "anthropic", "google"],
 )
-def test_all_proxy_source_formats_share_model_byte_limit(source_provider: str):
+def test_all_proxy_source_formats_share_model_byte_limit(
+    source_provider: ProviderType,
+):
     app = _make_app()
     request = _request(
         app,
@@ -166,6 +169,7 @@ def test_all_proxy_source_formats_share_model_byte_limit(source_provider: str):
     response = asyncio.run(_proxy_handler(request, source_provider))
 
     assert response.status_code == 400
+    assert not isinstance(response, StreamingResponse)
     payload = json.loads(response.body)
     error = payload["error"]
     assert error["message"] == (
