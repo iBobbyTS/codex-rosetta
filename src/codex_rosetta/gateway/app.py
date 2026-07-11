@@ -27,7 +27,11 @@ from .auth import (
 from .config import GatewayConfig
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
 from .embeddings import handle_embeddings as _handle_embeddings
-from .headers import build_upstream_extra_headers
+from .headers import (
+    build_upstream_extra_headers,
+    generate_request_id,
+    resolve_request_id,
+)
 from .health import build_health_payload, build_readiness_payload
 from .image_workers import ImageFetchWorkerPool
 from .logging import (
@@ -469,6 +473,30 @@ def _try_stop_profiler(
         logger.debug("Failed to store profiling result")
 
 
+def _proxy_request_id_or_error(
+    request: Any, source_provider: ProviderType
+) -> str | Response:
+    """Resolve a safe request ID or return a source-shaped ingress error."""
+
+    try:
+        return resolve_request_id(request.headers.get("x-request-id"))
+    except ValueError as exc:
+        response = error_response_for_source(source_provider, 400, str(exc))
+        response.headers["x-request-id"] = generate_request_id()
+        return response
+
+
+def _apply_route_model_alias(
+    body: dict[str, Any], model: str, upstream_model: str | None
+) -> tuple[str, str]:
+    """Apply an upstream alias and return log/stat model labels."""
+
+    if upstream_model:
+        body["model"] = upstream_model
+        return f"{model} (upstream={upstream_model})", upstream_model
+    return model, model
+
+
 async def _proxy_handler(
     request: Any,
     source_provider: ProviderType,
@@ -478,8 +506,11 @@ async def _proxy_handler(
     """Shared handler for all proxy endpoints."""
     config: GatewayConfig = request.app.gateway_config
 
-    # Generate or honour a request ID for end-to-end traceability.
-    request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
+    # Reject untrusted correlation metadata before it can reach logs, traces,
+    # persistence, state, response headers, or the upstream transport.
+    request_id = _proxy_request_id_or_error(request, source_provider)
+    if isinstance(request_id, Response):
+        return request_id
 
     try:
         body: dict[str, Any] = request.json()
@@ -532,11 +563,11 @@ async def _proxy_handler(
         resp.headers["x-request-id"] = request_id
         return resp
 
-    # Model alias: replace the model name in the request body with the
-    # actual upstream identifier so the converter and upstream provider
-    # both see the correct name.
-    if route.upstream_model:
-        body["model"] = route.upstream_model
+    # Model aliases are applied before converter/upstream use while logging
+    # preserves both public and upstream identities.
+    model_label, stats_model = _apply_route_model_alias(
+        body, model, route.upstream_model
+    )
 
     # Determine streaming
     is_stream = force_stream or detect_stream_request(source_provider, body)
@@ -554,10 +585,7 @@ async def _proxy_handler(
         window_id=codex_window_id,
     )
 
-    model_label = (
-        f"{model} (upstream={route.upstream_model})" if route.upstream_model else model
-    )
-    record_request_stat(route.upstream_model or model)
+    record_request_stat(stats_model)
     logger.info(
         "[%s] %s -> %s | model=%s stream=%s",
         request_id,

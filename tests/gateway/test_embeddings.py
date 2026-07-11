@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -14,6 +15,7 @@ import pytest
 import codex_rosetta.gateway.embeddings as embeddings_module
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.embeddings import handle_embeddings
+from codex_rosetta.gateway.headers import MAX_REQUEST_ID_BYTES
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.transport.http import HttpTransport
 
@@ -178,6 +180,63 @@ class TestEmbeddingUpstreamModel:
         assert response.status_code == 200
         _, kwargs = request.app.transport.send_passthrough.call_args
         assert kwargs["extra_headers"]["User-Agent"] == "codex-cli/1.2.3"
+
+    @pytest.mark.parametrize(
+        ("headers", "expected_request_id"),
+        [({}, None), ({"x-request-id": "r" * MAX_REQUEST_ID_BYTES}, "exact")],
+    )
+    def test_request_id_is_generated_or_accepts_exact_limit(
+        self,
+        headers: dict[str, str],
+        expected_request_id: str | None,
+    ) -> None:
+        config = _make_config("https://api.example.com/v1")
+        request = _make_request(
+            {"model": "my-embed", "input": "hello"}, headers=headers
+        )
+        request.app.transport = MagicMock()
+        request.app.transport.send_passthrough = AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=200,
+                body={"object": "list", "data": [], "model": "my-embed"},
+                raw_content=b'{"object":"list","data":[],"model":"my-embed"}',
+            )
+        )
+
+        response = asyncio.run(handle_embeddings(request, config))
+
+        assert response.status_code == 200
+        _, kwargs = request.app.transport.send_passthrough.call_args
+        forwarded = kwargs["extra_headers"]["x-request-id"]
+        if expected_request_id == "exact":
+            assert forwarded == "r" * MAX_REQUEST_ID_BYTES
+        else:
+            uuid.UUID(forwarded)
+
+    @pytest.mark.parametrize(
+        "request_id",
+        ["", " ", "req\x1b[2J", "req\x7f", "请求", "r" * (MAX_REQUEST_ID_BYTES + 1)],
+    )
+    def test_invalid_request_id_is_rejected_before_embeddings_side_effects(
+        self,
+        request_id: str,
+    ) -> None:
+        config = _make_config("https://api.example.com/v1")
+        request = _make_request(
+            {"model": "my-embed", "input": "hello"},
+            headers={"x-request-id": request_id},
+        )
+        request.app.persistence = MagicMock()
+        request.json.side_effect = AssertionError("body must remain unread")
+
+        response = asyncio.run(handle_embeddings(request, config))
+
+        assert response.status_code == 400
+        payload = json.loads(response.body)
+        assert payload["error"]["type"] == "invalid_request_error"
+        assert payload["error"]["message"].startswith("'x-request-id' must be")
+        request.json.assert_not_called()
+        assert request.app.persistence.mock_calls == []
 
     def test_request_stats_use_resolved_upstream_model(
         self, monkeypatch: pytest.MonkeyPatch

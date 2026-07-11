@@ -46,6 +46,11 @@ Gateway model 标识符最多为 256 UTF-8 bytes。Codex 的 `x-codex-window-id`
 40 bytes。超过任一语义上限的请求会在 routing 或 state allocation 之前收到对应格式的
 HTTP 400。该限制避免 request error 回显和 state-key 内存绕过更大的 body/header 及
 cache-value byte budget。
+外部 `x-request-id` 仅作为 correlation metadata，必须由 1–128 个 visible ASCII bytes
+（`!` 到 `~`）组成；缺失时由 Gateway 生成 UUID。空值、包含 control character、非 ASCII
+或超长的 ID 会在 body parsing、logging、tracing、persistence、state allocation 和
+upstream forwarding 之前收到对应格式的 HTTP 400，避免 terminal-control 注入以及 trace
+中重复 metadata 放大诊断存储。
 
 跨轮内存状态执行按 principal 公平的硬限制。Provider continuation metadata 每条上限
 1 MiB、每个 scope 上限 8 MiB、每个 principal 上限 1,024 条/16 MiB，整个 app 上限

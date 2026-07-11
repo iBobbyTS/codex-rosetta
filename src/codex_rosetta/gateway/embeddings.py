@@ -16,7 +16,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from .config import GatewayConfig
-from .headers import build_upstream_extra_headers
+from .headers import build_upstream_extra_headers, resolve_request_id
 from .logging import get_logger, record_request_stat
 from .proxy import extract_model
 from .transport import UpstreamConnectionError, UpstreamTransport
@@ -40,6 +40,21 @@ async def handle_embeddings(
     Returns:
         The upstream response, forwarded to the client.
     """
+    # Validate correlation metadata before parsing, logging, persistence, or
+    # upstream forwarding. Missing IDs receive a Gateway-owned UUID.
+    try:
+        request_id = resolve_request_id(request.headers.get("x-request-id"))
+    except ValueError as exc:
+        return JSONResponse(
+            {
+                "error": {
+                    "message": str(exc),
+                    "type": "invalid_request_error",
+                }
+            },
+            status_code=400,
+        )
+
     # --- Parse request ---
     try:
         body: dict[str, Any] = request.json()
@@ -112,7 +127,6 @@ async def handle_embeddings(
     # --- Forward via transport ---
     upstream_url = f"{provider_info.base_url}/embeddings"
     transport: UpstreamTransport = request.app.transport
-    request_id = request.headers.get("x-request-id", "")
     extra_headers = build_upstream_extra_headers(request, request_id)
 
     t0 = time.monotonic()
