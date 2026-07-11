@@ -7,14 +7,13 @@ import os
 from typing import TYPE_CHECKING, Any
 
 from codex_rosetta.observability import (
-    DEFAULT_ERROR_MAX,
-    DEFAULT_SUCCESS_MAX,
     MetricsCollector,
     PersistenceManager,
     RequestLog,
 )
 
 from ..stream_trace import StreamTraceState
+from .runtime import AdminRuntimeState
 
 if TYPE_CHECKING:
     from ..config import GatewayConfig
@@ -25,42 +24,10 @@ logger = logging.getLogger("codex-rosetta-gateway")
 
 
 def _resolve_log_caps(config: GatewayConfig) -> tuple[int, int]:
-    """Resolve (success_max, error_max) from env vars and config.
-
-    Precedence: env vars > config.request_log.{success,error}_max >
-    legacy config.request_log.max_entries > built-in defaults.
-    """
-    rl_cfg: dict[str, Any] = getattr(config, "request_log", {}) or {}
-
-    def _parse_int_env(name: str) -> int | None:
-        raw = os.environ.get(name)
-        if raw is None or raw == "":
-            return None
-        try:
-            return int(raw)
-        except ValueError:
-            logger.warning("Ignoring non-integer %s=%r", name, raw)
-            return None
-
-    success_max = _parse_int_env("REQUEST_LOG_SUCCESS_MAX")
-    error_max = _parse_int_env("REQUEST_LOG_ERROR_MAX")
-
-    if success_max is None:
-        success_max = rl_cfg.get("success_max")
-    if error_max is None:
-        error_max = rl_cfg.get("error_max")
-
-    legacy = rl_cfg.get("max_entries")
-    if legacy is not None and success_max is None:
-        logger.warning(
-            "config: server.request_log.max_entries is deprecated; "
-            "use success_max (and optionally error_max) instead."
-        )
-        success_max = legacy
-
+    """Return request-log caps validated during config construction."""
     return (
-        int(success_max) if success_max is not None else DEFAULT_SUCCESS_MAX,
-        int(error_max) if error_max is not None else DEFAULT_ERROR_MAX,
+        config.request_log_success_max,
+        config.request_log_error_max,
     )
 
 
@@ -74,7 +41,12 @@ def setup_admin(
     Routes are registered separately via ``register_admin_routes`` before
     calling this function.
     """
+    token_values = set(config.token_values)
+    internal_token = getattr(app, "internal_token", None)
+    if internal_token:
+        token_values.add(internal_token)
     metrics = MetricsCollector()
+    metrics.update_token_values(token_values)
 
     # Set up SQLite persistence alongside the config file
     persistence: PersistenceManager | None = None
@@ -82,7 +54,10 @@ def setup_admin(
         data_dir = os.path.join(os.path.dirname(config_path), "data")
         success_max, error_max = _resolve_log_caps(config)
         persistence = PersistenceManager(
-            data_dir, success_max=success_max, error_max=error_max
+            data_dir,
+            success_max=success_max,
+            error_max=error_max,
+            token_values=token_values,
         )
 
         # Restore persisted metrics counters
@@ -118,4 +93,7 @@ def setup_admin(
     app.gateway_config = config
     app.config_path = config_path
     app.profiler_state = profiler_state
-    app.stream_trace_state = StreamTraceState(config.stream_trace)
+    app.stream_trace_state = StreamTraceState(
+        config.stream_trace, token_values=token_values
+    )
+    app.admin_runtime_state = AdminRuntimeState()

@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.cli import _empty_config_template
+from codex_rosetta.gateway.config import GatewayConfig, load_config
+
+
+def _secure_server(**overrides) -> dict:
+    server = {
+        "admin_password": "test-admin-password",
+        "api_keys": [{"id": "test-client", "key": "test-gateway-key", "label": "Test"}],
+    }
+    server.update(overrides)
+    return server
 
 
 def _minimal_raw(**server_overrides) -> dict:
@@ -18,7 +30,7 @@ def _minimal_raw(**server_overrides) -> dict:
             }
         },
         "models": {"gpt-test": "test"},
-        "server": {},
+        "server": _secure_server(),
     }
     raw["server"].update(server_overrides)
     return raw
@@ -42,10 +54,156 @@ class TestAdminPasswordUnresolvedEnvVar:
         cfg = GatewayConfig(raw)
         assert cfg.admin_password == "my-secret-password"
 
-    def test_accept_none(self):
+    def test_reject_missing_password(self):
         raw = _minimal_raw()
-        cfg = GatewayConfig(raw)
-        assert cfg.admin_password is None
+        raw["server"].pop("admin_password")
+        with pytest.raises(ValueError, match="admin_password"):
+            GatewayConfig(raw)
+
+    def test_reject_non_string_password(self):
+        raw = _minimal_raw(admin_password=12345)
+        with pytest.raises(ValueError, match="admin_password"):
+            GatewayConfig(raw)
+
+
+class TestEnvironmentSubstitution:
+    """Environment placeholders are resolved as string data after JSON parsing."""
+
+    def test_load_config_preserves_special_characters_without_structure_injection(
+        self, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ):
+        special = 'admin","credential_visible":true,"injected":"\\line\nrest'
+        monkeypatch.setenv("SPECIAL_ADMIN_PASSWORD", special)
+        raw = _minimal_raw(
+            admin_password="${SPECIAL_ADMIN_PASSWORD}",
+            credential_visible=False,
+        )
+        raw["providers"]["test"]["api_key"] = "prefix-${SPECIAL_ADMIN_PASSWORD}-suffix"
+        path = tmp_path / "config.jsonc"
+        path.write_text(json.dumps(raw), encoding="utf-8")
+
+        loaded = load_config(str(path))
+
+        assert loaded["server"]["admin_password"] == special
+        assert loaded["server"]["credential_visible"] is False
+        assert "injected" not in loaded["server"]
+        assert loaded["providers"]["test"]["api_key"] == f"prefix-{special}-suffix"
+        assert GatewayConfig(loaded).admin_password == special
+
+    def test_admin_candidate_substitution_keeps_special_value_as_data(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        special = 'quote"backslash\\newline\nrest'
+        monkeypatch.setenv("SPECIAL_ADMIN_PASSWORD", special)
+        raw = _minimal_raw(
+            admin_password="${SPECIAL_ADMIN_PASSWORD}",
+            credential_visible=False,
+        )
+
+        config = GatewayConfig.from_raw_with_env(raw)
+
+        assert config.admin_password == special
+        assert config.credential_visible is False
+
+
+class TestGatewayAccessKeys:
+    """Gateway access keys require stable, unique principal IDs."""
+
+    def test_reject_missing_access_keys(self):
+        raw = _minimal_raw()
+        raw["server"].pop("api_keys")
+        with pytest.raises(ValueError, match="at least one"):
+            GatewayConfig(raw)
+
+    @pytest.mark.parametrize("principal", ["", "   ", None])
+    def test_reject_empty_principal_id(self, principal):
+        raw = _minimal_raw()
+        raw["server"]["api_keys"][0]["id"] = principal
+        with pytest.raises(ValueError, match="id must be a non-empty"):
+            GatewayConfig(raw)
+
+    def test_reject_duplicate_principal_ids(self):
+        raw = _minimal_raw()
+        raw["server"]["api_keys"].append(
+            {"id": "test-client", "key": "other-key", "label": "Other"}
+        )
+        with pytest.raises(ValueError, match="duplicate.*id"):
+            GatewayConfig(raw)
+
+    def test_maps_raw_keys_to_stable_principals(self):
+        cfg = GatewayConfig(_minimal_raw())
+        assert cfg.api_key_principals == {"test-gateway-key": "test-client"}
+
+    @pytest.mark.parametrize("label", [{"nested": True}, ["label"], "x" * 129])
+    def test_rejects_invalid_access_key_label(self, label):
+        raw = _minimal_raw()
+        raw["server"]["api_keys"][0]["label"] = label
+        with pytest.raises(ValueError, match="label must"):
+            GatewayConfig(raw)
+
+    def test_allows_empty_access_key_label(self):
+        raw = _minimal_raw()
+        raw["server"]["api_keys"][0]["label"] = ""
+        assert GatewayConfig(raw).api_key_labels == {"test-gateway-key": ""}
+
+    def test_secure_defaults(self):
+        cfg = GatewayConfig(_minimal_raw())
+        assert cfg.host == "127.0.0.1"
+        assert cfg.credential_visible is False
+
+    def test_cli_scaffold_generates_unique_mandatory_credentials(self):
+        first = _empty_config_template()
+        second = _empty_config_template()
+
+        first_config = GatewayConfig(first)
+        second_config = GatewayConfig(second)
+        assert first_config.admin_password != second_config.admin_password
+        assert first_config.api_keys[0]["key"] != second_config.api_keys[0]["key"]
+        assert first_config.host == "127.0.0.1"
+        assert first_config.credential_visible is False
+
+
+class TestAdminCorsOrigins:
+    """Admin CORS accepts only canonical HTTP(S) origin allowlists."""
+
+    @pytest.mark.parametrize("value", [None, "https://admin.example", {}])
+    def test_rejects_non_list_allowlist(self, value):
+        with pytest.raises(ValueError, match="admin_cors_origins must be a list"):
+            GatewayConfig(_minimal_raw(admin_cors_origins=value))
+
+    @pytest.mark.parametrize(
+        "origin",
+        [
+            123,
+            "ftp://admin.example",
+            "https://user:password@admin.example",
+            "https://admin.example/path",
+            "https://admin.example?query=1",
+            "https://admin.example#fragment",
+            "https://admin.example:invalid",
+        ],
+    )
+    def test_rejects_non_origin_entries(self, origin):
+        with pytest.raises(ValueError, match=r"admin_cors_origins\[0\]"):
+            GatewayConfig(_minimal_raw(admin_cors_origins=[origin]))
+
+    def test_normalizes_default_ports_trailing_slashes_and_duplicates(self):
+        config = GatewayConfig(
+            _minimal_raw(
+                admin_cors_origins=[
+                    " HTTPS://ADMIN.EXAMPLE:443/ ",
+                    "https://admin.example",
+                    "http://localhost:80/",
+                    "http://localhost:8765",
+                ]
+            )
+        )
+
+        assert config.admin_cors_origins == [
+            "https://admin.example",
+            "http://localhost",
+            "http://localhost:8765",
+        ]
 
 
 class TestStreamTraceConfig:
@@ -92,7 +250,7 @@ class TestProviderApiTypeResolution:
                 }
             },
             "models": {"deepseek-test": "DeepSeek"},
-            "server": {},
+            "server": _secure_server(),
         }
 
         cfg = GatewayConfig(raw)
@@ -115,7 +273,7 @@ class TestProviderApiTypeResolution:
                 }
             },
             "models": {"minimax-test": "MiniMax"},
-            "server": {},
+            "server": _secure_server(),
         }
 
         cfg = GatewayConfig(raw)
@@ -137,7 +295,7 @@ class TestProviderApiTypeResolution:
                 }
             },
             "models": {"pixel-test": "Pixel"},
-            "server": {},
+            "server": _secure_server(),
         }
 
         cfg = GatewayConfig(raw)
@@ -199,6 +357,56 @@ class TestModelToolAdaptation:
             "enable_phase_detection": False,
             "tool_call_cache_ttl_hours": 12,
         }
+
+    @pytest.mark.parametrize(
+        "value",
+        [True, False, "nan", "inf", "1e999", 721, 1e100],
+    )
+    def test_rejects_invalid_tool_mapping_ttl(self, value):
+        raw = _minimal_raw()
+        raw["models"] = {
+            "gpt-test": {
+                "provider": "test",
+                "tool_adaptation": {"tool_call_cache_ttl_hours": value},
+            }
+        }
+
+        with pytest.raises(ValueError, match="at most 720 hours"):
+            GatewayConfig(raw)
+
+    @pytest.mark.parametrize("value", ["0.5", "720", 720.0])
+    def test_accepts_valid_string_and_boundary_tool_mapping_ttl(self, value):
+        raw = _minimal_raw()
+        raw["models"] = {
+            "gpt-test": {
+                "provider": "test",
+                "tool_adaptation": {"tool_call_cache_ttl_hours": value},
+            }
+        }
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.model_tool_adaptations["gpt-test"][
+            "tool_call_cache_ttl_hours"
+        ] == float(value)
+
+    def test_env_substituted_tool_mapping_ttl_uses_same_validator(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        raw = _minimal_raw()
+        raw["models"] = {
+            "gpt-test": {
+                "provider": "test",
+                "tool_adaptation": {"tool_call_cache_ttl_hours": "${TOOL_TTL}"},
+            }
+        }
+        monkeypatch.setenv("TOOL_TTL", "720")
+
+        cfg = GatewayConfig.from_raw_with_env(raw)
+
+        assert (
+            cfg.model_tool_adaptations["gpt-test"]["tool_call_cache_ttl_hours"] == 720.0
+        )
 
 
 class TestModelGroups:

@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from typing import Any, cast
 
+from codex_rosetta._vendor.httpserver import Request
+from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.admin.metrics import MetricsCollector, _ProviderStats
+from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.health import build_health_payload
 
 
 # ---------------------------------------------------------------------------
@@ -169,6 +175,46 @@ class TestMetricsCollectorPerProvider:
         health = m.provider_health_snapshot()
         assert health["flaky"]["last_error"] == "upstream timeout"
 
+    def test_error_detail_redacts_only_tokens_at_ingestion(self):
+        m = MetricsCollector()
+        m.update_token_values({"sk-provider-secret"})
+        m.record_request(
+            model="m",
+            source="openai_chat",
+            target="openai_chat",
+            status_code=503,
+            duration_ms=10.0,
+            is_stream=False,
+            provider_name="private-provider",
+            error_detail=(
+                "Authorization failed for Bearer bearer-secret; "
+                "configured=sk-provider-secret; prompt=user@example.com; "
+                "password=ordinary-password; client_secret=ordinary-client-secret"
+            ),
+        )
+
+        error = m.provider_health_snapshot()["private-provider"]["last_error"]
+        assert "bearer-secret" not in error
+        assert "sk-provider-secret" not in error
+        assert error.count("[REDACTED]") == 2
+        assert "prompt=user@example.com" in error
+        assert "password=ordinary-password" in error
+        assert "client_secret=ordinary-client-secret" in error
+
+    def test_health_payload_uses_compact_hour_error_count(self):
+        metrics = MetricsCollector()
+        metrics.record_request(
+            model="m",
+            source="source",
+            target="provider",
+            status_code=503,
+            duration_ms=10.0,
+            is_stream=False,
+        )
+        metrics._window._buckets.clear()
+
+        assert build_health_payload(metrics)["errors_last_hour"] == 1
+
 
 # ---------------------------------------------------------------------------
 # Functional tests for health handler (unit-level, no HTTP server)
@@ -302,3 +348,72 @@ class TestHandleHealthFunction:
         assert resp.status_code == 503
         assert body["status"] == "not_ready"
         assert "providers" in body
+
+
+def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
+    config = GatewayConfig(
+        {
+            "providers": {
+                "private-provider": {
+                    "api_key": "sk-provider-secret",
+                    "base_url": "https://api.example.test/v1",
+                    "type": "openai",
+                }
+            },
+            "models": {"model-a": "private-provider"},
+            "server": {
+                "admin_password": "test-admin-password",
+                "api_keys": [
+                    {
+                        "id": "test-client",
+                        "label": "Test client",
+                        "key": "test-gateway-key",
+                    }
+                ],
+            },
+        }
+    )
+    app = cast(Any, create_app(config))
+    raw_error = (
+        "Authorization failed for Bearer bearer-secret; "
+        "configured=sk-provider-secret; prompt=user@example.com; "
+        "password=ordinary-password; client_secret=ordinary-client-secret"
+    )
+    for _ in range(10):
+        app.metrics.record_request(
+            model="model-a",
+            source="openai_responses",
+            target="openai_chat",
+            status_code=500,
+            duration_ms=10.0,
+            is_stream=False,
+            provider_name="private-provider",
+            error_detail=raw_error,
+        )
+    # Simulate a raw value retained before the running redactor was installed.
+    app.metrics._provider_stats["private-provider"].last_error = raw_error
+
+    for path, expected_status in (("/health", 200), ("/health/ready", 503)):
+        request = Request(
+            method="GET",
+            path=path,
+            query_string="",
+            headers={},
+            body=b"",
+            client_addr=("127.0.0.1", 12345),
+            app=app,
+        )
+        response = cast(Any, asyncio.run(app._dispatch(request)))
+        body = json.loads(response.body)
+        serialized = json.dumps(body)
+
+        assert response.status_code == expected_status
+        assert (
+            body["providers"]["private-provider"]["last_error"].count("[REDACTED]") == 2
+        )
+        assert "bearer-secret" not in serialized
+        assert "sk-provider-secret" not in serialized
+        assert "private-provider" in serialized
+        assert "prompt=user@example.com" in serialized
+        assert "password=ordinary-password" in serialized
+        assert "client_secret=ordinary-client-secret" in serialized

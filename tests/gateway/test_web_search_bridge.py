@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock
 
+from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
 from codex_rosetta.gateway.transport._base import UpstreamStream
 from codex_rosetta.gateway.web_search import WebSearchSettings
@@ -185,9 +186,11 @@ def test_responses_chat_web_search_executes_tavily_and_continues_chat_stream():
             web_search_client=fake_tavily,
         )
         assert response.status_code == 200
+        assert isinstance(response, StreamingResponse)
         assert "request_conversion_ms" in profile
         emitted: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             emitted.append(chunk)
         return emitted
 
@@ -277,8 +280,10 @@ def test_responses_chat_without_tavily_key_does_not_expose_web_search_tool():
             transport=transport,
             web_search_config={},
         )
+        assert isinstance(response, StreamingResponse)
         emitted: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             emitted.append(chunk)
         return emitted
 

@@ -60,6 +60,14 @@ To keep provider-side prompt caching and model continuity intact, Rosetta stores
 - Codex-native tool call
 - expiration time
 
+For authenticated, window-scoped gateway requests, SQLite is the cross-request
+source of truth; the mapping is not retained as an in-memory cross-turn cache.
+The exact reversible payload is protected with AES-256-GCM at rest. Diagnostic
+redaction is deliberately not applied to this executable payload, because a
+`[REDACTED]` call would no longer describe the tool action Codex executed. See
+[Gateway Security and Authentication](../gateway-security.md#executable-tool-history-storage)
+for key lifecycle, backup, failure, and legacy-row behavior.
+
 On later requests for the same session, Rosetta walks the historical messages and replaces known Codex-native calls with the original localized calls before sending the request upstream. If a loaded mapping is not used by the current outgoing request, Rosetta deletes it after the request is sent. Expired rows are cleaned periodically.
 
 This keeps Codex's downstream history native while keeping the upstream model's repeated context stable.

@@ -2058,7 +2058,7 @@ function renderToolPolicy(item, policy) {
 
 function renderToolItem(item, policies, nested=false) {
   const policy = item.policy_id ? policies.get(item.policy_id) : null;
-  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${esc(item.id)}"><div class="tool-name">${esc(item.name)}</div><div class="tool-badges">${renderToolKindBadge(item)}</div>${renderToolPolicy(item, policy)}</div>`;
+  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div><div class="tool-badges">${renderToolKindBadge(item)}</div>${renderToolPolicy(item, policy)}</div>`;
 }
 
 function renderToolNamespace(namespaceItem, childIds, index) {
@@ -2071,14 +2071,14 @@ function renderToolNamespace(namespaceItem, childIds, index) {
   const isExpanded = toolCatalogFilter === 'function' || expandedToolNamespaces.has(namespaceItem.id);
   const policy = index.policies.get(namespaceItem.policy_id);
   const childrenHtml = visibleChildren.map(item => renderToolItem(item, index.policies, true)).join('');
-  return `<div class="tool-namespace" data-namespace-id="${esc(namespaceItem.id)}"><div class="tool-namespace-head"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${esc(namespaceItem.id)}" onclick="toggleToolNamespace('${esc(namespaceItem.id)}')">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div>${renderToolPolicy(namespaceItem, policy)}</div><div class="tool-namespace-children" id="tool-children-${esc(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
+  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div>${renderToolPolicy(namespaceItem, policy)}</div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
 }
 
 function renderToolGroup(groupId, itemIds, index) {
   const items = itemIds.map(id => index.items.get(id)).filter(Boolean);
   if (items.length === 0) return '';
   const body = items.map(item => renderToolItem(item, index.policies)).join('');
-  return `<section class="tool-group" data-tool-group="${esc(groupId)}"><div class="tool-group-title"><span>${esc(t('tools.group.' + groupId))}</span><span class="tool-group-count">${items.length}</span></div><div class="tool-list">${body}</div></section>`;
+  return `<section class="tool-group" data-tool-group="${escAttr(groupId)}"><div class="tool-group-title"><span>${esc(t('tools.group.' + groupId))}</span><span class="tool-group-count">${items.length}</span></div><div class="tool-list">${body}</div></section>`;
 }
 
 function renderNamespaceGroup(index) {
@@ -2516,8 +2516,8 @@ function addModelGroupRow(modelName, info) {
   const checked = cap => caps.includes(cap) ? ' checked' : '';
   const typeChecked = type => rowType === type ? ' checked' : '';
   row.innerHTML = `
-    <input class="group-model-name" value="${esc(modelName || '')}" placeholder="exposed model name">
-    <input class="group-upstream-model" value="${esc(_modelUpstream(info || {}))}" placeholder="upstream model (optional)">
+    <input class="group-model-name" value="${escAttr(modelName || '')}" placeholder="exposed model name">
+    <input class="group-upstream-model" value="${escAttr(_modelUpstream(info || {}))}" placeholder="upstream model (optional)">
     <div>
       <div class="fetch-type-radios group-model-type">
         <label><input type="radio" class="group-model-type-input" name="${typeName}" value="llm"${typeChecked('llm')} onchange="onModelGroupRowTypeChange(this)"> <span>${t('label.llm')}</span></label>
@@ -2759,12 +2759,12 @@ function renderProviders() {
   grid.innerHTML = entries.map(([name, cfg]) => {
     const enabled = cfg.enabled !== false;
     const info = _providerDisplayInfo(name, cfg);
-    const logoHtml = info.logoUrl ? `<img class="provider-logo" src="${esc(info.logoUrl)}" alt="">` : '';
+    const logoHtml = info.logoUrl ? `<img class="provider-logo" src="${escAttr(info.logoUrl)}" alt="">` : '';
     // In list view, always output fixed columns (Provider/Protocol, Base URL, API Key) for alignment
     const fieldsHtml = isList
-      ? `<div class="field" title="${esc(info.displayType)}"><code>${esc(info.displayType)}</code></div>
-         <div class="field" title="${esc(cfg.base_url || '')}"><code>${esc(cfg.base_url || '')}</code></div>
-         ${_credentialVisible ? `<div class="field" title="${esc(cfg.api_key || '')}"><code>${esc(cfg.api_key || '')}</code></div>` : '<div class="field"></div>'}`
+      ? `<div class="field" title="${escAttr(info.displayType)}"><code>${esc(info.displayType)}</code></div>
+         <div class="field" title="${escAttr(cfg.base_url || '')}"><code>${esc(cfg.base_url || '')}</code></div>
+         ${_credentialVisible ? `<div class="field" title="${escAttr(cfg.api_key || '')}"><code>${esc(cfg.api_key || '')}</code></div>` : '<div class="field"></div>'}`
       : `<div class="field">${t('label.providerVendor')}: <code>${esc(info.providerName)}</code></div>
          <div class="field">${t('label.providerProtocol')}: <code>${esc(info.protocolName)}</code></div>
          <div class="field">Base URL: <code>${esc(cfg.base_url || '')}</code></div>
@@ -2775,15 +2775,15 @@ function renderProviders() {
       <div class="card-header">
         <div class="name">${logoHtml}${esc(name)}</div>
         <label class="toggle" title="${enabled ? t('provider.enabled') : t('provider.disabled')}">
-          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleProvider('${esc(name)}')">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleProvider(${handlerArg(name)})">
           <span class="slider"></span>
         </label>
       </div>
       ${fieldsHtml}
       <div class="actions">
-        <button class="btn btn-sm" onclick="copyProviderEntry('${esc(name)}')">${t('btn.clone')}</button>
-        <button class="btn btn-sm" onclick="editProvider('${esc(name)}')">${t('btn.edit')}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteProvider('${esc(name)}')">${t('btn.delete')}</button>
+        <button class="btn btn-sm" onclick="copyProviderEntry(${handlerArg(name)})">${t('btn.clone')}</button>
+        <button class="btn btn-sm" onclick="editProvider(${handlerArg(name)})">${t('btn.edit')}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteProvider(${handlerArg(name)})">${t('btn.delete')}</button>
       </div>
     </div>`;
   }).join('');
@@ -2850,17 +2850,17 @@ function _modelTestControls(name, caps) {
   const hasReasoning = caps.includes('reasoning');
   const isEmbedding = caps.includes('embedding');
   if (isEmbedding) {
-    return `<button class="btn btn-sm btn-test" style="border-radius:var(--radius);color:var(--orange);font-weight:600" onclick="runTest('${esc(name)}','embedding')">${t('btn.test')}</button>`;
+    return `<button class="btn btn-sm btn-test" style="border-radius:var(--radius);color:var(--orange);font-weight:600" onclick="runTest(${handlerArg(name)},'embedding')">${t('btn.test')}</button>`;
   }
   return `<div class="test-group">
-    <button class="btn btn-sm btn-test" onclick="runTest('${esc(name)}','text')">${t('btn.test')}</button>
+    <button class="btn btn-sm btn-test" onclick="runTest(${handlerArg(name)},'text')">${t('btn.test')}</button>
     <button class="btn btn-sm btn-caret" onclick="toggleTestMenu(this)">&#9662;</button>
     <div class="test-menu">
-      <div class="test-menu-item" onclick="runTest('${esc(name)}','text')">${t('test.text')}</div>
-      <div class="test-menu-item" onclick="runTest('${esc(name)}','stream')">${t('test.stream')}</div>
-      <div class="test-menu-item${hasTools ? '' : ' disabled'}" onclick="${hasTools ? `runTest('${esc(name)}','tools')` : ''}">${t('test.tools')}</div>
-      <div class="test-menu-item${hasVision ? '' : ' disabled'}" onclick="${hasVision ? `runTest('${esc(name)}','vision')` : ''}">${t('test.vision')}</div>
-      <div class="test-menu-item${hasReasoning ? '' : ' disabled'}" onclick="${hasReasoning ? `runTest('${esc(name)}','reasoning')` : ''}">${t('test.reasoning')}</div>
+      <div class="test-menu-item" onclick="runTest(${handlerArg(name)},'text')">${t('test.text')}</div>
+      <div class="test-menu-item" onclick="runTest(${handlerArg(name)},'stream')">${t('test.stream')}</div>
+      <div class="test-menu-item${hasTools ? '' : ' disabled'}" onclick="${hasTools ? `runTest(${handlerArg(name)},'tools')` : ''}">${t('test.tools')}</div>
+      <div class="test-menu-item${hasVision ? '' : ' disabled'}" onclick="${hasVision ? `runTest(${handlerArg(name)},'vision')` : ''}">${t('test.vision')}</div>
+      <div class="test-menu-item${hasReasoning ? '' : ' disabled'}" onclick="${hasReasoning ? `runTest(${handlerArg(name)},'reasoning')` : ''}">${t('test.reasoning')}</div>
     </div>
   </div>`;
 }
@@ -2888,7 +2888,7 @@ function renderModels() {
     provSet.add(typeof info === 'string' ? info : info.provider);
   }
   provFilter.innerHTML = `<option value="">${t('filter.allProviders')}</option>` +
-    [...provSet].sort().map(p => `<option value="${esc(p)}"${p === prevProv ? ' selected' : ''}>${esc(p)}</option>`).join('');
+    [...provSet].sort().map(p => `<option value="${escAttr(p)}"${p === prevProv ? ' selected' : ''}>${esc(p)}</option>`).join('');
 
   // Update sort header indicators
   document.getElementById('sortName').className = 'sortable' + (_modelSortKey === 'name' ? ` ${_modelSortDir}` : '');
@@ -2952,9 +2952,9 @@ function renderModels() {
     const rows = modelEntries.map(([modelName, info]) => {
       const caps = _modelCaps(info);
       const upstream = _modelUpstream(info);
-      const upstreamTag = upstream ? ` <span style="font-size:11px;color:var(--text-dim)" title="Upstream: ${esc(upstream)}">→ ${esc(upstream)}</span>` : '';
+      const upstreamTag = upstream ? ` <span style="font-size:11px;color:var(--text-dim)" title="Upstream: ${escAttr(upstream)}">→ ${esc(upstream)}</span>` : '';
       return `<tr${providerDisabled ? ' style="opacity:0.4"' : ''}>
-        <td><code class="copyable" title="Click to copy" onclick="copyText('${esc(modelName)}')">${esc(modelName)}</code>${upstreamTag} ${_modelCapBadges(caps)}</td>
+        <td><code class="copyable" title="Click to copy" onclick="copyText(${handlerArg(modelName)})">${esc(modelName)}</code>${upstreamTag} ${_modelCapBadges(caps)}</td>
         <td>${esc(provider)}${providerDisabled ? ` <span style="color:var(--text-dim);font-size:11px">(${t('provider.disabled')})</span>` : ''}</td>
         <td style="text-align:right;white-space:nowrap">${_modelTestControls(modelName, caps)}</td>
       </tr>`;
@@ -2962,12 +2962,12 @@ function renderModels() {
     return `<div class="model-group-card${collapsed ? ' collapsed' : ''}">
       <div class="model-group-head">
         <div class="model-group-title">
-          <button type="button" class="key-btn model-group-toggle" onclick="toggleModelGroup('${esc(groupName)}')" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '&#9656;' : '&#9662;'}</button>
+          <button type="button" class="key-btn model-group-toggle" onclick="toggleModelGroup(${handlerArg(groupName)})" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '&#9656;' : '&#9662;'}</button>
           <code>${esc(groupName)}</code><span class="model-group-meta">${esc(provider)} · ${modelEntries.length}</span>
         </div>
         <div class="model-group-actions">
-          <button class="btn btn-sm" onclick="openModelGroupModal('${esc(groupName)}')">${t('btn.edit')}</button>
-          <button class="btn btn-sm btn-danger" onclick="deleteModelGroup('${esc(groupName)}', this)">${t('btn.delete')}</button>
+          <button class="btn btn-sm" onclick="openModelGroupModal(${handlerArg(groupName)})">${t('btn.edit')}</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteModelGroup(${handlerArg(groupName)}, this)">${t('btn.delete')}</button>
         </div>
       </div>
       <div class="model-group-body"><div class="table-scroll"><table><tbody>${rows}</tbody></table></div></div>
@@ -2981,15 +2981,15 @@ function renderModels() {
     const provDisabled = disabledProviders.has(prov);
     const caps = _modelCaps(info);
     const upstream = _modelUpstream(info);
-    const upstreamTag = upstream ? ` <span style="font-size:11px;color:var(--text-dim)" title="Upstream: ${esc(upstream)}">→ ${esc(upstream)}</span>` : '';
+    const upstreamTag = upstream ? ` <span style="font-size:11px;color:var(--text-dim)" title="Upstream: ${escAttr(upstream)}">→ ${esc(upstream)}</span>` : '';
     return `<tr${provDisabled ? ' style="opacity:0.4"' : ''}>
-      <td><code class="copyable" title="Click to copy" onclick="copyText('${esc(name)}')">${esc(name)}</code>${upstreamTag} ${_modelCapBadges(caps)}</td>
+      <td><code class="copyable" title="Click to copy" onclick="copyText(${handlerArg(name)})">${esc(name)}</code>${upstreamTag} ${_modelCapBadges(caps)}</td>
       <td>${esc(prov)}${provDisabled ? ` <span style="color:var(--text-dim);font-size:11px">(${t('provider.disabled')})</span>` : ''}</td>
       <td style="text-align:right; white-space:nowrap">
         ${_modelTestControls(name, caps)}
-        <button class="btn btn-sm" onclick="cloneModel('${esc(name)}')">${t('btn.clone')}</button>
-        <button class="btn btn-sm" onclick="editModel('${esc(name)}','${esc(prov)}')">${t('btn.edit')}</button>
-        <button class="btn btn-sm btn-danger" onclick="deleteModel('${esc(name)}', this)">${t('btn.delete')}</button>
+        <button class="btn btn-sm" onclick="cloneModel(${handlerArg(name)})">${t('btn.clone')}</button>
+        <button class="btn btn-sm" onclick="editModel(${handlerArg(name)},${handlerArg(prov)})">${t('btn.edit')}</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteModel(${handlerArg(name)}, this)">${t('btn.delete')}</button>
       </td>
     </tr>`;
   }).join('');
@@ -3157,7 +3157,7 @@ function _renderMultiKeys(keys) {
   let html = '<div class="multi-key-list">';
   keys.forEach((k, i) => {
     html += `<div class="multi-key-row">
-      <input type="${inputType}" value="${esc(k)}" data-key-idx="${i}" placeholder="API key #${i+1}">
+      <input type="${inputType}" value="${escAttr(k)}" data-key-idx="${i}" placeholder="API key #${i+1}">
       <button type="button" class="key-btn" onclick="_removeKeyEntry(${i})" title="Remove">${delSvg}</button>
     </div>`;
   });
@@ -3329,7 +3329,7 @@ function openFetchModelsModal() {
   if (configData) {
     for (const [name, cfg] of Object.entries(configData.providers)) {
       if (cfg.enabled === false) continue;
-      sel.innerHTML += `<option value="${esc(name)}">${esc(name)}</option>`;
+      sel.innerHTML += `<option value="${escAttr(name)}">${esc(name)}</option>`;
     }
   }
   // Reset state
@@ -3416,7 +3416,7 @@ function renderFetchedModels() {
     const displayName = prefix ? prefix + m : m;
     const exists = displayName in existingModels;
     return `<label${exists ? ' style="opacity:0.6"' : ''}>
-      <input type="checkbox" value="${esc(m)}" onchange="updateFetchCount()"${exists ? ' checked data-exists="true"' : ''}>
+      <input type="checkbox" value="${escAttr(m)}" onchange="updateFetchCount()"${exists ? ' checked data-exists="true"' : ''}>
       <span>${esc(m)}</span>${exists ? ' <span class="exists-tag" style="font-size:11px;color:var(--text-dim)">(exists)</span>' : ''}
     </label>`;
   }).join('');
@@ -3536,15 +3536,15 @@ function renderKeys() {
   tbody.innerHTML = keys.map(k => {
     const created = k.created ? new Date(k.created).toLocaleDateString() : '—';
     return `<tr>
-      <td><span class="key-label-text" id="label-${k.id}">${esc(k.label || '—')}</span>
-        <button class="key-btn" style="margin-left:4px" onclick="editKeyLabel('${k.id}','${esc(k.label || '')}')" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></td>
-      <td style="width:40%"><div class="key-cell"><code class="key-masked" data-masked="${esc(k.key)}">${esc(k.key)}</code>
+      <td><span class="key-label-text" id="label-${escAttr(k.id)}">${esc(k.label || '—')}</span>
+        <button class="key-btn" style="margin-left:4px" onclick="editKeyLabel(${handlerArg(k.id)},${handlerArg(k.label || '')})" title="Edit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button></td>
+      <td style="width:40%"><div class="key-cell"><code class="key-masked" data-masked="${escAttr(k.key)}">${esc(k.key)}</code>
         ${_credentialVisible ? `<span class="key-actions">
-          <button class="key-btn" onclick="toggleKey('${k.id}',this)" title="Toggle visibility"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
-          <button class="key-btn" onclick="copyKeyById('${k.id}')" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
+          <button class="key-btn" onclick="toggleKey(${handlerArg(k.id)},this)" title="Toggle visibility"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          <button class="key-btn" onclick="copyKeyById(${handlerArg(k.id)})" title="Copy"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></button>
         </span>` : ''}</div></td>
       <td>${created}</td>
-      <td style="white-space:nowrap"><button class="btn btn-sm" onclick="rotateKey('${k.id}','${esc(k.label || k.id)}', this)">${t('btn.rotate')}</button> <button class="btn btn-sm btn-danger" onclick="deleteKey('${k.id}','${esc(k.label || k.id)}', this)">${t('btn.delete')}</button></td>
+      <td style="white-space:nowrap"><button class="btn btn-sm" onclick="rotateKey(${handlerArg(k.id)},${handlerArg(k.label || k.id)}, this)">${t('btn.rotate')}</button> <button class="btn btn-sm btn-danger" onclick="deleteKey(${handlerArg(k.id)},${handlerArg(k.label || k.id)}, this)">${t('btn.delete')}</button></td>
     </tr>`;
   }).join('');
 }
@@ -3690,7 +3690,7 @@ async function loadProfilingResults() {
         <td>${esc(r.source || '-')} → ${esc(r.target || '-')}</td>
         <td>${mode}</td>
         <td>${dur}</td>
-        <td style="white-space:nowrap"><button class="btn btn-sm" onclick="viewFlamegraph(${i})" title="View"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:middle"><path d="M8 14c-2.5 0-5-1.5-5-5 0-2 1-3.5 2.5-5.5C7 1.5 8 1 8 1s1 .5 2.5 2.5C12 5.5 13 7 13 9c0 3.5-2.5 5-5 5z"/><path d="M8 14c-1.5 0-2.5-1-2.5-3 0-1 .5-2 1.5-3 .5-.5 1-1 1-1s.5.5 1 1c1 1 1.5 2 1.5 3 0 2-1 3-2.5 3z"/></svg></button> <button class="btn btn-sm" onclick="downloadFlamegraph(${i}, '${esc(r.model||"profile")}')" title="Download"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:middle"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10"/></svg></button></td>
+        <td style="white-space:nowrap"><button class="btn btn-sm" onclick="viewFlamegraph(${i})" title="View"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:middle"><path d="M8 14c-2.5 0-5-1.5-5-5 0-2 1-3.5 2.5-5.5C7 1.5 8 1 8 1s1 .5 2.5 2.5C12 5.5 13 7 13 9c0 3.5-2.5 5-5 5z"/><path d="M8 14c-1.5 0-2.5-1-2.5-3 0-1 .5-2 1.5-3 .5-.5 1-1 1-1s.5.5 1 1c1 1 1.5 2 1.5 3 0 2-1 3-2.5 3z"/></svg></button> <button class="btn btn-sm" onclick="downloadFlamegraph(${i}, ${handlerArg(r.model||"profile")})" title="Download"><svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" style="vertical-align:middle"><path d="M8 2v8m0 0l-3-3m3 3l3-3M3 12h10"/></svg></button></td>
       </tr>`;
     }).join('');
   } catch (e) { /* ignore */ }
@@ -3941,7 +3941,7 @@ function renderLogs(entries, total) {
       const hasError = !!e.error_detail;
       const rowId = e.timestamp + '_' + e.model;
       const isExpanded = expandedLogRows.has(rowId);
-      const rowStyle = hasError ? ` style="cursor:pointer" onclick="toggleLogRow('${rowId}',this)"` : '';
+      const rowStyle = hasError ? ` style="cursor:pointer" onclick="toggleLogRow(${handlerArg(rowId)},this)"` : '';
       const expandHint = hasError ? ' title="Click to expand error"' : '';
       const clientIp = e.client_ip || '—';
       let rows = `<tr${rowStyle}${expandHint}>
@@ -4027,8 +4027,8 @@ function updateFilterOptions() {
   const pSel = document.getElementById('filterProvider');
   // preserve selection
   const mVal = mSel.value, pVal = pSel.value;
-  mSel.innerHTML = `<option value="">${t('filter.allModels')}</option>` + models.map(m => `<option value="${esc(m)}">${esc(m)}</option>`).join('');
-  pSel.innerHTML = `<option value="">${t('filter.allProviders')}</option>` + providers.map(p => `<option value="${esc(p)}">${esc(p)}</option>`).join('');
+  mSel.innerHTML = `<option value="">${t('filter.allModels')}</option>` + models.map(m => `<option value="${escAttr(m)}">${esc(m)}</option>`).join('');
+  pSel.innerHTML = `<option value="">${t('filter.allProviders')}</option>` + providers.map(p => `<option value="${escAttr(p)}">${esc(p)}</option>`).join('');
   mSel.value = mVal; pSel.value = pVal;
   updateKeyFilterOptions();
 }
@@ -4038,7 +4038,7 @@ function updateKeyFilterOptions() {
   const kVal = kSel.value;
   const keys = (keysData && keysData.keys) || [];
   const labels = [...new Set([...keys.map(k => k.label), ...logKeyLabels].filter(Boolean))].sort();
-  kSel.innerHTML = `<option value="">${t('filter.allKeys')}</option>` + labels.map(l => `<option value="${esc(l)}">${esc(l)}</option>`).join('');
+  kSel.innerHTML = `<option value="">${t('filter.allKeys')}</option>` + labels.map(l => `<option value="${escAttr(l)}">${esc(l)}</option>`).join('');
   kSel.value = kVal;
 }
 
@@ -4093,15 +4093,75 @@ document.addEventListener('keydown', e => {
 });
 
 // ===================== Helpers =====================
-// esc() escapes HTML special chars AND single quotes so the result is
-// safe in both HTML text nodes and single-quoted JS-string attributes
-// such as onclick="fn('${esc(name)}')".
+// esc() is for HTML text/attribute contexts only. Dynamic inline-handler
+// arguments must use handlerArg(), which serializes a JS string before
+// applying HTML-attribute encoding.
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s;
-  // innerHTML escapes &, <, > and " but NOT '.  Replace ' last to avoid
-  // double-encoding the & in the &#39; entity.
   return d.innerHTML.replace(/'/g, '&#39;');
+}
+
+function escAttr(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function handlerArg(value) {
+  return escAttr(JSON.stringify(String(value)));
+}
+
+function _createTestMetaItem(label, value, tone) {
+  const item = document.createElement('div');
+  item.className = 'meta-item';
+  const strong = document.createElement('strong');
+  strong.textContent = label + ':';
+  item.append(strong, document.createTextNode(' '));
+  if (tone) {
+    const span = document.createElement('span');
+    span.style.color = `var(--${tone})`;
+    span.textContent = value;
+    item.append(span);
+  } else {
+    item.append(document.createTextNode(value));
+  }
+  return item;
+}
+
+function _resetTestMeta(meta, model) {
+  meta.replaceChildren(_createTestMetaItem('Model', model));
+}
+
+function _appendTestMeta(meta, label, value, tone) {
+  meta.append(_createTestMetaItem(label, value, tone));
+}
+
+function _safeUsageCount(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+    ? String(value)
+    : '-';
+}
+
+function _usageCount(usage, primaryKey, fallbackKey) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return '-';
+  const hasPrimary = Object.prototype.hasOwnProperty.call(usage, primaryKey);
+  const value = hasPrimary ? usage[primaryKey] : usage[fallbackKey];
+  return _safeUsageCount(value);
+}
+
+function _appendTestUsageMeta(meta, type, usage) {
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return;
+  if (type === 'embedding') {
+    _appendTestMeta(meta, 'Tokens', `${_safeUsageCount(usage.prompt_tokens)} in`);
+    return;
+  }
+  const inputTokens = _usageCount(usage, 'input_tokens', 'prompt_tokens');
+  const outputTokens = _usageCount(usage, 'output_tokens', 'completion_tokens');
+  _appendTestMeta(meta, 'Tokens', `${inputTokens} in / ${outputTokens} out`);
 }
 
 function formatDuration(seconds) {
@@ -4244,7 +4304,7 @@ async function runTest(model, type) {
   const imgDetails = document.getElementById('testImageDetails');
   const imgBody = document.getElementById('testImageBody');
   document.getElementById('testModalTitle').textContent = `Test: ${getTestLabel(type)}`;
-  meta.innerHTML = `<div class="meta-item"><strong>Model:</strong> ${esc(model)}</div>`;
+  _resetTestMeta(meta, model);
   output.textContent = '';
   output.className = 'test-output';
   reqDetails.removeAttribute('open');
@@ -4335,26 +4395,22 @@ async function runTest(model, type) {
             if (statusCode >= 400) {
               const errMsg = body?.error?.message || JSON.stringify(body?.error || body);
               output.textContent = `Error ${statusCode}: ${errMsg}`;
-              meta.innerHTML += `<div class="meta-item"><strong>Time:</strong> ${elapsed}s</div><div class="meta-item"><strong>Status:</strong> <span style="color:var(--red)">${statusCode}</span></div>`;
+              _appendTestMeta(meta, 'Time', `${elapsed}s`);
+              _appendTestMeta(meta, 'Status', String(statusCode), 'red');
               resolve();
               return;
             }
 
-            meta.innerHTML += `<div class="meta-item"><strong>Time:</strong> ${elapsed}s</div><div class="meta-item"><strong>Status:</strong> <span style="color:var(--green)">200 OK</span></div>`;
+            _appendTestMeta(meta, 'Time', `${elapsed}s`);
+            _appendTestMeta(meta, 'Status', '200 OK', 'green');
 
             if (type === 'embedding') {
-              if (body?.usage) {
-                meta.innerHTML += `<div class="meta-item"><strong>Tokens:</strong> ${body.usage.prompt_tokens || '?'} in</div>`;
-              }
+              _appendTestUsageMeta(meta, type, body?.usage);
               const dim = body?.data?.[0]?.embedding?.length;
               output.textContent = dim ? `Embedding OK — ${dim} dimensions` : t('test.emptyResponse');
             } else {
               // Responses result
-              if (body?.usage) {
-                const inputTokens = body.usage.input_tokens ?? body.usage.prompt_tokens ?? '?';
-                const outputTokens = body.usage.output_tokens ?? body.usage.completion_tokens ?? '?';
-                meta.innerHTML += `<div class="meta-item"><strong>Tokens:</strong> ${inputTokens} in / ${outputTokens} out</div>`;
-              }
+              _appendTestUsageMeta(meta, type, body?.usage);
               const toolCall = extractResponsesToolCall(body);
               if (type === 'tools' && toolCall) {
                 output.textContent = `Tool call: ${toolCall.name || '?'}(${toolCall.arguments || '{}'})`;
@@ -4402,7 +4458,8 @@ async function runTest(model, type) {
       const errText = await res.text();
       output.className = 'test-output';
       output.textContent = `Error ${res.status}: ${errText}`;
-      meta.innerHTML += `<div class="meta-item"><strong>Time:</strong> ${((performance.now()-t0)/1000).toFixed(2)}s</div><div class="meta-item"><strong>Status:</strong> <span style="color:var(--red)">${res.status}</span></div>`;
+      _appendTestMeta(meta, 'Time', `${((performance.now()-t0)/1000).toFixed(2)}s`);
+      _appendTestMeta(meta, 'Status', String(res.status), 'red');
       resDetails.style.display = '';
       resBody.textContent = errText;
       return;
@@ -4436,7 +4493,8 @@ async function runTest(model, type) {
     if (!streamState.text && streamState.doneText) output.textContent = streamState.doneText;
     if (!output.textContent) output.textContent = t('test.emptyResponse');
     const elapsed = ((performance.now() - t0)/1000).toFixed(2);
-    meta.innerHTML += `<div class="meta-item"><strong>Time:</strong> ${elapsed}s</div><div class="meta-item"><strong>Status:</strong> <span style="color:var(--green)">OK (stream)</span></div>`;
+    _appendTestMeta(meta, 'Time', `${elapsed}s`);
+    _appendTestMeta(meta, 'Status', 'OK (stream)', 'green');
     resDetails.style.display = '';
     resBody.textContent = rawChunks.map(c => c === '[DONE]' ? c : JSON.stringify(JSON.parse(c), null, 2)).join('\n---\n');
   } catch(e) {

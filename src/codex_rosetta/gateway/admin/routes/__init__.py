@@ -167,11 +167,11 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/profiling/enable", methods=["POST"])(enable_profiling)
     app.route("/admin/api/profiling/disable", methods=["POST"])(disable_profiling)
     app.route("/admin/api/profiling/results", methods=["GET"])(get_profiling_results)
-    app.route("/admin/api/profiling/results/<index>", methods=["GET"])(
-        get_profiling_result
-    )
     app.route("/admin/api/profiling/results/download", methods=["GET"])(
         download_profiling_results
+    )
+    app.route("/admin/api/profiling/results/<int:index>", methods=["GET"])(
+        get_profiling_result
     )
     app.route("/admin/api/profiling/results", methods=["DELETE"])(
         clear_profiling_results

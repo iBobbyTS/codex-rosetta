@@ -1,5 +1,5 @@
 # /// zerodep
-# version = "0.3.2"
+# version = "0.3.3"
 # deps = ["httpclient"]
 # tier = "subsystem"
 # category = "network"
@@ -59,6 +59,8 @@ __all__ = [
     # Constants
     "DEFAULT_RETRY_INTERVAL",
     "DEFAULT_TIMEOUT",
+    "DEFAULT_MAX_LINE_BYTES",
+    "DEFAULT_MAX_EVENT_BYTES",
     # Data classes
     "SSEEvent",
     # Low-level parsers
@@ -66,6 +68,7 @@ __all__ = [
     "AsyncEventSource",
     # Exceptions
     "SSEError",
+    "SSELimitError",
     "SSEConnectionError",
     "SSEHTTPError",
     # High-level clients
@@ -90,6 +93,7 @@ def _ensure_sibling_path(name: str) -> str:
 try:
     _httpclient_dir = _ensure_sibling_path("httpclient")
     from httpclient import HttpConnectionError as _HttpConnectionError
+    from httpclient import HttpResponseLimitError as _HttpResponseLimitError
     from httpclient import HttpTimeoutError as _HttpTimeoutError
     from httpclient import async_get as _http_async_get
     from httpclient import get as _http_get
@@ -97,6 +101,13 @@ try:
     _HAS_HTTPCLIENT = True
 except (ImportError, AttributeError):
     _HAS_HTTPCLIENT = False
+
+    class _HttpResponseLimitError(Exception):
+        """Fallback type used when the optional httpclient is unavailable."""
+
+        kind: str
+        limit: int
+        actual: int
 
 # ── Sentinel for injection parameters ──────────────────────────────────────
 
@@ -121,6 +132,8 @@ _UNSET = _Unset()
 
 DEFAULT_RETRY_INTERVAL = 3000  # ms, per W3C spec
 DEFAULT_TIMEOUT = 30.0
+DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+DEFAULT_MAX_EVENT_BYTES = 8 * 1024 * 1024
 
 
 # ── Data classes ──
@@ -150,6 +163,26 @@ class SSEEvent:
 # ── Core parser ──
 
 
+class SSEError(Exception):
+    """Base exception for SSE errors."""
+
+
+class SSELimitError(SSEError):
+    """Raised when an SSE line or event exceeds a configured byte limit.
+
+    Attributes:
+        kind: The SSE element that exceeded its limit.
+        limit: Maximum permitted size in bytes.
+        actual: Observed size in bytes when the limit was detected.
+    """
+
+    def __init__(self, kind: str, limit: int, actual: int) -> None:
+        self.kind = kind
+        self.limit = limit
+        self.actual = actual
+        super().__init__(f"SSE {kind} exceeds {limit} bytes (observed {actual} bytes)")
+
+
 class _SSEParser:
     """Stateful W3C SSE line parser.
 
@@ -157,19 +190,32 @@ class _SSEParser:
     when an empty line triggers dispatch.
     """
 
-    __slots__ = ("_event_type", "_data_buf", "_last_id", "_retry", "_first_line")
+    __slots__ = (
+        "_event_type",
+        "_data_buf",
+        "_last_id",
+        "_retry",
+        "_first_line",
+        "_max_event_bytes",
+        "_event_bytes",
+    )
 
     def __init__(
         self,
         *,
         last_id: str = "",
         retry: int | None = None,
+        max_event_bytes: int | None = DEFAULT_MAX_EVENT_BYTES,
     ) -> None:
+        if max_event_bytes is not None and max_event_bytes <= 0:
+            raise ValueError("max_event_bytes must be positive or None")
         self._event_type: str = ""
         self._data_buf: list[str] = []
         self._last_id: str = last_id
         self._retry: int | None = retry
         self._first_line: bool = True
+        self._max_event_bytes = max_event_bytes
+        self._event_bytes = 0
 
     @property
     def last_event_id(self) -> str:
@@ -219,7 +265,17 @@ class _SSEParser:
         if field == "event":
             self._event_type = value
         elif field == "data":
+            value_bytes = len(value.encode("utf-8"))
+            event_bytes = self._event_bytes + value_bytes
+            if self._data_buf:
+                event_bytes += 1
+            if (
+                self._max_event_bytes is not None
+                and event_bytes > self._max_event_bytes
+            ):
+                raise SSELimitError("event", self._max_event_bytes, event_bytes)
             self._data_buf.append(value)
+            self._event_bytes = event_bytes
         elif field == "id":
             if "\0" not in value:
                 self._last_id = value
@@ -242,6 +298,7 @@ class _SSEParser:
         # Reset per-event state (id and retry persist)
         self._event_type = ""
         self._data_buf = []
+        self._event_bytes = 0
         return event
 
 
@@ -258,11 +315,17 @@ class EventSource:
             print(event.event, event.data)
     """
 
-    def __init__(self, lines: Iterable[str]) -> None:
+    def __init__(
+        self,
+        lines: Iterable[str],
+        *,
+        max_event_bytes: int | None = DEFAULT_MAX_EVENT_BYTES,
+    ) -> None:
         self._lines = lines
+        self._max_event_bytes = max_event_bytes
 
     def __iter__(self) -> Iterator[SSEEvent]:
-        parser = _SSEParser()
+        parser = _SSEParser(max_event_bytes=self._max_event_bytes)
         for line in self._lines:
             event = parser.feed_line(line)
             if event is not None:
@@ -278,11 +341,17 @@ class AsyncEventSource:
             print(event.data)
     """
 
-    def __init__(self, lines: AsyncIterable[str]) -> None:
+    def __init__(
+        self,
+        lines: AsyncIterable[str],
+        *,
+        max_event_bytes: int | None = DEFAULT_MAX_EVENT_BYTES,
+    ) -> None:
         self._lines = lines
+        self._max_event_bytes = max_event_bytes
 
     async def __aiter__(self) -> AsyncIterator[SSEEvent]:
-        parser = _SSEParser()
+        parser = _SSEParser(max_event_bytes=self._max_event_bytes)
         async for line in self._lines:
             event = parser.feed_line(line)
             if event is not None:
@@ -290,10 +359,6 @@ class AsyncEventSource:
 
 
 # ── Exceptions ──
-
-
-class SSEError(Exception):
-    """Base exception for SSE errors."""
 
 
 class SSEConnectionError(SSEError):
@@ -338,6 +403,8 @@ class _SSEClientMixin:
     _retry_interval: int
     _max_retries: int
     _url: str
+    _max_line_bytes: int | None
+    _max_event_bytes: int | None
 
     def _init_parser(self) -> _SSEParser:
         """Create a parser with restored persistent state."""
@@ -348,7 +415,41 @@ class _SSEClientMixin:
                 if self._retry_interval != DEFAULT_RETRY_INTERVAL
                 else None
             ),
+            max_event_bytes=self._max_event_bytes,
         )
+
+    @staticmethod
+    def _line_size(line: str) -> int:
+        """Return the UTF-8 byte size of a transport-decoded SSE line."""
+        return len(line.encode("utf-8"))
+
+    def _check_line_size(self, line: str) -> None:
+        """Enforce the line cap for custom transports without limit support."""
+        if self._max_line_bytes is None:
+            return
+        actual = self._line_size(line)
+        if actual > self._max_line_bytes:
+            raise SSELimitError("line", self._max_line_bytes, actual)
+
+    def _iter_response_lines(self, response: Any) -> Iterator[str]:
+        """Yield bounded sync lines, retaining legacy transport compatibility."""
+        try:
+            lines = response.iter_lines(max_line_bytes=self._max_line_bytes)
+        except TypeError:
+            lines = response.iter_lines()
+        for line in lines:
+            self._check_line_size(line)
+            yield line
+
+    async def _aiter_response_lines(self, response: Any) -> AsyncIterator[str]:
+        """Yield bounded async lines, retaining legacy transport compatibility."""
+        try:
+            lines = response.aiter_lines(max_line_bytes=self._max_line_bytes)
+        except TypeError:
+            lines = response.aiter_lines()
+        async for line in lines:
+            self._check_line_size(line)
+            yield line
 
     def _handle_event(self, event: SSEEvent) -> None:
         """Update reconnection state from a received event."""
@@ -377,6 +478,9 @@ class SSEClient(_SSEClientMixin):
         max_retries: Maximum reconnection attempts (``-1`` = unlimited).
         verify: Whether to verify TLS certificates.
         last_event_id: Initial ``Last-Event-ID`` header value.
+        max_line_bytes: Maximum bytes per SSE line, or ``None`` for unlimited.
+        max_event_bytes: Maximum accumulated data bytes per SSE event, or
+            ``None`` for unlimited.
         transport: Sync HTTP GET callable. Defaults to ``_UNSET``
             (auto-discover sibling ``httpclient.get``). Must accept
             ``(url, *, headers, stream, timeout, verify)`` and return
@@ -400,8 +504,14 @@ class SSEClient(_SSEClientMixin):
         max_retries: int = -1,
         verify: bool = True,
         last_event_id: str = "",
+        max_line_bytes: int | None = DEFAULT_MAX_LINE_BYTES,
+        max_event_bytes: int | None = DEFAULT_MAX_EVENT_BYTES,
         transport: Callable[..., Any] | None | _Unset = _UNSET,
     ) -> None:
+        if max_line_bytes is not None and max_line_bytes <= 0:
+            raise ValueError("max_line_bytes must be positive or None")
+        if max_event_bytes is not None and max_event_bytes <= 0:
+            raise ValueError("max_event_bytes must be positive or None")
         self._transport: Callable[..., Any]
         if isinstance(transport, _Unset):
             _require_httpclient()
@@ -427,6 +537,8 @@ class SSEClient(_SSEClientMixin):
         self._max_retries = max_retries
         self._verify = verify
         self._last_event_id = last_event_id
+        self._max_line_bytes = max_line_bytes
+        self._max_event_bytes = max_event_bytes
         self._response: Any = None
         self._closed = False
 
@@ -445,7 +557,7 @@ class SSEClient(_SSEClientMixin):
                 self._response = self._connect()
                 parser = self._init_parser()
 
-                for line in self._response.iter_lines():
+                for line in self._iter_response_lines(self._response):
                     if self._closed:
                         return
                     event = parser.feed_line(line)
@@ -458,6 +570,8 @@ class SSEClient(_SSEClientMixin):
                 if self._closed:
                     return
 
+            except _HttpResponseLimitError as exc:
+                raise SSELimitError(exc.kind, exc.limit, exc.actual) from exc
             except self._reconnect_errors as exc:
                 last_error = exc
             finally:
@@ -526,6 +640,9 @@ class AsyncSSEClient(_SSEClientMixin):
         max_retries: Maximum reconnection attempts (``-1`` = unlimited).
         verify: Whether to verify TLS certificates.
         last_event_id: Initial ``Last-Event-ID`` header value.
+        max_line_bytes: Maximum bytes per SSE line, or ``None`` for unlimited.
+        max_event_bytes: Maximum accumulated data bytes per SSE event, or
+            ``None`` for unlimited.
         transport: Async HTTP GET callable. Defaults to ``_UNSET``
             (auto-discover sibling ``httpclient.async_get``). Must accept
             ``(url, *, headers, stream, timeout, verify)`` and return
@@ -549,8 +666,14 @@ class AsyncSSEClient(_SSEClientMixin):
         max_retries: int = -1,
         verify: bool = True,
         last_event_id: str = "",
+        max_line_bytes: int | None = DEFAULT_MAX_LINE_BYTES,
+        max_event_bytes: int | None = DEFAULT_MAX_EVENT_BYTES,
         transport: Callable[..., Any] | None | _Unset = _UNSET,
     ) -> None:
+        if max_line_bytes is not None and max_line_bytes <= 0:
+            raise ValueError("max_line_bytes must be positive or None")
+        if max_event_bytes is not None and max_event_bytes <= 0:
+            raise ValueError("max_event_bytes must be positive or None")
         self._transport: Callable[..., Any]
         if isinstance(transport, _Unset):
             _require_httpclient()
@@ -576,6 +699,8 @@ class AsyncSSEClient(_SSEClientMixin):
         self._max_retries = max_retries
         self._verify = verify
         self._last_event_id = last_event_id
+        self._max_line_bytes = max_line_bytes
+        self._max_event_bytes = max_event_bytes
         self._response: Any = None
         self._closed = False
 
@@ -594,7 +719,7 @@ class AsyncSSEClient(_SSEClientMixin):
                 self._response = await self._connect()
                 parser = self._init_parser()
 
-                async for line in self._response.aiter_lines():
+                async for line in self._aiter_response_lines(self._response):
                     if self._closed:
                         return
                     event = parser.feed_line(line)
@@ -606,6 +731,8 @@ class AsyncSSEClient(_SSEClientMixin):
                 if self._closed:
                     return
 
+            except _HttpResponseLimitError as exc:
+                raise SSELimitError(exc.kind, exc.limit, exc.actual) from exc
             except self._reconnect_errors as exc:
                 last_error = exc
             finally:

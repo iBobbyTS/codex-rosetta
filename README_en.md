@@ -17,8 +17,12 @@ Clone the repository, enter it, and install the package:
 ```bash
 git clone https://github.com/iBobbyTS/codex-rosetta.git
 cd codex-rosetta
-python -m pip install -U .
+python -m pip install -U '.[gateway]'
 ```
+
+The `gateway` extra installs the audited AEAD dependency used for exact,
+restart-safe tool-history persistence. Core conversion-only consumers may
+still install `.` without gateway dependencies.
 
 ## Usage
 
@@ -27,6 +31,11 @@ Initialize the gateway configuration once:
 ```bash
 codex-rosetta-gateway init
 ```
+
+Initialization generates a mandatory Admin password and gateway access key in
+the owner-only config file. Store both securely; protected `/v1` requests must
+send the generated access key as a Bearer token. See
+[Gateway security and authentication](docs/en/gateway-security.md).
 
 Start the local gateway each time you use it:
 
@@ -37,6 +46,7 @@ codex-rosetta-gateway --host 127.0.0.1 -v
 ## Full Documentation
 
 - [English user documentation](docs/en/README.md)
+- [Gateway security and authentication](docs/en/gateway-security.md)
 - [Developer documentation](docs/dev/README.md)
 
 ## Problems This Project Addresses

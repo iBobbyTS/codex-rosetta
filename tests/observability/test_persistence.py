@@ -2,13 +2,17 @@
 
 import pytest
 
-from codex_rosetta.observability import PersistenceManager, RequestLogEntry
+from codex_rosetta.observability import PersistenceManager, RequestLog, RequestLogEntry
 
 
 @pytest.fixture
 def pm(tmp_path):
     """Create a PersistenceManager using a temp directory."""
-    return PersistenceManager(str(tmp_path), success_max=100, error_max=50)
+    manager = PersistenceManager(str(tmp_path), success_max=100, error_max=50)
+    try:
+        yield manager
+    finally:
+        manager.close()
 
 
 class TestPersistenceManager:
@@ -71,34 +75,71 @@ class TestPersistenceManager:
         # Should not raise on double close
         pm.close()
 
+    def test_request_log_stream_result_update_persists_terminal_fields(self, pm):
+        log = RequestLog(persistence=pm)
+        entry = RequestLogEntry.create(
+            model="gpt-stream",
+            source_provider="openai_responses",
+            target_provider="openai_chat",
+            is_stream=True,
+            status_code=200,
+            duration_ms=5.0,
+            profile={"stream_connect_ms": 1.0},
+        )
+        log.add(entry)
+
+        log.update_result(
+            entry.id,
+            status_code=502,
+            duration_ms=250.125,
+            error_detail="stream failed",
+            profile_update={"stream_complete": False},
+        )
+
+        updated = log.get_entry(entry.id)
+        assert updated is not None
+        assert updated["status_code"] == 502
+        assert updated["duration_ms"] == 250.12
+        assert updated["error_detail"] == "stream failed"
+        assert updated["profile"] == {
+            "stream_connect_ms": 1.0,
+            "stream_complete": False,
+        }
+
 
 class TestPersistenceRetention:
     def test_prune_success(self, tmp_path):
         pm = PersistenceManager(str(tmp_path), success_max=5, error_max=5)
-        for i in range(10):
-            entry = RequestLogEntry.create(
-                model=f"model-{i}",
-                source_provider="openai_chat",
-                target_provider="anthropic",
-                is_stream=False,
-                status_code=200,
-                duration_ms=10.0,
-            )
-            pm.insert_log_entries([entry.to_dict()])
-        # After pruning, should have at most success_max
-        assert pm.count_success_entries() <= 5
+        try:
+            for i in range(10):
+                entry = RequestLogEntry.create(
+                    model=f"model-{i}",
+                    source_provider="openai_chat",
+                    target_provider="anthropic",
+                    is_stream=False,
+                    status_code=200,
+                    duration_ms=10.0,
+                )
+                pm.insert_log_entries([entry.to_dict()])
+            # After pruning, should have at most success_max
+            assert pm.count_success_entries() <= 5
+        finally:
+            pm.close()
 
     def test_prune_errors_independently(self, tmp_path):
         pm = PersistenceManager(str(tmp_path), success_max=5, error_max=3)
-        # Add errors
-        for i in range(10):
-            entry = RequestLogEntry.create(
-                model=f"err-{i}",
-                source_provider="openai_chat",
-                target_provider="anthropic",
-                is_stream=False,
-                status_code=500,
-                duration_ms=10.0,
-            )
-            pm.insert_log_entries([entry.to_dict()])
-        assert pm.count_error_entries() <= 3
+        try:
+            # Add errors
+            for i in range(10):
+                entry = RequestLogEntry.create(
+                    model=f"err-{i}",
+                    source_provider="openai_chat",
+                    target_provider="anthropic",
+                    is_stream=False,
+                    status_code=500,
+                    duration_ms=10.0,
+                )
+                pm.insert_log_entries([entry.to_dict()])
+            assert pm.count_error_entries() <= 3
+        finally:
+            pm.close()

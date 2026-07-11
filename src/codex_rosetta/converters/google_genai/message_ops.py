@@ -33,6 +33,7 @@ from ...types.ir import (
 )
 from ..base import BaseMessageOps
 from .content_ops import GoogleGenAIContentOps
+from .image_fetch import ImageFetchPolicy
 from .tool_ops import GoogleGenAIToolOps
 
 
@@ -103,6 +104,7 @@ class GoogleGenAIMessageOps(BaseMessageOps):
         ir_input_list = (
             list(ir_messages) if not isinstance(ir_messages, list) else ir_messages
         )
+        image_fetch_policy = kwargs.get("image_fetch_policy")
 
         for item in ir_input_list:
             if is_message(item):
@@ -112,7 +114,11 @@ class GoogleGenAIMessageOps(BaseMessageOps):
                     # System messages are handled at converter level
                     # Skip them here
                     continue
-                content = self._ir_message_to_p(msg, ir_input_list)
+                content = self._ir_message_to_p(
+                    msg,
+                    ir_input_list,
+                    image_fetch_policy=image_fetch_policy,
+                )
                 if content:
                     contents.append(content)
             elif is_extension_item(item):
@@ -128,7 +134,11 @@ class GoogleGenAIMessageOps(BaseMessageOps):
         return contents, warnings_list
 
     def _ir_message_to_p(
-        self, message: Message, ir_input: Any = None
+        self,
+        message: Message,
+        ir_input: Any = None,
+        *,
+        image_fetch_policy: ImageFetchPolicy | None = None,
     ) -> dict[str, Any]:
         """Convert a single IR message to Google Content format.
 
@@ -143,14 +153,22 @@ class GoogleGenAIMessageOps(BaseMessageOps):
         parts: list[dict[str, Any]] = []
 
         for content_part in message.get("content", []):
-            part = self._ir_content_part_to_p(content_part, ir_input)
+            part = self._ir_content_part_to_p(
+                content_part,
+                ir_input,
+                image_fetch_policy=image_fetch_policy,
+            )
             if part is not None:
                 parts.append(part)
 
         return {"role": google_role, "parts": parts}
 
     def _ir_content_part_to_p(
-        self, content_part: ContentPart, ir_input: Any = None
+        self,
+        content_part: ContentPart,
+        ir_input: Any = None,
+        *,
+        image_fetch_policy: ImageFetchPolicy | None = None,
     ) -> Any:
         """Convert a single IR content part to Google Part format.
 
@@ -166,7 +184,10 @@ class GoogleGenAIMessageOps(BaseMessageOps):
         if is_text_part(content_part):
             return self.content_ops.ir_text_to_p(content_part)
         elif is_image_part(content_part):
-            return self.content_ops.ir_image_to_p(content_part)
+            return self.content_ops.ir_image_to_p(
+                content_part,
+                image_fetch_policy=image_fetch_policy,
+            )
         elif is_file_part(content_part):
             return self.content_ops.ir_file_to_p(content_part)
         elif is_audio_part(content_part):

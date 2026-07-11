@@ -12,6 +12,7 @@ from codex_rosetta.types.ir import (
     IRRequest,
     IRResponse,
     Message,
+    is_text_part,
 )
 
 
@@ -226,7 +227,9 @@ class TestOpenAIResponsesConverter:
             "system",
             "user",
         ]
-        assert result["messages"][0]["content"][0]["text"] == "Follow project rules."
+        first_part = result["messages"][0]["content"][0]
+        assert is_text_part(first_part)
+        assert first_part["text"] == "Follow project rules."
         assert result["tool_config"]["disable_parallel"] is True
 
     def test_request_from_provider_mixed_tools_prefers_top_level_definition(self):
@@ -528,12 +531,16 @@ class TestOpenAIResponsesConverter:
             context=context,
         )
 
-        response = self.converter.response_to_provider(
+        ir_response = cast(
+            IRResponse,
             {
                 "id": "chatcmpl_exec",
+                "object": "response",
+                "created": 123,
                 "model": "deepseek-v4-flash",
                 "choices": [
                     {
+                        "index": 0,
                         "message": {
                             "role": "assistant",
                             "content": [
@@ -550,6 +557,9 @@ class TestOpenAIResponsesConverter:
                     }
                 ],
             },
+        )
+        response = self.converter.response_to_provider(
+            ir_response,
             context=context,
         )
 

@@ -21,33 +21,36 @@ Compatibility cannot be declared just because the version numbers are the same.
 
 ## Package version naming
 
-Codex-Rosetta uses `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form.
+Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form. Manual GitHub Release tags retain the repository's historical `v` prefix, so source `0.144.0.r0` maps to tag `v0.144.0.r0`.
 
-## Current inspection baseline
+## Current pending inspection baseline
 
-Inspection date: 2026-07-09
+Inspection date: 2026-07-10
 
 | Project | Current Value | Description |
 | --- | --- | --- |
-| Local Codex CLI | `codex-cli 0.144.0` | From `codex --version` |
+| Local Codex CLI | `codex-cli 0.144.1` | From `codex --version`; newer than the `0.144.0.r0` compatibility target |
 | Codex source branch | `main` | `../openai-codex-src` |
 | Codex source commit | `2e8c3756f95789c215d9ea9a5ade6ec377934b3f` | `build: ratchet direct reqwest dependencies (#31431)` |
 | Codex source timestamp | `2026-07-09T11:53:18-07:00` | Latest commit in the source checkout |
 | Codex-Rosetta package version | `0.144.0.r0` | First Rosetta patch for Codex `0.144.0` |
+| Codex-Rosetta review snapshot | HEAD `eb947426572ad7658c4b5ad19688fa68659a06b6` plus uncommitted work | Seventh-round repair close observed 86 tracked modified files, 20 untracked files, and a tracked diff of 4,757 additions / 1,175 deletions |
 
-This table records the exact source code snapshot used for this release review; the Codex CLI release version and the source code commit are still two independent compatibility identifiers.
+This is a dirty inspection snapshot, not a clean reproducible release revision. The `0.144.0` compatibility decision is **pending / not approved** until every triggered live gate passes against an exact clean Codex-Rosetta commit. The Codex CLI release version, Codex source commit, Codex-Rosetta source version, and Codex-Rosetta commit remain independent compatibility identifiers.
 
-## Verification results
+## Recorded verification results (partial)
 
 | Check | Results |
 | --- | --- |
 | Codex source contract check | Passed after updating baseline; matches `2e8c3756f957…` |
 | Codex-specific targeted regression | `404 passed`; extended regression `425 passed, 6 warnings`; Responses converter `356 passed` |
 | `make lint` | Passed; both Ruff check and format check passed |
-| `make test` | `2326 passed, 4 skipped, 27 warnings` |
-| Real Codex/API | `deepseek-v4-flash` completed Lite/code-mode, file reading, and multi-turn tool tests through an isolated gateway; observing native GPT requests still requires a real GPT route |
+| `make test` | `2533 passed, 4 skipped, 9 warnings` |
+| Real Codex/API | **Partial:** `deepseek-v4-flash` completed controlled Lite/code-mode, file reading, multi-turn tools, `ultra`, and `exec` through an isolated gateway. Native GPT, compact/resume/fork, plugin/MCP/deferred tools, web search, UI phase, Desktop tools, changed error paths, and multi-agent remain unverified/not triggered; WebSocket Responses, incremental history, and remote compact remain unsupported |
 
-The first time the full test from the previous documentation review was run, `TestPipelineProfile::test_profile_populated_after_convert_request` experienced a temporary failure; the test passed when rerun alone, and subsequent reruns of the full `make test` also passed. This failure has not occurred again in the complete test after the new automation in this round; if it recurs in the future, it should still be investigated separately as a test isolation/stability issue.
+The controlled alias is evidence only for the third-party route it actually exercised. It must not be expanded into native GPT evidence or treated as satisfying the complete live matrix. See [`reports/20260709-codex-v0.144.0.md`](reports/20260709-codex-v0.144.0.md) for the itemized `tested`, `unverified / not triggered`, and `unsupported` status.
+
+The earlier intermittent `TestPipelineProfile::test_profile_populated_after_convert_request` failure was traced to test arithmetic, not conversion state leakage: each phase and the total are independently rounded to a 0.01 ms reporting quantum, so adding rounded sub-millisecond phases can exceed the separately rounded total. The request/response assertions now use tight absolute tolerances derived from that quantization; focused tests, a 50,000-iteration stress run, and the full suite pass. See `.agent-work/debug/resolved/20260709-pipeline-profile-rounding-flake.md` for the evidence chain.
 
 ## Files
 

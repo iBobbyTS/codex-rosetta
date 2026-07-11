@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
 from codex_rosetta.routing import ResolvedRoute
@@ -243,8 +244,12 @@ class _RawStream(UpstreamStream):
     async def read_error(self) -> str:
         return b"".join(self._chunks).decode()
 
-    async def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
-        raise AssertionError("Responses passthrough must not parse stream chunks")
+    def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        async def gen() -> AsyncIterator[dict[str, Any]]:
+            raise AssertionError("Responses passthrough must not parse stream chunks")
+            yield {}
+
+        return gen()
 
     def aiter_raw_bytes(self) -> AsyncIterator[bytes]:
         async def gen() -> AsyncIterator[bytes]:
@@ -301,8 +306,10 @@ def test_openai_responses_streaming_direct_raw_passthrough():
             transport=transport,
             extra_headers={"x-request-id": "req-123"},
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[bytes] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, bytes)
             chunks.append(chunk)
         return response, profile, chunks
 

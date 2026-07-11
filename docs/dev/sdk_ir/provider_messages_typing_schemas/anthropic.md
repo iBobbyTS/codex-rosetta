@@ -40,7 +40,7 @@ graph TD
 
 ### MessageParam
 
-**Type**: `TypedDict`  
+**Type**: `TypedDict`
 **Characteristics**: Minimal design with only two required fields
 
 ```python

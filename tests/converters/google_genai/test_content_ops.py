@@ -80,21 +80,13 @@ class TestGoogleGenAIContentOps:
 
     def test_ir_image_to_p_with_url_downloads(self):
         """Test IR ImagePart with URL downloads and converts to inline base64."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import patch
 
         ir_image = ImagePart(type="image", image_url="https://example.com/img.jpg")
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b"\x89PNG\r\n"
-        mock_resp.headers = MagicMock()
-        mock_resp.headers.get.return_value = "image/png"
-
-        mock_opener = MagicMock()
-        mock_opener.open.return_value = mock_resp
-
         with patch(
-            "codex_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
-            return_value=mock_opener,
-        ):
+            "codex_rosetta.converters.google_genai.content_ops.fetch_image_url",
+            return_value=(b"\x89PNG\r\n", "image/png"),
+        ) as fetch:
             result = GoogleGenAIContentOps.ir_image_to_p(ir_image)
 
         assert result is not None
@@ -102,18 +94,41 @@ class TestGoogleGenAIContentOps:
         import base64
 
         assert result["inlineData"]["data"] == base64.b64encode(b"\x89PNG\r\n").decode()
+        assert fetch.call_args.args[1].proxy_url is None
+
+    def test_ir_image_url_uses_explicit_gateway_proxy_not_process_environment(
+        self, monkeypatch
+    ):
+        """Gateway-owned proxy selection must survive hot reload and app isolation."""
+        from unittest.mock import patch
+
+        monkeypatch.setenv("HTTPS_PROXY", "http://stale-process-proxy:8080")
+        ir_image = ImagePart(type="image", image_url="https://example.com/img.jpg")
+        with patch(
+            "codex_rosetta.converters.google_genai.content_ops.fetch_image_url",
+            return_value=(b"image", "image/jpeg"),
+        ) as fetch:
+            result = GoogleGenAIContentOps.ir_image_to_p(
+                ir_image,
+                proxy_url="http://app-owned-proxy:9090",
+            )
+
+        assert result is not None
+        assert fetch.call_args.args[1].proxy_url == "http://app-owned-proxy:9090"
 
     def test_ir_image_to_p_with_url_download_failure(self):
         """Test IR ImagePart with URL returns None on download failure."""
         from unittest.mock import patch
 
+        from codex_rosetta.converters.google_genai.image_fetch import ImageFetchError
+
         ir_image = ImagePart(type="image", image_url="https://example.com/img.jpg")
         with patch(
-            "codex_rosetta.converters.google_genai.content_ops.urllib.request.build_opener",
-            side_effect=Exception("timeout"),
+            "codex_rosetta.converters.google_genai.content_ops.fetch_image_url",
+            side_effect=ImageFetchError("Image download failed"),
         ):
-            result = GoogleGenAIContentOps.ir_image_to_p(ir_image)
-        assert result is None
+            with pytest.raises(ImageFetchError, match="^Image download failed$"):
+                GoogleGenAIContentOps.ir_image_to_p(ir_image)
 
     def test_ir_image_to_p_with_data_uri(self):
         """Test IR ImagePart with data URI is parsed directly."""

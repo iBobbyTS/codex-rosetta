@@ -3,45 +3,36 @@
 from __future__ import annotations
 
 import asyncio
-import time
-import uuid
 from typing import Any
 
-from codex_rosetta._vendor.httpclient import AsyncClient, Response as HttpResponse
+from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from ...config import GatewayConfig
+from ...transport import UpstreamResponseTooLargeError
+from ...transport.http.transport import request_bounded_response
+from ..runtime import (
+    DEFAULT_TEST_TASK_MAX_PAYLOAD_BYTES,
+    DEFAULT_TEST_TASK_TIMEOUT_SECONDS,
+    AdminTestTaskStore,
+)
+from ._shared import _parse_json_object
 
-# In-memory store: task_id → {status, result, asyncio_task, started, ...}
-_test_tasks: dict[str, dict[str, Any]] = {}
-_MAX_TASK_AGE = 300  # seconds — auto-cleanup threshold
-_TASK_TIMEOUT = 120  # seconds — per-task execution timeout
-
-
-def _cleanup_stale_tasks() -> None:
-    """Remove tasks older than _MAX_TASK_AGE."""
-    now = time.monotonic()
-    expired = [
-        tid
-        for tid, t in _test_tasks.items()
-        if now - t.get("started", 0) > _MAX_TASK_AGE
-    ]
-    for tid in expired:
-        task = _test_tasks.pop(tid, None)
-        if task and not task.get("_task_obj", asyncio.Future()).done():
-            task["_task_obj"].cancel()
+_TASK_TIMEOUT = DEFAULT_TEST_TASK_TIMEOUT_SECONDS
+_TASK_RESPONSE_MAX_BYTES = DEFAULT_TEST_TASK_MAX_PAYLOAD_BYTES
 
 
 async def _run_test_task(
     task_id: str,
+    store: AdminTestTaskStore,
+    base_url: str,
     endpoint: str,
     payload: dict[str, Any],
     internal_token: str,
-    proxy_url: str | None,  # noqa: ARG001 — reserved for future use
 ) -> None:
     """Execute an upstream test request via a self-call to the gateway.
 
-    Results are stored in ``_test_tasks[task_id]``.  This runs as an
+    Results are stored in the app-owned task store.  This runs as an
     ``asyncio.Task`` so the admin API handler can return immediately.
 
     Important: we create a **dedicated** ``AsyncClient`` per task instead
@@ -60,55 +51,63 @@ async def _run_test_task(
                 "Authorization": f"Bearer {internal_token}",
             }
 
-            base_url = _test_tasks[task_id].get("_base_url", "http://127.0.0.1:28765")
             url = f"{base_url}{endpoint}"
 
             # Enforce per-task timeout so hung upstream calls don't
             # linger for the full _MAX_TASK_AGE cleanup window.
             resp = await asyncio.wait_for(
-                client.post(url, json=payload, headers=headers),
+                request_bounded_response(
+                    client,
+                    "POST",
+                    url,
+                    json=payload,
+                    headers=headers,
+                    max_success_bytes=_TASK_RESPONSE_MAX_BYTES,
+                    max_error_bytes=_TASK_RESPONSE_MAX_BYTES,
+                ),
                 timeout=_TASK_TIMEOUT,
             )
-            assert isinstance(resp, HttpResponse)
 
-            # Try to parse JSON body
-            try:
-                body = resp.json()
-            except Exception:
-                body = resp.text
-
-            _test_tasks[task_id].update(
-                {
-                    "status": "done",
-                    "status_code": resp.status_code,
-                    "body": body,
-                }
+            store.finish(
+                task_id,
+                status="done",
+                status_code=resp.status_code,
+                body_bytes=resp.content,
             )
         finally:
             await client.aclose()
     except asyncio.CancelledError:
-        _test_tasks[task_id]["status"] = "cancelled"
+        store.finish(task_id, status="cancelled")
+        raise
     except asyncio.TimeoutError:
-        _test_tasks[task_id].update(
-            {
-                "status": "error",
-                "error": f"Test timed out after {_TASK_TIMEOUT}s",
-            }
+        store.finish(
+            task_id,
+            status="error",
+            status_code=504,
+            error=f"Test timed out after {_TASK_TIMEOUT:g}s",
+        )
+    except UpstreamResponseTooLargeError:
+        store.finish(
+            task_id,
+            status="error",
+            status_code=502,
+            error=(
+                "Admin model-test upstream response exceeds "
+                f"{_TASK_RESPONSE_MAX_BYTES} bytes"
+            ),
         )
     except Exception as exc:
-        _test_tasks[task_id].update(
-            {
-                "status": "error",
-                "error": str(exc),
-            }
+        store.finish(
+            task_id,
+            status="error",
+            status_code=502,
+            error=str(exc),
         )
 
 
 def _get_gateway_config(request: Any) -> GatewayConfig | None:
-    """Return the live GatewayConfig from the app module."""
-    import codex_rosetta.gateway.app as _app_mod
-
-    return _app_mod._config
+    """Return the live GatewayConfig owned by this app instance."""
+    return getattr(request.app, "gateway_config", None)
 
 
 async def start_test(request: Any) -> Response:
@@ -117,12 +116,9 @@ async def start_test(request: Any) -> Response:
     POST /admin/api/test
     Body: {endpoint: "/v1/...", payload: {...}}
     """
-    _cleanup_stale_tasks()
-
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     endpoint = body.get("endpoint")
     payload = body.get("payload")
@@ -133,6 +129,11 @@ async def start_test(request: Any) -> Response:
     if not internal_token:
         return JSONResponse({"error": "No internal token available"}, status_code=500)
 
+    store: AdminTestTaskStore = request.app.admin_runtime_state.test_tasks
+    task_id, capacity_error = store.reserve()
+    if task_id is None:
+        return JSONResponse({"error": capacity_error}, status_code=429)
+
     # Determine the base URL the gateway is listening on so the test
     # task can POST back to ourselves.
     host = getattr(request.app, "_bind_host", "127.0.0.1")
@@ -142,21 +143,10 @@ async def start_test(request: Any) -> Response:
         host = "127.0.0.1"
     base_url = f"http://{host}:{port}"
 
-    task_id = uuid.uuid4().hex[:12]
-    _test_tasks[task_id] = {
-        "status": "pending",
-        "started": time.monotonic(),
-        "_base_url": base_url,
-    }
-
-    # Determine proxy from gateway config
-    gw_config = _get_gateway_config(request)
-    proxy_url = gw_config.proxy if gw_config else None
-
     asyncio_task = asyncio.create_task(
-        _run_test_task(task_id, endpoint, payload, internal_token, proxy_url)
+        _run_test_task(task_id, store, base_url, endpoint, payload, internal_token)
     )
-    _test_tasks[task_id]["_task_obj"] = asyncio_task
+    store.attach_task(task_id, asyncio_task)
 
     return JSONResponse({"task_id": task_id})
 
@@ -166,12 +156,10 @@ async def get_test_result(request: Any, task_id: str = "") -> Response:
 
     GET /admin/api/test/<task_id>
     """
-    task = _test_tasks.get(task_id)
-    if not task:
+    store: AdminTestTaskStore = request.app.admin_runtime_state.test_tasks
+    result = store.get_public(task_id)
+    if result is None:
         return JSONResponse({"error": "Task not found"}, status_code=404)
-
-    # Return only serialisable fields (skip _task_obj, _base_url)
-    result: dict[str, Any] = {k: v for k, v in task.items() if not k.startswith("_")}
     return JSONResponse(result)
 
 
@@ -180,13 +168,8 @@ async def cancel_test(request: Any, task_id: str = "") -> Response:
 
     DELETE /admin/api/test/<task_id>
     """
-    task = _test_tasks.get(task_id)
-    if not task:
+    store: AdminTestTaskStore = request.app.admin_runtime_state.test_tasks
+    if not store.cancel(task_id):
         return JSONResponse({"error": "Task not found"}, status_code=404)
-
-    task_obj = task.get("_task_obj")
-    if task_obj and not task_obj.done():
-        task_obj.cancel()
-        task["status"] = "cancelled"
 
     return JSONResponse({"ok": True})

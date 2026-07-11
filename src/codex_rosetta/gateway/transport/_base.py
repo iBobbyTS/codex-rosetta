@@ -122,6 +122,26 @@ class UpstreamConnectionError(Exception):
     """Raised when the transport cannot reach the upstream provider."""
 
 
+class UpstreamSafetyError(UpstreamConnectionError):
+    """Raised when an upstream response violates a bounded transport contract."""
+
+
+class UpstreamResponseTooLargeError(UpstreamSafetyError):
+    """Raised before an upstream response body can exceed its byte limit."""
+
+
+class UpstreamContentEncodingError(UpstreamSafetyError):
+    """Raised when an upstream ignores the identity-only response contract."""
+
+
+class UpstreamStreamLimitError(UpstreamSafetyError):
+    """Raised when an upstream stream exceeds a per-line or per-event limit."""
+
+
+class UpstreamProtocolError(UpstreamConnectionError):
+    """Raised when an upstream response violates its wire protocol."""
+
+
 # ---------------------------------------------------------------------------
 # Transport protocol
 # ---------------------------------------------------------------------------

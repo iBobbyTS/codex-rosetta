@@ -1,7 +1,7 @@
 # LLM Provider Converter - IR (Intermediate Representation) Design Document
 
-**Version**: 1.0  
-**Date**: 2024-01-10  
+**Version**: 1.0
+**Date**: 2024-01-10
 **Status**: Final Design
 
 ## Table of Contents

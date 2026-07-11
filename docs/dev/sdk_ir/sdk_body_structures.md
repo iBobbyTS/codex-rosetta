@@ -14,7 +14,7 @@ Based on analysis of four major SDK entry functions, we identified the complete 
 
 ## 1. OpenAI Chat Completions
 
-**Entry function**: `openai_client.chat.completions.create()`  
+**Entry function**: `openai_client.chat.completions.create()`
 **Total parameters**: 37
 
 ### 1.1 Core Input Content Parameters
@@ -90,7 +90,7 @@ Based on analysis of four major SDK entry functions, we identified the complete 
 
 ## 2. OpenAI Responses
 
-**Entry function**: `openai_responses_client.responses.create()`  
+**Entry function**: `openai_responses_client.responses.create()`
 **Total parameters**: 28
 
 ### 2.1 Core Input Content Parameters
@@ -167,7 +167,7 @@ Based on analysis of four major SDK entry functions, we identified the complete 
 
 ## 3. Anthropic Messages
 
-**Entry function**: `anthropic_client.messages.create()`  
+**Entry function**: `anthropic_client.messages.create()`
 **Total parameters**: 14
 
 ### 3.1 Core Input Content Parameters
@@ -222,7 +222,7 @@ Based on analysis of four major SDK entry functions, we identified the complete 
 
 ## 4. Google GenerativeAI
 
-**Entry function**: `google_client.models.generate_content()`  
+**Entry function**: `google_client.models.generate_content()`
 **Total parameters**: 3 top-level parameters
 
 ### 4.1 Core Input Content Parameters

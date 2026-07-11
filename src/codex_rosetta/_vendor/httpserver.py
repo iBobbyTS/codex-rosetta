@@ -1,5 +1,5 @@
 # /// zerodep
-# version = "0.2.1"
+# version = "0.2.3"
 # deps = []
 # tier = "subsystem"
 # category = "network"
@@ -46,6 +46,7 @@ import os
 import re
 import signal
 import sys
+import time
 from collections.abc import AsyncIterator, Callable
 from email.utils import formatdate
 from pathlib import Path
@@ -75,6 +76,12 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
 DEFAULT_MAX_BODY_SIZE = 1_048_576  # 1 MB
 DEFAULT_READ_TIMEOUT = 30.0  # seconds
+DEFAULT_REQUEST_LINE_TIMEOUT = 5.0  # seconds
+DEFAULT_MAX_HEADER_COUNT = 100
+DEFAULT_MAX_HEADER_BYTES = 64 * 1024
+DEFAULT_HEADER_TIMEOUT = 10.0  # seconds
+DEFAULT_BODY_TIMEOUT = 30.0  # seconds
+DEFAULT_MAX_CONCURRENT_REQUEST_PARSES = 64
 
 _STATUS_REASONS: dict[int, str] = {
     100: "Continue",
@@ -101,6 +108,7 @@ _STATUS_REASONS: dict[int, str] = {
     415: "Unsupported Media Type",
     422: "Unprocessable Entity",
     429: "Too Many Requests",
+    431: "Request Header Fields Too Large",
     500: "Internal Server Error",
     502: "Bad Gateway",
     503: "Service Unavailable",
@@ -185,6 +193,7 @@ class Request:
         "client_addr",
         "app",
         "_json",
+        "_pre_body_hooks_ran",
     )
 
     def __init__(
@@ -207,6 +216,7 @@ class Request:
         self.client_addr = client_addr
         self.app = app
         self._json: Any = _SENTINEL
+        self._pre_body_hooks_ran = False
 
     def json(self) -> Any:
         """Parse body as JSON (cached)."""
@@ -447,22 +457,34 @@ def _compile_route(
 # ── HTTP Parsing ─────────────────────────────────────────────────────────────
 
 
-async def _read_request(
+def _deadline(timeout: float) -> float:
+    """Return a monotonic deadline for one bounded parser phase."""
+    return time.monotonic() + timeout
+
+
+def _remaining(deadline: float) -> float:
+    """Return positive time remaining or raise the stable timeout signal."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise asyncio.TimeoutError
+    return remaining
+
+
+async def _read_request_head(
     reader: asyncio.StreamReader,
-    timeout: float,
-    max_body_size: int,
-) -> tuple[str, str, str, dict[str, str], bytes]:
-    """Read and parse an HTTP request from a stream.
-
-    Returns:
-        Tuple of (method, path, query_string, headers, body).
-
-    Raises:
-        _BadRequest: If the request is malformed.
-        asyncio.TimeoutError: If reading times out.
-    """
-    # -- Request line --
-    raw_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+    request_line_timeout: float,
+    header_timeout: float,
+) -> tuple[str, str, str, dict[str, str]]:
+    """Read one request line and bounded header section."""
+    request_line_deadline = _deadline(request_line_timeout)
+    try:
+        raw_line = await asyncio.wait_for(
+            reader.readline(), timeout=_remaining(request_line_deadline)
+        )
+    except ValueError:
+        raise _BadRequest("Request line is too large") from None
+    if time.monotonic() > request_line_deadline:
+        raise asyncio.TimeoutError
     if not raw_line:
         raise _BadRequest("Empty request")
     request_line = raw_line.decode("latin-1").rstrip("\r\n")
@@ -471,60 +493,168 @@ async def _read_request(
         raise _BadRequest(f"Malformed request line: {request_line!r}")
     method, raw_url, _version = parts
 
-    # -- URL --
     parsed = urlparse(raw_url)
     path = unquote(parsed.path)
     query_string = parsed.query
+    headers = await _read_header_section(
+        reader,
+        deadline=_deadline(header_timeout),
+    )
+    return method.upper(), path, query_string, headers
 
-    # -- Headers --
-    headers: dict[str, str] = {}
-    while True:
-        line = await asyncio.wait_for(reader.readline(), timeout=timeout)
-        decoded = line.decode("latin-1").rstrip("\r\n")
-        if not decoded:
-            break
-        if ":" in decoded:
-            k, v = decoded.split(":", 1)
-            headers[k.strip().lower()] = v.strip()
 
-    # -- Body --
-    body = b""
+async def _read_request_body(
+    reader: asyncio.StreamReader,
+    headers: dict[str, str],
+    *,
+    body_timeout: float,
+    header_timeout: float,
+    max_body_size: int,
+) -> bytes:
+    """Read one fixed or chunked body under a single monotonic deadline."""
+    body_deadline = _deadline(body_timeout)
     cl = headers.get("content-length")
     if cl is not None:
-        length = int(cl)
+        try:
+            length = int(cl)
+        except ValueError:
+            raise _BadRequest("Invalid Content-Length") from None
+        if length < 0:
+            raise _BadRequest("Invalid Content-Length")
         if length > max_body_size:
             raise HTTPException(413, f"Request body too large ({length} bytes)")
         if length > 0:
-            body = await asyncio.wait_for(reader.readexactly(length), timeout=timeout)
-    elif headers.get("transfer-encoding", "").lower() == "chunked":
-        body = await _read_chunked_body(reader, timeout, max_body_size)
+            body = await asyncio.wait_for(
+                reader.readexactly(length), timeout=_remaining(body_deadline)
+            )
+            if time.monotonic() > body_deadline:
+                raise asyncio.TimeoutError
+            return body
+        return b""
+    if headers.get("transfer-encoding", "").lower() == "chunked":
+        return await _read_chunked_body(
+            reader,
+            deadline=body_deadline,
+            header_timeout=header_timeout,
+            max_body_size=max_body_size,
+        )
+    return b""
 
-    return method.upper(), path, query_string, headers, body
+
+async def _read_request(
+    reader: asyncio.StreamReader,
+    timeout: float,
+    max_body_size: int,
+) -> tuple[str, str, str, dict[str, str], bytes]:
+    """Backward-compatible complete request reader.
+
+    Returns:
+        Tuple of (method, path, query_string, headers, body).
+
+    Raises:
+        _BadRequest: If the request is malformed.
+        asyncio.TimeoutError: If reading times out.
+    """
+    method, path, query_string, headers = await _read_request_head(
+        reader,
+        request_line_timeout=min(timeout, DEFAULT_REQUEST_LINE_TIMEOUT),
+        header_timeout=min(timeout, DEFAULT_HEADER_TIMEOUT),
+    )
+    body = await _read_request_body(
+        reader,
+        headers,
+        body_timeout=timeout,
+        header_timeout=min(timeout, DEFAULT_HEADER_TIMEOUT),
+        max_body_size=max_body_size,
+    )
+    return method, path, query_string, headers, body
+
+
+async def _read_header_section(
+    reader: asyncio.StreamReader,
+    *,
+    deadline: float,
+    discard: bool = False,
+) -> dict[str, str]:
+    """Read one bounded HTTP header or trailer section.
+
+    The aggregate byte budget includes each raw name/value line, its CRLF
+    framing, and the final empty-line delimiter.  The monotonic deadline starts
+    immediately before the first header read and cannot be extended by a peer
+    that keeps producing individual lines within the ordinary read timeout.
+    """
+    total_bytes = 0
+    count = 0
+    headers: dict[str, str] = {}
+    while True:
+        try:
+            line = await asyncio.wait_for(
+                reader.readline(),
+                timeout=_remaining(deadline),
+            )
+        except ValueError:
+            # StreamReader raises ValueError when one line exceeds its own
+            # configured limit.  Keep the response stable and do not echo it.
+            raise HTTPException(431, "Request header section is too large") from None
+        if not line:
+            raise _BadRequest("Incomplete request header section")
+        if time.monotonic() > deadline:
+            raise asyncio.TimeoutError
+
+        total_bytes += len(line)
+        if total_bytes > DEFAULT_MAX_HEADER_BYTES:
+            raise HTTPException(431, "Request header section is too large")
+
+        decoded = line.decode("latin-1").rstrip("\r\n")
+        if not decoded:
+            return headers
+
+        count += 1
+        if count > DEFAULT_MAX_HEADER_COUNT:
+            raise HTTPException(431, "Too many request header fields")
+        if discard:
+            continue
+        if ":" in decoded:
+            key, value = decoded.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
 
 
 async def _read_chunked_body(
     reader: asyncio.StreamReader,
-    timeout: float,
+    *,
+    deadline: float,
+    header_timeout: float,
     max_body_size: int,
 ) -> bytes:
     """Read a chunked transfer-encoded body."""
     parts: list[bytes] = []
     total = 0
     while True:
-        size_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        size_line = await asyncio.wait_for(
+            reader.readline(), timeout=_remaining(deadline)
+        )
         size_str = size_line.decode("latin-1").split(";")[0].strip()
         if not size_str:
             break
         chunk_size = int(size_str, 16)
         if chunk_size == 0:
-            await asyncio.wait_for(reader.readline(), timeout=timeout)
+            trailer_deadline = min(deadline, _deadline(header_timeout))
+            await _read_header_section(
+                reader,
+                deadline=trailer_deadline,
+                discard=True,
+            )
             break
         total += chunk_size
         if total > max_body_size:
             raise HTTPException(413, "Request body too large")
-        data = await asyncio.wait_for(reader.readexactly(chunk_size), timeout=timeout)
-        await asyncio.wait_for(reader.readline(), timeout=timeout)
+        data = await asyncio.wait_for(
+            reader.readexactly(chunk_size), timeout=_remaining(deadline)
+        )
+        await asyncio.wait_for(reader.readline(), timeout=_remaining(deadline))
         parts.append(data)
+    if time.monotonic() > deadline:
+        raise asyncio.TimeoutError
     return b"".join(parts)
 
 
@@ -613,7 +743,14 @@ class App:
 
     Args:
         max_body_size: Maximum request body size in bytes.
-        read_timeout: Timeout for reading a single request (seconds).
+        read_timeout: Legacy body-read timeout. Phase-specific values below
+            take precedence; request-line and header phases never inherit a
+            value above their secure defaults.
+        request_line_timeout: Monotonic total deadline for the request line.
+        header_timeout: Monotonic total deadline for each header/trailer section.
+        body_timeout: Monotonic total deadline for the complete request body.
+        max_concurrent_request_parses: Maximum connections allowed to parse a
+            request concurrently. Excess connections receive an immediate 503.
 
     Example::
 
@@ -631,9 +768,42 @@ class App:
         *,
         max_body_size: int = DEFAULT_MAX_BODY_SIZE,
         read_timeout: float = DEFAULT_READ_TIMEOUT,
+        request_line_timeout: float | None = None,
+        header_timeout: float | None = None,
+        body_timeout: float | None = None,
+        max_concurrent_request_parses: int = DEFAULT_MAX_CONCURRENT_REQUEST_PARSES,
     ):
+        if isinstance(max_concurrent_request_parses, bool) or not isinstance(
+            max_concurrent_request_parses, int
+        ):
+            raise TypeError("max_concurrent_request_parses must be an integer")
+        if max_concurrent_request_parses <= 0:
+            raise ValueError("max_concurrent_request_parses must be positive")
+        if read_timeout <= 0:
+            raise ValueError("read_timeout must be positive")
+
+        resolved_request_line_timeout = (
+            min(read_timeout, DEFAULT_REQUEST_LINE_TIMEOUT)
+            if request_line_timeout is None
+            else request_line_timeout
+        )
+        resolved_header_timeout = (
+            min(read_timeout, DEFAULT_HEADER_TIMEOUT)
+            if header_timeout is None
+            else header_timeout
+        )
+        resolved_body_timeout = read_timeout if body_timeout is None else body_timeout
+        for name, value in (
+            ("request_line_timeout", resolved_request_line_timeout),
+            ("header_timeout", resolved_header_timeout),
+            ("body_timeout", resolved_body_timeout),
+        ):
+            if value <= 0:
+                raise ValueError(f"{name} must be positive")
+
         self._routes: list[_Route] = []
         self._static_routes: list[tuple[str, str]] = []
+        self._before_body_handlers: list[Callable[..., Any]] = []
         self._before_request_handlers: list[Callable[..., Any]] = []
         self._after_request_handlers: list[Callable[..., Any]] = []
         self._error_handlers: dict[int | type, Callable[..., Any]] = {}
@@ -641,6 +811,11 @@ class App:
         self._shutdown_event: asyncio.Event | None = None
         self.max_body_size = max_body_size
         self.read_timeout = read_timeout
+        self.request_line_timeout = resolved_request_line_timeout
+        self.header_timeout = resolved_header_timeout
+        self.body_timeout = resolved_body_timeout
+        self.max_concurrent_request_parses = max_concurrent_request_parses
+        self._active_request_parses = 0
         self.port: int | None = None
         self.host: str | None = None
 
@@ -718,6 +893,19 @@ class App:
         self._static_routes.append((url_prefix, abs_dir))
 
     # ── Middleware ────────────────────────────────────────────────────────
+
+    def before_body(self, handler: Callable[..., Any]) -> Callable[..., Any]:
+        """Register an after-headers, before-body hook.
+
+        The hook receives a ``Request`` whose method, path, query, headers,
+        client address, and app are available, while ``body`` is still empty.
+        It may return a ``Response`` to reject the request without consuming
+        body bytes. If the same callable is also registered with
+        :meth:`before_request`, it runs only once for socket-parsed requests
+        while direct ``_dispatch`` calls retain the normal fallback.
+        """
+        self._before_body_handlers.append(handler)
+        return handler
 
     def before_request(self, handler: Callable[..., Any]) -> Callable[..., Any]:
         """Register a before-request hook.
@@ -810,6 +998,8 @@ class App:
         """Match a request to a route and invoke the handler."""
         # -- before_request hooks --
         for hook in self._before_request_handlers:
+            if request._pre_body_hooks_ran and hook in self._before_body_handlers:
+                continue
             result = await _invoke(hook, request)
             if result is not None:
                 return _coerce_response(result)
@@ -874,6 +1064,35 @@ class App:
 
     # ── Connection Handling ───────────────────────────────────────────────
 
+    def _try_acquire_request_parse(self) -> bool:
+        """Acquire one parser slot without creating a waiting task."""
+        if self._active_request_parses >= self.max_concurrent_request_parses:
+            return False
+        self._active_request_parses += 1
+        return True
+
+    def _release_request_parse(self) -> None:
+        """Release one parser slot exactly once for the current request."""
+        if self._active_request_parses <= 0:
+            raise RuntimeError("request parse slot released without acquisition")
+        self._active_request_parses -= 1
+
+    @property
+    def active_request_parses(self) -> int:
+        """Return the current number of request parsers holding a slot."""
+        return self._active_request_parses
+
+    async def _run_before_body_hooks(
+        self, request: Request
+    ) -> Response | StreamingResponse | None:
+        """Run early hooks after headers and before consuming body bytes."""
+        for hook in self._before_body_handlers:
+            result = await _invoke(hook, request)
+            if result is not None:
+                return _coerce_response(result)
+        request._pre_body_hooks_ran = True
+        return None
+
     @staticmethod
     async def _send_error_and_close(
         writer: asyncio.StreamWriter,
@@ -889,6 +1108,10 @@ class App:
         except (BrokenPipeError, ConnectionResetError):
             pass
         writer.close()
+        try:
+            await writer.wait_closed()
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            pass
 
     async def _handle_connection(
         self,
@@ -898,11 +1121,52 @@ class App:
         """Handle a single client connection."""
         peer = writer.get_extra_info("peername")
         client_addr = (peer[0], peer[1]) if peer else ("unknown", 0)
+        request: Request | None = None
+
+        if not self._try_acquire_request_parse():
+            await self._send_error_and_close(
+                writer,
+                JSONResponse(
+                    {"error": "Request parser capacity reached"},
+                    status_code=503,
+                ),
+            )
+            return
 
         try:
-            method, path, qs, headers, body = await _read_request(
-                reader, self.read_timeout, self.max_body_size
-            )
+            try:
+                method, path, qs, headers = await _read_request_head(
+                    reader,
+                    request_line_timeout=self.request_line_timeout,
+                    header_timeout=self.header_timeout,
+                )
+                request = Request(
+                    method=method,
+                    path=path,
+                    query_string=qs,
+                    headers=headers,
+                    body=b"",
+                    client_addr=client_addr,
+                    app=self,
+                )
+                early_response = await self._run_before_body_hooks(request)
+                if early_response is None:
+                    request.body = await _read_request_body(
+                        reader,
+                        headers,
+                        body_timeout=self.body_timeout,
+                        header_timeout=self.header_timeout,
+                        max_body_size=self.max_body_size,
+                    )
+            finally:
+                self._release_request_parse()
+
+            logger.debug("%s %s from %s", method, path, client_addr)
+            if early_response is not None:
+                response = await self._run_after_hooks(request, early_response)
+            else:
+                response = await self._dispatch(request)
+            await response._write(writer)
         except _BadRequest as exc:
             logger.debug("Bad request from %s: %s", client_addr, exc)
             await self._send_error_and_close(
@@ -913,20 +1177,17 @@ class App:
                     content_type="text/plain; charset=utf-8",
                 ),
             )
-            return
         except HTTPException as exc:
             await self._send_error_and_close(
                 writer,
                 JSONResponse({"error": exc.message}, status_code=exc.status_code),
             )
-            return
         except asyncio.TimeoutError:
             logger.debug("Request read timed out from %s", client_addr)
             await self._send_error_and_close(
                 writer,
                 JSONResponse({"error": "Request Timeout"}, status_code=408),
             )
-            return
         except asyncio.IncompleteReadError:
             logger.debug("Incomplete request body from %s", client_addr)
             await self._send_error_and_close(
@@ -935,34 +1196,10 @@ class App:
                     {"error": "Bad Request: incomplete body"}, status_code=400
                 ),
             )
-            return
-        except Exception:
-            logger.debug("Failed to read request from %s", client_addr, exc_info=True)
-            await self._send_error_and_close(
-                writer,
-                JSONResponse({"error": "Internal Server Error"}, status_code=500),
-            )
-            return
-
-        request = Request(
-            method=method,
-            path=path,
-            query_string=qs,
-            headers=headers,
-            body=body,
-            client_addr=client_addr,
-            app=self,
-        )
-
-        logger.debug("%s %s from %s", method, path, client_addr)
-
-        try:
-            response = await self._dispatch(request)
-            await response._write(writer)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             logger.debug("Connection reset by %s during response", client_addr)
         except Exception:
-            logger.exception("Error writing response to %s", client_addr)
+            logger.exception("Error handling request from %s", client_addr)
         finally:
             try:
                 writer.close()

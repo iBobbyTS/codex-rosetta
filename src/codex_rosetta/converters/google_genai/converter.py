@@ -56,6 +56,7 @@ from ._constants import (
 )
 from .config_ops import GoogleGenAIConfigOps
 from .content_ops import GoogleGenAIContentOps
+from .image_fetch import ImageFetchPolicy
 from .message_ops import GoogleGenAIMessageOps
 from .tool_ops import GoogleGenAIToolOps
 
@@ -72,6 +73,15 @@ def _modality_list_to_dict(modality_list: list[dict]) -> dict[str, int]:
         count = item.get("token_count") or item.get("tokenCount") or 0
         result[f"{modality}_tokens"] = count
     return result
+
+
+def _image_fetch_policy(context: ConversionContext) -> ImageFetchPolicy:
+    policy = context.options.get("image_fetch_policy")
+    if policy is not None:
+        if isinstance(policy, ImageFetchPolicy):
+            return policy
+        raise TypeError("image_fetch_policy must be an ImageFetchPolicy")
+    return ImageFetchPolicy(proxy_url=context.options.get("outbound_proxy_url"))
 
 
 def _dict_to_modality_list(details: dict[str, int]) -> list[dict[str, Any]]:
@@ -249,7 +259,10 @@ class GoogleGenAIConverter(BaseConverter):
                     cast(list, system_instruction["parts"]).extend(msg_parts)
 
         # Convert non-system messages
-        contents, msg_warnings = self.message_ops.ir_messages_to_p(ir_messages)
+        contents, msg_warnings = self.message_ops.ir_messages_to_p(
+            ir_messages,
+            image_fetch_policy=_image_fetch_policy(ctx),
+        )
         ctx.warnings.extend(msg_warnings)
         result["contents"] = contents
 

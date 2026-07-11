@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import os
+import secrets
 import subprocess
 import sys
 from typing import Any
@@ -72,11 +72,31 @@ def _open_in_editor(config_path: str | None = None) -> None:
 # Config file helpers
 # ---------------------------------------------------------------------------
 
-_CONFIG_TEMPLATE: dict[str, Any] = {
-    "providers": {},
-    "models": {},
-    "server": {"host": "0.0.0.0", "port": 8765},
-}
+
+def _secure_server_template() -> dict[str, Any]:
+    """Return secure, immediately usable server settings for a new config."""
+    return {
+        "host": "127.0.0.1",
+        "port": 8765,
+        "admin_password": secrets.token_urlsafe(32),
+        "credential_visible": False,
+        "api_keys": [
+            {
+                "id": "default",
+                "label": "Default client",
+                "key": f"rsk-{secrets.token_hex(24)}",
+            }
+        ],
+    }
+
+
+def _empty_config_template() -> dict[str, Any]:
+    """Return a new secure config scaffold."""
+    return {
+        "providers": {},
+        "models": {},
+        "server": _secure_server_template(),
+    }
 
 
 def _load_or_create_config(path: str) -> tuple[dict[str, Any], str]:
@@ -84,7 +104,7 @@ def _load_or_create_config(path: str) -> tuple[dict[str, Any], str]:
     if os.path.isfile(path):
         return load_config_raw(path), path
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    data: dict[str, Any] = json.loads(json.dumps(_CONFIG_TEMPLATE))
+    data = _empty_config_template()
     return data, path
 
 
@@ -125,12 +145,16 @@ def _cmd_init(args: argparse.Namespace) -> None:
             "claude-sonnet-4-20250514": "anthropic",
             "gemini-2.0-flash": "google",
         },
-        "server": {"host": "0.0.0.0", "port": 8765},
+        "server": _secure_server_template(),
     }
 
     _write_jsonc(config_path, template)
     print(f"Created config at {config_path}")
-    print("Edit it to add your API keys, then run: codex-rosetta-gateway")
+    print(
+        "Generated a mandatory Admin password and gateway access key under "
+        "server. Store them securely."
+    )
+    print("Edit provider API keys, then run: codex-rosetta-gateway")
 
 
 def _cmd_add_provider(args: argparse.Namespace) -> None:
@@ -346,10 +370,7 @@ def main() -> None:
     # Resolve verbosity: CLI --verbose wins, then config/env, then --log-level
     verbose = args.verbose or config.verbose
 
-    setup_logging(
-        verbose=verbose,
-        log_bodies=config.log_bodies,
-    )
+    setup_logging(verbose=verbose)
 
     host = args.host or config.host
     port = args.port or config.port
@@ -365,7 +386,10 @@ def main() -> None:
     if verbose:
         logger.info("Verbose logging enabled (DEBUG level)")
     if config.log_bodies:
-        logger.info("Request/response body logging enabled")
+        logger.info(
+            "Request/response body logging enabled on the dedicated DEBUG body "
+            "logger (configured API tokens are redacted)"
+        )
 
     app = create_app(config, config_path=config_path)
 

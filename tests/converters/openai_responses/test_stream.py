@@ -1865,16 +1865,15 @@ class TestCustomToolCallStreaming:
 
         restored_events: list[dict[str, Any]] = []
         for chunk in chunks:
-            ir_events = cast(
-                list[Any],
-                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            ir_events = self.converter.stream_response_from_provider(
+                chunk, context=ctx_from
             )
             for ir_event in ir_events:
                 restored = self.converter.stream_response_to_provider(
                     ir_event, context=ctx_to
                 )
                 if isinstance(restored, list):
-                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                    restored_events.extend(restored)
                 elif restored:
                     restored_events.append(cast(dict[str, Any], restored))
 
@@ -2026,16 +2025,15 @@ class TestCustomToolCallStreaming:
 
         restored_events: list[dict[str, Any]] = []
         for chunk in chunks:
-            ir_events = cast(
-                list[Any],
-                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            ir_events = self.converter.stream_response_from_provider(
+                chunk, context=ctx_from
             )
             for ir_event in ir_events:
                 restored = self.converter.stream_response_to_provider(
                     ir_event, context=ctx_to
                 )
                 if isinstance(restored, list):
-                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                    restored_events.extend(restored)
                 elif restored:
                     restored_events.append(cast(dict[str, Any], restored))
 
@@ -2247,16 +2245,15 @@ class TestCustomToolCallStreaming:
 
         restored_events: list[dict[str, Any]] = []
         for chunk in chunks:
-            ir_events = cast(
-                list[Any],
-                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            ir_events = self.converter.stream_response_from_provider(
+                chunk, context=ctx_from
             )
             for ir_event in ir_events:
                 restored = self.converter.stream_response_to_provider(
                     ir_event, context=ctx_to
                 )
                 if isinstance(restored, list):
-                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                    restored_events.extend(restored)
                 elif restored:
                     restored_events.append(cast(dict[str, Any], restored))
 
@@ -2347,16 +2344,15 @@ class TestCustomToolCallStreaming:
 
         restored_events: list[dict[str, Any]] = []
         for chunk in chunks:
-            ir_events = cast(
-                list[Any],
-                self.converter.stream_response_from_provider(chunk, context=ctx_from),
+            ir_events = self.converter.stream_response_from_provider(
+                chunk, context=ctx_from
             )
             for ir_event in ir_events:
                 restored = self.converter.stream_response_to_provider(
                     ir_event, context=ctx_to
                 )
                 if isinstance(restored, list):
-                    restored_events.extend(cast(list[dict[str, Any]], restored))
+                    restored_events.extend(restored)
                 elif restored:
                     restored_events.append(cast(dict[str, Any], restored))
 

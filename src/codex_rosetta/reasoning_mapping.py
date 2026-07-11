@@ -56,7 +56,6 @@ VALID_REASONING_MAPPINGS: tuple[ReasoningMapping, ...] = (
     "mimo_v2_5",
 )
 
-_RESOLVED_MAPPINGS: set[str] = set(VALID_REASONING_MAPPINGS) - {"auto"}
 _QWEN_BUDGETS: dict[ReasoningEffort, int] = {
     "light": 2048,
     "medium": 4096,
@@ -112,7 +111,7 @@ def resolve_reasoning_mapping(
     if requested != "auto":
         return ReasoningMappingResolution(
             requested=requested,
-            effective=cast(ResolvedReasoningMapping, requested),
+            effective=requested,
             source="config",
         )
 

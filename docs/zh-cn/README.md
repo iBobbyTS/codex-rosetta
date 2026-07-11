@@ -4,6 +4,10 @@
 
 - [Codex 版本兼容性](version-compatibility.md)
 
+## 网关运维
+
+- [安全与认证](gateway-security.md)
+
 ## Codex 工具本地化
 
 - [基础对话](codex-tool-localization/basic-conversation.md)

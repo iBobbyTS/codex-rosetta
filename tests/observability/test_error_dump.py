@@ -147,8 +147,12 @@ class TestDumpError:
     """Integration tests for the dump_error function."""
 
     @pytest.fixture()
-    def persistence(self, tmp_path: object) -> PersistenceManager:
-        return PersistenceManager(str(tmp_path))
+    def persistence(self, tmp_path: object):
+        manager = PersistenceManager(str(tmp_path))
+        try:
+            yield manager
+        finally:
+            manager.close()
 
     def test_stores_error_dump(self, persistence: PersistenceManager) -> None:
         body = {"model": "gpt-4", "messages": [{"role": "user", "content": "hi"}]}
@@ -275,6 +279,53 @@ class TestDumpError:
         # Should return None (logged the error) rather than raising
         assert result is None
 
+    def test_redacts_tokens_but_preserves_prompt_content(self, tmp_path) -> None:
+        persistence = PersistenceManager(
+            str(tmp_path), token_values={"provider-secret"}
+        )
+        dump_id = dump_error(
+            persistence,
+            request_body={
+                "prompt": "Email alice@example.com and inspect token_count",
+                "api_key": "request-secret",
+                "password": "ordinary-password",
+                "client_secret": "ordinary-client-secret",
+                "proxy_password": "ordinary-proxy-password",
+                "nested": "Bearer bearer-secret and provider-secret",
+            },
+            converted_body={"authorization": "Bearer converted-secret"},
+            response_text="upstream echoed provider-secret",
+            upstream_url=(
+                "https://ordinary-user:ordinary-password@example.test/v1"
+                "?api_token=provider-secret&note=ordinary-secret"
+            ),
+            status_code=500,
+            error_phase="upstream",
+        )
+
+        assert isinstance(dump_id, str)
+        entry = persistence.get_error_dump(dump_id)
+        assert entry is not None
+        body_data = persistence.get_dump_body(entry["body_hash"])
+        converted_data = persistence.get_dump_body(entry["converted_body_hash"])
+        assert body_data is not None
+        assert converted_data is not None
+        body = decompress_body(body_data)
+        converted = decompress_body(converted_data)
+        assert body["prompt"] == "Email alice@example.com and inspect token_count"
+        assert body["api_key"] == "[REDACTED]"
+        assert body["password"] == "ordinary-password"
+        assert body["client_secret"] == "ordinary-client-secret"
+        assert body["proxy_password"] == "ordinary-proxy-password"
+        assert body["nested"] == "Bearer [REDACTED] and [REDACTED]"
+        assert converted["authorization"] == "[REDACTED]"
+        assert entry["response_text"] == "upstream echoed [REDACTED]"
+        assert entry["upstream_url"] == (
+            "https://ordinary-user:ordinary-password@example.test/v1"
+            "?api_token=[REDACTED]&note=ordinary-secret"
+        )
+        persistence.close()
+
 
 # ------------------------------------------------------------------
 # PersistenceManager error dump methods
@@ -285,8 +336,12 @@ class TestPersistenceErrorDumps:
     """Direct tests for PersistenceManager error dump operations."""
 
     @pytest.fixture()
-    def persistence(self, tmp_path: object) -> PersistenceManager:
-        return PersistenceManager(str(tmp_path))
+    def persistence(self, tmp_path: object):
+        manager = PersistenceManager(str(tmp_path))
+        try:
+            yield manager
+        finally:
+            manager.close()
 
     def test_query_with_filters(self, persistence: PersistenceManager) -> None:
         # Insert two dumps with different phases
@@ -321,6 +376,48 @@ class TestPersistenceErrorDumps:
         # Bodies should also be cleaned up
         row = persistence._conn.execute("SELECT COUNT(*) FROM dump_bodies").fetchone()
         assert row[0] == 0
+
+    def test_count_retention_removes_oldest_dump_and_orphaned_body(
+        self,
+        persistence: PersistenceManager,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(persistence, "DEFAULT_DUMP_MAX", 1)
+        persistence.insert_dump_body("first-body", b"first", 5)
+        persistence.insert_error_dump(
+            dump_id="first-dump",
+            request_log_id=None,
+            timestamp="2026-01-01T00:00:00+00:00",
+            model="test",
+            source_provider="openai_responses",
+            target_provider="openai_chat",
+            provider_name="test",
+            status_code=500,
+            error_phase="upstream",
+            body_hash="first-body",
+            response_text="first error",
+            upstream_url=None,
+        )
+        persistence.insert_dump_body("second-body", b"second", 6)
+        persistence.insert_error_dump(
+            dump_id="second-dump",
+            request_log_id=None,
+            timestamp="2026-01-02T00:00:00+00:00",
+            model="test",
+            source_provider="openai_responses",
+            target_provider="openai_chat",
+            provider_name="test",
+            status_code=500,
+            error_phase="upstream",
+            body_hash="second-body",
+            response_text="second error",
+            upstream_url=None,
+        )
+
+        assert persistence.get_error_dump("first-dump") is None
+        assert persistence.get_dump_body("first-body") is None
+        assert persistence.get_error_dump("second-dump") is not None
+        assert persistence.get_dump_body("second-body") is not None
 
     def test_get_nonexistent_dump(self, persistence: PersistenceManager) -> None:
         assert persistence.get_error_dump("nonexistent") is None

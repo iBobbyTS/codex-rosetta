@@ -15,7 +15,7 @@ This analysis is based on inspection of the source code of the actual installed 
 
 ## 1. OpenAI Chat Completions Response Structure
 
-**Return type**: [`ChatCompletion`](https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion.py)  
+**Return type**: [`ChatCompletion`](https://github.com/openai/openai-python/blob/main/src/openai/types/chat/chat_completion.py)
 **Design philosophy**: Concise chat completion response, focused on conversation scenarios
 
 ### 1.1 Top-Level Response Fields (8 fields)
@@ -88,7 +88,7 @@ This is the core content carrier for OpenAI Chat Completions:
 
 ## 2. OpenAI Responses API Response Structure
 
-**Return type**: [`Response`](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response.py)  
+**Return type**: [`Response`](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response.py)
 **Design philosophy**: Highly modular response system supporting complex interaction patterns
 
 ### 2.1 Top-Level Response Fields (20+ fields)
@@ -271,7 +271,7 @@ The core message type in OpenAI Responses:
 
 ## 3. Anthropic Messages Response Structure
 
-**Return type**: [`Message`](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/message.py)  
+**Return type**: [`Message`](https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/types/message.py)
 **Design philosophy**: Clean and elegant content block architecture, balancing functionality and ease of use
 
 ### 3.1 Top-Level Response Fields (8 fields)
@@ -344,7 +344,7 @@ Anthropic's server-side tool use block, used for internal tool calls such as web
 
 ## 4. Google GenerativeAI Response Structure
 
-**Return type**: [`GenerateContentResponse`](https://github.com/google/generative-ai-python/blob/main/google/generativeai/types/generation_types.py)  
+**Return type**: [`GenerateContentResponse`](https://github.com/google/generative-ai-python/blob/main/google/generativeai/types/generation_types.py)
 **Design philosophy**: Multimodal-first Parts composition architecture, natively supporting multiple content types
 
 ### 4.1 Top-Level Response Fields (8 fields)

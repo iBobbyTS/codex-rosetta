@@ -14,32 +14,49 @@ Downstream SSE formatting lives in :mod:`transport.sse_format`.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 import re
+import threading
 import time
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response, StreamingResponse
 
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.converters.google_genai.image_fetch import (
+    ImageFetchCancellation,
+    ImageFetchPolicy,
+    ImageFetchTimeoutError,
+)
 from codex_rosetta.pipeline import ConversionError, ConversionPipeline
 from codex_rosetta.routing import ResolvedRoute
 
 from codex_rosetta.observability.error_dump import dump_error
 
 from .logging import (
+    BodyLogState,
+    UpstreamErrorLogState,
     get_logger,
     log_converted_request,
+    log_ir_request,
     log_original_request,
     log_response,
     log_stream_summary,
     log_upstream_error,
 )
+from .image_workers import (
+    ImageFetchWorkerPool,
+    ImageWorkerCapacityError,
+    ImageWorkerTimeoutError,
+)
 from .stream_phase_buffer import ResponsesPhaseBuffer
+from .state_scope import GatewayStateScope
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
@@ -74,6 +91,38 @@ from .web_search import (
 )
 
 logger = get_logger()
+
+
+async def _convert_request(
+    pipeline: ConversionPipeline,
+    route: ResolvedRoute,
+    body: dict[str, Any],
+    on_ir_ready: Callable[[dict[str, Any]], None],
+    *,
+    image_fetch_workers: ImageFetchWorkerPool | None = None,
+    image_fetch_policy: ImageFetchPolicy | None = None,
+) -> dict[str, Any]:
+    """Keep potentially blocking Google image retrieval off the event loop."""
+    if route.target_provider == "google":
+        policy = image_fetch_policy or ImageFetchPolicy(
+            cancellation=ImageFetchCancellation()
+        )
+        cancellation = policy.cancellation or ImageFetchCancellation()
+        owner = image_fetch_workers or ImageFetchWorkerPool(max_workers=1)
+        close_owner = image_fetch_workers is None
+        try:
+            return await owner.run(
+                lambda: pipeline.convert_request(
+                    body,
+                    on_ir_ready=on_ir_ready,
+                ),
+                cancellation=cancellation,
+                timeout_seconds=policy.timeout_seconds,
+            )
+        finally:
+            if close_owner:
+                await owner.close()
+    return pipeline.convert_request(body, on_ir_ready=on_ir_ready)
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +167,20 @@ def error_response_for_source(
         body = {"error": {"message": message}}
 
     return JSONResponse(body, status_code=status_code)
+
+
+def _conversion_failure_response(
+    source_provider: ProviderType,
+    exc: ImageWorkerCapacityError | ImageWorkerTimeoutError | ConversionError,
+) -> Response:
+    """Map conversion scheduling/fetch failures to stable Gateway statuses."""
+    if isinstance(exc, ImageWorkerCapacityError):
+        return error_response_for_source(source_provider, 503, str(exc))
+    if isinstance(exc, ImageWorkerTimeoutError) or isinstance(
+        exc.__cause__, ImageFetchTimeoutError
+    ):
+        return error_response_for_source(source_provider, 504, str(exc))
+    return error_response_for_source(source_provider, 400, str(exc))
 
 
 # ---------------------------------------------------------------------------
@@ -538,18 +601,27 @@ def _pop_read_output_cache(body: dict[str, Any]) -> ReadOutputCache | None:
 def _load_persistent_tool_mappings(
     persistence: Any | None,
     *,
-    session_id: str | None,
+    state_scope: GatewayStateScope,
 ) -> list[LocalizedToolMapping]:
-    if persistence is None or not session_id:
+    if not state_scope.persistent:
         return []
+    if persistence is None:
+        raise RuntimeError(
+            "Persistent tool-history storage is unavailable; refusing lossy replay"
+        )
     try:
         rows = persistence.query_tool_call_mappings(
-            session_id=session_id,
-            now=datetime.now(UTC).isoformat(),
+            principal_id=state_scope.principal_id,
+            provider_name=state_scope.provider_name,
+            model=state_scope.model,
+            session_id=state_scope.conversation_id,
+            now=datetime.now(timezone.utc).isoformat(),
         )
-    except Exception:
-        logger.debug("Failed to load persistent tool-call mappings", exc_info=True)
-        return []
+    except Exception as exc:
+        logger.error("Failed to load persistent tool-call mappings", exc_info=True)
+        raise RuntimeError(
+            "Persistent tool history could not be authenticated; refusing lossy replay"
+        ) from exc
 
     mappings: list[LocalizedToolMapping] = []
     for row in rows:
@@ -557,19 +629,22 @@ def _load_persistent_tool_mappings(
             row.get("original_tool_call") or {},
             row.get("codex_tool_call") or {},
         )
-        if mapping is not None:
-            mappings.append(mapping)
+        if mapping is None:
+            raise RuntimeError(
+                "Authenticated persistent tool history contains an invalid mapping"
+            )
+        mappings.append(mapping)
     return mappings
 
 
 def _delete_unused_persistent_tool_mappings(
     persistence: Any | None,
     *,
-    session_id: str | None,
+    state_scope: GatewayStateScope,
     loaded_mappings: list[LocalizedToolMapping],
     used_call_ids: set[str],
 ) -> None:
-    if persistence is None or not session_id or not loaded_mappings:
+    if persistence is None or not state_scope.persistent or not loaded_mappings:
         return
     unused = [
         mapping.call_id
@@ -580,7 +655,10 @@ def _delete_unused_persistent_tool_mappings(
         return
     try:
         persistence.delete_tool_call_mappings(
-            session_id=session_id,
+            principal_id=state_scope.principal_id,
+            provider_name=state_scope.provider_name,
+            model=state_scope.model,
+            session_id=state_scope.conversation_id,
             tool_call_ids=unused,
         )
     except Exception:
@@ -590,52 +668,34 @@ def _delete_unused_persistent_tool_mappings(
 def _persist_tool_mapping(
     persistence: Any | None,
     *,
-    session_id: str | None,
+    state_scope: GatewayStateScope,
     ttl_hours: float,
     mapping: LocalizedToolMapping,
 ) -> None:
-    if persistence is None or not session_id or not mapping.call_id:
+    if not state_scope.persistent or not mapping.call_id:
         return
-    now = datetime.now(UTC)
+    if persistence is None:
+        raise RuntimeError(
+            "Persistent tool-history storage is unavailable; refusing volatile mapping"
+        )
+    now = datetime.now(timezone.utc)
     try:
         persistence.upsert_tool_call_mapping(
-            session_id=session_id,
+            principal_id=state_scope.principal_id,
+            provider_name=state_scope.provider_name,
+            model=state_scope.model,
+            session_id=state_scope.conversation_id,
             tool_call_id=mapping.call_id,
             original_tool_call=mapping.original_tool_call(),
             codex_tool_call=mapping.codex_tool_call(),
             expire_at=(now + timedelta(hours=ttl_hours)).isoformat(),
             timestamp=now.isoformat(),
         )
-    except Exception:
-        logger.debug("Failed to persist tool-call mapping", exc_info=True)
-
-
-def _persist_localized_response_mappings(
-    ir_response: dict[str, Any],
-    *,
-    tool_store: CodexToolLocalizationStore,
-    persistence: Any | None,
-    session_id: str | None,
-    ttl_hours: float,
-) -> None:
-    for choice in ir_response.get("choices", []):
-        if not isinstance(choice, dict):
-            continue
-        message = choice.get("message")
-        if not isinstance(message, dict):
-            continue
-        for part in message.get("content", []):
-            if not isinstance(part, dict) or part.get("type") != "tool_call":
-                continue
-            mapping = tool_store.get(part.get("tool_call_id", ""))
-            if mapping is None:
-                continue
-            _persist_tool_mapping(
-                persistence,
-                session_id=session_id,
-                ttl_hours=ttl_hours,
-                mapping=mapping,
-            )
+    except Exception as exc:
+        logger.error("Failed to persist tool-call mapping", exc_info=True)
+        raise RuntimeError(
+            "Tool history could not be durably protected; refusing volatile mapping"
+        ) from exc
 
 
 def _translate_and_persist_localized_response_tools(
@@ -644,25 +704,29 @@ def _translate_and_persist_localized_response_tools(
     *,
     tool_store: CodexToolLocalizationStore,
     persistence: Any | None,
-    session_id: str | None,
+    state_scope: GatewayStateScope,
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
 ) -> None:
     if not should_localize_code_tools(route):
         return
+    ttl_hours = tool_call_cache_ttl_hours(route.tool_adaptation)
+
+    def _remember_mapping(mapping: LocalizedToolMapping) -> None:
+        _persist_tool_mapping(
+            persistence,
+            state_scope=state_scope,
+            ttl_hours=ttl_hours,
+            mapping=mapping,
+        )
+
     translate_localized_ir_response(
         ir_response,
-        store=tool_store,
+        store=tool_store if not state_scope.persistent else None,
+        on_mapping=_remember_mapping if state_scope.persistent else None,
         capabilities=capabilities,
         read_cache=read_cache,
         use_apply_patch=use_apply_patch_for_code_edits(route.tool_adaptation),
-    )
-    _persist_localized_response_mappings(
-        ir_response,
-        tool_store=tool_store,
-        persistence=persistence,
-        session_id=session_id,
-        ttl_hours=tool_call_cache_ttl_hours(route.tool_adaptation),
     )
 
 
@@ -696,16 +760,26 @@ async def close_resources(
     transport: UpstreamTransport | None = None,
     metadata_store: ProviderMetadataStore | None = None,
     codex_tool_store: CodexToolLocalizationStore | None = None,
+    window_tool_search_store: WindowToolSearchStore | None = None,
+    image_fetch_workers: ImageFetchWorkerPool | None = None,
 ) -> None:
-    """Close transport and clear metadata store (called on app shutdown)."""
+    """Close transport and clear all app-owned cross-request state."""
+    if image_fetch_workers is not None:
+        await image_fetch_workers.close()
     if transport is not None:
         await transport.close()
-    store = metadata_store or _default_metadata_store
-    store.clear()
+    store = metadata_store if metadata_store is not None else _default_metadata_store
+    store.clear_all()
     tools = (
         codex_tool_store if codex_tool_store is not None else _default_codex_tool_store
     )
-    tools.clear()
+    tools.clear_all()
+    window_tools = (
+        window_tool_search_store
+        if window_tool_search_store is not None
+        else _default_window_tool_search_store
+    )
+    window_tools.clear_all()
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +800,36 @@ class _CacheEntry:
     created: float = field(default_factory=time.monotonic)
 
 
+MAX_PROVIDER_METADATA_ENTRY_BYTES = 1 * 1024 * 1024
+MAX_PROVIDER_METADATA_SCOPE_BYTES = 8 * 1024 * 1024
+MAX_PROVIDER_METADATA_ENTRIES_PER_PRINCIPAL = 1_024
+MAX_PROVIDER_METADATA_PRINCIPAL_BYTES = 16 * 1024 * 1024
+MAX_PROVIDER_METADATA_GLOBAL_BYTES = 64 * 1024 * 1024
+
+
+class ProviderMetadataCapacityError(RuntimeError):
+    """Raised before provider metadata would exceed a configured budget."""
+
+
+@dataclass
+class _ProviderMetadataEntry:
+    serialized: bytes
+    byte_size: int
+    created: float = field(default_factory=time.monotonic)
+
+
+@dataclass
+class _ProviderMetadataState:
+    store: dict[tuple[GatewayStateScope, str], _ProviderMetadataEntry] = field(
+        default_factory=dict
+    )
+    scope_bytes: dict[GatewayStateScope, int] = field(default_factory=dict)
+    principal_entries: dict[str, int] = field(default_factory=dict)
+    principal_bytes: dict[str, int] = field(default_factory=dict)
+    global_bytes: int = 0
+    lock: threading.RLock = field(default_factory=threading.RLock)
+
+
 class ProviderMetadataStore:
     """Stores provider_metadata across request boundaries with TTL and bounds.
 
@@ -734,38 +838,215 @@ class ProviderMetadataStore:
         max_size: Maximum number of entries.  Oldest is evicted on overflow.
     """
 
-    def __init__(self, *, ttl: float = 1800.0, max_size: int = 10_000) -> None:
-        self._store: dict[str, _CacheEntry] = {}
+    def __init__(
+        self,
+        *,
+        ttl: float = 1800.0,
+        max_size: int = 10_000,
+        max_entry_bytes: int = MAX_PROVIDER_METADATA_ENTRY_BYTES,
+        max_bytes_per_scope: int = MAX_PROVIDER_METADATA_SCOPE_BYTES,
+        max_entries_per_principal: int = MAX_PROVIDER_METADATA_ENTRIES_PER_PRINCIPAL,
+        max_bytes_per_principal: int = MAX_PROVIDER_METADATA_PRINCIPAL_BYTES,
+        max_bytes_global: int = MAX_PROVIDER_METADATA_GLOBAL_BYTES,
+        _scope: GatewayStateScope | None = None,
+        _state: _ProviderMetadataState | None = None,
+    ) -> None:
+        self._is_root = _state is None
+        self._state = _state or _ProviderMetadataState()
+        self._store = self._state.store
         self._ttl = ttl
         self._max_size = max_size
+        self._max_entry_bytes = max_entry_bytes
+        self._max_bytes_per_scope = max_bytes_per_scope
+        self._max_entries_per_principal = max_entries_per_principal
+        self._max_bytes_per_principal = max_bytes_per_principal
+        self._max_bytes_global = max_bytes_global
+        self._scope = _scope or GatewayStateScope(
+            principal_id="__standalone_store__",
+            provider_name="",
+            model="",
+            conversation_id=f"request:{uuid.uuid4().hex}",
+            persistent=False,
+        )
 
-    def _evict_expired(self) -> None:
+    def scoped(self, scope: GatewayStateScope) -> ProviderMetadataStore:
+        """Return a view whose call IDs are namespaced to *scope*."""
+        return ProviderMetadataStore(
+            ttl=self._ttl,
+            max_size=self._max_size,
+            max_entry_bytes=self._max_entry_bytes,
+            max_bytes_per_scope=self._max_bytes_per_scope,
+            max_entries_per_principal=self._max_entries_per_principal,
+            max_bytes_per_principal=self._max_bytes_per_principal,
+            max_bytes_global=self._max_bytes_global,
+            _scope=scope,
+            _state=self._state,
+        )
+
+    def _key(self, call_id: str) -> tuple[GatewayStateScope, str]:
+        return self._scope, call_id
+
+    @staticmethod
+    def _canonicalize(value: Any) -> bytes:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+
+    def _remove_key_locked(self, key: tuple[GatewayStateScope, str]) -> None:
+        entry = self._store.pop(key, None)
+        if entry is None:
+            return
+        scope = key[0]
+        principal_id = scope.principal_id
+        principal_entries = self._state.principal_entries.get(principal_id, 0) - 1
+        scope_bytes = self._state.scope_bytes.get(scope, 0) - entry.byte_size
+        principal_bytes = (
+            self._state.principal_bytes.get(principal_id, 0) - entry.byte_size
+        )
+        if scope_bytes > 0:
+            self._state.scope_bytes[scope] = scope_bytes
+        else:
+            self._state.scope_bytes.pop(scope, None)
+        if principal_entries > 0:
+            self._state.principal_entries[principal_id] = principal_entries
+        else:
+            self._state.principal_entries.pop(principal_id, None)
+        if principal_bytes > 0:
+            self._state.principal_bytes[principal_id] = principal_bytes
+        else:
+            self._state.principal_bytes.pop(principal_id, None)
+        self._state.global_bytes -= entry.byte_size
+
+    def _evict_expired_locked(self, now: float) -> None:
+        expired = [
+            key for key, entry in self._store.items() if now - entry.created > self._ttl
+        ]
+        for key in expired:
+            self._remove_key_locked(key)
+
+    def _put_many(self, values: list[tuple[str, Any]]) -> None:
+        prepared: dict[tuple[GatewayStateScope, str], tuple[bytes, int]] = {}
+        for call_id, value in values:
+            serialized = self._canonicalize(value)
+            byte_size = len(serialized)
+            if byte_size > self._max_entry_bytes:
+                raise ProviderMetadataCapacityError(
+                    f"provider_metadata entry exceeds {self._max_entry_bytes} bytes"
+                )
+            prepared[self._key(call_id)] = (serialized, byte_size)
+        if not prepared:
+            return
+
         now = time.monotonic()
-        expired = [k for k, e in self._store.items() if now - e.created > self._ttl]
-        for k in expired:
-            del self._store[k]
+        principal_id = self._scope.principal_id
+        with self._state.lock:
+            self._evict_expired_locked(now)
+            new_keys = [key for key in prepared if key not in self._store]
+            projected_principal_entries = self._state.principal_entries.get(
+                principal_id, 0
+            ) + len(new_keys)
+            if projected_principal_entries > self._max_entries_per_principal:
+                raise ProviderMetadataCapacityError(
+                    "provider_metadata principal entry count exceeds "
+                    f"{self._max_entries_per_principal}"
+                )
+            overflow = len(self._store) + len(new_keys) - self._max_size
+            evictions: list[tuple[GatewayStateScope, str]] = []
+            if overflow > 0:
+                candidates = sorted(
+                    (
+                        key
+                        for key in self._store
+                        if key[0].principal_id == principal_id and key not in prepared
+                    ),
+                    key=lambda key: self._store[key].created,
+                )
+                if len(candidates) < overflow:
+                    raise ProviderMetadataCapacityError(
+                        f"provider_metadata entry count exceeds {self._max_size}"
+                    )
+                evictions = candidates[:overflow]
 
-    def _evict_oldest(self) -> None:
-        if len(self._store) >= self._max_size:
-            oldest_key = min(self._store, key=lambda k: self._store[k].created)
-            del self._store[oldest_key]
+            removed_scope_bytes = sum(
+                self._store[key].byte_size for key in evictions if key[0] == self._scope
+            )
+            removed_principal_bytes = sum(
+                self._store[key].byte_size for key in evictions
+            )
+            removed_global_bytes = removed_principal_bytes
+            for key in prepared:
+                old = self._store.get(key)
+                if old is not None:
+                    removed_scope_bytes += old.byte_size
+                    removed_principal_bytes += old.byte_size
+                    removed_global_bytes += old.byte_size
+
+            added_bytes = sum(item[1] for item in prepared.values())
+            scope_bytes = (
+                self._state.scope_bytes.get(self._scope, 0)
+                - removed_scope_bytes
+                + added_bytes
+            )
+            principal_bytes = (
+                self._state.principal_bytes.get(principal_id, 0)
+                - removed_principal_bytes
+                + added_bytes
+            )
+            global_bytes = self._state.global_bytes - removed_global_bytes + added_bytes
+            if scope_bytes > self._max_bytes_per_scope:
+                raise ProviderMetadataCapacityError(
+                    f"provider_metadata scope exceeds {self._max_bytes_per_scope} bytes"
+                )
+            if principal_bytes > self._max_bytes_per_principal:
+                raise ProviderMetadataCapacityError(
+                    "provider_metadata principal exceeds "
+                    f"{self._max_bytes_per_principal} bytes"
+                )
+            if global_bytes > self._max_bytes_global:
+                raise ProviderMetadataCapacityError(
+                    "provider_metadata application exceeds "
+                    f"{self._max_bytes_global} bytes"
+                )
+
+            for key in evictions:
+                self._remove_key_locked(key)
+            for key, (serialized, byte_size) in prepared.items():
+                self._remove_key_locked(key)
+                self._store[key] = _ProviderMetadataEntry(
+                    serialized=serialized,
+                    byte_size=byte_size,
+                    created=now,
+                )
+                scope = key[0]
+                entry_principal = scope.principal_id
+                self._state.scope_bytes[scope] = (
+                    self._state.scope_bytes.get(scope, 0) + byte_size
+                )
+                self._state.principal_entries[entry_principal] = (
+                    self._state.principal_entries.get(entry_principal, 0) + 1
+                )
+                self._state.principal_bytes[entry_principal] = (
+                    self._state.principal_bytes.get(entry_principal, 0) + byte_size
+                )
+                self._state.global_bytes += byte_size
 
     def cache_from_response(self, ir_response: dict[str, Any]) -> None:
         """Extract and cache provider_metadata from tool calls in an IR response."""
-        self._evict_expired()
+        values: list[tuple[str, Any]] = []
         for choice in ir_response.get("choices", []):
             msg = choice.get("message", {})
             for part in msg.get("content", []):
                 if part.get("type") == "tool_call" and "provider_metadata" in part:
                     tool_call_id = part.get("tool_call_id")
                     if tool_call_id:
-                        self._evict_oldest()
-                        self._store[tool_call_id] = _CacheEntry(
-                            data=part["provider_metadata"],
-                        )
-                        logger.debug(
-                            "Cached provider_metadata for tool_call %s", tool_call_id
-                        )
+                        values.append((tool_call_id, part["provider_metadata"]))
+        self._put_many(values)
+        for tool_call_id, _value in values:
+            logger.debug("Cached provider_metadata for tool_call %s", tool_call_id)
 
     def cache_from_stream_event(self, ir_event: dict[str, Any]) -> None:
         """Cache provider_metadata from a tool_call_start stream event."""
@@ -773,11 +1054,9 @@ class ProviderMetadataStore:
             ir_event.get("type") == "tool_call_start"
             and "provider_metadata" in ir_event
         ):
-            self._evict_expired()
-            self._evict_oldest()
-            self._store[ir_event["tool_call_id"]] = _CacheEntry(
-                data=ir_event["provider_metadata"],
-            )
+            tool_call_id = ir_event.get("tool_call_id")
+            if tool_call_id:
+                self._put_many([(tool_call_id, ir_event["provider_metadata"])])
 
     def inject_into_request(self, ir_request: dict[str, Any]) -> None:
         """Inject cached provider_metadata into tool call parts in an IR request.
@@ -786,56 +1065,487 @@ class ProviderMetadataStore:
         same tool_call_id may appear in multiple requests.  Entries are kept
         alive (not popped) for subsequent turns.
         """
-        self._evict_expired()
-        logger.debug(
-            "inject: store has %d entries: %s",
-            len(self._store),
-            list(self._store.keys()),
-        )
-        for msg in ir_request.get("messages", []):
-            for part in msg.get("content", []):
-                if part.get("type") == "tool_call":
-                    tool_call_id = part.get("tool_call_id")
-                    if tool_call_id and tool_call_id in self._store:
-                        part["provider_metadata"] = self._store[tool_call_id].data
+        injections: list[tuple[dict[str, Any], bytes]] = []
+        with self._state.lock:
+            self._evict_expired_locked(time.monotonic())
+            logger.debug(
+                "inject: store has %d entries: %s",
+                len(self._store),
+                list(self._store.keys()),
+            )
+            for msg in ir_request.get("messages", []):
+                for part in msg.get("content", []):
+                    if part.get("type") == "tool_call":
+                        tool_call_id = part.get("tool_call_id")
+                        key = self._key(tool_call_id) if tool_call_id else None
+                        entry = self._store.get(key) if key is not None else None
+                        if entry is not None:
+                            injections.append((part, entry.serialized))
+        for part, serialized in injections:
+            part["provider_metadata"] = json.loads(serialized)
 
     def clear(self) -> None:
-        """Remove all entries."""
-        self._store.clear()
+        """Remove entries owned by this store's scope."""
+        with self._state.lock:
+            keys = [key for key in self._store if key[0] == self._scope]
+            for key in keys:
+                self._remove_key_locked(key)
+
+    def clear_all(self) -> None:
+        """Remove all entries owned by this root store."""
+        if not self._is_root:
+            raise RuntimeError("clear_all() is only available on a root store")
+        with self._state.lock:
+            self._store.clear()
+            self._state.scope_bytes.clear()
+            self._state.principal_entries.clear()
+            self._state.principal_bytes.clear()
+            self._state.global_bytes = 0
 
     def __len__(self) -> int:
-        return len(self._store)
+        with self._state.lock:
+            self._evict_expired_locked(time.monotonic())
+            if self._is_root:
+                return len(self._store)
+            return sum(1 for scope, _call_id in self._store if scope == self._scope)
+
+
+MAX_WINDOW_TOOL_SEARCH_TOOLS_PER_SCOPE = 1_024
+MAX_WINDOW_TOOL_SEARCH_SCOPES_PER_PRINCIPAL = 256
+MAX_WINDOW_TOOL_SEARCH_BYTES_PER_SCOPE = 16 * 1024 * 1024
+MAX_WINDOW_TOOL_SEARCH_BYTES_GLOBAL = 64 * 1024 * 1024
+
+
+class ToolSearchCapacityError(RuntimeError):
+    """Raised before deferred tool state would exceed a configured budget."""
+
+
+@dataclass
+class _ToolSearchMapAccounting:
+    item_bytes: dict[str, int] = field(default_factory=dict)
+    item_tools: dict[str, int] = field(default_factory=dict)
+
+    @property
+    def byte_size(self) -> int:
+        if not self.item_bytes:
+            return 0
+        return 2 + sum(self.item_bytes.values()) + len(self.item_bytes) - 1
+
+    @property
+    def tool_count(self) -> int:
+        return sum(self.item_tools.values())
+
+
+@dataclass
+class _WindowToolSearchState:
+    store: dict[GatewayStateScope, _CacheEntry]
+    deferred_store: dict[GatewayStateScope, _CacheEntry]
+    accounting: dict[tuple[str, GatewayStateScope], _ToolSearchMapAccounting] = field(
+        default_factory=dict
+    )
+    scope_bytes: dict[GatewayStateScope, int] = field(default_factory=dict)
+    scope_tools: dict[GatewayStateScope, int] = field(default_factory=dict)
+    scope_refs: dict[GatewayStateScope, int] = field(default_factory=dict)
+    principal_scopes: dict[str, int] = field(default_factory=dict)
+    global_bytes: int = 0
+    lock: threading.RLock = field(default_factory=threading.RLock)
 
 
 class WindowToolSearchStore:
-    """Stores loadable Responses tools discovered within one Codex window."""
+    """Stores loadable Responses tools within bounded Codex window state."""
 
-    def __init__(self, *, ttl: float = 1800.0, max_size: int = 1_000) -> None:
-        self._store: dict[str, _CacheEntry] = {}
-        self._deferred_store: dict[str, _CacheEntry] = {}
+    def __init__(
+        self,
+        *,
+        ttl: float = 1800.0,
+        max_size: int = 1_000,
+        max_scopes_per_principal: int = MAX_WINDOW_TOOL_SEARCH_SCOPES_PER_PRINCIPAL,
+        max_tools_per_scope: int = MAX_WINDOW_TOOL_SEARCH_TOOLS_PER_SCOPE,
+        max_bytes_per_scope: int = MAX_WINDOW_TOOL_SEARCH_BYTES_PER_SCOPE,
+        max_bytes_global: int = MAX_WINDOW_TOOL_SEARCH_BYTES_GLOBAL,
+        _store: dict[GatewayStateScope, _CacheEntry] | None = None,
+        _deferred_store: dict[GatewayStateScope, _CacheEntry] | None = None,
+        _scope: GatewayStateScope | None = None,
+        _state: _WindowToolSearchState | None = None,
+        _standalone_principal: str | None = None,
+    ) -> None:
+        self._is_root = _state is None and _store is None and _deferred_store is None
+        if _state is None:
+            _state = _WindowToolSearchState(
+                store=_store if _store is not None else {},
+                deferred_store=_deferred_store if _deferred_store is not None else {},
+            )
+        self._state = _state
+        self._store = _state.store
+        self._deferred_store = _state.deferred_store
         self._ttl = ttl
         self._max_size = max_size
+        self._max_scopes_per_principal = max_scopes_per_principal
+        self._max_tools_per_scope = max_tools_per_scope
+        self._max_bytes_per_scope = max_bytes_per_scope
+        self._max_bytes_global = max_bytes_global
+        self._scope = _scope
+        self._standalone_principal = _standalone_principal or (
+            f"__standalone_store__:{uuid.uuid4().hex}"
+        )
+        if not self._state.accounting and (self._store or self._deferred_store):
+            with self._state.lock:
+                self._rebuild_accounting_locked()
+
+    def scoped(self, scope: GatewayStateScope) -> WindowToolSearchStore:
+        """Return a view whose window state is namespaced to *scope*."""
+        return WindowToolSearchStore(
+            ttl=self._ttl,
+            max_size=self._max_size,
+            max_scopes_per_principal=self._max_scopes_per_principal,
+            max_tools_per_scope=self._max_tools_per_scope,
+            max_bytes_per_scope=self._max_bytes_per_scope,
+            max_bytes_global=self._max_bytes_global,
+            _scope=scope,
+            _state=self._state,
+            _standalone_principal=self._standalone_principal,
+        )
+
+    def _scope_key(self, window_id: str) -> GatewayStateScope:
+        if self._scope is not None:
+            return self._scope
+        return GatewayStateScope(
+            principal_id=self._standalone_principal,
+            provider_name="",
+            model="",
+            conversation_id=window_id,
+            persistent=False,
+        )
+
+    @staticmethod
+    def _canonical_json_size(value: Any) -> int:
+        return len(
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+        )
+
+    @classmethod
+    def _item_byte_size(cls, key: str, tool: dict[str, Any]) -> int:
+        return cls._canonical_json_size(key) + 1 + cls._canonical_json_size(tool)
+
+    @classmethod
+    def _tool_count(cls, tool: dict[str, Any]) -> int:
+        count = 1
+        children = tool.get("tools")
+        if isinstance(children, list):
+            count += sum(
+                cls._tool_count(child) for child in children if isinstance(child, dict)
+            )
+        return count
+
+    @classmethod
+    def _accounting_for_data(cls, data: dict[str, Any]) -> _ToolSearchMapAccounting:
+        accounting = _ToolSearchMapAccounting()
+        for key, tool in data.items():
+            if not isinstance(key, str) or not isinstance(tool, dict):
+                continue
+            accounting.item_bytes[key] = cls._item_byte_size(key, tool)
+            accounting.item_tools[key] = cls._tool_count(tool)
+        return accounting
+
+    def _rebuild_accounting_locked(self) -> None:
+        self._state.accounting.clear()
+        self._state.scope_bytes.clear()
+        self._state.scope_tools.clear()
+        self._state.scope_refs.clear()
+        self._state.principal_scopes.clear()
+        self._state.global_bytes = 0
+        for kind, store in (
+            ("loaded", self._store),
+            ("deferred", self._deferred_store),
+        ):
+            for scope, entry in store.items():
+                data = entry.data if isinstance(entry.data, dict) else {}
+                accounting = self._accounting_for_data(data)
+                self._add_accounting_locked(kind, scope, accounting)
+
+    def _store_for_kind(self, kind: str) -> dict[GatewayStateScope, _CacheEntry]:
+        return self._store if kind == "loaded" else self._deferred_store
+
+    def _add_accounting_locked(
+        self,
+        kind: str,
+        scope: GatewayStateScope,
+        accounting: _ToolSearchMapAccounting,
+    ) -> None:
+        self._state.accounting[(kind, scope)] = accounting
+        previous_refs = self._state.scope_refs.get(scope, 0)
+        self._state.scope_refs[scope] = previous_refs + 1
+        if previous_refs == 0:
+            principal_id = scope.principal_id
+            self._state.principal_scopes[principal_id] = (
+                self._state.principal_scopes.get(principal_id, 0) + 1
+            )
+        self._state.scope_bytes[scope] = (
+            self._state.scope_bytes.get(scope, 0) + accounting.byte_size
+        )
+        self._state.scope_tools[scope] = (
+            self._state.scope_tools.get(scope, 0) + accounting.tool_count
+        )
+        self._state.global_bytes += accounting.byte_size
+
+    def _remove_ref_locked(self, ref: tuple[str, GatewayStateScope]) -> None:
+        kind, scope = ref
+        self._store_for_kind(kind).pop(scope, None)
+        accounting = self._state.accounting.pop(ref, None)
+        if accounting is None:
+            return
+        remaining_refs = self._state.scope_refs.get(scope, 0) - 1
+        if remaining_refs > 0:
+            self._state.scope_refs[scope] = remaining_refs
+        else:
+            self._state.scope_refs.pop(scope, None)
+            principal_id = scope.principal_id
+            remaining_scopes = self._state.principal_scopes.get(principal_id, 0) - 1
+            if remaining_scopes > 0:
+                self._state.principal_scopes[principal_id] = remaining_scopes
+            else:
+                self._state.principal_scopes.pop(principal_id, None)
+        remaining_bytes = self._state.scope_bytes.get(scope, 0) - accounting.byte_size
+        remaining_tools = self._state.scope_tools.get(scope, 0) - accounting.tool_count
+        if remaining_bytes > 0:
+            self._state.scope_bytes[scope] = remaining_bytes
+        else:
+            self._state.scope_bytes.pop(scope, None)
+        if remaining_tools > 0:
+            self._state.scope_tools[scope] = remaining_tools
+        else:
+            self._state.scope_tools.pop(scope, None)
+        self._state.global_bytes -= accounting.byte_size
+
+    def _expired_refs_locked(self, now: float) -> set[tuple[str, GatewayStateScope]]:
+        return {
+            (kind, scope)
+            for kind, store in (
+                ("loaded", self._store),
+                ("deferred", self._deferred_store),
+            )
+            for scope, entry in store.items()
+            if now - entry.created > self._ttl
+        }
 
     def _evict_expired(self) -> None:
-        now = time.monotonic()
-        expired = [k for k, e in self._store.items() if now - e.created > self._ttl]
-        for k in expired:
-            del self._store[k]
-        deferred_expired = [
-            k for k, e in self._deferred_store.items() if now - e.created > self._ttl
-        ]
-        for k in deferred_expired:
-            del self._deferred_store[k]
+        with self._state.lock:
+            for ref in self._expired_refs_locked(time.monotonic()):
+                self._remove_ref_locked(ref)
 
-    def _evict_oldest(self) -> None:
-        if len(self._store) >= self._max_size:
-            oldest_key = min(self._store, key=lambda k: self._store[k].created)
-            del self._store[oldest_key]
-        if len(self._deferred_store) >= self._max_size:
-            oldest_key = min(
-                self._deferred_store, key=lambda k: self._deferred_store[k].created
+    def _candidate_data(
+        self,
+        existing_data: dict[str, Any],
+        tools: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], set[str]]:
+        candidate = dict(existing_data)
+        changed: set[str] = set()
+        for tool in tools:
+            key = self._tool_key(tool)
+            if not key:
+                continue
+            candidate[key] = self._preview_merge_loadable_tool(candidate.get(key), tool)
+            changed.add(key)
+        return candidate, changed
+
+    def _candidate_accounting(
+        self,
+        *,
+        kind: str,
+        scope: GatewayStateScope,
+        data: dict[str, Any],
+        changed: set[str],
+        use_existing: bool,
+    ) -> _ToolSearchMapAccounting:
+        existing = self._state.accounting.get((kind, scope)) if use_existing else None
+        if existing is None:
+            accounting = _ToolSearchMapAccounting()
+        else:
+            accounting = _ToolSearchMapAccounting(
+                item_bytes=dict(existing.item_bytes),
+                item_tools=dict(existing.item_tools),
             )
-            del self._deferred_store[oldest_key]
+        for key in changed:
+            tool = data[key]
+            accounting.item_bytes[key] = self._item_byte_size(key, tool)
+            accounting.item_tools[key] = self._tool_count(tool)
+        return accounting
+
+    def _planned_evictions_locked(
+        self,
+        candidate_refs: set[tuple[str, GatewayStateScope]],
+        expired: set[tuple[str, GatewayStateScope]],
+    ) -> set[tuple[str, GatewayStateScope]]:
+        evictions: set[tuple[str, GatewayStateScope]] = set()
+        for kind, scope in candidate_refs:
+            store = self._store_for_kind(kind)
+            active = {
+                key: entry for key, entry in store.items() if (kind, key) not in expired
+            }
+            if scope in active or len(active) < self._max_size:
+                continue
+            own_scopes = [
+                key
+                for key in active
+                if key.principal_id == scope.principal_id
+                and (kind, key) not in candidate_refs
+            ]
+            if not own_scopes:
+                raise ToolSearchCapacityError(
+                    "Deferred tool-search capacity exceeded: "
+                    f"global scope limit is {self._max_size}"
+                )
+            oldest = min(own_scopes, key=lambda key: active[key].created)
+            evictions.add((kind, oldest))
+        return evictions
+
+    def _validate_principal_scope_candidates_locked(
+        self,
+        candidate_refs: set[tuple[str, GatewayStateScope]],
+        expired: set[tuple[str, GatewayStateScope]],
+    ) -> None:
+        """Reject new scopes before mutation when a principal reaches its cap."""
+        active_refs = set(self._state.accounting) - expired
+        active_scopes = {scope for _kind, scope in active_refs}
+        candidate_scopes = {scope for _kind, scope in candidate_refs}
+        new_by_principal: dict[str, int] = {}
+        for scope in candidate_scopes - active_scopes:
+            new_by_principal[scope.principal_id] = (
+                new_by_principal.get(scope.principal_id, 0) + 1
+            )
+        expired_scopes = {
+            scope
+            for _kind, scope in expired
+            if not any(
+                active_scope == scope and (active_kind, active_scope) not in expired
+                for active_kind, active_scope in self._state.accounting
+            )
+        }
+        expired_by_principal: dict[str, int] = {}
+        for scope in expired_scopes:
+            expired_by_principal[scope.principal_id] = (
+                expired_by_principal.get(scope.principal_id, 0) + 1
+            )
+        for principal_id, added in new_by_principal.items():
+            projected = (
+                self._state.principal_scopes.get(principal_id, 0)
+                - expired_by_principal.get(principal_id, 0)
+                + added
+            )
+            if projected > self._max_scopes_per_principal:
+                raise ToolSearchCapacityError(
+                    "Deferred tool-search capacity exceeded: principal scope limit "
+                    f"is {self._max_scopes_per_principal}"
+                )
+
+    def _validate_candidates_locked(
+        self,
+        candidates: dict[
+            tuple[str, GatewayStateScope],
+            tuple[dict[str, Any], _ToolSearchMapAccounting],
+        ],
+        removed: set[tuple[str, GatewayStateScope]],
+    ) -> None:
+        projected_scope_bytes = dict(self._state.scope_bytes)
+        projected_scope_tools = dict(self._state.scope_tools)
+        projected_global = self._state.global_bytes
+
+        for ref in removed | set(candidates):
+            accounting = self._state.accounting.get(ref)
+            if accounting is None:
+                continue
+            scope = ref[1]
+            projected_scope_bytes[scope] = (
+                projected_scope_bytes.get(scope, 0) - accounting.byte_size
+            )
+            projected_scope_tools[scope] = (
+                projected_scope_tools.get(scope, 0) - accounting.tool_count
+            )
+            projected_global -= accounting.byte_size
+
+        for (_kind, scope), (_data, accounting) in candidates.items():
+            projected_scope_bytes[scope] = (
+                projected_scope_bytes.get(scope, 0) + accounting.byte_size
+            )
+            projected_scope_tools[scope] = (
+                projected_scope_tools.get(scope, 0) + accounting.tool_count
+            )
+            projected_global += accounting.byte_size
+
+        for _kind, scope in candidates:
+            tool_count = projected_scope_tools.get(scope, 0)
+            byte_size = projected_scope_bytes.get(scope, 0)
+            if tool_count > self._max_tools_per_scope:
+                raise ToolSearchCapacityError(
+                    "Deferred tool-search capacity exceeded: "
+                    f"scope tool limit is {self._max_tools_per_scope}"
+                )
+            if byte_size > self._max_bytes_per_scope:
+                raise ToolSearchCapacityError(
+                    "Deferred tool-search capacity exceeded: "
+                    f"scope byte limit is {self._max_bytes_per_scope}"
+                )
+        if projected_global > self._max_bytes_global:
+            raise ToolSearchCapacityError(
+                "Deferred tool-search capacity exceeded: "
+                f"global byte limit is {self._max_bytes_global}"
+            )
+
+    def _remember_batches_locked(
+        self,
+        scope: GatewayStateScope,
+        batches: list[tuple[str, list[dict[str, Any]]]],
+    ) -> None:
+        now = time.monotonic()
+        expired = self._expired_refs_locked(now)
+        candidates: dict[
+            tuple[str, GatewayStateScope],
+            tuple[dict[str, Any], _ToolSearchMapAccounting],
+        ] = {}
+        for kind, tools in batches:
+            if not tools:
+                continue
+            ref = (kind, scope)
+            entry = self._store_for_kind(kind).get(scope)
+            use_existing = entry is not None and ref not in expired
+            existing_data = (
+                entry.data if use_existing and isinstance(entry.data, dict) else {}
+            )
+            candidate_data, changed = self._candidate_data(existing_data, tools)
+            if not changed:
+                continue
+            accounting = self._candidate_accounting(
+                kind=kind,
+                scope=scope,
+                data=candidate_data,
+                changed=changed,
+                use_existing=use_existing,
+            )
+            candidates[ref] = (candidate_data, accounting)
+
+        if not candidates:
+            return
+        self._validate_principal_scope_candidates_locked(set(candidates), expired)
+        evictions = self._planned_evictions_locked(set(candidates), expired)
+        removed = expired | evictions
+        self._validate_candidates_locked(candidates, removed)
+        materialized = {
+            ref: (copy.deepcopy(data), accounting)
+            for ref, (data, accounting) in candidates.items()
+        }
+
+        for ref in removed:
+            self._remove_ref_locked(ref)
+        for (kind, candidate_scope), (data, accounting) in materialized.items():
+            self._remove_ref_locked((kind, candidate_scope))
+            self._store_for_kind(kind)[candidate_scope] = _CacheEntry(data=data)
+            self._add_accounting_locked(kind, candidate_scope, accounting)
 
     @staticmethod
     def _tool_key(tool: Any) -> str | None:
@@ -888,10 +1598,11 @@ class WindowToolSearchStore:
             return ""
         arguments = call.get("arguments")
         if isinstance(arguments, str):
+            raw_arguments = arguments
             try:
                 arguments = json.loads(arguments) if arguments else {}
             except json.JSONDecodeError:
-                return arguments
+                return raw_arguments
         if not isinstance(arguments, dict):
             return ""
         query = arguments.get("query")
@@ -1009,11 +1720,11 @@ class WindowToolSearchStore:
             for key in ("name", "description")
             if isinstance((value := namespace.get(key)), str)
         )
-        child_name = child.get("name") if isinstance(child.get("name"), str) else ""
+        raw_child_name = child.get("name")
+        child_name = raw_child_name if isinstance(raw_child_name, str) else ""
+        raw_child_description = child.get("description")
         child_description = (
-            child.get("description")
-            if isinstance(child.get("description"), str)
-            else ""
+            raw_child_description if isinstance(raw_child_description, str) else ""
         )
         schema_text = " ".join(
             cls._schema_search_text(child.get("parameters", {}))
@@ -1061,54 +1772,62 @@ class WindowToolSearchStore:
 
     def _remember_tools(
         self,
-        store: dict[str, _CacheEntry],
+        store: dict[GatewayStateScope, _CacheEntry],
         window_id: str,
         tools: list[dict[str, Any]],
     ) -> None:
         if not tools:
             return
-        self._evict_expired()
-        window_tools = dict(store.get(window_id, _CacheEntry(data={})).data)
-        for tool in tools:
-            key = self._tool_key(tool)
-            if not key:
-                continue
-            window_tools[key] = self._merge_loadable_tool(window_tools.get(key), tool)
-        self._evict_oldest()
-        store[window_id] = _CacheEntry(data=window_tools)
+        scope_key = self._scope_key(window_id)
+        kind = "loaded" if store is self._store else "deferred"
+        with self._state.lock:
+            self._remember_batches_locked(scope_key, [(kind, tools)])
 
     @staticmethod
-    def _merge_loadable_tool(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+    def _preview_merge_loadable_tool(
+        existing: Any, incoming: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Build a merge candidate without copying retained payloads first."""
         if (
             not isinstance(existing, dict)
             or existing.get("type") != "namespace"
             or incoming.get("type") != "namespace"
         ):
-            return copy.deepcopy(incoming)
+            return incoming
 
-        merged = copy.deepcopy(existing)
-        existing_children = merged.setdefault("tools", [])
+        existing_children = existing.get("tools")
         incoming_children = incoming.get("tools")
         if not isinstance(existing_children, list) or not isinstance(
             incoming_children, list
         ):
-            return copy.deepcopy(incoming)
+            return incoming
 
         existing_names = {
             child.get("name")
             for child in existing_children
             if isinstance(child, dict) and isinstance(child.get("name"), str)
         }
+        additions: list[dict[str, Any]] = []
         for child in incoming_children:
             if not isinstance(child, dict):
                 continue
             child_name = child.get("name")
             if isinstance(child_name, str) and child_name in existing_names:
                 continue
-            existing_children.append(copy.deepcopy(child))
+            additions.append(child)
             if isinstance(child_name, str):
                 existing_names.add(child_name)
+        if not additions:
+            return existing
+        merged = dict(existing)
+        merged["tools"] = [*existing_children, *additions]
         return merged
+
+    @staticmethod
+    def _merge_loadable_tool(existing: Any, incoming: dict[str, Any]) -> dict[str, Any]:
+        return copy.deepcopy(
+            WindowToolSearchStore._preview_merge_loadable_tool(existing, incoming)
+        )
 
     def remember_deferred_tools(
         self, window_id: str | None, tools: list[dict[str, Any]]
@@ -1129,23 +1848,52 @@ class WindowToolSearchStore:
             return
         self._remember_tools(self._store, window_id, discovered_tools)
 
-    def enrich_tool_search_outputs(
-        self, window_id: str | None, body: dict[str, Any]
+    def prepare_request(
+        self,
+        window_id: str | None,
+        deferred_tools: list[dict[str, Any]],
+        body: dict[str, Any],
     ) -> None:
-        """Fill empty tool_search_output tools from Rosetta-hidden namespaces."""
+        """Atomically enrich and retain all deferred-tool state for one request."""
         if not window_id:
             return
+        scope_key = self._scope_key(window_id)
+        with self._state.lock:
+            now = time.monotonic()
+            deferred_ref = ("deferred", scope_key)
+            deferred_entry = self._deferred_store.get(scope_key)
+            deferred_existing = (
+                deferred_entry.data
+                if deferred_entry is not None
+                and deferred_ref not in self._expired_refs_locked(now)
+                and isinstance(deferred_entry.data, dict)
+                else {}
+            )
+            candidate_deferred, _changed = self._candidate_data(
+                deferred_existing, deferred_tools
+            )
+            self._enrich_tool_search_outputs_from_data(body, candidate_deferred)
+            discovered_tools = self._extract_tool_search_tools(body)
+            self._remember_batches_locked(
+                scope_key,
+                [
+                    ("deferred", deferred_tools),
+                    ("loaded", discovered_tools),
+                ],
+            )
+
+    def _enrich_tool_search_outputs_from_data(
+        self,
+        body: dict[str, Any],
+        deferred_data: dict[str, Any],
+    ) -> None:
         input_items = body.get("input")
-        if not isinstance(input_items, list):
-            return
-        self._evict_expired()
-        entry = self._deferred_store.get(window_id)
-        if entry is None or not isinstance(entry.data, dict) or not entry.data:
+        if not isinstance(input_items, list) or not deferred_data:
             return
 
         calls_by_id = self._tool_search_calls_by_id(body)
         deferred_tools = [
-            tool for tool in entry.data.values() if isinstance(tool, dict)
+            tool for tool in deferred_data.values() if isinstance(tool, dict)
         ]
         if not deferred_tools:
             return
@@ -1160,9 +1908,25 @@ class WindowToolSearchStore:
             query = self._tool_search_query(call)
             limit = self._tool_search_limit(call)
             matches = self._match_deferred_tools(deferred_tools, query, limit)
-            if not matches:
-                continue
-            item["tools"] = [copy.deepcopy(tool) for tool in matches]
+            if matches:
+                item["tools"] = [copy.deepcopy(tool) for tool in matches]
+
+    def enrich_tool_search_outputs(
+        self, window_id: str | None, body: dict[str, Any]
+    ) -> None:
+        """Fill empty tool_search_output tools from Rosetta-hidden namespaces."""
+        if not window_id:
+            return
+        input_items = body.get("input")
+        if not isinstance(input_items, list):
+            return
+        with self._state.lock:
+            for ref in self._expired_refs_locked(time.monotonic()):
+                self._remove_ref_locked(ref)
+            entry = self._deferred_store.get(self._scope_key(window_id))
+            if entry is None or not isinstance(entry.data, dict):
+                return
+            self._enrich_tool_search_outputs_from_data(body, entry.data)
 
     @classmethod
     def _match_deferred_tools(
@@ -1231,24 +1995,28 @@ class WindowToolSearchStore:
         """Append remembered loadable tools to an IR request for the same window."""
         if not window_id:
             return
-        self._evict_expired()
-        entry = self._store.get(window_id)
-        if entry is None:
-            return
-        tools_by_key = entry.data
-        if not isinstance(tools_by_key, dict) or not tools_by_key:
-            return
+        with self._state.lock:
+            for ref in self._expired_refs_locked(time.monotonic()):
+                self._remove_ref_locked(ref)
+            entry = self._store.get(self._scope_key(window_id))
+            if entry is None:
+                return
+            tools_by_key = entry.data
+            if not isinstance(tools_by_key, dict) or not tools_by_key:
+                return
 
-        response_converter = pipeline._source_converter
-        converted: list[Any] = []
-        for tool in tools_by_key.values():
-            converted_tool = response_converter.tool_ops.p_tool_definition_to_ir(tool)
-            if isinstance(converted_tool, list):
-                converted.extend(converted_tool)
-            else:
-                converted.append(converted_tool)
-        if not converted:
-            return
+            response_converter = pipeline._source_converter
+            converted: list[Any] = []
+            for tool in tools_by_key.values():
+                converted_tool = response_converter.tool_ops.p_tool_definition_to_ir(
+                    tool
+                )
+                if isinstance(converted_tool, list):
+                    converted.extend(converted_tool)
+                else:
+                    converted.append(converted_tool)
+            if not converted:
+                return
 
         existing_tools = ir_request.setdefault("tools", [])
         existing_names = {
@@ -1275,11 +2043,25 @@ class WindowToolSearchStore:
             response_converter._store_native_tool_type_map(added, pipeline.context)
 
     def clear(self) -> None:
-        self._store.clear()
-        self._deferred_store.clear()
+        with self._state.lock:
+            if self._scope is None:
+                for ref in list(self._state.accounting):
+                    self._remove_ref_locked(ref)
+                return
+            self._remove_ref_locked(("loaded", self._scope))
+            self._remove_ref_locked(("deferred", self._scope))
+
+    def clear_all(self) -> None:
+        """Remove all discovered and deferred tools owned by this root store."""
+        if not self._is_root:
+            raise RuntimeError("clear_all() is only available on a root store")
+        self.clear()
 
     def __len__(self) -> int:
-        return len(self._store)
+        with self._state.lock:
+            if self._scope is None:
+                return len(self._store)
+            return int(self._scope in self._store)
 
 
 _default_metadata_store = ProviderMetadataStore()
@@ -1303,15 +2085,57 @@ def _prepare_window_tool_search_request(
             route.tool_adaptation
         ),
     )
-    window_tools.remember_deferred_tools(codex_window_id, deferred_tools)
-    window_tools.enrich_tool_search_outputs(codex_window_id, body)
-    window_tools.remember_from_request(codex_window_id, body)
+    window_tools.prepare_request(codex_window_id, deferred_tools, body)
     return True
 
 
 # ---------------------------------------------------------------------------
 # Core proxy handlers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_state_stores(
+    *,
+    route: ResolvedRoute,
+    model: str,
+    state_scope: GatewayStateScope | None,
+    metadata_store: ProviderMetadataStore | None,
+    codex_tool_store: CodexToolLocalizationStore | None,
+    window_tool_search_store: WindowToolSearchStore | None,
+) -> tuple[
+    GatewayStateScope,
+    ProviderMetadataStore,
+    CodexToolLocalizationStore,
+    WindowToolSearchStore,
+]:
+    """Resolve one ownership scope across all cross-request state stores."""
+    scope = state_scope or GatewayStateScope.for_request(
+        principal_id="__direct_request__",
+        provider_name=route.provider_name,
+        model=model,
+        window_id=None,
+    )
+    store_root = (
+        metadata_store if metadata_store is not None else _default_metadata_store
+    )
+    tool_store_root = (
+        codex_tool_store if codex_tool_store is not None else _default_codex_tool_store
+    )
+    window_tools_root = (
+        window_tool_search_store
+        if window_tool_search_store is not None
+        else _default_window_tool_search_store
+    )
+    if state_scope is None:
+        # Direct library callers have no authenticated request context. Keep
+        # explicitly supplied stores compatible but never persist them.
+        return scope, store_root, tool_store_root, window_tools_root
+    return (
+        scope,
+        store_root.scoped(scope),
+        tool_store_root.scoped(scope),
+        window_tools_root.scoped(scope),
+    )
 
 
 async def handle_non_streaming(
@@ -1324,9 +2148,12 @@ async def handle_non_streaming(
     codex_tool_store: CodexToolLocalizationStore | None = None,
     extra_headers: dict[str, str] | None = None,
     persistence: Any | None = None,
-    tool_cache_session_id: str | None = None,
+    state_scope: GatewayStateScope | None = None,
     codex_window_id: str | None = None,
     window_tool_search_store: WindowToolSearchStore | None = None,
+    upstream_error_log_state: UpstreamErrorLogState | None = None,
+    body_log_state: BodyLogState | None = None,
+    image_fetch_workers: ImageFetchWorkerPool | None = None,
 ) -> tuple[Response, dict[str, Any]]:
     """Non-streaming proxy: convert -> forward -> convert back -> respond.
 
@@ -1335,20 +2162,19 @@ async def handle_non_streaming(
         per-phase timing data merged from the conversion pipeline and
         gateway-level measurements (upstream latency).
     """
-    store = metadata_store or _default_metadata_store
-    tool_store = (
-        codex_tool_store if codex_tool_store is not None else _default_codex_tool_store
-    )
-    window_tools = (
-        window_tool_search_store
-        if window_tool_search_store is not None
-        else _default_window_tool_search_store
+    model = body.get("model", "")
+    scope, store, tool_store, window_tools = _resolve_state_stores(
+        route=route,
+        model=model,
+        state_scope=state_scope,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        window_tool_search_store=window_tool_search_store,
     )
     persistent_mappings: list[LocalizedToolMapping] = []
     used_mapping_call_ids: set[str] = set()
     profile: dict[str, Any] = {}
     # model was already injected into body by app.py
-    model = body.get("model", "")
     body = _apply_tool_adaptation(body, route)
     source_tool_capabilities = NativeToolCapabilities.from_chat_tools(
         _flatten_responses_tools(body)
@@ -1361,7 +2187,7 @@ async def handle_non_streaming(
     )
 
     if _is_openai_responses_direct(route):
-        log_original_request(body)
+        log_original_request(body, state=body_log_state)
         t_upstream = time.perf_counter()
         try:
             resp = await transport.send_request(
@@ -1387,6 +2213,7 @@ async def handle_non_streaming(
                 resp.status_code,
                 resp.error_text,
                 endpoint=str(route.target_provider),
+                state=upstream_error_log_state,
             )
             dump_error(
                 persistence,
@@ -1411,7 +2238,11 @@ async def handle_non_streaming(
             )
 
         if resp.body is not None:
-            log_response(resp.body, label="UPSTREAM RESPONSE")
+            log_response(
+                resp.body,
+                label="UPSTREAM RESPONSE",
+                state=body_log_state,
+            )
         return (
             Response(
                 body=resp.raw_content,
@@ -1421,6 +2252,12 @@ async def handle_non_streaming(
             profile,
         )
 
+    log_original_request(body, state=body_log_state)
+    image_fetch_cancellation = ImageFetchCancellation()
+    image_fetch_policy = ImageFetchPolicy(
+        proxy_url=provider_info.proxy_url,
+        cancellation=image_fetch_cancellation,
+    )
     pipeline = ConversionPipeline(
         route.source_provider,
         route.target_provider,
@@ -1432,7 +2269,8 @@ async def handle_non_streaming(
         conversion_options={
             "enable_tool_description_optimization": (
                 enable_tool_description_optimization(route.tool_adaptation)
-            )
+            ),
+            "image_fetch_policy": image_fetch_policy,
         },
     )
 
@@ -1450,18 +2288,25 @@ async def handle_non_streaming(
             )
 
     try:
-        target_body = pipeline.convert_request(body, on_ir_ready=_on_request_ir_ready)
-    except ConversionError as exc:
-        return error_response_for_source(route.source_provider, 400, str(exc)), profile
+        target_body = await _convert_request(
+            pipeline,
+            route,
+            body,
+            _on_request_ir_ready,
+            image_fetch_workers=image_fetch_workers,
+            image_fetch_policy=image_fetch_policy,
+        )
+    except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
+        return _conversion_failure_response(route.source_provider, exc), profile
     if should_localize_code_tools(route):
         persistent_mappings = _load_persistent_tool_mappings(
             persistence,
-            session_id=tool_cache_session_id,
+            state_scope=scope,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
         route,
-        codex_tool_store=tool_store,
+        codex_tool_store=tool_store if not scope.persistent else None,
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
         capabilities=source_tool_capabilities,
@@ -1471,10 +2316,10 @@ async def handle_non_streaming(
 
     profile.update(pipeline.profile)
 
-    log_original_request(pipeline.ir_request)
+    log_ir_request(pipeline.ir_request, state=body_log_state)
     if pipeline.warnings:
         logger.warning("Conversion warnings: %s", pipeline.warnings)
-    log_converted_request(target_body)
+    log_converted_request(target_body, state=body_log_state)
 
     # Phase 3: Forward to upstream via transport
     t_upstream = time.perf_counter()
@@ -1496,7 +2341,7 @@ async def handle_non_streaming(
         )
     _delete_unused_persistent_tool_mappings(
         persistence,
-        session_id=tool_cache_session_id,
+        state_scope=scope,
         loaded_mappings=persistent_mappings,
         used_call_ids=used_mapping_call_ids,
     )
@@ -1507,6 +2352,7 @@ async def handle_non_streaming(
             resp.status_code,
             resp.error_text,
             endpoint=str(route.target_provider),
+            state=upstream_error_log_state,
         )
         dump_error(
             persistence,
@@ -1532,7 +2378,7 @@ async def handle_non_streaming(
 
     # Phase 4: Target response → Source response
     assert resp.body is not None
-    log_response(resp.body, label="UPSTREAM RESPONSE")
+    log_response(resp.body, label="UPSTREAM RESPONSE", state=body_log_state)
 
     def _on_response_ir_ready(ir_response: dict[str, Any]) -> None:
         _translate_and_persist_localized_response_tools(
@@ -1540,7 +2386,7 @@ async def handle_non_streaming(
             route,
             tool_store=tool_store,
             persistence=persistence,
-            session_id=tool_cache_session_id,
+            state_scope=scope,
             capabilities=tool_capabilities,
             read_cache=read_cache,
         )
@@ -1581,7 +2427,8 @@ async def _stream_event_generator(
     """
     chunk_count = 0
     t0 = time.monotonic()
-    stream_error: str | None = None
+    terminal_outcome = "cancelled"
+    stream_error: str | None = "Stream closed before completion"
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -1635,8 +2482,10 @@ async def _stream_event_generator(
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-    except Exception as exc:
-        stream_error = str(exc)
+        terminal_outcome = "completed"
+        stream_error = None
+    except BaseException as exc:
+        terminal_outcome, stream_error = _stream_terminal_failure(exc)
         raise
     finally:
         _finalize_stream_profile(
@@ -1645,6 +2494,7 @@ async def _stream_event_generator(
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
+            terminal_outcome=terminal_outcome,
             stream_error=stream_error,
             ttfb_ms=ttfb_ms,
         )
@@ -1672,7 +2522,8 @@ async def _web_search_stream_event_generator(  # noqa: C901
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
     t0 = time.monotonic()
-    stream_error: str | None = None
+    terminal_outcome = "cancelled"
+    stream_error: str | None = "Stream closed before completion"
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
     controller = WebSearchStreamController()
@@ -1802,8 +2653,10 @@ async def _web_search_stream_event_generator(  # noqa: C901
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-    except Exception as exc:
-        stream_error = str(exc)
+        terminal_outcome = "completed"
+        stream_error = None
+    except BaseException as exc:
+        terminal_outcome, stream_error = _stream_terminal_failure(exc)
         raise
     finally:
         _finalize_stream_profile(
@@ -1812,6 +2665,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
+            terminal_outcome=terminal_outcome,
             stream_error=stream_error,
             ttfb_ms=ttfb_ms,
         )
@@ -1960,15 +2814,21 @@ def _finalize_stream_profile(
     trace: StreamTraceLogger | None,
     t0: float,
     chunk_count: int,
+    terminal_outcome: str,
     stream_error: str | None,
     ttfb_ms: float | None,
+    passthrough: bool = False,
 ) -> None:
+    stream_complete = terminal_outcome == "completed"
     if entry_id and request_log is not None:
         stream_profile: dict[str, Any] = {
             "stream_duration_ms": round((time.monotonic() - t0) * 1000, 2),
             "stream_chunks": chunk_count,
-            "stream_complete": stream_error is None,
+            "stream_complete": stream_complete,
+            "stream_outcome": terminal_outcome,
         }
+        if passthrough:
+            stream_profile["stream_passthrough"] = True
         if ttfb_ms is not None:
             stream_profile["stream_ttfb_ms"] = ttfb_ms
         if stream_error is not None:
@@ -1982,11 +2842,22 @@ def _finalize_stream_profile(
             "stream_complete",
             {
                 "chunk_count": chunk_count,
-                "stream_complete": stream_error is None,
+                "stream_complete": stream_complete,
+                "stream_outcome": terminal_outcome,
                 "stream_error": stream_error,
                 "ttfb_ms": ttfb_ms,
+                "passthrough": passthrough,
             },
         )
+
+
+def _stream_terminal_failure(exc: BaseException) -> tuple[str, str]:
+    """Classify early close/cancellation separately from provider failures."""
+    if isinstance(exc, asyncio.CancelledError):
+        return "cancelled", "Stream cancelled or client disconnected"
+    if isinstance(exc, GeneratorExit):
+        return "cancelled", "Stream closed before completion"
+    return "error", str(exc)
 
 
 async def _raw_stream_event_generator(
@@ -2000,7 +2871,8 @@ async def _raw_stream_event_generator(
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
     t0 = time.monotonic()
-    stream_error: str | None = None
+    terminal_outcome = "cancelled"
+    stream_error: str | None = "Stream closed before completion"
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -2022,36 +2894,23 @@ async def _raw_stream_event_generator(
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-    except Exception as exc:
-        stream_error = str(exc)
+        terminal_outcome = "completed"
+        stream_error = None
+    except BaseException as exc:
+        terminal_outcome, stream_error = _stream_terminal_failure(exc)
         raise
     finally:
-        if entry_id and request_log is not None:
-            stream_profile: dict[str, Any] = {
-                "stream_duration_ms": round((time.monotonic() - t0) * 1000, 2),
-                "stream_chunks": chunk_count,
-                "stream_complete": stream_error is None,
-                "stream_passthrough": True,
-            }
-            if ttfb_ms is not None:
-                stream_profile["stream_ttfb_ms"] = ttfb_ms
-            if stream_error is not None:
-                stream_profile["stream_error"] = stream_error[:500]
-            try:
-                request_log.update_profile(entry_id, stream_profile)
-            except Exception:
-                logger.debug("Failed to write stream profile for %s", entry_id)
-        if trace is not None:
-            trace.log(
-                "stream_complete",
-                {
-                    "chunk_count": chunk_count,
-                    "stream_complete": stream_error is None,
-                    "stream_error": stream_error,
-                    "ttfb_ms": ttfb_ms,
-                    "passthrough": True,
-                },
-            )
+        _finalize_stream_profile(
+            entry_id=entry_id,
+            request_log=request_log,
+            trace=trace,
+            t0=t0,
+            chunk_count=chunk_count,
+            terminal_outcome=terminal_outcome,
+            stream_error=stream_error,
+            ttfb_ms=ttfb_ms,
+            passthrough=True,
+        )
 
 
 async def _handle_direct_responses_streaming(
@@ -2066,10 +2925,12 @@ async def _handle_direct_responses_streaming(
     request_log: Any | None,
     persistence: Any | None,
     stream_trace_state: StreamTraceState | None,
+    upstream_error_log_state: UpstreamErrorLogState | None,
+    body_log_state: BodyLogState | None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Handle same-protocol Responses streaming passthrough."""
     profile: dict[str, Any] = {}
-    log_original_request(body)
+    log_original_request(body, state=body_log_state)
     t_connect = time.perf_counter()
     try:
         stream = await transport.send_streaming(
@@ -2116,6 +2977,7 @@ async def _handle_direct_responses_streaming(
             error_text,
             endpoint=str(route.target_provider),
             is_streaming=True,
+            state=upstream_error_log_state,
         )
         dump_error(
             persistence,
@@ -2191,10 +3053,13 @@ async def handle_streaming(
     entry_id: str | None = None,
     request_log: Any | None = None,
     persistence: Any | None = None,
-    tool_cache_session_id: str | None = None,
+    state_scope: GatewayStateScope | None = None,
     codex_window_id: str | None = None,
     window_tool_search_store: WindowToolSearchStore | None = None,
     stream_trace_state: StreamTraceState | None = None,
+    upstream_error_log_state: UpstreamErrorLogState | None = None,
+    body_log_state: BodyLogState | None = None,
+    image_fetch_workers: ImageFetchWorkerPool | None = None,
     web_search_config: dict[str, Any] | None = None,
     web_search_client: TavilySearchClient | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
@@ -2211,20 +3076,19 @@ async def handle_streaming(
         duration, chunks) are written back to the request log entry
         after the stream completes.
     """
-    store = metadata_store or _default_metadata_store
-    tool_store = (
-        codex_tool_store if codex_tool_store is not None else _default_codex_tool_store
-    )
-    window_tools = (
-        window_tool_search_store
-        if window_tool_search_store is not None
-        else _default_window_tool_search_store
+    model = body.get("model", "")
+    scope, store, tool_store, window_tools = _resolve_state_stores(
+        route=route,
+        model=model,
+        state_scope=state_scope,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        window_tool_search_store=window_tool_search_store,
     )
     persistent_mappings: list[LocalizedToolMapping] = []
     used_mapping_call_ids: set[str] = set()
     profile: dict[str, Any] = {}
     # model was already injected into body by app.py
-    model = body.get("model", "")
     body = _apply_tool_adaptation(body, route)
     body, web_search_runtime = _prepare_web_search_runtime_and_body(
         route=route,
@@ -2254,8 +3118,16 @@ async def handle_streaming(
             request_log=request_log,
             persistence=persistence,
             stream_trace_state=stream_trace_state,
+            upstream_error_log_state=upstream_error_log_state,
+            body_log_state=body_log_state,
         )
 
+    log_original_request(body, state=body_log_state)
+    image_fetch_cancellation = ImageFetchCancellation()
+    image_fetch_policy = ImageFetchPolicy(
+        proxy_url=provider_info.proxy_url,
+        cancellation=image_fetch_cancellation,
+    )
     pipeline = ConversionPipeline(
         route.source_provider,
         route.target_provider,
@@ -2267,7 +3139,8 @@ async def handle_streaming(
         conversion_options={
             "enable_tool_description_optimization": (
                 enable_tool_description_optimization(route.tool_adaptation)
-            )
+            ),
+            "image_fetch_policy": image_fetch_policy,
         },
     )
 
@@ -2285,18 +3158,25 @@ async def handle_streaming(
             )
 
     try:
-        target_body = pipeline.convert_request(body, on_ir_ready=_on_request_ir_ready)
-    except ConversionError as exc:
-        return error_response_for_source(route.source_provider, 400, str(exc)), profile
+        target_body = await _convert_request(
+            pipeline,
+            route,
+            body,
+            _on_request_ir_ready,
+            image_fetch_workers=image_fetch_workers,
+            image_fetch_policy=image_fetch_policy,
+        )
+    except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
+        return _conversion_failure_response(route.source_provider, exc), profile
     if should_localize_code_tools(route):
         persistent_mappings = _load_persistent_tool_mappings(
             persistence,
-            session_id=tool_cache_session_id,
+            state_scope=scope,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
         route,
-        codex_tool_store=tool_store,
+        codex_tool_store=tool_store if not scope.persistent else None,
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
         capabilities=source_tool_capabilities,
@@ -2306,11 +3186,11 @@ async def handle_streaming(
 
     profile.update(pipeline.profile)
 
-    log_original_request(pipeline.ir_request)
+    log_ir_request(pipeline.ir_request, state=body_log_state)
     if pipeline.warnings:
         logger.warning("Conversion warnings: %s", pipeline.warnings)
 
-    log_converted_request(target_body)
+    log_converted_request(target_body, state=body_log_state)
 
     # Phase 3: Open upstream connection and check for immediate errors
     # *before* committing to a 200 StreamingResponse.
@@ -2352,7 +3232,7 @@ async def handle_streaming(
         )
     _delete_unused_persistent_tool_mappings(
         persistence,
-        session_id=tool_cache_session_id,
+        state_scope=scope,
         loaded_mappings=persistent_mappings,
         used_call_ids=used_mapping_call_ids,
     )
@@ -2370,6 +3250,7 @@ async def handle_streaming(
             error_text,
             endpoint=str(route.target_provider),
             is_streaming=True,
+            state=upstream_error_log_state,
         )
         dump_error(
             persistence,
@@ -2417,13 +3298,13 @@ async def handle_streaming(
         def _persist_stream_mapping(mapping: LocalizedToolMapping) -> None:
             _persist_tool_mapping(
                 persistence,
-                session_id=tool_cache_session_id,
+                state_scope=scope,
                 ttl_hours=ttl_hours,
                 mapping=mapping,
             )
 
         stream_transformer = LocalizedToolCallStreamTransformer(
-            store=tool_store,
+            store=tool_store if not scope.persistent else None,
             on_mapping=_persist_stream_mapping,
             capabilities=tool_capabilities,
             read_cache=read_cache,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
@@ -22,7 +23,16 @@ def _make_app():
                 }
             },
             "models": {"gpt-test": "test-provider"},
-            "server": {},
+            "server": {
+                "admin_password": "test-admin-password",
+                "api_keys": [
+                    {
+                        "id": "test-client",
+                        "label": "Test client",
+                        "key": "test-gateway-key",
+                    }
+                ],
+            },
         }
     )
     return create_app(config)
@@ -33,7 +43,7 @@ def _request(app, path: str, *, body: bytes = b"not json") -> Request:
         method="POST",
         path=path,
         query_string="",
-        headers={},
+        headers={"authorization": "Bearer test-gateway-key"},
         body=body,
         client_addr=("127.0.0.1", 12345),
         app=app,
@@ -47,6 +57,19 @@ def test_responses_endpoint_remains_agent_facing_generation_route():
 
     assert response.status_code == 400
     assert b"Invalid JSON body" in response.body
+
+
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/embeddings"])
+@pytest.mark.parametrize("value", [[], None, "text", 1, True, 1.25])
+def test_public_post_endpoints_reject_non_object_json(path: str, value: object):
+    app = _make_app()
+
+    response = asyncio.run(
+        app._dispatch(_request(app, path, body=json.dumps(value).encode()))
+    )
+
+    assert response.status_code == 400
+    assert b"JSON body must be an object" in response.body
 
 
 @pytest.mark.parametrize(

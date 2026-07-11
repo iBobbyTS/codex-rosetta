@@ -619,12 +619,16 @@ class OpenAIResponsesConverter(BaseConverter):
                 output.append(entry)
 
             child = metadata.get("responses_namespace_child")
+            entry_tools = entry.get("tools")
+            if not isinstance(entry_tools, list):
+                entry_tools = []
+                entry["tools"] = entry_tools
             if isinstance(child, dict):
-                entry["tools"].append(dict(child))
+                entry_tools.append(dict(child))
             else:
                 child_tool = copy.deepcopy(converted)
                 child_tool.pop("strict", None)
-                entry["tools"].append(child_tool)
+                entry_tools.append(child_tool)
 
         return output
 
@@ -1598,14 +1602,17 @@ class OpenAIResponsesConverter(BaseConverter):
                 ]
         return result
 
+    @staticmethod
     def _handle_provider_passthrough_to_p(
-        self,
-        event: ProviderPassthroughEvent,
+        event: IRStreamEvent,
         context: StreamContext | None,
     ) -> dict[str, Any]:
-        if event.get("provider") != self._CONVERTER_TAG:
+        if event.get("type") != "provider_passthrough":
             return {}
-        payload = dict(event.get("payload", {}))
+        passthrough_event = cast(ProviderPassthroughEvent, event)
+        if passthrough_event.get("provider") != OpenAIResponsesConverter._CONVERTER_TAG:
+            return {}
+        payload = dict(passthrough_event.get("payload", {}))
         item = payload.get("item")
         if isinstance(context, OpenAIResponsesStreamContext) and isinstance(item, dict):
             if item.get("type") == "message":

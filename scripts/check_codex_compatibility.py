@@ -11,7 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 SCHEMA_VERSION = 1
@@ -352,6 +352,7 @@ def _responses_lite_model_capabilities(models_json: str) -> list[dict[str, Any]]
     for index, model in enumerate(models):
         if not isinstance(model, dict):
             raise ContractExtractionError(f"models.json entry {index} is not an object")
+        model = cast(dict[str, Any], model)
         if model.get("use_responses_lite") is not True:
             continue
 
@@ -374,14 +375,15 @@ def _responses_lite_model_capabilities(models_json: str) -> list[dict[str, Any]]
             )
         seen_slugs.add(slug)
 
-        reasoning_levels = model["supported_reasoning_levels"]
-        if not isinstance(reasoning_levels, list) or not all(
+        raw_reasoning_levels = model["supported_reasoning_levels"]
+        if not isinstance(raw_reasoning_levels, list) or not all(
             isinstance(level, dict) and isinstance(level.get("effort"), str)
-            for level in reasoning_levels
+            for level in raw_reasoning_levels
         ):
             raise ContractExtractionError(
                 f"Responses Lite model has invalid reasoning levels: {slug}"
             )
+        reasoning_levels = cast(list[dict[str, Any]], raw_reasoning_levels)
 
         capability = {
             key: model[key]

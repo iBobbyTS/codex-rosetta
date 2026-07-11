@@ -8,6 +8,11 @@ on:
 jobs:
   sdk-compatibility:
     runs-on: ubuntu-latest
+    # Repository Actions default to a read-only token. Keep the write grant on
+    # this schedule/manual-only job so fork or untrusted PR code cannot use it.
+    permissions:
+      contents: read
+      issues: write
 
     steps:
       - uses: actions/checkout@v6
@@ -47,7 +52,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
-              labels: 'sdk-compatibility,automated',
             });
 
             const duplicate = existingIssues.data.find(issue => issue.title === title);
@@ -60,7 +64,6 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: title,
-              labels: ['sdk-compatibility', 'automated'],
               body: `## SDK Compatibility Test Failure
 
             The weekly SDK compatibility check has detected type test failures with the latest SDK versions.

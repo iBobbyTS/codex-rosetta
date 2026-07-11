@@ -82,11 +82,11 @@ def p_generation_config_to_ir(
     provider_config: Any, **kwargs: Any
 ) -> GenerationConfig:
     result: Dict[str, Any] = {} #Declared as Dict[str, Any]
-    
+
     if "max_tokens" in provider_config:
         result["max_tokens"] = provider_config["max_tokens"]
     # ...more conditional filling
-    
+
     return result # Error: return dict[str, Any] instead of GenerationConfig
 ```
 

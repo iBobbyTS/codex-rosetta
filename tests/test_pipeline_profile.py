@@ -45,14 +45,16 @@ class TestPipelineProfile:
             assert isinstance(val, float), f"{key} is not float: {type(val)}"
             assert val >= 0, f"{key} is negative: {val}"
 
-        # Total should be >= sum of parts (due to overhead)
+        # Total should cover the sum of parts.  Every exported duration is
+        # independently rounded to 0.01 ms, so the four rounded parts can
+        # exceed the separately rounded total by at most about 0.025 ms.
         parts_sum = (
             p["source_to_ir_ms"]
             + p["ir_transforms_ms"]
             + p["ir_to_target_ms"]
             + p["body_transforms_ms"]
         )
-        assert p["request_conversion_ms"] >= parts_sum * 0.9  # allow small float error
+        assert p["request_conversion_ms"] + 0.03 >= parts_sum
 
     def test_profile_populated_after_convert_response(self):
         pipeline = ConversionPipeline("openai_chat", "anthropic")
@@ -64,9 +66,10 @@ class TestPipelineProfile:
         assert "response_to_source_ms" in p
         assert "response_conversion_ms" in p
 
-        # Response conversion total should be >= sum of parts
+        # The two rounded parts can exceed the separately rounded total by at
+        # most about 0.015 ms.
         parts_sum = p["response_from_target_ms"] + p["response_to_source_ms"]
-        assert p["response_conversion_ms"] >= parts_sum * 0.9
+        assert p["response_conversion_ms"] + 0.02 >= parts_sum
 
     def test_profile_has_all_keys_after_full_roundtrip(self):
         pipeline = ConversionPipeline("openai_chat", "anthropic")

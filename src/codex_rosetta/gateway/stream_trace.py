@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.observability.redaction import SecretRedactor
 
 logger = logging.getLogger("codex-rosetta-gateway")
 
@@ -56,15 +59,51 @@ class StreamTraceConfig:
         }
 
 
+@dataclass(frozen=True)
+class PreparedStreamTraceUpdate:
+    """Fully constructed trace state ready for an assignment-only commit."""
+
+    config: StreamTraceConfig
+    redactor: SecretRedactor
+
+
 class StreamTraceState:
     """Mutable stream trace settings used by the running gateway."""
 
-    def __init__(self, config: StreamTraceConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: StreamTraceConfig | None = None,
+        *,
+        token_values: Iterable[str] = (),
+    ) -> None:
         self.config = config or StreamTraceConfig()
+        self._redactor = SecretRedactor(token_values)
 
-    def update(self, config: StreamTraceConfig) -> None:
+    def prepare_update(
+        self,
+        config: StreamTraceConfig,
+        *,
+        token_values: Iterable[str] | None = None,
+    ) -> PreparedStreamTraceUpdate:
+        """Construct replacement trace state without mutating live settings."""
+        redactor = (
+            SecretRedactor(token_values) if token_values is not None else self._redactor
+        )
+        return PreparedStreamTraceUpdate(config=config, redactor=redactor)
+
+    def commit_update(self, prepared: PreparedStreamTraceUpdate) -> None:
+        """Commit prepared trace settings using assignments only."""
+        self.config = prepared.config
+        self._redactor = prepared.redactor
+
+    def update(
+        self,
+        config: StreamTraceConfig,
+        *,
+        token_values: Iterable[str] | None = None,
+    ) -> None:
         """Apply new settings without restarting the gateway."""
-        self.config = config
+        self.commit_update(self.prepare_update(config, token_values=token_values))
 
     def create_logger(
         self,
@@ -100,6 +139,7 @@ class StreamTraceState:
             target_provider=target_provider,
             provider_name=provider_name,
             max_string_chars=config.max_string_chars,
+            redactor=self._redactor,
         )
 
 
@@ -117,6 +157,7 @@ class StreamTraceLogger:
         target_provider: ProviderType,
         provider_name: str,
         max_string_chars: int = DEFAULT_MAX_CHARS,
+        redactor: SecretRedactor | None = None,
     ) -> None:
         self.path = path
         self.request_id = request_id
@@ -126,6 +167,7 @@ class StreamTraceLogger:
         self.target_provider = target_provider
         self.provider_name = provider_name
         self.max_string_chars = max_string_chars
+        self._redactor = redactor or SecretRedactor()
         self._disabled = False
 
     def log(
@@ -140,7 +182,7 @@ class StreamTraceLogger:
             return
 
         record = {
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "request_id": self.request_id,
             "request_log_id": self.request_log_id,
             "model": self.model,
@@ -149,11 +191,16 @@ class StreamTraceLogger:
             "provider_name": self.provider_name,
             "chunk_index": chunk_index,
             "stage": stage,
-            "data": _truncate(data, self.max_string_chars),
+            "data": _truncate(self._redactor.redact(data), self.max_string_chars),
         }
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as fh:
+            parent_existed = self.path.parent.exists()
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if not parent_existed:
+                os.chmod(self.path.parent, 0o700)
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
         except OSError as exc:
             self._disabled = True

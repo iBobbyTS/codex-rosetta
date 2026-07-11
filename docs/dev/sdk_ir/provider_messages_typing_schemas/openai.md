@@ -34,7 +34,7 @@ graph TD
 
 ### ChatCompletionMessageParam
 
-**Type**: `TypeAlias`  
+**Type**: `TypeAlias`
 **Definition**: A Union type containing six message roles
 
 ```python
@@ -52,7 +52,7 @@ ChatCompletionMessageParam: TypeAlias = Union[
 
 ### 1. ChatCompletionDeveloperMessageParam
 
-**Role**: `developer`  
+**Role**: `developer`
 **Purpose**: Developer message used for high-level instructions that set model behavior
 
 | Field     | Type                                                      | Required | Description                                               |
@@ -72,7 +72,7 @@ class ChatCompletionDeveloperMessageParam(TypedDict, total=False):
 
 ### 2. ChatCompletionSystemMessageParam
 
-**Role**: `system`  
+**Role**: `system`
 **Purpose**: System message used to set assistant behavior and context
 
 | Field     | Type                                                      | Required | Description         |
@@ -92,7 +92,7 @@ class ChatCompletionSystemMessageParam(TypedDict, total=False):
 
 ### 3. ChatCompletionUserMessageParam
 
-**Role**: `user`  
+**Role**: `user`
 **Purpose**: User message supporting text, images, audio, and files
 
 | Field     | Type                                                 | Required | Description              |
@@ -119,7 +119,7 @@ class ChatCompletionUserMessageParam(TypedDict, total=False):
 
 ### 4. ChatCompletionAssistantMessageParam
 
-**Role**: `assistant`  
+**Role**: `assistant`
 **Purpose**: Assistant message that can include text, tool calls, function calls, and audio responses
 
 | Field           | Type                                                   | Required | Description                                                                 |
@@ -173,7 +173,7 @@ ContentArrayOfContentPart: TypeAlias = Union[
 
 ### 5. ChatCompletionToolMessageParam
 
-**Role**: `tool`  
+**Role**: `tool`
 **Purpose**: Tool response message used to return the result of a tool call
 
 | Field           | Type                                                      | Required | Description                 |
@@ -193,7 +193,7 @@ class ChatCompletionToolMessageParam(TypedDict, total=False):
 
 ### 6. ChatCompletionFunctionMessageParam
 
-**Role**: `function`  
+**Role**: `function`
 **Purpose**: **Deprecated** function response message (replaced by the tool message)
 
 | Field     | Type                 | Required | Description      |

@@ -11,6 +11,7 @@ import pytest
 from codex_rosetta.gateway.auth import (
     AuthState,
     api_key_label_var,
+    api_key_principal_var,
     create_auth_hook,
 )
 
@@ -45,21 +46,17 @@ def _run(coro: Any) -> Any:
 
 
 class TestNoApiKey:
-    """When no api_key is configured, all requests pass through."""
+    """A misconfigured empty key set never opens protected APIs."""
 
-    def test_all_requests_allowed(self):
-        state = AuthState(frozenset(), {}, None)
+    def test_health_is_public_but_protected_api_is_rejected(self):
+        state = AuthState({}, {}, None, admin_password="admin-password")
         hook = create_auth_hook(state)
 
-        for path in [
-            "/health",
-            "/v1/responses",
-            "/v1/models",
-            "/v1/embeddings",
-            "/admin/api/config",
-        ]:
+        assert _run(hook(_make_request("/health"))) is None
+        for path in ["/v1/responses", "/v1/models", "/v1/embeddings"]:
             resp = _run(hook(_make_request(path)))
-            assert resp is None, f"Expected pass-through for {path}"
+            assert resp is not None
+            assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +71,12 @@ class TestWithApiKey:
 
     @pytest.fixture()
     def hook(self):
-        state = AuthState(frozenset({self.KEY}), {}, None)
+        state = AuthState(
+            {self.KEY: "test-principal"},
+            {},
+            None,
+            admin_password="admin-password",
+        )
         return create_auth_hook(state)
 
     # --- Health is always public ---
@@ -137,12 +139,31 @@ class TestWithApiKey:
         )
         assert _run(hook(req)) is None
 
-    # --- Removed downstream endpoints fall through to routing ---
+    # --- The /v1 namespace fails closed, including removed endpoints ---
     @pytest.mark.parametrize(
         "path,headers,query_params",
         [
+            ("/v1", {}, None),
             ("/v1/chat/completions", {}, None),
             ("/v1/messages", {"x-api-key": KEY}, None),
+        ],
+    )
+    def test_removed_v1_paths_require_api_key_before_routing(
+        self,
+        hook: Any,
+        path: str,
+        headers: dict[str, str],
+        query_params: dict[str, list[str]] | None,
+    ):
+        req = _make_request(path, headers=headers, query_params=query_params)
+        response = _run(hook(req))
+        assert response is not None
+        assert response.status_code == 401
+
+    # --- Other provider namespaces remain outside API-key auth ---
+    @pytest.mark.parametrize(
+        "path,headers,query_params",
+        [
             (
                 "/v1beta/models/gemini:generateContent",
                 {"x-goog-api-key": KEY},
@@ -151,7 +172,7 @@ class TestWithApiKey:
             ("/v1beta/models", {"x-goog-api-key": KEY}, None),
         ],
     )
-    def test_removed_downstream_paths_not_api_key_protected(
+    def test_non_v1_downstream_paths_not_api_key_protected(
         self,
         hook: Any,
         path: str,
@@ -161,14 +182,16 @@ class TestWithApiKey:
         req = _make_request(path, headers=headers, query_params=query_params)
         assert _run(hook(req)) is None
 
-    # --- Admin (no gateway-level auth) ---
+    # --- Admin uses its own mandatory auth ---
     def test_admin_html_no_auth(self, hook: Any):
         req = _make_request("/admin", method="GET")
         assert _run(hook(req)) is None
 
-    def test_admin_api_no_auth(self, hook: Any):
+    def test_admin_api_requires_auth(self, hook: Any):
         req = _make_request("/admin/api/config", method="GET")
-        assert _run(hook(req)) is None
+        resp = _run(hook(req))
+        assert resp is not None
+        assert resp.status_code == 401
 
 
 # ---------------------------------------------------------------------------
@@ -183,7 +206,12 @@ class TestMultiKey:
 
     @pytest.fixture()
     def hook(self):
-        state = AuthState(frozenset(self.KEYS), {}, None)
+        state = AuthState(
+            {key: f"principal-{key}" for key in self.KEYS},
+            {},
+            None,
+            admin_password="admin-password",
+        )
         return create_auth_hook(state)
 
     def test_first_key_valid(self, hook: Any):
@@ -236,7 +264,12 @@ class TestInternalToken:
 
     @pytest.fixture()
     def hook(self):
-        state = AuthState(frozenset({self.KEY}), {}, self.INTERNAL)
+        state = AuthState(
+            {self.KEY: "real-principal"},
+            {},
+            self.INTERNAL,
+            admin_password="admin-password",
+        )
         return create_auth_hook(state)
 
     def test_internal_token_accepted(self, hook: Any):
@@ -268,10 +301,12 @@ class TestInternalToken:
 # ---------------------------------------------------------------------------
 
 
-async def _run_and_get_label(hook: Any, req: Any) -> tuple[Any, str | None]:
-    """Run the auth hook and return (response, label) in the same async context."""
+async def _run_and_get_identity(
+    hook: Any, req: Any
+) -> tuple[Any, str | None, str | None]:
+    """Run auth and return response, display label, and stable principal."""
     resp = await hook(req)
-    return resp, api_key_label_var.get()
+    return resp, api_key_label_var.get(), api_key_principal_var.get()
 
 
 class TestKeyLabelTracking:
@@ -279,11 +314,17 @@ class TestKeyLabelTracking:
 
     KEYS = {"key-prod", "key-dev"}
     LABELS = {"key-prod": "Production", "key-dev": "Development"}
+    PRINCIPALS = {"key-prod": "prod-id", "key-dev": "dev-id"}
     INTERNAL = "rsk-internal-test"
 
     @pytest.fixture()
     def hook(self):
-        state = AuthState(frozenset(self.KEYS), self.LABELS, self.INTERNAL)
+        state = AuthState(
+            self.PRINCIPALS,
+            self.LABELS,
+            self.INTERNAL,
+            admin_password="admin-password",
+        )
         return create_auth_hook(state)
 
     def test_label_attached_for_prod_key(self, hook: Any):
@@ -291,21 +332,24 @@ class TestKeyLabelTracking:
             "/v1/responses",
             headers={"authorization": "Bearer key-prod"},
         )
-        _, label = _run(_run_and_get_label(hook, req))
+        _, label, principal = _run(_run_and_get_identity(hook, req))
         assert label == "Production"
+        assert principal == "prod-id"
 
     def test_label_attached_for_dev_key(self, hook: Any):
         req = _make_request(
             "/v1/responses",
             headers={"authorization": "Bearer key-dev"},
         )
-        _, label = _run(_run_and_get_label(hook, req))
+        _, label, principal = _run(_run_and_get_identity(hook, req))
         assert label == "Development"
+        assert principal == "dev-id"
 
     def test_internal_token_label(self, hook: Any):
         req = _make_request(
             "/v1/responses",
             headers={"authorization": f"Bearer {self.INTERNAL}"},
         )
-        _, label = _run(_run_and_get_label(hook, req))
+        _, label, principal = _run(_run_and_get_identity(hook, req))
         assert label == "internal"
+        assert principal == "__admin_internal__"

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 from typing import Any
 
-from codex_rosetta._vendor.httpclient import AsyncClient, Response as HttpResponse
+from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from ...config import GatewayConfig
-from ._shared import _qp
+from ...transport.http.transport import request_bounded_response
+from ._shared import _bounded_int_qp, _qp
+
+_MAX_PAGE_LIMIT = 1000
+_MAX_PAGE_OFFSET = 1_000_000
 
 
 def _detect_host_ip() -> dict[str, Any]:
@@ -64,8 +68,15 @@ def _persistence_snapshot(persistence: Any) -> dict[str, Any] | None:
 async def get_metrics(request: Any) -> Response:
     """Return a full metrics snapshot."""
     metrics = request.app.metrics
-    seconds = int(_qp(request, "seconds", "60"))
-    seconds = max(1, min(seconds, 300))
+    seconds = _bounded_int_qp(
+        request,
+        "seconds",
+        default=60,
+        minimum=1,
+        maximum=300,
+    )
+    if isinstance(seconds, Response):
+        return seconds
     snap = metrics.snapshot(series_seconds=seconds)
 
     persistence_snap = _persistence_snapshot(getattr(request.app, "persistence", None))
@@ -112,8 +123,24 @@ async def get_request_key_labels(request: Any) -> Response:
 async def get_requests(request: Any) -> Response:
     """Return paginated, filtered request log entries."""
     log = request.app.request_log
-    limit = int(_qp(request, "limit", "50"))
-    offset = int(_qp(request, "offset", "0"))
+    limit = _bounded_int_qp(
+        request,
+        "limit",
+        default=50,
+        minimum=1,
+        maximum=_MAX_PAGE_LIMIT,
+    )
+    if isinstance(limit, Response):
+        return limit
+    offset = _bounded_int_qp(
+        request,
+        "offset",
+        default=0,
+        minimum=0,
+        maximum=_MAX_PAGE_OFFSET,
+    )
+    if isinstance(offset, Response):
+        return offset
     model = _qp(request, "model")
     provider = _qp(request, "provider")
     status = _qp(request, "status")
@@ -214,10 +241,11 @@ async def network_diagnostics(request: Any) -> Response:
     # IP geolocation via ip-api.com (no key required, JSON by default)
     try:
         async with AsyncClient(**client_kwargs) as client:
-            resp = await client.get(
-                "http://ip-api.com/json/?fields=query,country,city,isp"
+            resp = await request_bounded_response(
+                client,
+                "GET",
+                "http://ip-api.com/json/?fields=query,country,city,isp",
             )
-            assert isinstance(resp, HttpResponse)
             if resp.status_code == 200:
                 data = resp.json()
                 results["ip"] = {
@@ -237,7 +265,11 @@ async def network_diagnostics(request: Any) -> Response:
     # Google connectivity
     try:
         async with AsyncClient(**client_kwargs) as client:
-            resp = await client.get("https://www.google.com/generate_204")
+            resp = await request_bounded_response(
+                client,
+                "GET",
+                "https://www.google.com/generate_204",
+            )
             results["google"] = {
                 "ok": resp.status_code == 204,
                 "status": resp.status_code,
@@ -264,8 +296,24 @@ async def get_error_dumps(request: Any) -> Response:
     if persistence is None:
         return JSONResponse({"error": "No persistence configured"}, status_code=400)
 
-    limit = int(_qp(request, "limit", "50"))
-    offset = int(_qp(request, "offset", "0"))
+    limit = _bounded_int_qp(
+        request,
+        "limit",
+        default=50,
+        minimum=1,
+        maximum=_MAX_PAGE_LIMIT,
+    )
+    if isinstance(limit, Response):
+        return limit
+    offset = _bounded_int_qp(
+        request,
+        "offset",
+        default=0,
+        minimum=0,
+        maximum=_MAX_PAGE_OFFSET,
+    )
+    if isinstance(offset, Response):
+        return offset
     model = _qp(request, "model")
     error_phase = _qp(request, "error_phase")
     provider = _qp(request, "provider")

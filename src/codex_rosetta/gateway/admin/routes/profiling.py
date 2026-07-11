@@ -18,7 +18,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.observability.profiling import ProfilerState  # noqa: F401 (re-exported)
 
-from ._shared import _qp
+from ._shared import _parse_json_object, _qp
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +36,10 @@ async def enable_profiling(request: Any) -> Response:
     """Enable profiling for the next N requests."""
     state: ProfilerState = request.app.profiler_state
 
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+
     # Pre-check: is pyinstrument available?
     try:
         import pyinstrument  # noqa: F401
@@ -49,10 +53,9 @@ async def enable_profiling(request: Any) -> Response:
         )
 
     try:
-        body = request.json()
-    except Exception:
-        body = {}
-    requests = int(body.get("requests", 5))
+        requests = int(body.get("requests", 5))
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "'requests' must be an integer"}, status_code=400)
     requests = max(1, min(requests, 100))  # clamp to [1, 100]
     return JSONResponse(state.enable(requests))
 

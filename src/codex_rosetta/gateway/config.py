@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import os
 import re
+import tempfile
+from collections.abc import Callable
 from typing import Any
+from urllib.parse import urlsplit
 
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.observability.redaction import collect_token_values
+from codex_rosetta.observability.retention import resolve_request_log_caps
 from codex_rosetta.reasoning_mapping import normalize_reasoning_mapping
 from codex_rosetta.routing import ResolvedRoute
 
 from .providers import build_provider_info
 from .stream_trace import StreamTraceConfig
+from .tool_adaptation import validate_tool_call_cache_ttl_hours
 from .transport import ProviderInfo
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -52,6 +59,72 @@ PROVIDER_API_TYPE_SHIMS: dict[tuple[str, str], str] = {
     ("qwen", "chat"): "qwen",
     ("zhipu", "chat"): "zhipu",
 }
+
+MAX_API_KEY_LABEL_LENGTH = 128
+
+
+def validate_api_key_label(value: Any, *, field: str = "label") -> str:
+    """Validate a gateway access-key display label and return it unchanged."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a string")
+    if len(value) > MAX_API_KEY_LABEL_LENGTH:
+        raise ValueError(
+            f"{field} must be at most {MAX_API_KEY_LABEL_LENGTH} characters"
+        )
+    return value
+
+
+def normalize_admin_cors_origins(value: Any) -> list[str]:
+    """Validate and canonicalize the Admin CORS origin allowlist."""
+    if not isinstance(value, list):
+        raise ValueError("config: server.admin_cors_origins must be a list")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            raise ValueError(
+                f"config: server.admin_cors_origins[{index}] must be a string"
+            )
+        raw = item.strip()
+        if not raw or any(char.isspace() for char in raw):
+            raise ValueError(
+                f"config: server.admin_cors_origins[{index}] must be an HTTP(S) origin"
+            )
+        parsed = urlsplit(raw)
+        if (
+            parsed.scheme.lower() not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                f"config: server.admin_cors_origins[{index}] must be an HTTP(S) origin "
+                "without credentials, path, query, or fragment"
+            )
+        try:
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                f"config: server.admin_cors_origins[{index}] has an invalid port"
+            ) from exc
+
+        scheme = parsed.scheme.lower()
+        hostname = parsed.hostname.lower()
+        host = f"[{hostname}]" if ":" in hostname else hostname
+        if port is not None and not (
+            (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
+        ):
+            host = f"{host}:{port}"
+        origin = f"{scheme}://{host}"
+        if origin not in seen:
+            seen.add(origin)
+            normalized.append(origin)
+    return normalized
 
 
 def api_type_to_provider_type(api_type: Any) -> str | None:
@@ -102,6 +175,18 @@ _JSONC_COMMENT_RE = re.compile(
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 
 
+class ConfigConflictError(RuntimeError):
+    """Raised when a config changed after it was loaded for editing."""
+
+
+class ConfigDocument(dict[str, Any]):
+    """Mutable config mapping carrying its source-file content digest."""
+
+    def __init__(self, value: dict[str, Any], *, source_digest: str) -> None:
+        super().__init__(value)
+        self.source_digest = source_digest
+
+
 def _strip_jsonc_comments(text: str) -> str:
     """Remove // and /* */ comments from JSONC, preserving strings."""
 
@@ -113,8 +198,15 @@ def _strip_jsonc_comments(text: str) -> str:
     return _JSONC_COMMENT_RE.sub(_replace, text)
 
 
-def _substitute_env_vars(text: str) -> str:
-    """Replace ${ENV_VAR} placeholders with environment variable values."""
+def _substitute_env_vars(value: Any) -> Any:
+    """Resolve ${ENV_VAR} placeholders inside parsed JSON string values."""
+
+    if isinstance(value, dict):
+        return {key: _substitute_env_vars(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_substitute_env_vars(item) for item in value]
+    if not isinstance(value, str):
+        return value
 
     def _replace(m: re.Match) -> str:
         var_name = m.group(1)
@@ -124,7 +216,7 @@ def _substitute_env_vars(text: str) -> str:
             return m.group(0)  # leave placeholder intact
         return value
 
-    return _ENV_VAR_RE.sub(_replace, text)
+    return _ENV_VAR_RE.sub(_replace, value)
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -132,43 +224,134 @@ def load_config(path: str) -> dict[str, Any]:
     with open(path) as f:
         raw = f.read()
     stripped = _strip_jsonc_comments(raw)
-    substituted = _substitute_env_vars(stripped)
-    return json.loads(substituted)
+    parsed = json.loads(stripped)
+    return _substitute_env_vars(parsed)
 
 
-def write_config(path: str, data: dict[str, Any]) -> None:
-    """Write a config dict as formatted JSON to *path*.
+def _content_digest(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
-    Creates parent directories if needed.  Uses an exclusive file lock
-    (``fcntl.flock``) to prevent concurrent writes from multiple
-    gateway instances sharing the same config file (e.g. via hard link).
 
-    Comments in the original JSONC file (if any) are **not** preserved.
+def _ensure_private_directory(path: str) -> None:
+    """Create missing directory components with owner-only permissions."""
+    directory = os.path.abspath(path)
+    missing: list[str] = []
+    current = directory
+    while not os.path.exists(current):
+        missing.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    for created in missing:
+        os.chmod(created, 0o700)
+
+
+def _atomic_write_bytes(path: str, content: bytes) -> None:
+    """Atomically replace *path* with fsynced owner-only bytes."""
+    parent = os.path.dirname(path) or "."
+    fd, temporary = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            fd = -1
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _fsync_directory(path: str) -> None:
+    directory_fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def write_config(
+    path: str,
+    data: dict[str, Any],
+    *,
+    activate: Callable[[], None] | None = None,
+) -> None:
+    """Crash-safely write config using a lock, digest CAS, and backup.
+
+    A :class:`ConfigDocument` loaded by :func:`load_config_raw` is rejected if
+    the file changed before this write. Comments are not preserved. When
+    *activate* is provided it runs while the write lock is held; a callback
+    failure restores the exact previous file bytes before the exception is
+    re-raised.
     """
     import fcntl
 
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    # Use "a+" to create the file if it doesn't exist, then lock.
-    # "r+" would fail on a new file; "w" truncates before locking.
-    with open(path, "a+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.truncate(0)
-        f.seek(0)
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.write("\n")
-        f.flush()
-        # Lock released automatically when f is closed
+    parent = os.path.dirname(os.path.abspath(path)) or "."
+    _ensure_private_directory(parent)
+    serialized = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    lock_path = f"{path}.lock"
+    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        os.fchmod(lock_fd, 0o600)
+        with os.fdopen(lock_fd, "r+") as lock_file:
+            lock_fd = -1
+            fcntl.flock(lock_file, fcntl.LOCK_EX)
+            current = b""
+            if os.path.exists(path):
+                with open(path, "rb") as existing:
+                    current = existing.read()
+            expected_digest = getattr(data, "source_digest", None)
+            current_digest = _content_digest(current)
+            if expected_digest is not None and expected_digest != current_digest:
+                raise ConfigConflictError(
+                    "config changed on disk after it was loaded; reload and retry"
+                )
+
+            if current:
+                _atomic_write_bytes(f"{path}.bak", current)
+            _atomic_write_bytes(path, serialized)
+            try:
+                _fsync_directory(parent)
+                if activate is not None:
+                    activate()
+            except Exception:
+                if current:
+                    _atomic_write_bytes(path, current)
+                else:
+                    try:
+                        os.unlink(path)
+                    except FileNotFoundError:
+                        pass
+                _fsync_directory(parent)
+                raise
+            if isinstance(data, ConfigDocument):
+                data.source_digest = _content_digest(serialized)
+    finally:
+        if lock_fd >= 0:
+            os.close(lock_fd)
 
 
-def load_config_raw(path: str) -> dict[str, Any]:
+def load_config_raw(path: str) -> ConfigDocument:
     """Load and parse a JSONC config file *without* env-var substitution.
 
     Useful for reading config that will be written back (e.g. ``add`` CLI).
     """
-    with open(path) as f:
-        raw = f.read()
+    with open(path, "rb") as f:
+        raw_bytes = f.read()
+    raw = raw_bytes.decode("utf-8")
     stripped = _strip_jsonc_comments(raw)
-    return json.loads(stripped)
+    return ConfigDocument(
+        json.loads(stripped), source_digest=_content_digest(raw_bytes)
+    )
 
 
 def discover_config(explicit_path: str | None = None) -> str | None:
@@ -197,7 +380,14 @@ class GatewayConfig:
     # Default capabilities when not specified in config.
     DEFAULT_CAPABILITIES: list[str] = ["text"]
 
+    @classmethod
+    def from_raw_with_env(cls, raw: dict[str, Any]) -> GatewayConfig:
+        """Resolve environment placeholders in a raw candidate and validate it."""
+        resolved = _substitute_env_vars(raw)
+        return cls(resolved)
+
     def __init__(self, raw: dict[str, Any]) -> None:
+        self.token_values = collect_token_values(raw)
         all_providers: dict[str, dict[str, str]] = raw.get("providers", {})
 
         # Filter out disabled providers (enabled defaults to True)
@@ -228,16 +418,34 @@ class GatewayConfig:
                     value.get("reasoning_mapping")
                 )
             if isinstance(value, dict) and value.get("tool_adaptation"):
-                self.model_tool_adaptations[model_name] = value["tool_adaptation"]
+                tool_adaptation = value["tool_adaptation"]
+                if not isinstance(tool_adaptation, dict):
+                    raise ValueError(
+                        f"config: model '{model_name}' tool_adaptation must be an object"
+                    )
+                normalized_tool_adaptation = dict(tool_adaptation)
+                if "tool_call_cache_ttl_hours" in normalized_tool_adaptation:
+                    normalized_tool_adaptation["tool_call_cache_ttl_hours"] = (
+                        validate_tool_call_cache_ttl_hours(
+                            normalized_tool_adaptation["tool_call_cache_ttl_hours"],
+                            field=(
+                                f"config: model '{model_name}' "
+                                "tool_adaptation.tool_call_cache_ttl_hours"
+                            ),
+                        )
+                    )
+                self.model_tool_adaptations[model_name] = normalized_tool_adaptation
 
         _server = raw.get("server", {})
-        self.host: str = _server.get("host", "0.0.0.0")
+        self.host: str = _server.get("host", "127.0.0.1")
         self.port: int = _server.get("port", 8765)
         self.proxy: str | None = _server.get("proxy")
         self.socket: str | None = _server.get("socket")
-        self.credential_visible: bool = _server.get("credential_visible", True)
+        self.credential_visible: bool = _server.get("credential_visible", False)
         self.admin_password: str | None = _server.get("admin_password")
-        if self.admin_password and _ENV_VAR_RE.search(self.admin_password):
+        if isinstance(self.admin_password, str) and _ENV_VAR_RE.search(
+            self.admin_password
+        ):
             raise ValueError(
                 "config: admin_password contains an unresolved ${...} placeholder. "
                 "Set the environment variable or use a literal password."
@@ -249,11 +457,17 @@ class GatewayConfig:
         #   "server": {
         #     "admin_cors_origins": ["https://my-admin.example.com"]
         #   }
-        self.admin_cors_origins: list[str] = _server.get("admin_cors_origins", []) or []
+        self.admin_cors_origins = normalize_admin_cors_origins(
+            _server.get("admin_cors_origins", [])
+        )
 
-        # Request-log retention knobs (consumed by setup_admin).  Kept as
-        # a raw dict here so admin layer owns the resolution policy.
-        self.request_log: dict[str, Any] = _server.get("request_log", {}) or {}
+        # Resolve request-log retention during config construction so startup
+        # and Admin hot reload use the same strict validation boundary.
+        self.request_log: Any = _server.get("request_log", {})
+        (
+            self.request_log_success_max,
+            self.request_log_error_max,
+        ) = resolve_request_log_caps(self.request_log)
         self.stream_trace: StreamTraceConfig = StreamTraceConfig.from_mapping(
             _server.get("stream_trace", {})
         )
@@ -274,14 +488,6 @@ class GatewayConfig:
                     "created": "",
                 }
             ]
-        # O(1) lookup set and key→label map for auth middleware
-        self.api_key_set: frozenset[str] = frozenset(
-            entry["key"] for entry in self.api_keys
-        )
-        self.api_key_labels: dict[str, str] = {
-            entry["key"]: entry.get("label", "") for entry in self.api_keys
-        }
-
         # Debug / logging options (config + env-var overrides)
         _debug = raw.get("debug", {})
         self.verbose: bool = _debug.get("verbose", False) or os.environ.get(
@@ -293,6 +499,18 @@ class GatewayConfig:
 
         self._validate()
 
+        # Raw-key lookup maps remain in memory only.  Persistent/request state
+        # uses the stable configured ID, never the display label or raw key.
+        self.api_key_set: frozenset[str] = frozenset(
+            entry["key"] for entry in self.api_keys
+        )
+        self.api_key_labels: dict[str, str] = {
+            entry["key"]: entry.get("label", "") for entry in self.api_keys
+        }
+        self.api_key_principals: dict[str, str] = {
+            entry["key"]: entry["id"] for entry in self.api_keys
+        }
+
         # Build ProviderInfo objects (with key rotation support)
         self.providers: dict[str, ProviderInfo] = {
             name: build_provider_info(
@@ -302,6 +520,48 @@ class GatewayConfig:
         }
 
     def _validate(self) -> None:
+        if not isinstance(self.admin_password, str) or not self.admin_password.strip():
+            raise ValueError("config: server.admin_password must be a non-empty string")
+        if not isinstance(self.api_keys, list) or not self.api_keys:
+            raise ValueError("config: at least one server.api_keys entry is required")
+
+        seen_ids: set[str] = set()
+        seen_keys: set[str] = set()
+        for index, entry in enumerate(self.api_keys):
+            if not isinstance(entry, dict):
+                raise ValueError(f"config: server.api_keys[{index}] must be an object")
+            principal = entry.get("id")
+            key = entry.get("key")
+            if not isinstance(principal, str) or not principal.strip():
+                raise ValueError(
+                    f"config: server.api_keys[{index}].id must be a non-empty string"
+                )
+            if principal == "__admin_internal__":
+                raise ValueError(
+                    "config: server.api_keys[].id uses a reserved internal principal"
+                )
+            if principal in seen_ids:
+                raise ValueError(
+                    f"config: duplicate server.api_keys[].id '{principal}'"
+                )
+            if not isinstance(key, str) or not key.strip():
+                raise ValueError(
+                    f"config: server.api_keys[{index}].key must be a non-empty string"
+                )
+            if _ENV_VAR_RE.search(key):
+                raise ValueError(
+                    f"config: server.api_keys[{index}].key contains an unresolved "
+                    "${...} placeholder. Set the environment variable."
+                )
+            if key in seen_keys:
+                raise ValueError("config: duplicate server.api_keys[].key")
+            validate_api_key_label(
+                entry.get("label", ""),
+                field=f"config: server.api_keys[{index}].label",
+            )
+            seen_ids.add(principal)
+            seen_keys.add(key)
+
         if not self._raw_providers:
             logger.warning(
                 "config: no enabled providers — all providers may be disabled"

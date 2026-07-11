@@ -259,7 +259,7 @@ graph TB
     IRReq --> RSN[reasoning → config_ops.ir_reasoning_config_to_p]
     IRReq --> CACHE[cache → config_ops.ir_cache_config_to_p]
     IRReq --> EXT[provider_extensions → merge directly]
-    
+
     MODEL --> RESULT[Provider Request Dict]
     SYS --> RESULT
     MSGS --> RESULT

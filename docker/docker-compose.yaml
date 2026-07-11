@@ -12,14 +12,33 @@
 
 services:
   codex-rosetta-gateway:
-    image: oaklight/codex-rosetta-gateway
+    # Build only from a wheel produced by the current checkout. `make compose-up`
+    # supplies LOCAL_WHEEL after rebuilding it; no registry image is published.
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      args:
+        LOCAL_WHEEL: ${LOCAL_WHEEL:?Run make compose-up from the repository root}
+        PYPI_MIRROR: ${PYPI_MIRROR:-}
+        REGISTRY_MIRROR: ${REGISTRY_MIRROR:-}
+    image: codex-rosetta-gateway-local:${CODEX_ROSETTA_VERSION:-dev}
     ports:
       - "8765:8765" # Gateway API + admin panel
     volumes:
-      - ./config:/config # Mount your config directory (contains config.jsonc)
+      # Defaults to docker/config; override for isolated/test deployments.
+      - ${CODEX_ROSETTA_CONFIG_DIR:-./config}:/config
     environment:
       - PUID=${PUID:-1000} # Match your host user's UID
       - PGID=${PGID:-1000} # Match your host user's GID
+      # Every generated config contains a mandatory random Admin password and
+      # gateway access key. Replace them in ./config/config.jsonc or supply
+      # CODEX_ROSETTA_ADMIN_PASSWORD / CODEX_ROSETTA_API_KEY when using the
+      # versioned example config.
+      # - CODEX_ROSETTA_ADMIN_PASSWORD=replace-with-a-strong-secret
+      # - CODEX_ROSETTA_API_KEY=rsk-replace-with-a-strong-secret
+      # Optional durable key override for encrypted tool-history mappings.
+      # If unset, /config/data/tool-mapping.key is created with mode 0600.
+      # - CODEX_ROSETTA_TOOL_MAPPING_KEY=<base64-encoded-32-byte-key>
       # API keys — referenced as ${ENV_VAR} in config.jsonc
       # - OPENAI_API_KEY=sk-xxx
       # - ANTHROPIC_API_KEY=sk-ant-xxx

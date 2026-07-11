@@ -17,6 +17,16 @@ lives in [`docs/en`](../en/README.md) and [`docs/zh-cn`](../zh-cn/README.md).
 - [SDK and IR research](sdk_ir/)
 - [Codex tool localization trace QA](codex-tool-localization/trace-qa.md)
 
+## Release
+
+- [Manual GitHub Release procedure](releasing.md)
+
+Releases are created only through the GitHub web UI. PyPI and Docker publishing
+targets are disabled. `make build-docker` remains available for local
+verification and always rebuilds/installs the wheel from the current checkout.
+`make compose-up` applies the same provenance rule to the versioned Compose
+service and never pulls a published Codex-Rosetta image.
+
 ## Manual development deployment
 
 The manual development deployment path remains available:

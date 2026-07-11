@@ -236,6 +236,47 @@ class RequestLog:
                     self._entries[i] = replace(entry, profile=merged)
                     break
 
+    def update_result(
+        self,
+        entry_id: str,
+        *,
+        status_code: int,
+        duration_ms: float,
+        error_detail: str | None,
+        profile_update: dict[str, Any] | None = None,
+    ) -> None:
+        """Finalize the outcome of an existing streaming request entry."""
+        if self._persistence is not None:
+            self._persistence.update_entry_result(
+                entry_id,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                error_detail=error_detail,
+                profile_update=profile_update,
+            )
+            return
+
+        def _updated(entry: RequestLogEntry) -> RequestLogEntry:
+            profile = dict(entry.profile or {})
+            if profile_update:
+                profile.update(profile_update)
+            return replace(
+                entry,
+                status_code=status_code,
+                duration_ms=round(duration_ms, 2),
+                error_detail=error_detail,
+                profile=profile or None,
+            )
+
+        for i, entry in enumerate(self._entries):
+            if entry.id == entry_id:
+                self._entries[i] = _updated(entry)
+                break
+        for i, entry in enumerate(self._pending):
+            if entry.id == entry_id:
+                self._pending[i] = _updated(entry)
+                break
+
     def clear(self) -> None:
         """Remove all entries."""
         if self._persistence is not None:

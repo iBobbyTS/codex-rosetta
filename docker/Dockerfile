@@ -6,7 +6,6 @@ FROM ${REGISTRY_MIRROR:-docker.io}/python:${PYTHON_VERSION}-alpine AS base
 
 ARG PYPI_MIRROR
 ARG LOCAL_WHEEL
-ARG PACKAGE_VERSION
 
 # Prevents Python from writing pyc files and enables unbuffered output.
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -27,31 +26,16 @@ RUN apk add --no-cache su-exec
 RUN mkdir -p /tmp/dist/
 COPY dist/ /tmp/dist/
 
-# Install codex-rosetta[gateway,profiling]: local wheel > specific version > latest from PyPI
-# Then remove pip/setuptools to save ~10MB
-RUN if [ -n "$LOCAL_WHEEL" ] && [ -f "/tmp/dist/$LOCAL_WHEEL" ]; then \
-        echo "Installing from local wheel: $LOCAL_WHEEL"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
-        else \
-            pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
-        fi; \
-    elif [ -n "$PACKAGE_VERSION" ]; then \
-        echo "Installing codex-rosetta version: $PACKAGE_VERSION"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "codex-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
-        else \
-            pip install --no-cache-dir "codex-rosetta[gateway,profiling]==$PACKAGE_VERSION"; \
-        fi; \
+# The application itself must come from the current repository build. PyPI is
+# used only to resolve third-party dependencies declared by that wheel.
+RUN test -n "$LOCAL_WHEEL" && test -f "/tmp/dist/$LOCAL_WHEEL" && \
+    echo "Installing from current local wheel: $LOCAL_WHEEL" && \
+    if [ -n "$PYPI_MIRROR" ]; then \
+        pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
     else \
-        echo "Installing latest codex-rosetta from PyPI"; \
-        if [ -n "$PYPI_MIRROR" ]; then \
-            pip install -i "$PYPI_MIRROR" --no-cache-dir "codex-rosetta[gateway,profiling]"; \
-        else \
-            pip install --no-cache-dir "codex-rosetta[gateway,profiling]"; \
-        fi; \
+        pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
     fi && \
-    pip uninstall -y pip setuptools 2>/dev/null || true && \
+    (pip uninstall -y pip setuptools 2>/dev/null || true) && \
     rm -rf /tmp/dist/
 
 # Config directory — mount a volume here with your config.jsonc.

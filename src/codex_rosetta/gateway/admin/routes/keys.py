@@ -9,8 +9,13 @@ from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
-from ...config import GatewayConfig, load_config_raw, write_config
-from ._shared import _get_config_path, _mask_api_key, _reload_gateway_config
+from ...config import GatewayConfig, load_config_raw, validate_api_key_label
+from ._shared import (
+    _commit_gateway_config,
+    _get_config_path,
+    _mask_api_key,
+    _parse_json_object,
+)
 
 
 async def get_api_keys(request: Any) -> Response:
@@ -47,13 +52,16 @@ async def create_api_key(request: Any) -> Response:
     if not config_path:
         return JSONResponse({"error": "No config file path available"}, status_code=500)
 
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
     try:
-        body = request.json()
-    except Exception:
-        body = {}
-
-    label = body.get("label", "")
+        label = validate_api_key_label(body.get("label", ""), field="'label'")
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     manual_key = body.get("key")
+    if manual_key is not None and not isinstance(manual_key, str):
+        return JSONResponse({"error": "'key' must be a string"}, status_code=400)
     key_value = manual_key if manual_key else f"rsk-{secrets.token_hex(24)}"
 
     entry = {
@@ -79,24 +87,9 @@ async def create_api_key(request: Any) -> Response:
 
     server.setdefault("api_keys", []).append(entry)
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
     # Return the full key exactly once so the user can copy it
     return JSONResponse({"ok": True, "key": entry})
@@ -110,10 +103,9 @@ async def update_api_key(request: Any, **kwargs: Any) -> Response:
 
     key_id = request.path_params["key_id"]
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     try:
         data = load_config_raw(config_path)
@@ -131,28 +123,16 @@ async def update_api_key(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": f"Key '{key_id}' not found"}, status_code=404)
 
     if "label" in body:
-        target["label"] = body["label"]
+        try:
+            target["label"] = validate_api_key_label(body["label"], field="'label'")
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
-
-    return JSONResponse({"ok": True, "id": key_id, "label": target["label"]})
+    return JSONResponse({"ok": True, "id": key_id, "label": target.get("label", "")})
 
 
 async def delete_api_key(request: Any, **kwargs: Any) -> Response:
@@ -174,25 +154,15 @@ async def delete_api_key(request: Any, **kwargs: Any) -> Response:
 
     if len(keys) == original_len:
         return JSONResponse({"error": f"Key '{key_id}' not found"}, status_code=404)
-
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
+    if not keys:
         return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
+            {"error": "Cannot delete the last gateway access key"},
+            status_code=409,
         )
 
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
     return JSONResponse({"ok": True, "deleted": key_id})
 
@@ -224,24 +194,9 @@ async def rotate_api_key(request: Any, **kwargs: Any) -> Response:
     target["key"] = new_key
     target["rotated"] = datetime.now(timezone.utc).isoformat()
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
     # Return the new key exactly once so the user can copy it
     return JSONResponse({"ok": True, "id": key_id, "key": new_key})
