@@ -25,6 +25,13 @@ def _write_jsonl(path: Path, records: list[object]) -> None:
     )
 
 
+def _tool_failure(message: str) -> dict[str, object]:
+    return {
+        "type": "response_item",
+        "payload": {"type": "function_call_output", "output": message},
+    }
+
+
 def test_classifies_rate_limit_without_leaking_bearer_token(tmp_path: Path):
     log_path = tmp_path / "rollout-019f3cbf-be45-7813-9d46-ff29d2773507.jsonl"
     _write_jsonl(
@@ -163,6 +170,82 @@ def test_bounds_oversized_lines_and_records_malformed_jsonl(tmp_path: Path):
     assert report["scan"]["malformed_lines"] == 1
     assert any(group["category"] == "invalid_jsonl" for group in report["error_groups"])
     assert "JSONL 损坏" in render_markdown(report)
+
+
+def test_candidate_file_limit_accepts_exact_count_and_drops_plus_one(
+    tmp_path: Path,
+) -> None:
+    for name in ("a", "b"):
+        _write_jsonl(
+            tmp_path / f"{name}.jsonl",
+            [_tool_failure(f"fatal error retained-{name}")],
+        )
+
+    exact = analyze_paths([tmp_path], max_candidate_files=2)
+
+    assert exact["scan"]["candidate_files_retained"] == 2
+    assert exact["retention"]["candidate_files_dropped"] == 0
+
+    _write_jsonl(
+        tmp_path / "c.jsonl",
+        [_tool_failure("fatal error dropped-c")],
+    )
+    truncated = analyze_paths([tmp_path], max_candidate_files=2)
+
+    assert truncated["scan"]["files_discovered"] == 3
+    assert truncated["scan"]["candidate_files_retained"] == 2
+    assert truncated["scan"]["files_selected"] == 2
+    assert truncated["retention"]["candidate_files_dropped"] == 1
+    signatures = [group["signature"] for group in truncated["error_groups"]]
+    assert signatures == ["fatal error retained-a", "fatal error retained-b"]
+    assert "文件列表已截断：未保留 1 个候选文件" in render_markdown(truncated)
+
+
+def test_error_group_limit_accepts_exact_count_and_drops_plus_one(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "history.jsonl"
+    records = [_tool_failure(f"fatal error group-{index}") for index in range(3)]
+    _write_jsonl(path, records)
+
+    exact = analyze_paths([tmp_path], max_error_groups=3, sample_limit=0)
+
+    assert len(exact["error_groups"]) == 3
+    assert exact["retention"]["error_group_occurrences_dropped"] == 0
+    assert all(not group["samples"] for group in exact["error_groups"])
+
+    _write_jsonl(path, [*records, _tool_failure("fatal error group-extra")])
+    truncated = analyze_paths([tmp_path], max_error_groups=3, sample_limit=0)
+
+    assert len(truncated["error_groups"]) == 3
+    assert truncated["categories"][0]["count"] == 4
+    assert truncated["retention"]["error_group_occurrences_dropped"] == 1
+    assert truncated["retention"]["error_group_overflow_by_category"] == {"unknown": 1}
+    assert all(
+        "overflow" not in group["signature"] for group in truncated["error_groups"]
+    )
+    assert "错误签名组已截断：未保留 1 次溢出记录" in render_markdown(truncated)
+
+
+def test_error_group_limit_stays_deterministic_under_many_distinct_errors(
+    tmp_path: Path,
+) -> None:
+    _write_jsonl(
+        tmp_path / "history.jsonl",
+        [_tool_failure(f"fatal error distinct-{index:03d}") for index in range(500)],
+    )
+
+    first = analyze_paths([tmp_path], max_error_groups=25, sample_limit=0)
+    second = analyze_paths([tmp_path], max_error_groups=25, sample_limit=0)
+
+    assert len(first["error_groups"]) == 25
+    assert first["categories"][0]["count"] == 500
+    assert first["retention"]["error_group_occurrences_dropped"] == 475
+    assert first["retention"]["error_group_overflow_by_category"] == {"unknown": 475}
+    assert [group["signature"] for group in first["error_groups"]] == [
+        group["signature"] for group in second["error_groups"]
+    ]
+    assert all(not group["samples"] for group in first["error_groups"])
 
 
 def test_ignores_prompt_text_and_detects_structured_tool_failure(tmp_path: Path):
