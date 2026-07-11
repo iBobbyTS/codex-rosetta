@@ -941,6 +941,7 @@ def test_tavily_real_loopback_timeout_and_cancel(
         )
 
     server.slow_started.clear()
+    server.slow_delay = 2
 
     async def _cancel() -> None:
         task = asyncio.create_task(
@@ -949,7 +950,7 @@ def test_tavily_real_loopback_timeout_and_cancel(
                 settings=WebSearchSettings(),
             )
         )
-        await asyncio.to_thread(server.slow_started.wait, 1)
+        assert await asyncio.to_thread(server.slow_started.wait, 1)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
