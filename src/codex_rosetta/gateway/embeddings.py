@@ -17,7 +17,7 @@ from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from .config import GatewayConfig
 from .headers import build_upstream_extra_headers
-from .logging import get_logger
+from .logging import get_logger, record_request_stat
 from .transport import UpstreamConnectionError, UpstreamTransport
 
 logger = get_logger()
@@ -94,6 +94,8 @@ async def handle_embeddings(
     # actual upstream identifier so the upstream provider sees the correct name.
     if route.upstream_model:
         body["model"] = route.upstream_model
+
+    record_request_stat(route.upstream_model or model)
 
     # --- Forward via transport ---
     upstream_url = f"{provider_info.base_url}/embeddings"

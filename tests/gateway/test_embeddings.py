@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import codex_rosetta.gateway.embeddings as embeddings_module
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.embeddings import handle_embeddings
 from codex_rosetta.gateway.transport._base import UpstreamResponse
@@ -177,3 +178,29 @@ class TestEmbeddingUpstreamModel:
         assert response.status_code == 200
         _, kwargs = request.app.transport.send_passthrough.call_args
         assert kwargs["extra_headers"]["User-Agent"] == "codex-cli/1.2.3"
+
+    def test_request_stats_use_resolved_upstream_model(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Embeddings contribute to per-model stats using the upstream name."""
+        config = _make_config(
+            "https://api.example.com/v1", upstream_model="BAAI/bge-m3"
+        )
+        request = _make_request({"model": "my-embed", "input": "hello"})
+        request.app.transport = MagicMock()
+        request.app.transport.send_passthrough = AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=200,
+                body={"object": "list", "data": [], "model": "BAAI/bge-m3"},
+                raw_content=b'{"object":"list","data":[],"model":"BAAI/bge-m3"}',
+            )
+        )
+        recorded_models: list[str] = []
+        monkeypatch.setattr(
+            embeddings_module, "record_request_stat", recorded_models.append
+        )
+
+        response = asyncio.run(handle_embeddings(request, config))
+
+        assert response.status_code == 200
+        assert recorded_models == ["BAAI/bge-m3"]
