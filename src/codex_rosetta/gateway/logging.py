@@ -329,7 +329,7 @@ def get_logger() -> logging.Logger:
 
 
 def setup_logging(
-    log_level: str = "info",
+    log_level: str = "warning",
     use_colors: bool = True,
 ) -> logging.Logger:
     """Configure the gateway logger.

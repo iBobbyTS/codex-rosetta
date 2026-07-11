@@ -110,6 +110,22 @@ def test_setup_logging_rejects_unsupported_level(
         gateway_logging.setup_logging(log_level="debug", use_colors=False)
 
 
+def test_setup_logging_defaults_to_warning(
+    monkeypatch: pytest.MonkeyPatch,
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    console = io.StringIO()
+    monkeypatch.setattr(gateway_logging.sys, "stderr", console)
+
+    gateway_logging.setup_logging(use_colors=False)
+    isolated_gateway_loggers.info("hidden-info")
+    isolated_gateway_loggers.warning("visible-warning")
+
+    output = console.getvalue()
+    assert "hidden-info" not in output
+    assert "visible-warning" in output
+
+
 def test_body_log_redacts_tokens_before_serialization_and_preserves_other_data(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
