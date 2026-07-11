@@ -7,6 +7,7 @@ import hashlib
 import logging
 import os
 import re
+import sys
 import tempfile
 from collections.abc import Callable
 from typing import Any
@@ -61,6 +62,31 @@ PROVIDER_API_TYPE_SHIMS: dict[tuple[str, str], str] = {
 }
 
 MAX_API_KEY_LABEL_LENGTH = 128
+REQUEST_BODY_LIMIT_OPTIONS_MB = (64, 128, 256, 512, 1024)
+DEFAULT_REQUEST_BODY_LIMIT_MB = 128
+UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
+
+
+def normalize_request_body_limit_mb(value: Any) -> int | None:
+    """Validate the configured inbound request-body limit.
+
+    ``None`` is the normalized runtime representation of the explicit
+    ``"unlimited"`` setting. Numeric limits use MiB-sized units even though the
+    user-facing configuration keeps the shorter ``_mb`` spelling.
+    """
+    if value == UNLIMITED_REQUEST_BODY_LIMIT:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(
+            "config: server.request_body_limit_mb must be one of "
+            "64, 128, 256, 512, 1024, or 'unlimited'"
+        )
+    if value not in REQUEST_BODY_LIMIT_OPTIONS_MB:
+        raise ValueError(
+            "config: server.request_body_limit_mb must be one of "
+            "64, 128, 256, 512, 1024, or 'unlimited'"
+        )
+    return value
 
 
 def validate_api_key_label(value: Any, *, field: str = "label") -> str:
@@ -442,6 +468,19 @@ class GatewayConfig:
         self.proxy: str | None = _server.get("proxy")
         self.socket: str | None = _server.get("socket")
         self.credential_visible: bool = _server.get("credential_visible", False)
+        self.request_body_limit_mb = normalize_request_body_limit_mb(
+            _server.get("request_body_limit_mb", DEFAULT_REQUEST_BODY_LIMIT_MB)
+        )
+        self.request_body_limit_config_value: int | str = (
+            UNLIMITED_REQUEST_BODY_LIMIT
+            if self.request_body_limit_mb is None
+            else self.request_body_limit_mb
+        )
+        self.request_body_limit_bytes = (
+            sys.maxsize
+            if self.request_body_limit_mb is None
+            else self.request_body_limit_mb * 1024 * 1024
+        )
         self.admin_password: str | None = _server.get("admin_password")
         if isinstance(self.admin_password, str) and _ENV_VAR_RE.search(
             self.admin_password

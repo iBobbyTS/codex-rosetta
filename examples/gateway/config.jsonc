@@ -42,6 +42,8 @@
     // retain the mandatory password and access key below.
     "host": "127.0.0.1",
     "port": 8765,
+    // One of 64, 128, 256, 512, 1024, or "unlimited". Values are MiB.
+    "request_body_limit_mb": 128,
     "admin_password": "${CODEX_ROSETTA_ADMIN_PASSWORD}",
     "credential_visible": false,
     "api_keys": [

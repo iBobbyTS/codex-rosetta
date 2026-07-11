@@ -479,9 +479,9 @@ async def get_config(request: Any) -> Response:
         raw_model_groups, providers, expanded_raw_models
     )
 
-    server = _mask_server_config(raw.get("server", {}))
-
     config: GatewayConfig = request.app.gateway_config
+    server = _mask_server_config(raw.get("server", {}))
+    server.setdefault("request_body_limit_mb", config.request_body_limit_config_value)
     return JSONResponse(
         {
             "config_path": config_path,
@@ -926,6 +926,9 @@ async def put_server_settings(request: Any) -> Response:
             server["proxy"] = proxy
         else:
             server.pop("proxy", None)
+
+    if "request_body_limit_mb" in body:
+        server["request_body_limit_mb"] = body["request_body_limit_mb"]
 
     if "stream_trace" in body:
         stream_trace = body.get("stream_trace") or {}

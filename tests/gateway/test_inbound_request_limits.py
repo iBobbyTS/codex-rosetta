@@ -15,7 +15,7 @@ from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.proxy import close_resources
 
 
-def _config() -> GatewayConfig:
+def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
     return GatewayConfig(
         {
             "providers": {
@@ -36,6 +36,7 @@ def _config() -> GatewayConfig:
                     }
                 ],
                 "admin_cors_origins": ["https://admin.example"],
+                "request_body_limit_mb": request_body_limit_mb,
             },
         }
     )
@@ -44,8 +45,8 @@ def _config() -> GatewayConfig:
 class _RunningGateway:
     """Run a real Gateway App on an isolated loopback socket."""
 
-    def __init__(self) -> None:
-        self.app = create_app(_config())
+    def __init__(self, request_body_limit_mb: int | str = 128) -> None:
+        self.app = create_app(_config(request_body_limit_mb))
 
         @self.app.post("/v1/socket-test")
         async def socket_test(request: Any) -> dict[str, int]:
@@ -132,9 +133,9 @@ def _wait_for_parser_count(app: Any, expected: int) -> None:
     assert app.active_request_parses == expected
 
 
-def test_gateway_uses_fixed_inbound_parser_budgets() -> None:
+def test_gateway_uses_default_body_limit_and_fixed_parser_budgets() -> None:
     with _RunningGateway() as running:
-        assert running.app.max_body_size == 50_000_000
+        assert running.app.max_body_size == 128 * 1024 * 1024
         assert running.app.request_line_timeout == 5.0
         assert running.app.header_timeout == 10.0
         assert running.app.body_timeout == 30.0
@@ -196,6 +197,22 @@ def test_valid_gateway_key_allows_body_read_and_dispatch() -> None:
 
         assert b" 200 " in response.split(b"\r\n", 1)[0]
         assert b'"size": 2' in response
+        assert running.app.active_request_parses == 0
+
+
+def test_configured_body_limit_rejects_oversized_content_length() -> None:
+    with _RunningGateway(request_body_limit_mb=64) as running:
+        response = _exchange(
+            running.address,
+            b"POST /v1/socket-test HTTP/1.1\r\n"
+            b"Host: localhost\r\n"
+            b"Authorization: Bearer test-gateway-key\r\n"
+            b"Content-Type: application/json\r\n"
+            b"Content-Length: 67108865\r\n\r\n",
+        )
+
+        assert b" 413 " in response.split(b"\r\n", 1)[0]
+        assert b"Request body too large (67108865 bytes)" in response
         assert running.app.active_request_parses == 0
 
 

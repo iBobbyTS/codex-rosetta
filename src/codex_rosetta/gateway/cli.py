@@ -16,6 +16,7 @@ from codex_rosetta import __version__
 
 from .banner import print_banner
 from .config import (
+    DEFAULT_REQUEST_BODY_LIMIT_MB,
     PATHS_TO_TRY,
     GatewayConfig,
     discover_config,
@@ -78,6 +79,7 @@ def _secure_server_template() -> dict[str, Any]:
     return {
         "host": "127.0.0.1",
         "port": 8765,
+        "request_body_limit_mb": DEFAULT_REQUEST_BODY_LIMIT_MB,
         "admin_password": secrets.token_urlsafe(32),
         "credential_visible": False,
         "api_keys": [
