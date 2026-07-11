@@ -20,20 +20,37 @@
     }
   },
 
-  // Model → provider routing table.
-  // When a request arrives with a given model name, the gateway
-  // looks up the target provider here.
-  "models": {
-    "gpt-4o": "openai_chat",
-    "gpt-4o-mini": "openai_chat",
-    "gpt-4.1": "openai_chat",
-    "gpt-4.1-mini": "openai_chat",
-    "gpt-4.1-nano": "openai_chat",
-    "claude-sonnet-4-20250514": "anthropic",
-    "claude-3-5-haiku-20241022": "anthropic",
-    "gemini-2.0-flash": "google",
-    "gemini-2.5-pro": "google",
-    "gemini-2.5-flash": "google"
+  // Model groups are the only routing definitions. Group type controls
+  // LLM vs embedding behavior; LLM models may declare text/vision only.
+  "model_groups": {
+    "OpenAI Chat": {
+      "provider": "openai_chat",
+      "type": "llm",
+      "models": {
+        "gpt-4o": {"capabilities": ["text", "vision"]},
+        "gpt-4o-mini": {"capabilities": ["text", "vision"]},
+        "gpt-4.1": {"capabilities": ["text", "vision"]},
+        "gpt-4.1-mini": {"capabilities": ["text", "vision"]},
+        "gpt-4.1-nano": {"capabilities": ["text"]}
+      }
+    },
+    "Anthropic": {
+      "provider": "anthropic",
+      "type": "llm",
+      "models": {
+        "claude-sonnet-4-20250514": {"capabilities": ["text", "vision"]},
+        "claude-3-5-haiku-20241022": {"capabilities": ["text", "vision"]}
+      }
+    },
+    "Google": {
+      "provider": "google",
+      "type": "llm",
+      "models": {
+        "gemini-2.0-flash": {"capabilities": ["text", "vision"]},
+        "gemini-2.5-pro": {"capabilities": ["text", "vision"]},
+        "gemini-2.5-flash": {"capabilities": ["text", "vision"]}
+      }
+    }
   },
 
   // Server settings

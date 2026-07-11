@@ -261,11 +261,9 @@ class CodexToolLocalizationStore:
 
 
 def should_localize_code_tools(route: Any) -> bool:
-    """Return whether Codex editing tools should be localized for this route."""
-    tool_adaptation = getattr(route, "tool_adaptation", None) or {}
+    """Return whether a Responses request is crossing into Chat."""
     return (
-        bool(tool_adaptation.get("localize_code_editing_tools"))
-        and getattr(route, "source_provider", None)
+        getattr(route, "source_provider", None)
         in ("openai_responses", "open_responses")
         and getattr(route, "target_provider", None) == "openai_chat"
     )

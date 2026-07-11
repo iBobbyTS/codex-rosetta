@@ -3,7 +3,7 @@
 This package splits the admin route handlers into focused modules:
 
 - auth        — HTML serving, admin login, rate limiting
-- config      — Config CRUD, upstream model fetch, bulk-add
+- config      — Config CRUD and upstream model fetch
 - keys        — Gateway API key management
 - observability — Metrics, request log, network diagnostics
 - testing     — Async model test tasks
@@ -31,13 +31,10 @@ from .auth import (
     serve_admin_html,
 )
 from .config import (
-    bulk_add_models,
-    delete_model,
     delete_model_group,
     delete_provider,
     fetch_upstream_models,
     get_config,
-    put_model,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -114,8 +111,6 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>/key", methods=["GET"])(
         get_provider_key
     )
-    app.route("/admin/api/config/models/<path:name>", methods=["PUT"])(put_model)
-    app.route("/admin/api/config/models/<path:name>", methods=["DELETE"])(delete_model)
     app.route("/admin/api/config/model-groups/<path:name>", methods=["PUT"])(
         put_model_group
     )
@@ -125,7 +120,6 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>/models", methods=["GET"])(
         fetch_upstream_models
     )
-    app.route("/admin/api/config/models", methods=["POST"])(bulk_add_models)
     app.route("/admin/api/config/server", methods=["PUT"])(put_server_settings)
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)
     # Read-only tool catalog

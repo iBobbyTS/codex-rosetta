@@ -2,7 +2,7 @@
 
 Defines the :class:`ResolvedRoute` data contract and :class:`Router`
 protocol for resolving a model name into a target provider, shim config,
-capabilities, and reasoning mapping.
+and capabilities.
 
 This module lives in the core library (no network or gateway deps) so
 any consumer (gateway, argo-proxy, CLI tools) can depend on it.
@@ -15,7 +15,7 @@ separately by each :class:`Router` implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Protocol
 
 from codex_rosetta.auto_detect import ProviderType
 
@@ -41,10 +41,6 @@ class ResolvedRoute:
             when the gateway model name is used as-is.
         model_capabilities: Declared capabilities of the model
             (e.g. ``["text", "vision"]``).
-        reasoning_mapping: Per-model reasoning mapping from the admin UI /
-            config, or ``None`` for auto.
-        tool_adaptation: Per-model tool adaptation config from
-            the admin UI / config, or ``None``.
     """
 
     source_provider: ProviderType
@@ -53,8 +49,6 @@ class ResolvedRoute:
     shim_name: str | None = None
     upstream_model: str | None = None
     model_capabilities: list[str] = field(default_factory=lambda: ["text"])
-    reasoning_mapping: str | None = None
-    tool_adaptation: dict[str, Any] | None = None
 
 
 class Router(Protocol):
@@ -80,7 +74,7 @@ class Router(Protocol):
 
         Returns:
             A :class:`ResolvedRoute` with target provider, shim,
-            capabilities, and reasoning mapping.
+            and capabilities.
 
         Raises:
             KeyError: If the model is not in the routing table.

@@ -96,7 +96,7 @@ def _empty_config_template() -> dict[str, Any]:
     """Return a new secure config scaffold."""
     return {
         "providers": {},
-        "models": {},
+        "model_groups": {},
         "server": _secure_server_template(),
     }
 
@@ -142,10 +142,22 @@ def _cmd_init(args: argparse.Namespace) -> None:
                 "base_url": "https://generativelanguage.googleapis.com",
             },
         },
-        "models": {
-            "gpt-4o": "openai_chat",
-            "claude-sonnet-4-20250514": "anthropic",
-            "gemini-2.0-flash": "google",
+        "model_groups": {
+            "OpenAI": {
+                "provider": "openai_chat",
+                "type": "llm",
+                "models": {"gpt-4o": {}},
+            },
+            "Anthropic": {
+                "provider": "anthropic",
+                "type": "llm",
+                "models": {"claude-sonnet-4-20250514": {}},
+            },
+            "Google": {
+                "provider": "google",
+                "type": "llm",
+                "models": {"gemini-2.0-flash": {}},
+            },
         },
         "server": _secure_server_template(),
     }
@@ -199,29 +211,37 @@ def _cmd_add_model(args: argparse.Namespace) -> None:
     config_path = discover_config(args.config) or PATHS_TO_TRY[0]
     data, path = _load_or_create_config(config_path)
 
-    model_name: str = args.name
-    providers = data.get("providers", {})
-    provider: str = args.provider or ""
-    if not provider:
-        if providers:
-            choices = list(providers.keys())
-            print(f"Available providers: {', '.join(choices)}")
-            provider = input(f"Provider for '{model_name}': ").strip()
-        else:
-            provider = input(f"Provider for '{model_name}': ").strip()
-    if not provider:
-        print("Error: provider is required.", file=sys.stderr)
+    group_name: str = args.group
+    groups = data.get("model_groups", {})
+    group = groups.get(group_name) if isinstance(groups, dict) else None
+    if not isinstance(group, dict):
+        print(f"Error: model group '{group_name}' does not exist.", file=sys.stderr)
         sys.exit(1)
-    if provider not in providers:
-        print(
-            f"Warning: provider '{provider}' not yet in config. "
-            f"Add it with: codex-rosetta-gateway add provider {provider}",
-            file=sys.stderr,
-        )
-
-    data.setdefault("models", {})[model_name] = provider
+    model_name: str = args.name
+    group.setdefault("models", {})[model_name] = {}
     _write_jsonc(path, data)
-    print(f"Added model '{model_name}' -> '{provider}' to {path}")
+    print(f"Added model '{model_name}' to group '{group_name}' in {path}")
+
+
+def _cmd_add_model_group(args: argparse.Namespace) -> None:
+    """Add an empty model group owned by one provider."""
+    config_path = discover_config(args.config) or PATHS_TO_TRY[0]
+    data, path = _load_or_create_config(config_path)
+    providers = data.get("providers", {})
+    if args.provider not in providers:
+        print(f"Error: provider '{args.provider}' does not exist.", file=sys.stderr)
+        sys.exit(1)
+    groups = data.setdefault("model_groups", {})
+    if args.name in groups:
+        print(f"Error: model group '{args.name}' already exists.", file=sys.stderr)
+        sys.exit(1)
+    groups[args.name] = {
+        "provider": args.provider,
+        "type": args.type,
+        "models": {},
+    }
+    _write_jsonc(path, data)
+    print(f"Added {args.type} model group '{args.name}' to {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +309,9 @@ def main() -> None:
     )
 
     # ``add`` subcommands
-    add_parser = sub.add_parser("add", help="Add a provider or model to the config")
+    add_parser = sub.add_parser(
+        "add", help="Add a provider, model group, or grouped model to the config"
+    )
     add_sub = add_parser.add_subparsers(dest="add_type")
 
     _provider_list = ", ".join(_KNOWN_PROVIDERS)
@@ -303,9 +325,16 @@ def main() -> None:
     )
     prov_parser.add_argument("--base-url", default=None, help="Provider base URL")
 
-    model_parser = add_sub.add_parser("model", help="Add a model routing entry")
+    group_parser = add_sub.add_parser("model-group", help="Add a model group")
+    group_parser.add_argument("name", help="Model group name")
+    group_parser.add_argument("--provider", required=True, help="Target provider name")
+    group_parser.add_argument(
+        "--type", choices=("llm", "embedding"), default="llm", help="Group type"
+    )
+
+    model_parser = add_sub.add_parser("model", help="Add a model to a group")
     model_parser.add_argument("name", help="Model name (e.g. gpt-4o)")
-    model_parser.add_argument("--provider", default=None, help="Target provider name")
+    model_parser.add_argument("--group", required=True, help="Target model group")
 
     args = parser.parse_args()
 
@@ -323,6 +352,8 @@ def main() -> None:
     if args.command == "add":
         if args.add_type == "provider":
             _cmd_add_provider(args)
+        elif args.add_type == "model-group":
+            _cmd_add_model_group(args)
         elif args.add_type == "model":
             _cmd_add_model(args)
         else:

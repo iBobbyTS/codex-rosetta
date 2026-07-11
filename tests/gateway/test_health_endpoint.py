@@ -360,7 +360,13 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
                     "type": "openai",
                 }
             },
-            "models": {"model-a": "private-provider"},
+            "model_groups": {
+                "private": {
+                    "provider": "private-provider",
+                    "type": "llm",
+                    "models": {"model-a": {}},
+                }
+            },
             "server": {
                 "admin_password": "test-admin-password",
                 "api_keys": [

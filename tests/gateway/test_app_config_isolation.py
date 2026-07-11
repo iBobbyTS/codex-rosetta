@@ -31,7 +31,13 @@ def _config(
                     "type": "openai",
                 }
             },
-            "models": {f"model-{label}": f"provider-{label}"},
+            "model_groups": {
+                f"group-{label}": {
+                    "provider": f"provider-{label}",
+                    "type": "llm",
+                    "models": {f"model-{label}": {}},
+                }
+            },
             "server": {
                 "admin_password": "test-admin-password",
                 "api_keys": [

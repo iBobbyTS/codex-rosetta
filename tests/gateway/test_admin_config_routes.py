@@ -13,10 +13,8 @@ import pytest
 
 from codex_rosetta.gateway.admin.routes import _shared
 from codex_rosetta.gateway.admin.routes.config import (
-    bulk_add_models,
     delete_model_group,
     get_config,
-    put_model,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -44,7 +42,13 @@ def _config_data() -> dict[str, Any]:
                 "api_key": "sk-test",
             }
         },
-        "models": {"gpt-test": "openai"},
+        "model_groups": {
+            "OpenAI": {
+                "provider": "openai",
+                "type": "llm",
+                "models": {"gpt-test": {"capabilities": ["text"]}},
+            }
+        },
         "server": {
             "admin_password": "test-admin-password",
             "api_keys": [
@@ -724,7 +728,11 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
         "provider": "deepseek",
         "api_type": "chat",
     }
-    config["models"]["deepseek-test"] = "DeepSeek"
+    config["model_groups"]["DeepSeek"] = {
+        "provider": "DeepSeek",
+        "type": "llm",
+        "models": {"deepseek-test": {}},
+    }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
 
@@ -753,214 +761,6 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert "type" not in saved["providers"]["DeepSeek"]
 
 
-def test_put_model_persists_tool_adaptation_and_reloads_runtime_config(tmp_path):
-    """Model tool adaptation settings persist and hot-reload into routing."""
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(
-        app=app,
-        path_params={"name": "gpt-test"},
-    )
-    request.json = lambda: {
-        "provider": "openai",
-        "capabilities": ["text"],
-        "tool_adaptation": {
-            "localize_code_editing_tools": False,
-            "use_apply_patch_for_code_edits": False,
-            "remove_image_generation": True,
-            "enable_tool_description_optimization": False,
-            "enable_phase_detection": False,
-            "tool_call_cache_ttl_hours": 12,
-        },
-    }
-
-    response = _run(put_model(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["models"]["gpt-test"]["tool_adaptation"] == {
-        "localize_code_editing_tools": False,
-        "use_apply_patch_for_code_edits": False,
-        "remove_image_generation": True,
-        "enable_tool_description_optimization": False,
-        "enable_phase_detection": False,
-        "tool_call_cache_ttl_hours": 12.0,
-    }
-    route, _provider = app.gateway_config.resolve("openai_responses", "gpt-test")
-    assert route.tool_adaptation == {
-        "localize_code_editing_tools": False,
-        "use_apply_patch_for_code_edits": False,
-        "remove_image_generation": True,
-        "enable_tool_description_optimization": False,
-        "enable_phase_detection": False,
-        "tool_call_cache_ttl_hours": 12.0,
-    }
-
-
-def test_put_model_omits_default_tool_adaptation(tmp_path):
-    """Default-only tool adaptation settings do not create config noise."""
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(
-        app=app,
-        path_params={"name": "gpt-test"},
-    )
-    request.json = lambda: {
-        "provider": "openai",
-        "capabilities": ["text"],
-        "tool_adaptation": {
-            "localize_code_editing_tools": False,
-            "use_apply_patch_for_code_edits": True,
-            "remove_image_generation": False,
-            "enable_tool_description_optimization": True,
-            "enable_phase_detection": True,
-            "tool_call_cache_ttl_hours": 24,
-        },
-    }
-
-    response = _run(put_model(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert "tool_adaptation" not in saved["models"]["gpt-test"]
-    assert saved["models"]["gpt-test"]["capabilities"] == ["text"]
-
-
-@pytest.mark.parametrize("ttl", [True, "nan", "inf", "1e999", 720.01])
-def test_put_model_rejects_invalid_tool_mapping_ttl_without_writing(tmp_path, ttl):
-    config_path = tmp_path / "config.jsonc"
-    original = _config_data()
-    config_path.write_text(json.dumps(original), encoding="utf-8")
-    initial_config = GatewayConfig(original)
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app, path_params={"name": "gpt-test"})
-    request.json = lambda: {
-        "provider": "openai",
-        "capabilities": ["text", "tools"],
-        "tool_adaptation": {"tool_call_cache_ttl_hours": ttl},
-    }
-
-    response = _run(put_model(request))
-
-    assert response.status_code == 400
-    assert b"at most 720 hours" in response.body
-    assert json.loads(config_path.read_text(encoding="utf-8")) == original
-
-
-def test_put_model_accepts_maximum_tool_mapping_ttl(tmp_path):
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app, path_params={"name": "gpt-test"})
-    request.json = lambda: {
-        "provider": "openai",
-        "capabilities": ["text", "tools"],
-        "tool_adaptation": {"tool_call_cache_ttl_hours": 720},
-    }
-
-    response = _run(put_model(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert (
-        saved["models"]["gpt-test"]["tool_adaptation"]["tool_call_cache_ttl_hours"]
-        == 720.0
-    )
-
-
-def test_put_model_persists_reasoning_mapping_and_drops_legacy_override(tmp_path):
-    """Model saves the new reasoning mapping and discards old reasoning fields."""
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app, path_params={"name": "gpt-test"})
-    request.json = lambda: {
-        "provider": "openai",
-        "capabilities": ["text"],
-        "reasoning_mapping": "qwen_3_7",
-        "reasoning_override": {"thinking_type": "adaptive"},
-    }
-
-    response = _run(put_model(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["models"]["gpt-test"]["reasoning_mapping"] == "qwen_3_7"
-    assert saved["models"]["gpt-test"]["capabilities"] == ["text"]
-    assert "reasoning_override" not in saved["models"]["gpt-test"]
-    route, _provider = app.gateway_config.resolve("openai_responses", "gpt-test")
-    assert route.reasoning_mapping == "qwen_3_7"
-
-
-def test_get_config_returns_reasoning_mapping_metadata_and_drops_legacy(tmp_path):
-    """Admin config response exposes mapping metadata without legacy override."""
-    config = _config_data()
-    config["models"] = {
-        "qwen-public": {
-            "provider": "openai",
-            "upstream_model": "qwen3.7-plus",
-            "capabilities": ["text"],
-            "reasoning_override": {"thinking_type": "adaptive"},
-        }
-    }
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
-
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=GatewayConfig(config),
-    )
-    request = SimpleNamespace(app=app)
-
-    response = _run(get_config(request))
-
-    assert response.status_code == 200
-    body = json.loads(response.body.decode("utf-8"))
-    model = body["models"]["qwen-public"]
-    assert "reasoning_override" not in model
-    assert "reasoning_mapping" not in model
-    assert model["reasoning"] == {
-        "source": "model",
-        "requested": "auto",
-        "effective": "qwen_3_7",
-        "target_provider": "openai_chat",
-    }
-
-
 def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     """Admin config exposes grouped management data and expanded runtime models."""
     config = _config_data()
@@ -968,6 +768,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     config["model_groups"] = {
         "OpenAI": {
             "provider": "openai",
+            "type": "llm",
             "models": {
                 "grouped": {
                     "upstream_model": "grouped-upstream",
@@ -989,9 +790,10 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
 
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
-    assert set(body["models"]) == {"standalone", "grouped"}
-    assert set(body["standalone_models"]) == {"standalone"}
+    assert set(body["models"]) == {"grouped"}
+    assert "standalone_models" not in body
     assert body["model_groups"]["OpenAI"]["provider"] == "openai"
+    assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "grouped-upstream"
     )
@@ -1013,6 +815,7 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
     request.json = lambda: {
         "provider": "openai",
+        "type": "llm",
         "models": {
             "gpt-grouped": {
                 "upstream_model": "gpt-upstream",
@@ -1027,6 +830,7 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"] == {
         "provider": "openai",
+        "type": "llm",
         "models": {
             "gpt-grouped": {
                 "capabilities": ["text"],
@@ -1040,98 +844,13 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.model_capabilities == ["text"]
 
 
-def test_put_model_group_persists_reasoning_mapping_and_drops_legacy(tmp_path):
-    """Grouped model entries save reasoning_mapping and discard legacy override."""
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
-    request.json = lambda: {
-        "provider": "openai",
-        "models": {
-            "qwen-public": {
-                "upstream_model": "qwen3.7-plus",
-                "capabilities": ["text"],
-                "reasoning_mapping": "auto",
-                "reasoning_override": {"thinking_type": "adaptive"},
-            }
-        },
-    }
-
-    response = _run(put_model_group(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    entry = saved["model_groups"]["OpenAI"]["models"]["qwen-public"]
-    assert entry["reasoning_mapping"] == "auto"
-    assert entry["capabilities"] == ["text"]
-    assert "reasoning_override" not in entry
-    route, _provider = app.gateway_config.resolve("openai_responses", "qwen-public")
-    assert route.reasoning_mapping == "auto"
-
-
-def test_bulk_add_models_persists_explicit_llm_capabilities(tmp_path):
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app)
-    request.json = lambda: {
-        "provider": "openai",
-        "models": ["gpt-bulk"],
-        "capabilities": ["text"],
-    }
-
-    response = _run(bulk_add_models(request))
-
-    assert response.status_code == 200
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["models"]["gpt-bulk"]["capabilities"] == ["text"]
-
-
-def test_put_model_group_rejects_duplicate_flat_model_name(tmp_path):
-    """A grouped model cannot reuse an existing top-level model name."""
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
-
-    initial_config = GatewayConfig(_config_data())
-    app = SimpleNamespace(
-        config_path=str(config_path),
-        gateway_config=initial_config,
-        stream_trace_state=StreamTraceState(initial_config.stream_trace),
-        auth_state=None,
-    )
-    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
-    request.json = lambda: {
-        "provider": "openai",
-        "models": {"gpt-test": {"capabilities": ["text"]}},
-    }
-
-    response = _run(put_model_group(request))
-
-    assert response.status_code == 409
-    saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert "model_groups" not in saved
-
-
 def test_delete_model_group_removes_group_and_runtime_models(tmp_path):
     """Deleting a model group removes its expanded model routes."""
     config = _config_data()
     config["model_groups"] = {
         "OpenAI": {
             "provider": "openai",
+            "type": "llm",
             "models": {"gpt-grouped": "gpt-upstream"},
         }
     }
@@ -1155,28 +874,6 @@ def test_delete_model_group_removes_group_and_runtime_models(tmp_path):
     assert "gpt-grouped" not in app.gateway_config.models
 
 
-def test_admin_html_exposes_tool_adaptation_switches():
-    """Model modal exposes all configurable tool adaptation switches."""
-    html_path = (
-        Path(__file__).parents[2]
-        / "src"
-        / "codex_rosetta"
-        / "gateway"
-        / "admin"
-        / "admin.html"
-    )
-    html = html_path.read_text(encoding="utf-8")
-
-    assert 'id="toolUseApplyPatchForCodeEdits" checked' in html
-    assert 'id="toolUseApplyPatchRow" style="display:none' in html
-    assert 'onchange="updateToolAdaptationVisibility()"' in html
-    assert "function updateToolAdaptationVisibility()" in html
-    assert "toolAdaptation.use_apply_patch_for_code_edits !== false" in html
-    assert "toolAdaptation.enable_tool_description_optimization !== false" in html
-    assert "toolAdaptation.enable_phase_detection !== false" in html
-    assert "toolFlattenNestedNamespaceTools" not in html
-
-
 def test_admin_html_confirmation_button_triggers_action():
     """The full second-stage confirmation button executes the pending action."""
     html_path = (
@@ -1190,7 +887,7 @@ def test_admin_html_confirmation_button_triggers_action():
     html = html_path.read_text(encoding="utf-8")
     inline_confirm = html[
         html.index("function inlineConfirm(btn, action)") : html.index(
-            "async function _doDeleteModel(name)"
+            "function openFetchModelsModal()"
         )
     ]
 
@@ -1212,9 +909,9 @@ def test_admin_html_renders_tools_as_compact_cards():
     )
     html = html_path.read_text(encoding="utf-8")
     render_item = html[
-        html.index("function renderToolItem(item, policies, nested=false)") : html.index(
-            "function renderToolNamespace(namespaceItem, childIds, index)"
-        )
+        html.index(
+            "function renderToolItem(item, policies, nested=false)"
+        ) : html.index("function renderToolNamespace(namespaceItem, childIds, index)")
     ]
 
     assert ".tool-card-grid { grid-template-columns:repeat(4,minmax(0,1fr))" in html
@@ -1241,32 +938,6 @@ def test_admin_html_exposes_request_body_limit_options():
         assert f'<option value="{value}">{value} MB</option>' in html
     assert '<option value="unlimited"' in html
     assert "request_body_limit_mb" in html
-
-
-def test_admin_html_exposes_reasoning_mapping_controls():
-    """Model modal uses reasoning_mapping instead of legacy reasoning controls."""
-    html_path = (
-        Path(__file__).parents[2]
-        / "src"
-        / "codex_rosetta"
-        / "gateway"
-        / "admin"
-        / "admin.html"
-    )
-    html = html_path.read_text(encoding="utf-8")
-
-    assert 'id="reasoningMapping"' in html
-    assert 'id="reasoningAutoResult"' in html
-    assert 'id="modelReasoningGroup" style="display:none' not in html
-    assert "function _detectReasoningMappingByModelName(modelName)" in html
-    assert "body.reasoning_mapping" in html
-    assert 'id="capReasoning"' not in html
-    assert 'id="fetchCapReasoning"' not in html
-    assert 'value="reasoning"' not in html
-    assert "reasoning_override" not in html
-    assert "reasoningThinkingType" not in html
-    assert "reasoningBudgetRatio" not in html
-    assert "reasoningDisabled" not in html
 
 
 def test_admin_html_assumes_all_llm_models_support_tools():
@@ -1362,20 +1033,24 @@ def test_admin_html_exposes_model_group_controls():
     assert 'id="modelGroupList"' in html
     assert 'id="modelGroupModal"' in html
     assert 'id="modelGroupRows"' in html
+    assert 'id="fetchModelGroup"' in html
     assert "max-height: 90vh; overflow-y: auto;" in html
     assert "function openModelGroupModal(groupName)" in html
     assert "function toggleModelGroup(groupName)" in html
-    assert "function onModelGroupRowTypeChange(input)" in html
+    assert "function onModelGroupTypeChange()" in html
     assert "function saveModelGroup()" in html
     assert "/admin/api/config/model-groups/" in html
-    assert "configData.standalone_models || models" in html
+    assert "/admin/api/config/models" not in html
+    assert "standalone_models" not in html
     assert "_collapsedModelGroups" in html
     assert "model-group-card${collapsed ? ' collapsed' : ''}" in html
     assert 'class="model-group-body"' in html
-    assert 'class="group-model-type-input"' in html
+    assert 'name="modelGroupType"' in html
     assert 'class="checkbox-group group-cap-wrap"' in html
     assert 'class="group-cap" value="embedding"' not in html
-    assert "modelType === 'embedding'" in html
+    assert "groupType === 'llm'" in html
+    assert 'id="modelReasoningGroup"' not in html
+    assert 'id="modelToolAdaptationGroup"' not in html
     assert "'btn.addModelGroup':'+ Add Model Group'" in html
     assert "'btn.addModelGroup':'+ \\u6dfb\\u52a0\\u6a21\\u578b\\u7ec4'" in html
 

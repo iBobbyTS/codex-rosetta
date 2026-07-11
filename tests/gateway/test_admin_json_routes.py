@@ -25,7 +25,13 @@ def _config_data() -> dict[str, Any]:
                 "type": "openai",
             }
         },
-        "models": {"gpt-test": "test-provider"},
+        "model_groups": {
+            "test": {
+                "provider": "test-provider",
+                "type": "llm",
+                "models": {"gpt-test": {}},
+            }
+        },
         "server": {
             "admin_password": "test-admin-password",
             "api_keys": [
@@ -45,10 +51,8 @@ def _config_data() -> dict[str, Any]:
     [
         ("POST", "/admin/api/login", False),
         ("PUT", "/admin/api/config/providers/new-provider", True),
-        ("PUT", "/admin/api/config/models/new-model", True),
         ("PUT", "/admin/api/config/model-groups/new-group", True),
         ("PUT", "/admin/api/config/server", True),
-        ("POST", "/admin/api/config/models", True),
         ("POST", "/admin/api/keys", True),
         ("PUT", "/admin/api/keys/test-client", True),
         ("POST", "/admin/api/test", True),
