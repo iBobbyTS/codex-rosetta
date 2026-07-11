@@ -307,7 +307,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
             "test-provider": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
-                "type": "openai",
+                "provider": "custom",
+                "api_type": "responses_rosetta",
             }
         },
         "tool_profiles": {},

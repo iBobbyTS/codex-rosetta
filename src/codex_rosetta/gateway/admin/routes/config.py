@@ -12,6 +12,7 @@ from codex_rosetta.shims import list_shims
 from ...config import (
     GatewayConfig,
     load_config_raw,
+    provider_supports_tool_profiles,
 )
 from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
@@ -163,6 +164,7 @@ def _normalize_models_for_admin(
 
 def _normalize_model_groups_for_admin(
     raw_model_groups: dict[str, Any],
+    raw_providers: dict[str, Any],
 ) -> dict[str, Any]:
     """Normalize model group config for admin UI consumption."""
     groups: dict[str, Any] = {}
@@ -185,12 +187,16 @@ def _normalize_model_groups_for_admin(
                 )
                 entry.pop("provider", None)
                 models[model_name] = entry
-        groups[group_name] = {
+        normalized_group = {
             "provider": provider,
             "type": group_type,
-            "tool_profile": group_value.get("tool_profile", BUILTIN_TOOL_PROFILE),
             "models": models,
         }
+        if provider_supports_tool_profiles(raw_providers.get(provider)):
+            normalized_group["tool_profile"] = group_value.get(
+                "tool_profile", BUILTIN_TOOL_PROFILE
+            )
+        groups[group_name] = normalized_group
     return groups
 
 
@@ -328,7 +334,7 @@ async def get_config(request: Any) -> Response:
     raw_model_groups = raw.get("model_groups", {}) or {}
     expanded_raw_models = GatewayConfig._expand_model_groups(raw_model_groups)
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
-    model_groups = _normalize_model_groups_for_admin(raw_model_groups)
+    model_groups = _normalize_model_groups_for_admin(raw_model_groups, providers)
     tool_profiles = normalize_tool_profiles(raw.get("tool_profiles"))
 
     config: GatewayConfig = request.app.gateway_config
@@ -579,20 +585,23 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
     if duplicate_error is not None:
         return duplicate_error
 
-    tool_profiles = normalize_tool_profiles(data.get("tool_profiles"))
-    try:
-        tool_profile = validate_tool_profile_reference(
-            body.get("tool_profile", BUILTIN_TOOL_PROFILE),
-            tool_profiles,
-            field=f"model group '{name}' tool_profile",
-        )
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+    provider_config = (data.get("providers", {}) or {}).get(provider)
+    tool_profile: str | None = None
+    if group_type == "llm" and provider_supports_tool_profiles(provider_config):
+        tool_profiles = normalize_tool_profiles(data.get("tool_profiles"))
+        try:
+            tool_profile = validate_tool_profile_reference(
+                body.get("tool_profile", BUILTIN_TOOL_PROFILE),
+                tool_profiles,
+                field=f"model group '{name}' tool_profile",
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
 
     model_groups[name] = {
         "provider": provider,
         "type": group_type,
-        **({"tool_profile": tool_profile} if group_type == "llm" else {}),
+        **({"tool_profile": tool_profile} if tool_profile is not None else {}),
         "models": cleaned_models,
     }
 

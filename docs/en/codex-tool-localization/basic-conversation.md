@@ -30,7 +30,7 @@ This is important because Codex relies on fields that are not part of a minimal 
 - Native Responses tool item structure.
 - Provider-specific request fields such as `include`.
 
-Model-level tool adaptation can still run before pass-through. For example, the gateway can remove `image_generation` from the request if that model is configured with `remove_image_generation`.
+Tool Profiles do not apply to Pass-through providers. The gateway forwards their tool definitions and choices without Profile filtering, modification, namespace expansion, or Rosetta tool injection. Tool Profiles remain selectable for **OpenAI Responses (Rosetta)**, Chat, Anthropic, and Google providers.
 
 ## Responses To Chat Conversion
 

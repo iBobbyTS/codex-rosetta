@@ -65,8 +65,6 @@ multi_agent_v1.spawn_agent -> spawn_agent
 - 当工具来自 Responses 命名空间时，命名空间元数据被恢复。
 - 消息 `phase` 元数据被保留，以便工作流程输出在 Codex 中保持可折叠状态。
 
-## Image Generation 移除
+## Tool Profile 作用范围
 
-某些模型不应看到 `image_generation`，因为它们无法很好地使用它，或者因为路由应完全避免图像生成。当为某个模型启用 `remove_image_generation` 时，Rosetta 会从出站请求中移除 `image_generation` 工具，并在必要时清除不兼容的 tool choice/config 字段。
-
-此适配可以在直接 Responses 透传和 Responses 到 Chat 转换之前运行。
+**OpenAI Responses (Pass through)** 会完全忽略 Tool Profile，并保持传入工具不变。Responses Rosetta、Chat、Anthropic 和 Google 模型组仍保留 Profile 选择与处理；各转换路径会在自身内建桥接行为之外，执行该路径支持的 Profile 状态。

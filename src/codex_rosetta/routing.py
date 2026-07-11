@@ -41,7 +41,8 @@ class ResolvedRoute:
             when the gateway model name is used as-is.
         model_capabilities: Declared capabilities of the model
             (e.g. ``["text", "vision"]``).
-        tool_profile_name: Selected tool-profile identifier.
+        tool_profile_name: Selected tool-profile identifier, or ``None`` when
+            tool profiles do not apply to the route.
         tool_profile: Effective catalog item states for the selected profile.
         responses_processing: Internal handling mode for same-format OpenAI
             Responses routes. This does not represent a distinct wire protocol.
@@ -53,7 +54,7 @@ class ResolvedRoute:
     shim_name: str | None = None
     upstream_model: str | None = None
     model_capabilities: list[str] = field(default_factory=lambda: ["text"])
-    tool_profile_name: str = "builtin"
+    tool_profile_name: str | None = None
     tool_profile: dict[str, str] = field(default_factory=dict)
     responses_processing: Literal["passthrough", "rosetta"] = "rosetta"
 

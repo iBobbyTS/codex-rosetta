@@ -65,8 +65,6 @@ The important behavior is that tool calls must survive the round trip:
 - Namespace metadata is restored when the tool came from a Responses namespace.
 - Message `phase` metadata is preserved so work-process output remains foldable in Codex.
 
-## image_generation Removal
+## Tool Profile Scope
 
-Some models should not see `image_generation` because they cannot use it well or because the route should avoid image generation entirely. When `remove_image_generation` is enabled for a model, Rosetta removes the `image_generation` tool from the outgoing request and clears incompatible tool choice/config fields if needed.
-
-This adaptation can run before both direct Responses pass-through and Responses-to-Chat conversion.
+**OpenAI Responses (Pass through)** ignores Tool Profiles completely and keeps the incoming tools unchanged. Responses Rosetta, Chat, Anthropic, and Google model groups retain Profile selection and processing; each conversion path applies the states it supports in addition to its built-in bridge behavior.
