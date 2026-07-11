@@ -216,7 +216,9 @@ def test_error_group_limit_accepts_exact_count_and_drops_plus_one(
     tmp_path: Path,
 ) -> None:
     path = tmp_path / "history.jsonl"
-    records = [_tool_failure(f"fatal error group-{index}") for index in range(3)]
+    records: list[object] = [
+        _tool_failure(f"fatal error group-{index}") for index in range(3)
+    ]
     _write_jsonl(path, records)
 
     exact = analyze_paths([tmp_path], max_error_groups=3, sample_limit=0)
