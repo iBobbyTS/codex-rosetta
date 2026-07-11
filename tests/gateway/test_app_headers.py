@@ -397,6 +397,46 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     assert "x-request-id" in captured_headers
 
 
+def test_proxy_stats_use_original_upstream_model_name(monkeypatch):
+    """Stats must not expose the public model alias as the counter key."""
+    recorded_models: list[str] = []
+
+    class _Config:
+        models = {"public-alias": "test-provider"}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name="test-provider",
+                    upstream_model="provider-original-model",
+                ),
+                MagicMock(),
+            )
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+    monkeypatch.setattr(app_module, "record_request_stat", recorded_models.append)
+
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {"model": "public-alias", "messages": []}
+    request.app.metadata_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 200
+    assert recorded_models == ["provider-original-model"]
+
+
 def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
     """Observability storage is best-effort and cannot replace a proxy response."""
 
