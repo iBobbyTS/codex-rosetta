@@ -32,6 +32,17 @@ def _tool_failure(message: str) -> dict[str, object]:
     }
 
 
+def test_default_roots_follow_current_home_and_preserve_backup_root():
+    args = parse_args([])
+
+    assert args.roots == [
+        Path.home() / ".codex" / "archived_sessions",
+        Path.home() / ".codex" / "sessions",
+        Path("/Volumes/Backups/AI Agent Sessions/Codex"),
+    ]
+    assert "/Users/ibobby/.codex" not in SCRIPT_PATH.read_text(encoding="utf-8")
+
+
 def test_classifies_rate_limit_without_leaking_bearer_token(tmp_path: Path):
     log_path = tmp_path / "rollout-019f3cbf-be45-7813-9d46-ff29d2773507.jsonl"
     _write_jsonl(

@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_CODEX_HOME = Path.home() / ".codex"
 DEFAULT_ROOTS = (
-    Path("/Users/ibobby/.codex/archived_sessions"),
-    Path("/Users/ibobby/.codex/sessions"),
+    DEFAULT_CODEX_HOME / "archived_sessions",
+    DEFAULT_CODEX_HOME / "sessions",
     Path("/Volumes/Backups/AI Agent Sessions/Codex"),
 )
 ROLLOUT_TRACE_ROOT_ENV = "CODEX_ROLLOUT_TRACE_ROOT"
