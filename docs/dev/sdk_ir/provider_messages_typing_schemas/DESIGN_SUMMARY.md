@@ -268,7 +268,7 @@ def process_item(item: Union[Message, ExtensionItem]):
 
 ### Phase 1: Core Implementation 🎯
 
-**Priority**: High  
+**Priority**: High
 **Estimated time**: 2-3 weeks
 
 1. **Type definitions** (`src/codex-rosetta/types/ir.py`)
@@ -289,7 +289,7 @@ def process_item(item: Union[Message, ExtensionItem]):
 
 ### Phase 2: Extended Features 🚀
 
-**Priority**: Medium  
+**Priority**: Medium
 **Estimated time**: 2-3 weeks
 
 1. **Extension-item support**
@@ -310,7 +310,7 @@ def process_item(item: Union[Message, ExtensionItem]):
 
 ### Phase 3: Optimization and Documentation 📚
 
-**Priority**: Medium  
+**Priority**: Medium
 **Estimated time**: 1-2 weeks
 
 1. **Performance optimization**
@@ -456,6 +456,6 @@ This design balances **simplicity** and **flexibility**, meeting current needs w
 
 ---
 
-**Document Version**: 1.0  
-**Last Updated**: 2024-01-10  
+**Document Version**: 1.0
+**Last Updated**: 2024-01-10
 **Maintainer**: LLM Provider Converter Team

@@ -32,21 +32,32 @@ from .error_dump import (
     offload_images,
 )
 from .metrics import MetricsCollector
-from .persistence import DEFAULT_ERROR_MAX, DEFAULT_SUCCESS_MAX, PersistenceManager
+from .persistence import PersistenceManager, ToolMappingCapacityError
 from .profiling import ProfilerState
 from .request_log import RequestLog, RequestLogEntry
+from .retention import (
+    DEFAULT_ERROR_MAX,
+    DEFAULT_SUCCESS_MAX,
+    MAX_REQUEST_LOG_RETENTION,
+    resolve_request_log_caps,
+    validate_retention_cap,
+)
 
 __all__ = [
     "DEFAULT_ERROR_MAX",
     "DEFAULT_SUCCESS_MAX",
+    "MAX_REQUEST_LOG_RETENTION",
     "MetricsCollector",
     "PersistenceManager",
     "ProfilerState",
     "RequestLog",
     "RequestLogEntry",
+    "ToolMappingCapacityError",
     "compress_body",
     "compute_body_hash",
     "decompress_body",
     "dump_error",
     "offload_images",
+    "resolve_request_log_caps",
+    "validate_retention_cap",
 ]

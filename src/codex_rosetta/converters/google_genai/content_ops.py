@@ -9,12 +9,8 @@ Self-contained: does not depend on utils/FieldMapper or utils/ToolCallConverter.
 """
 
 import base64
-import logging
-import mimetypes
 import warnings
 from typing import Any, cast
-
-import urllib.request
 
 from ...types.ir import (
     AudioData,
@@ -29,6 +25,7 @@ from ...types.ir import (
 )
 from ...types.ir.parts import ContentPart
 from ..base import BaseContentOps
+from .image_fetch import ImageFetchPolicy, fetch_image_url
 
 
 class GoogleGenAIContentOps(BaseContentOps):
@@ -113,37 +110,12 @@ class GoogleGenAIContentOps(BaseContentOps):
                     pass
                 return None
 
-            try:
-                import os
-
-                proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY")
-                req = urllib.request.Request(
-                    url,
-                    headers={"User-Agent": "codex-rosetta/1.0 (image fetch)"},
-                )
-                if proxy:
-                    handler = urllib.request.ProxyHandler(
-                        {"https": proxy, "http": proxy}
-                    )
-                    opener = urllib.request.build_opener(handler)
-                else:
-                    opener = urllib.request.build_opener()
-                resp = opener.open(req, timeout=30)
-                data = resp.read()
-                content_type = resp.headers.get("Content-Type", "")
-                mime = (
-                    content_type.split(";")[0].strip()
-                    or mimetypes.guess_type(url)[0]
-                    or "image/jpeg"
-                )
-                b64 = base64.b64encode(data).decode()
-                return {"inlineData": {"mimeType": mime, "data": b64}}
-            except Exception as exc:
-                logging.getLogger("codex-rosetta").warning(
-                    "Failed to download image URL for Google GenAI conversion: %s",
-                    exc,
-                )
-                return None
+            policy = kwargs.get("image_fetch_policy")
+            if policy is None:
+                policy = ImageFetchPolicy(proxy_url=kwargs.get("proxy_url"))
+            data, mime = fetch_image_url(url, policy)
+            b64 = base64.b64encode(data).decode()
+            return {"inlineData": {"mimeType": mime, "data": b64}}
 
         return None
 

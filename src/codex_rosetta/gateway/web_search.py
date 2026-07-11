@@ -7,11 +7,9 @@ import json
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from codex_rosetta._vendor.httpclient import (
-    AsyncClient,
-    HttpClientError,
-    Response as HttpResponse,
-)
+from codex_rosetta._vendor.httpclient import AsyncClient
+
+from .transport.http.transport import request_bounded_response
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 WEB_SEARCH_TOOL_NAMES = {"web_search", "web_search_preview"}
@@ -88,17 +86,18 @@ class TavilyHTTPClient:
         }
         async with AsyncClient(timeout=self.timeout) as client:
             try:
-                response = await client.post(
+                response = await request_bounded_response(
+                    client,
+                    "POST",
                     TAVILY_SEARCH_URL,
                     json=payload,
                     headers=headers,
                 )
-            except HttpClientError as exc:
+            except Exception as exc:
                 raise RuntimeError(f"Tavily request failed: {exc}") from exc
 
-        assert isinstance(response, HttpResponse)
         if response.status_code >= 400:
-            body = response.content.decode("utf-8", errors="replace")
+            body = response.text[:500]
             raise RuntimeError(f"Tavily returned HTTP {response.status_code}: {body}")
         try:
             parsed = response.json()
@@ -227,6 +226,7 @@ class WebSearchStreamController:
             return [event]
 
         if event_type == "response.output_item.done" and _is_web_search_item(item):
+            assert isinstance(item, dict)
             self._set_web_search_output_index(event, item)
             query = _web_search_item_query(item)
             item_id = str(item.get("id") or f"web_search_{len(self.completed_items)}")

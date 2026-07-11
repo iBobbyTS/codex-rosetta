@@ -52,6 +52,16 @@ async def handle_embeddings(
             },
             status_code=400,
         )
+    if not isinstance(body, dict):
+        return JSONResponse(
+            {
+                "error": {
+                    "message": "JSON body must be an object",
+                    "type": "invalid_request_error",
+                }
+            },
+            status_code=400,
+        )
 
     model = body.get("model")
     if not model:

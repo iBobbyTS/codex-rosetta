@@ -7,11 +7,12 @@ import json
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import (
     ProviderMetadataStore,
     WindowToolSearchStore,
@@ -19,11 +20,13 @@ from codex_rosetta.gateway.proxy import (
     handle_non_streaming,
     handle_streaming,
 )
+from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
     LOCALIZATION_CAPABILITIES_KEY,
     LOCALIZED_CODE_TOOL_NAMES,
     READ_OUTPUT_CACHE_KEY,
+    LocalizedToolMapping,
     LocalizedToolCallStreamTransformer,
     NativeToolCapabilities,
     ReadOutputCache,
@@ -31,7 +34,9 @@ from codex_rosetta.gateway.tool_adaptation import (
     localized_mapping_from_tool_calls,
     generated_patch_for_edit,
     localize_code_editing_chat_request,
+    tool_call_cache_ttl_hours,
     translate_localized_tool_call_part,
+    validate_tool_call_cache_ttl_hours,
 )
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
@@ -46,6 +51,61 @@ def _route() -> ResolvedRoute:
         upstream_model="glm-5.2",
         tool_adaptation={"localize_code_editing_tools": True},
     )
+
+
+def _persistent_scope(principal_id: str = "test-client") -> GatewayStateScope:
+    return GatewayStateScope(
+        principal_id=principal_id,
+        provider_name="test-provider",
+        model="glm-5.2",
+        conversation_id="window-1",
+        persistent=True,
+    )
+
+
+@pytest.mark.parametrize("value", [True, "nan", "inf", "1e999", 720.01, 1e100])
+def test_tool_call_cache_ttl_runtime_helper_rejects_invalid_values(value):
+    with pytest.raises(ValueError, match="at most 720 hours"):
+        validate_tool_call_cache_ttl_hours(value)
+    with pytest.raises(ValueError, match="at most 720 hours"):
+        tool_call_cache_ttl_hours({"tool_call_cache_ttl_hours": value})
+
+
+@pytest.mark.parametrize("value", [0.25, "24", 720])
+def test_tool_call_cache_ttl_runtime_helper_accepts_supported_values(value):
+    assert validate_tool_call_cache_ttl_hours(value) == float(value)
+    assert tool_call_cache_ttl_hours({"tool_call_cache_ttl_hours": value}) == float(
+        value
+    )
+
+
+def test_tool_localization_store_isolates_same_call_id_by_principal():
+    root = CodexToolLocalizationStore()
+    store_a = root.scoped(_persistent_scope("client-a"))
+    store_b = root.scoped(_persistent_scope("client-b"))
+    mapping_a = LocalizedToolMapping("call_1", "Edit", {}, "apply_patch", {})
+    mapping_b = LocalizedToolMapping("call_1", "Bash", {}, "exec_command", {})
+    store_a.remember(mapping_a)
+    store_b.remember(mapping_b)
+
+    assert store_a.get("call_1") == mapping_a
+    assert store_b.get("call_1") == mapping_b
+
+
+def test_tool_localization_store_scoped_clear_preserves_other_principal():
+    root = CodexToolLocalizationStore()
+    store_a = root.scoped(_persistent_scope("client-a"))
+    store_b = root.scoped(_persistent_scope("client-b"))
+    mapping_a = LocalizedToolMapping("call_1", "Edit", {}, "apply_patch", {})
+    mapping_b = LocalizedToolMapping("call_1", "Bash", {}, "exec_command", {})
+    store_a.remember(mapping_a)
+    store_b.remember(mapping_b)
+
+    store_a.clear()
+
+    assert len(store_a) == 0
+    assert len(store_b) == 1
+    assert store_b.get("call_1") == mapping_b
 
 
 def _route_with_tool_adaptation(tool_adaptation: dict[str, Any]) -> ResolvedRoute:
@@ -122,7 +182,11 @@ def test_defer_responses_lite_namespaces_adds_one_tool_search():
         "mcp__codex_apps__github",
         "mcp__codex_apps__gmail",
     ]
-    remaining = [tool for item in body["input"] for tool in item["tools"]]
+    remaining: list[dict[str, Any]] = []
+    for item in body["input"]:
+        tools = item.get("tools")
+        assert isinstance(tools, list)
+        remaining.extend(tool for tool in tools if isinstance(tool, dict))
     assert [tool.get("type") for tool in remaining].count("tool_search") == 1
     assert {tool.get("name") for tool in remaining} == {"exec_command", None}
     tool_search = next(tool for tool in remaining if tool.get("type") == "tool_search")
@@ -771,7 +835,8 @@ def test_gateway_non_streaming_translates_edit_to_exec_when_apply_patch_absent(
         "input": [{"role": "user", "content": "edit example.txt"}],
     }
     if lite_tools:
-        body["input"].insert(0, {"type": "additional_tools", "tools": native_tools})
+        input_items = cast(list[Any], body["input"])
+        input_items.insert(0, {"type": "additional_tools", "tools": native_tools})
     else:
         body["tools"] = native_tools
 
@@ -2259,6 +2324,100 @@ def test_persisted_mapping_restores_history_without_memory_store():
     assert used_call_ids == {"call_edit"}
 
 
+def test_encrypted_mapping_restores_exact_raw_history_after_restart(tmp_path):
+    persistence = PersistenceManager(
+        str(tmp_path),
+        token_values={"sk-live-secret"},
+    )
+    command = (
+        "curl -H 'Authorization: Bearer bearer-secret' "
+        "https://user@example.com?key=sk-live-secret"
+    )
+    original_tool_call = {
+        "id": "call_bash",
+        "type": "function",
+        "function": {
+            "name": "Bash",
+            "arguments": json.dumps(
+                {
+                    "command": command,
+                    "api_key": "tool-api-key",
+                    "password": "ordinary-password",
+                    "client_secret": "ordinary-client-secret",
+                }
+            ),
+        },
+    }
+    codex_tool_call = {
+        "id": "call_bash",
+        "type": "function",
+        "function": {
+            "name": "exec_command",
+            "arguments": json.dumps(
+                {
+                    "cmd": command,
+                    "token": "runtime-oauth-token",
+                    "password": "ordinary-password",
+                }
+            ),
+        },
+    }
+    persistence.upsert_tool_call_mapping(
+        principal_id="test-client",
+        provider_name="test-provider",
+        model="glm-5.2",
+        session_id="window-1",
+        tool_call_id="call_bash",
+        original_tool_call=original_tool_call,
+        codex_tool_call=codex_tool_call,
+        expire_at="2030-01-01T00:00:00+00:00",
+        timestamp="2026-01-01T00:00:00+00:00",
+    )
+    persistence.close()
+
+    restarted = PersistenceManager(
+        str(tmp_path),
+        token_values={"sk-live-secret"},
+    )
+    rows = restarted.query_tool_call_mappings(
+        principal_id="test-client",
+        provider_name="test-provider",
+        model="glm-5.2",
+        session_id="window-1",
+        now="2026-01-01T00:00:00+00:00",
+    )
+    mapping = localized_mapping_from_tool_calls(
+        rows[0]["original_tool_call"],
+        rows[0]["codex_tool_call"],
+    )
+    assert mapping is not None
+    used_call_ids: set[str] = set()
+
+    adapted = localize_code_editing_chat_request(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [codex_tool_call],
+                }
+            ]
+        },
+        mappings=[mapping],
+        used_call_ids=used_call_ids,
+    )
+
+    function = adapted["messages"][0]["tool_calls"][0]["function"]
+    arguments = json.loads(function["arguments"])
+    assert function["name"] == "Bash"
+    assert arguments["command"] == command
+    assert arguments["api_key"] == "tool-api-key"
+    assert arguments["password"] == "ordinary-password"
+    assert arguments["client_secret"] == "ordinary-client-secret"
+    assert "user@example.com" in arguments["command"]
+    assert used_call_ids == {"call_bash"}
+    restarted.close()
+
+
 def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
     captured_bodies: list[dict[str, Any]] = []
     upstream_body = {
@@ -2281,7 +2440,10 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
                                     {
                                         "file_path": "example.txt",
                                         "old_string": "old",
-                                        "new_string": "new",
+                                        "new_string": (
+                                            "new sk-live-secret user@example.com "
+                                            "ordinary-password"
+                                        ),
                                     }
                                 ),
                             },
@@ -2305,7 +2467,11 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
 
     transport = MagicMock()
     transport.send_request = AsyncMock(side_effect=send_request)
-    persistence = PersistenceManager(str(tmp_path))
+    persistence = PersistenceManager(
+        str(tmp_path),
+        token_values={"sk-live-secret"},
+    )
+    tool_store = CodexToolLocalizationStore()
     body = {
         "model": "glm-5.2",
         "input": [{"role": "user", "content": "edit example.txt"}],
@@ -2326,14 +2492,15 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
             body,
             transport=transport,
             metadata_store=ProviderMetadataStore(),
-            codex_tool_store=CodexToolLocalizationStore(),
+            codex_tool_store=tool_store,
             persistence=persistence,
-            tool_cache_session_id="window-1",
+            state_scope=_persistent_scope(),
         )
 
     first_response, _ = asyncio.run(first_run())
     first_output = json.loads(first_response.body)["output"][0]
     assert persistence.count_tool_call_mappings() == 1
+    assert len(tool_store) == 0
 
     second_body = {
         "model": "glm-5.2",
@@ -2349,21 +2516,35 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
         "tools": body["tools"],
     }
 
-    async def second_run():
+    async def continue_run():
         return await handle_non_streaming(
             _route(),
             _provider_info(),
             second_body,
             transport=transport,
             metadata_store=ProviderMetadataStore(),
-            codex_tool_store=CodexToolLocalizationStore(),
+            codex_tool_store=tool_store,
             persistence=persistence,
-            tool_cache_session_id="window-1",
+            state_scope=_persistent_scope(),
         )
 
-    asyncio.run(second_run())
-    restored_calls = captured_bodies[-1]["messages"][0]["tool_calls"]
-    assert restored_calls[0]["function"]["name"] == "Edit"
+    asyncio.run(continue_run())
+    same_process_call = captured_bodies[-1]["messages"][0]["tool_calls"][0]
+    assert same_process_call["function"]["name"] == "Edit"
+    same_process_arguments = json.loads(same_process_call["function"]["arguments"])
+    assert same_process_arguments["new_string"] == (
+        "new sk-live-secret user@example.com ordinary-password"
+    )
+    assert len(tool_store) == 0
+
+    persistence.close()
+    persistence = PersistenceManager(
+        str(tmp_path),
+        token_values={"sk-live-secret"},
+    )
+    asyncio.run(continue_run())
+    restarted_call = captured_bodies[-1]["messages"][0]["tool_calls"][0]
+    assert restarted_call == same_process_call
     assert persistence.count_tool_call_mappings() == 1
     persistence.close()
 
@@ -2372,6 +2553,9 @@ def test_gateway_deletes_unused_persistent_mappings_after_request(tmp_path):
     captured_body: dict[str, Any] = {}
     persistence = PersistenceManager(str(tmp_path))
     persistence.upsert_tool_call_mapping(
+        principal_id="test-client",
+        provider_name="test-provider",
+        model="glm-5.2",
         session_id="window-1",
         tool_call_id="unused",
         original_tool_call={
@@ -2433,7 +2617,7 @@ def test_gateway_deletes_unused_persistent_mappings_after_request(tmp_path):
             metadata_store=ProviderMetadataStore(),
             codex_tool_store=CodexToolLocalizationStore(),
             persistence=persistence,
-            tool_cache_session_id="window-1",
+            state_scope=_persistent_scope(),
         )
 
     asyncio.run(run())
@@ -2564,9 +2748,11 @@ def test_gateway_streaming_localizes_request_and_returns_native_tool_events():
             codex_tool_store=CodexToolLocalizationStore(),
         )
         assert response.status_code == 200
+        assert isinstance(response, StreamingResponse)
         assert "request_conversion_ms" in profile
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -2658,8 +2844,10 @@ def test_gateway_streaming_translates_edit_to_exec_when_apply_patch_absent():
             metadata_store=ProviderMetadataStore(),
             codex_tool_store=CodexToolLocalizationStore(),
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -2748,8 +2936,10 @@ def test_gateway_streaming_translates_write_to_apply_patch_when_available():
             metadata_store=ProviderMetadataStore(),
             codex_tool_store=CodexToolLocalizationStore(),
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -2831,10 +3021,12 @@ def test_gateway_streaming_persists_tool_mapping(tmp_path):
             metadata_store=ProviderMetadataStore(),
             codex_tool_store=CodexToolLocalizationStore(),
             persistence=persistence,
-            tool_cache_session_id="window-1",
+            state_scope=_persistent_scope(),
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -2842,6 +3034,9 @@ def test_gateway_streaming_persists_tool_mapping(tmp_path):
 
     assert '"name": "exec_command"' in "\n".join(chunks)
     rows = persistence.query_tool_call_mappings(
+        principal_id="test-client",
+        provider_name="test-provider",
+        model="glm-5.2",
         session_id="window-1",
         now="2026-01-01T00:00:00+00:00",
     )

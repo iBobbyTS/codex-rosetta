@@ -20,22 +20,26 @@ This document is the only list of Codex-specific compatibility points. As long a
 
 Even if a certain automation has not yet been implemented, write out the necessary automated checks and mark the backlog. Even if a certain upgrade is judged to have no change with high confidence, its real test definition cannot be deleted; whether the real test is triggered in this upgrade is determined by the upgrade classification.
 
+## Current upgrade status
+
+Codex `0.144.0` compatibility is **pending / not approved**. The controlled `deepseek-v4-flash` run is evidence for the third-party Responses→Chat, Lite/code-mode, and successful `exec` paths only. It is not native GPT evidence, and it does not close the required compact/resume/fork, plugin/MCP/deferred-tool, web-search, UI-phase, Desktop-tool, changed-error, or multi-agent scenarios. Responses WebSocket, incremental history, and remote compact remain unsupported. The itemized evidence and dirty Rosetta snapshot are recorded in [`reports/20260709-codex-v0.144.0.md`](reports/20260709-codex-v0.144.0.md).
+
 ## Current compatibility overview
 
 | Boundaries | Current Implementation | Primary Locations | Upgrade Risks |
 | --- | --- | --- | --- |
 | Agent-facing API | Expose `/v1/responses` to Codex; Chat/Anthropic/Google as upstream target format | `gateway/app.py`, `gateway/proxy.py` | Codex change endpoint, transport or request shape |
-| Responses pass through as is | Responses→Responses retain unknown body fields, original response JSON and original SSE bytes | `gateway/proxy.py`, `test_responses_passthrough.py` | Low; only explicit tool adaptation will change the body |
-| Request and window identity | Read `x-codex-window-id` as session key for tool mapping, deferred tools and phase behavior; do not transparently transmit to upstream | `gateway/app.py`, `gateway/headers.py` | Codex changes to only send canonical `client_metadata` or change window semantics |
+| Responses pass through as is | Responses→Responses retain unknown body fields, original response JSON and original SSE bytes; raw bytes are unchanged while the transport enforces 1 MiB per line and 8 MiB per event with no total successful-stream cap | `gateway/proxy.py`, `gateway/transport/http/transport.py`, `test_responses_passthrough.py`, `test_http_transport_limits.py` | Codex emits a required single line or event above the safety envelope, or changes away from HTTP/SSE framing |
+| Request and window identity | Read `x-codex-window-id` as the authenticated session key for tool mapping, provider continuation metadata, deferred tools and phase behavior; keep external `x-request-id` correlation-only, use a private nonce when no window exists, and clear request-local state at normal/error/cancel completion | `gateway/app.py`, `gateway/state_scope.py`, `gateway/headers.py` | Codex changes to only send canonical `client_metadata` or change window semantics |
 | Responses→Chat bridge | Convert Codex Responses request to Chat via IR, and then rebuild Responses output | `converters/openai_responses/**`, `gateway/proxy.py` | High; new item/event/ fields will not be automatically transparently transmitted |
 | Responses Lite / `additional_tools` | Responses→Responses can be transmitted transparently as is; Responses→Chat merges the top-level tools with `input[].type=additional_tools`, retains the developer instructions, and removes duplication according to the final Chat name | `converters/openai_responses/message_ops.py`, `converter.py`, `gateway/proxy.py` | High; 0.144.0 model catalog Responses Lite has been enabled for some models, the location of tools and developer instructions will change |
 | custom/freeform tool | Identify `apply_patch` and Code Mode `exec` of Responses `type: custom`, convert into Chat callable form, and restore Codex-native tool type, call/output in response return | `openai_responses/converter.py`, `openai_responses/tool_ops.py`, `gateway/tool_adaptation.py` | Codex change custom grammar, call/output/delta event, or third-party models misinterpret freeform `exec` as JSON shell function |
 | Code tool localization | Replace `apply_patch`/`exec_command`/`write_stdin` with the familiar `Read`/`Edit`/`Write`/`Glob`/`Grep`/`Bash`, and the response is translated back to Codex-native call | `gateway/tool_adaptation.py`, `test_tool_adaptation.py` | Tool name, parameter schema, call id or execution result format change |
-| Tool history consistency | Memorize native/localized mapping by call id, rewrite subsequent history, and enable persistence and TTL cleanup | `gateway/proxy.py`, persistence/observability modules | Codex history replay, compact or output shape changes |
-| Deferred tool discovery | Temporary `namespace` tools by Codex window, inject/process `tool_search`, restore `tool_search_call/output` to native Responses items | `gateway/proxy.py::WindowToolSearchStore`, Responses converter | namespace/tool_search schema, execution or compact behavior changes |
+| Tool history consistency | Persist exact native/localized mappings by call id as authenticated encrypted SQLite state, rewrite subsequent history from SQLite, apply TTL cleanup, and enforce 16 MiB per row, 2,048 rows/64 MiB per session, 8,192 rows/256 MiB per principal, and 32,768 rows/512 MiB globally | `gateway/proxy.py`, `observability/persistence.py`, `observability/tool_mapping_crypto.py` | Codex history replay, compact or output shape changes; database/key backup mismatch; mapping size or session fan-out changes |
+| Deferred tool discovery | Temporary `namespace` tools by authenticated Codex window, inject/process `tool_search`, restore `tool_search_call/output`, and atomically enforce 1,024 tools/16 MiB per scope, 256 unique scopes per principal, 1,000 scopes per retained map, and 64 MiB per app without cross-principal eviction | `gateway/proxy.py::WindowToolSearchStore`, Responses converter | namespace/tool_search schema, execution, compact behavior, or retained payload size/window fan-out changes |
 | Codex tool usage tips | Supplement the Chat model with `request_user_input`, `create_goal`, `update_goal` and other Codex tool calling constraints | `converters/openai_chat/tool_ops.py`, related pipeline tests | schema, mode availability or Desktop/runtime tool contract changes |
-| Web search bridge | Codex `web_search` can be exposed to the Chat model, and the `web_search_call` event can be reconstructed and continued after Tavily execution | `gateway/web_search.py`, `test_web_search_bridge.py` | native web-search item/event or tool configuration changes |
-| Stream lifecycle | Rebuild `response.created`, item added/delta/done, `response.completed`, etc. from Chat chunks Responses SSE | `openai_responses/converter.py`, `gateway/proxy.py` | Codex parser adds required events, sequences or termination conditions |
+| Web search bridge | Codex `web_search` can be exposed to the Chat model, the `web_search_call` event can be reconstructed and continued after Tavily execution, and Tavily responses use the primary bounded identity-encoded HTTP reader | `gateway/web_search.py`, `gateway/transport/http/transport.py`, `test_web_search_bridge.py` | native web-search item/event, tool configuration, or auxiliary response behavior changes |
+| Stream lifecycle | Rebuild `response.created`, item added/delta/done, `response.completed`, etc. from Chat chunks Responses SSE; classify normal EOF, provider error, client cancellation, and bounded line/event overflow consistently in transport/telemetry/trace | `openai_responses/converter.py`, `gateway/proxy.py`, `gateway/transport/http/transport.py` | Codex parser adds required events, sequences or termination conditions; downstream disconnect semantics or maximum required event size changes |
 | Message phase | Use tool calls and terminal events to infer `commentary`/`final_answer`, write phase back to message item; override native tool/web search signal | `gateway/stream_phase_buffer.py`, `test_stream_phase_buffer.py` | phase enumeration or Codex mailbox/final-answer semantic changes |
 | Reasoning | Convert reasoning effort/summary, retain reasoning summary/content, `reasoning_content` and `encrypted_content` | Responses/Chat content, config, stream converters | New effort, summary delivery, reasoning event or encryption status change |
 | Context compaction resilience | Remove orphan `tool_choice/tool_config` that has no tools but remains after compact; keep tool history replayable | `converters/base/helpers/tool_orphan_fix.py`, `test_strip_orphaned_tool_config.py` | Codex compact output, window generation or historical clipping changes |
@@ -47,17 +51,17 @@ Even if a certain automation has not yet been implemented, write out the necessa
 | Compatibility points | Can be automated | Must be actually tested |
 | --- | --- | --- |
 | Agent-facing API | Routing, method, content type, SSE terminal/error fixture; fake upstream single-round and multi-round playback | Real Codex completes single/multi-round via gateway, the session ends normally and errors are visible |
-| Responses are transparently transmitted as is | Unknown request fields, original JSON, original SSE bytes and terminal events are not rewritten | True same-format Responses routing retains the actual Codex request/response fields and can be continued |
-| Request and window identity | header/body metadata extraction, fallback, concurrent window isolation and cache key testing | Capture header/body/window changes of real turn, compact, resume, fork, subagent |
+| Responses are transparently transmitted as is | Unknown request fields, original JSON, original SSE bytes and terminal events are not rewritten; raw passthrough enforces line/event caps without byte changes and closes on overflow | True same-format Responses routing retains the actual Codex request/response fields and can be continued; observe whether any required event approaches the cap |
+| Request and window identity | header/body metadata extraction, correlation/state-key separation, sequential/concurrent no-window isolation, persistent-window continuity, principal-fair provider-metadata entry/byte quotas, and normal/error/cancel cleanup | Capture header/body/window changes of real turn, compact, resume, fork, subagent |
 | Responses→Chat bridge | request/response/stream/history four-way fixture; fake Chat upstream multi-round tool playback | Use `deepseek-v4-flash` to complete text, multi-round tools, error recovery and final answer |
 | Responses Lite / `additional_tools` | Accurate replay of Lite requests; extract embedded tools and developer instructions; override top/embedded tool mixing, deduplication, `reasoning.context=all_turns`, `parallel_tool_calls=false` and embedded image-generation removal | Enable Lite for `deepseek-v4-flash` using controlled catalog override, complete real multiple rounds of tool calls and confirm that the second round can consume the results |
 | custom/freeform tool | `apply_patch` schema/grammar/delta/call-output round-trip; Code Mode `exec` in Responses→Chat→Responses, non-streaming, added/delta/done/completed return trips are restored to `custom_tool_call`; non-compliant third-party parameters are retained, and no guessing is rewritten to JavaScript | Real Codex execution success patch, failed patch Post-fix correction; execute `exec/wait` and nested tool call for catalog with code mode enabled, confirm that tool failure is visible and fatal incompatible-payload will not appear |
 | Code tool localization | native/localized schema mapping, parameter conversion, call id, result recovery and history replay | Really execute read/edit/write/search/shell, and the tool history can still be correctly consumed in the next round |
-| Tool history consistency | TTL, persistence, failure results, post-compact history, concurrent session isolation | compact/resume/restart after multiple rounds of tools, confirm that there are no repeated calls or orphaned output |
-| Deferred tool discovery | namespace defer, search matching, multiple searches, call/output and two-way window isolation | Real plugin/MCP namespace search, call, consume results, and verify that the two sessions do not cross talk |
+| Tool history consistency | Exact encrypted at-rest payload, authenticated restart replay, missing/wrong key and tamper fail-closed, plaintext and encrypted-v1 schema migration, row/session/principal/global row+byte budgets, replacement accounting, TTL release, transactional write rollback, abnormal replay bounds, and concurrent principal/session isolation | compact/resume/restart after multiple rounds of tools, confirm that there are no repeated calls or orphaned output; restore a matched database/key backup; exercise a session near the documented replay envelope |
+| Deferred tool discovery | namespace defer, search matching, multiple searches, call/output, two-way window isolation, UTF-8 byte/count budgets, per-principal unique-scope quota, same-principal global-oldest eviction, no cross-principal eviction, atomic overflow, concurrency, TTL/eviction/clear accounting | Real plugin/MCP namespace search, call, consume results, and verify that the two principals do not cross talk or exceed the retained-state envelope |
 | Codex tool usage tips | tool description/schema injection and mode availability fixture | Real calls to `request_user_input`, Goal/Plan and available Desktop runtime tools |
-| Web search bridge | Configure, disabled/missing keys, search results, event reconstruction and continuation fixtures | Real search, read results and continue to generate final answers; verify that error paths are recoverable |
-| Stream lifecycle | created, item/delta/done, completed/failed/incomplete sequence and exception EOF | Real streaming turn without duplication/truncation/stuck, terminal and errors are presented correctly |
+| Web search bridge | Configure, disabled/missing keys, search results, event reconstruction and continuation fixtures; real-loopback Content-Length/chunked/EOF/compression/timeout/cancel response limits | Real search, read results and continue to generate final answers; verify that error paths are recoverable |
+| Stream lifecycle | created, item/delta/done, completed/failed/incomplete sequence; huge declared HTTP chunks; no-newline/no-delimiter SSE; converted/raw/web-search overflow and early-close classification | Real streaming turn and client disconnect without duplication/truncation/stuck; terminal, cancellation, limits, and errors are presented correctly |
 | Message phase | All tool signals, completed-only, added/done/completed phase consistency | Commentary/final in Codex UI is displayed correctly, mailbox/steering can work |
 | Reasoning | effort/summary/content/encrypted state Cross-format round-trip and tool continuation round fixture | `deepseek-v4-flash` reasoning can be continued before, after, and in the next round of the tool without repeated thinking |
 | Context compaction resilience | orphan tool config, history trimming, compact fixture and window generation | Continue tool tasks after long session triggers compact and verify resume/restart |
@@ -72,6 +76,8 @@ Rosetta's current behavior:
 
 - `gateway/app.py::_proxy_handler` reads `x-codex-window-id` from HTTP header;
 - window id serves as the key for both tool history mapping and window-scoped `tool_search`/phase status;
+- provider continuation metadata uses the same authenticated principal/window scope; it enforces 1 MiB per entry, 8 MiB per scope, 1,024 entries/16 MiB per principal, and 10,000 entries/64 MiB globally, and global count replacement never evicts another principal;
+- `x-request-id` remains a trace/response correlation value and never becomes a state key; without a window header, each inbound request receives a private non-reusable scope that is cleared when non-streaming or streaming delivery ends normally, fails, or is cancelled;
 - `gateway/headers.py` only forwards `x-request-id`, `User-Agent` and `OpenResponses-Version` upstream;
 - Responses→Responses direct path leaves body intact, so canonical `client_metadata` will not be lost by IR;
 - Responses→Chat path does not send Codex metadata to Chat upstream, local status still relies on HTTP `x-codex-window-id`.
@@ -100,7 +106,14 @@ Responses→Chat is an explicit compatibility layer. After adding request item, 
 
 The bundled model catalog of Codex 0.144.0 has `use_responses_lite=true` enabled for some models. In this mode, Codex no longer puts tools at the top level `tools`: it inserts a `type: "additional_tools"` item at the beginning of `input` and uses a developer message to carry the original instructions; reasoning may also use `context: "all_turns"`.
 
-Responses→Responses direct path can naturally retain this body. Responses→Chat currently ignores `additional_tools` items that are unknown and do not have an extended namespace, and the top-level `tools` is empty. The result is that the Chat upstream does not receive any tool definitions. `remove_image_generation` currently only checks the top-level tools and cannot handle the `image_gen` namespace/function in Lite item. This is a confirmed compatibility gap for the 0.144.0 upgrade, and support for the Responses Lite-enabled model catalog cannot be declared until fixes and multiple rounds of real tool testing are completed.
+Responses→Responses direct path retains this body. Responses→Chat now merges
+top-level tools with `input[].type=additional_tools`, preserves the embedded
+developer instructions, deduplicates by the final Chat tool name, and applies
+image-generation filtering to both locations. Converter and gateway regression
+tests cover these paths, and the 0.144.0 upgrade report records a controlled
+multi-turn Lite/code-mode run through `deepseek-v4-flash`. Native GPT routing
+and untriggered catalog combinations remain real-test gaps, not an
+`additional_tools` implementation gap.
 
 ## 3. Codex-native tools and history replay
 
@@ -111,9 +124,9 @@ The current Codex source code exposes `apply_patch` as a freeform grammar tool w
 
 When Chat upstream downgrades the custom/freeform tool to a normal function call, the Responses return must restore `custom_tool_call` according to the `metadata.provider_type="custom"` recorded during the request period; this applies to both non-streaming responses and streaming added/delta/done/completed. The `{"cmd": "..."}` returned by a third-party model cannot be synthesized into JavaScript without authorization: it is evidence that the model does not adhere to freeform semantics, and should be handled by Codex as a visible tool error and let the model retry, rather than letting Rosetta guess the execution intention.
 
-Because Codex will resend history on subsequent requests, this project saves the native/localized mapping by `call_id` and restores the tool call originally seen by the model before sending it upstream. This is a critical path for prompt cache consistency with multi-round tools and must be tested with compact, resume, failed tool results, and TTL/persistence.
+Because Codex will resend history on subsequent requests, this project saves the native/localized mapping by `call_id` and restores the exact tool call originally seen by the model before sending it upstream. Authenticated window-scoped gateway requests use encrypted SQLite state as the cross-request authority; AES-256-GCM binds each payload to its principal/provider/model/session/call scope, and diagnostic redaction never substitutes `[REDACTED]` into executable replay data. Missing, mismatched, damaged, over-budget, or inconsistently-accounted key/ciphertext state fails closed. Ciphertext plus ownership metadata is capped at 16 MiB per row, 2,048 rows/64 MiB per session, 8,192 rows/256 MiB per principal, and 32,768 rows/512 MiB globally. Cleanup, replacement-aware accounting, validation, and the final upsert share one immediate transaction; encrypted-v1 accounting migration backfills without deleting valid history. This is a critical path for prompt cache consistency with multi-round tools and must be tested with compact, resume, failed tool results, TTL/persistence, restart, quota/rollback failure, and matched database/key backup restoration.
 
-`namespace` and `tool_search` are another Codex-specific path. Rosetta will hide namespaces that are not suitable for one-time expansion to Chat, save them by window, inject the synthesized `tool_search`, and restore the matching tool with a subsequent `tool_search_output`.
+`namespace` and `tool_search` are another Codex-specific path. Rosetta will hide namespaces that are not suitable for one-time expansion to Chat, save them by authenticated window, inject the synthesized `tool_search`, and restore the matching tool with a subsequent `tool_search_output`. The single store owner accounts canonical UTF-8 JSON bytes and nested tool count across both discovered and deferred state. It rejects a request atomically before mutation when a scope would exceed 1,024 tools or 16 MiB, a principal would exceed 256 unique scopes across both maps, or the app would exceed 64 MiB. Each retained map holds at most 1,000 scopes; when full, only the inserting principal's oldest scope may be replaced, otherwise the request is rejected. A scope present in both maps counts once toward the principal quota, and TTL, replacement, eviction, and clear paths return all accounting.
 
 Currently the direct namespace whitelist only contains `codex_app` and `multi_agent_v1`. Codex source code already has tool planning in the direction of `multi_agent_v2`/`collaboration`; although the general defer path may take over the new namespace, there is currently no dedicated end-to-end regression, and compatibility cannot be declared based on this.
 
@@ -137,6 +150,15 @@ response.output_item.done
 response.completed
 ```
 
+Gateway transport keeps the total successful HTTP/SSE stream size and duration
+unlimited, but it applies a 1 MiB per-line and 8 MiB per-event `data:` limit to
+both converted parsing and byte-preserving Responses passthrough. Chunked HTTP
+payloads are read in fixed bounded subchunks instead of materializing the
+peer-declared chunk size. Overflows close the upstream and become a stable
+`UpstreamStreamLimitError`; raw passthrough bytes below the limits are not
+rewritten. A Codex upgrade that introduces larger required single events must
+be measured and reviewed explicitly rather than disabling the limits.
+
 `phase` is inside the message item, not a separate event. `commentary` is not just a UI label: the current Codex checks the mailbox after the commentary item is completed, and may change subsequent sampling behavior. Therefore the phase in added, done and completed output must be consistent.
 
 Currently `ResponsesPhaseBuffer` treats function/custom/MCP/shell/computer/tool_search/ web_search calls as tool signals. Automated regression covers "text followed by native search tool" and the scenario where there is only native search call in `response.completed.output`, ensuring that the previous text is marked as `commentary` instead of erroneously marked as `final_answer`. When adding a new Codex output item type, you still need to clearly determine whether it will continue the agent loop, and expand this set and the tests of the two event paths accordingly.
@@ -159,7 +181,11 @@ Must check when upgrading:
 
 Bridge's window-scoped logic still relies on the compatibility header. If Codex stops sending the `x-codex-window-id` header in the future and only retains the body `client_metadata`, the phase and deferred tool status will no longer be windowed correctly. Every upgrade must be confirmed with real request capture.
 
-When the header is missing, the tool mapping cache will degenerate to `model:{model}`. This will cause multiple Codex sessions of the same model to share a mapping domain, so it can only be used as a compatible fallback and cannot be regarded as equivalent session isolation.
+When the header is missing, `GatewayStateScope` creates a request-local,
+non-persistent conversation ID. Tool mappings and deferred-tool state are not
+reused across requests, preventing same-model sessions from sharing a fallback
+mapping domain. The trade-off is loss of cross-turn restoration for that
+request path, which must remain visible in real compact/resume testing.
 
 ### Gateway `/v1/models` is not a Codex dynamic catalog
 
@@ -169,17 +195,22 @@ Therefore currently `/v1/models` cannot be considered a Codex catalog implementa
 
 ### Responses WebSocket and `/responses/compact` are not implemented yet
 
-The current gateway's Codex surface is HTTP `/v1/responses` + SSE. Responses WebSocket `response.create`, increment `previous_response_id` and remote `/responses/compact` in the source code are not verified capabilities. The current status of Responses Lite is documented separately above: direct path can be retained naturally, but bridge has a confirmed compatibility gap.
+The current gateway's Codex surface is HTTP `/v1/responses` + SSE. Responses WebSocket `response.create`, incremental `previous_response_id` and remote `/responses/compact` in the source code are not verified capabilities. Responses Lite is supported on both the direct and Responses→Chat paths described above; that support does not imply WebSocket, incremental-history, or remote-compact support.
 
 Codex model/provider configurations must not declare these capabilities without testing; each upgrade must confirm that Codex still uses HTTP/SSE for custom providers, or has reliable fallback.
 
 Currently Responses→Chat also relies on Codex to resend the complete input/history. Even if `additional_tools` is added, if Codex starts to use WebSocket/HTTP incremental requests and `previous_response_id` by default, Rosetta still does not have a corresponding server-side Responses session storage, and the bridge will lack history. This item must be determined through real request capture, and it cannot be inferred that it is enabled just from the presence of `previous_response_id` in the request type.
 
-### Code mode and new version of multi-agent tools lack special verification
+### Remaining code-mode and multi-agent verification gaps
 
-Generic custom-tool converter is not compatible with code-mode `exec/wait`. There is currently no Rosetta fixture covering JavaScript/code-mode payloads, nested tool call or wait continuation rounds; `multi_agent_v2`/`collaboration` also lacks the full namespace discovery + call + output regression.
-
-When these capabilities appear in the Codex model catalog or real requests, fixtures and end-to-end tests must be added first, and then the support statement must be updated.
+The generic custom/freeform path preserves code-mode `exec` as
+`custom_tool_call` with raw JavaScript input across non-streaming and streaming
+added/delta/done/completed events; ordinary function tools such as `wait`
+continue through the function-tool path. Automated fixtures cover the `exec`
+wire round-trip, and the upgrade report records one controlled live `exec`
+run. Nested call/wait continuation, malformed third-party recovery, and
+`multi_agent_v2`/`collaboration` namespace discovery + call + output still need
+dedicated real end-to-end coverage.
 
 ### Phase's native search signal has been incorporated into automated regression
 
@@ -187,4 +218,10 @@ When these capabilities appear in the Codex model catalog or real requests, fixt
 
 ### Existing real integration baselines are insufficient to prove tool compatibility
 
-The existing agentabi coverage in the warehouse mainly focuses on single-round arithmetic, and the startup script is only responsible for opening the Codex. They do not validate `apply_patch`, Goal/Plan, request_user_input, plugin/tool_search, web search, phase, compact/resume or subagent. Upgrading access control must run the multi-wheel tool matrix in the upgrade checklist.
+The recorded controlled 0.144.0 run covers Lite/code-mode short answers,
+file-read, multi-turn read/write/diff, `ultra`, and one `exec` path through
+`deepseek-v4-flash`. It does not validate native GPT routing, Goal/Plan,
+request_user_input, plugin/tool_search, web search, compact/resume, nested wait,
+or subagent behavior. Future upgrades must run the remaining matrix in the
+upgrade checklist instead of treating the controlled alias as complete model
+coverage.

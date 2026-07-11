@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.converters.openai_responses._constants import ResponsesEventType
 from codex_rosetta.gateway.proxy import _stream_event_generator, handle_streaming
 from codex_rosetta.gateway.stream_phase_buffer import (
@@ -511,6 +512,56 @@ def test_failed_terminal_flushes_buffered_text_without_final_answer_phase():
     assert emitted[-1]["response"]["error"]["code"] == "bio_policy"
 
 
+def test_event_limit_switches_to_unannotated_passthrough():
+    buffer = ResponsesPhaseBuffer(
+        window_id="thread-1:0",
+        max_buffered_events=2,
+    )
+
+    emitted = _collect(
+        buffer,
+        [
+            _created(),
+            _message_added(),
+            _content_added(),
+            _text_delta(),
+            _tool_added(),
+            _completed(with_tool=True),
+        ],
+    )
+
+    assert _event_types(emitted) == [
+        ResponsesEventType.RESPONSE_CREATED,
+        ResponsesEventType.OUTPUT_ITEM_ADDED,
+        ResponsesEventType.CONTENT_PART_ADDED,
+        ResponsesEventType.OUTPUT_TEXT_DELTA,
+        ResponsesEventType.OUTPUT_ITEM_ADDED,
+        ResponsesEventType.RESPONSE_COMPLETED,
+    ]
+    assert "phase" not in _message_item(emitted[1])
+    assert "phase" not in _completed_message(emitted[-1])
+
+
+def test_byte_limit_releases_oversized_event_without_buffering():
+    buffer = ResponsesPhaseBuffer(
+        window_id="thread-1:0",
+        max_buffered_bytes=1,
+    )
+
+    emitted = _collect(
+        buffer,
+        [_created(), _message_added(), _completed(with_tool=False)],
+    )
+
+    assert _event_types(emitted) == [
+        ResponsesEventType.RESPONSE_CREATED,
+        ResponsesEventType.OUTPUT_ITEM_ADDED,
+        ResponsesEventType.RESPONSE_COMPLETED,
+    ]
+    assert "phase" not in _message_item(emitted[1])
+    assert "phase" not in _completed_message(emitted[-1])
+
+
 class _FakeStream:
     def __init__(self, chunks: list[dict[str, Any]]) -> None:
         self.chunks = chunks
@@ -675,8 +726,10 @@ def test_handle_streaming_enables_phase_buffer_with_codex_window_id():
             transport=transport,
             codex_window_id="thread-1:0",
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -704,8 +757,10 @@ def test_handle_streaming_skips_phase_buffer_without_codex_window_id():
             transport=transport,
             codex_window_id=None,
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 
@@ -733,8 +788,10 @@ def test_handle_streaming_skips_phase_buffer_when_disabled():
             transport=transport,
             codex_window_id="thread-1:0",
         )
+        assert isinstance(response, StreamingResponse)
         chunks: list[str] = []
         async for chunk in response._generator:
+            assert isinstance(chunk, str)
             chunks.append(chunk)
         return chunks
 

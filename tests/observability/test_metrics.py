@@ -1,5 +1,7 @@
 """Tests for the observability MetricsCollector (standalone, no gateway)."""
 
+from unittest.mock import patch
+
 from codex_rosetta.observability import MetricsCollector
 from codex_rosetta.observability.metrics import _RollingWindow
 
@@ -71,6 +73,42 @@ class TestMetricsCollector:
         assert m.any_critical_provider()
         health = m.provider_health_snapshot()
         assert health["test-provider"]["status"] == "critical"
+
+    def test_errors_last_hour_uses_independent_3600_second_window(self):
+        with patch("codex_rosetta.observability.metrics.time.monotonic") as clock:
+            clock.return_value = 1000.0
+            m = MetricsCollector()
+            m.record_request(
+                model="m",
+                source="source",
+                target="provider-a",
+                status_code=500,
+                duration_ms=10.0,
+                is_stream=False,
+            )
+
+            clock.return_value = 1301.0
+            assert m.errors_last_hour() == 1
+            assert sum(point["errors"] for point in m.snapshot(300)["series"]) == 0
+
+            clock.return_value = 4600.0
+            assert m.errors_last_hour() == 1
+            clock.return_value = 4601.0
+            assert m.errors_last_hour() == 0
+
+    def test_errors_last_hour_counts_only_errors_across_providers(self):
+        m = MetricsCollector()
+        for provider, status in (("a", 200), ("a", 500), ("b", 429)):
+            m.record_request(
+                model="m",
+                source="source",
+                target=provider,
+                status_code=status,
+                duration_ms=10.0,
+                is_stream=False,
+                provider_name=provider,
+            )
+        assert m.errors_last_hour() == 2
 
     def test_rebuild_counters(self):
         m = MetricsCollector()

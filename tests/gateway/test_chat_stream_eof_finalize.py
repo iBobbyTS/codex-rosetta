@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
 from codex_rosetta.gateway.transport._base import UpstreamStream
 from codex_rosetta.routing import ResolvedRoute
@@ -117,9 +118,11 @@ def _run_chat_stream(chunks: list[dict[str, Any]]) -> list[str]:
             transport=transport,
         )
         assert response.status_code == 200
+        assert isinstance(response, StreamingResponse)
         assert "request_conversion_ms" in profile
         emitted: list[str] = []
         async for event in response._generator:
+            assert isinstance(event, str)
             emitted.append(event)
         return emitted
 

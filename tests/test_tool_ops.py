@@ -65,7 +65,7 @@ class TestFromProvider:
     def test_from_openai_responses(self):
         provider_tool = tool_ops.to_openai_responses(IR_TOOL)
         recovered = tool_ops.from_openai_responses(provider_tool)
-        assert recovered is not None
+        assert isinstance(recovered, dict)
         assert recovered["name"] == "get_weather"
 
     def test_from_anthropic(self):

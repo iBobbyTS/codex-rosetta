@@ -1,9 +1,9 @@
 # /// zerodep
-# version = "0.4.4"
+# version = "0.4.6"
 # deps = []
 # tier = "subsystem"
 # category = "network"
-# note = "Install/update via: https://zerodep.readthedocs.io/en/latest/guide/cli/"
+# note = "Install/update via `zerodep add httpclient`"
 # ///
 
 """Zero-dependency sync + async HTTP REST client.
@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import email.parser
 import hashlib
 import http.client
 import json as _json
@@ -62,12 +63,17 @@ __all__ = [
     "DEFAULT_USER_AGENT",
     "DEFAULT_POOL_SIZE",
     "DEFAULT_POOL_IDLE_TIMEOUT",
+    "DEFAULT_MAX_LINE_BYTES",
+    "DEFAULT_MAX_HEADER_COUNT",
+    "DEFAULT_MAX_HEADER_BYTES",
+    "DEFAULT_HEADER_TIMEOUT",
     # Exceptions
     "HttpClientError",
     "HTTPError",
     "TooManyRedirects",
     "HttpConnectionError",
     "HttpTimeoutError",
+    "HttpResponseLimitError",
     "Socks5Error",
     # Data structures
     "CaseInsensitiveDict",
@@ -108,6 +114,10 @@ DEFAULT_MAX_REDIRECTS = 10
 DEFAULT_USER_AGENT = "zerodep-http/0.1"
 DEFAULT_POOL_SIZE = 10
 DEFAULT_POOL_IDLE_TIMEOUT = 60.0
+DEFAULT_MAX_LINE_BYTES = 1024 * 1024
+DEFAULT_MAX_HEADER_COUNT = 100
+DEFAULT_MAX_HEADER_BYTES = 64 * 1024
+DEFAULT_HEADER_TIMEOUT = 10.0
 
 
 # ── CaseInsensitiveDict ──
@@ -305,6 +315,182 @@ class HttpTimeoutError(HttpClientError):
         self.timeout = timeout
         self.message = message
         super().__init__(message)
+
+
+class HttpResponseLimitError(HttpClientError):
+    """Raised when a streamed response exceeds a configured safety limit.
+
+    Attributes:
+        kind: The response element that exceeded its limit.
+        limit: Maximum permitted size in bytes.
+        actual: Observed size in bytes when the limit was detected.
+    """
+
+    def __init__(self, kind: str, limit: int, actual: int) -> None:
+        self.kind = kind
+        self.limit = limit
+        self.actual = actual
+        super().__init__(
+            f"HTTP response {kind} exceeds {limit} bytes (observed {actual} bytes)"
+        )
+
+
+def _header_timeout_error() -> HttpTimeoutError:
+    """Return the stable error for one response header-section deadline."""
+    return HttpTimeoutError(
+        f"HTTP response headers exceeded {DEFAULT_HEADER_TIMEOUT:g} seconds",
+        timeout=DEFAULT_HEADER_TIMEOUT,
+    )
+
+
+def _remaining_header_timeout(deadline: float, read_timeout: float | None) -> float:
+    """Return the next read timeout without allowing deadline renewal."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise _header_timeout_error()
+    if read_timeout is None:
+        return remaining
+    return min(read_timeout, remaining)
+
+
+def _check_header_line_budget(
+    line: bytes,
+    *,
+    count: int,
+    total_bytes: int,
+) -> tuple[int, int]:
+    """Account one raw header line and enforce count/aggregate limits."""
+    actual_bytes = total_bytes + len(line)
+    if actual_bytes > DEFAULT_MAX_HEADER_BYTES:
+        raise HttpResponseLimitError(
+            "header section", DEFAULT_MAX_HEADER_BYTES, actual_bytes
+        )
+    if line in (b"\r\n", b"\n"):
+        return count, actual_bytes
+    actual_count = count + 1
+    if actual_count > DEFAULT_MAX_HEADER_COUNT:
+        raise HttpResponseLimitError(
+            "header count", DEFAULT_MAX_HEADER_COUNT, actual_count
+        )
+    return actual_count, actual_bytes
+
+
+def _sync_response_socket(response: http.client.HTTPResponse) -> socket.socket | None:
+    """Best-effort lookup of the socket behind an ``HTTPResponse`` file."""
+    fp = response.fp
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    return sock if isinstance(sock, socket.socket) else None
+
+
+def _sync_read_header_section(
+    response: http.client.HTTPResponse,
+) -> list[bytes]:
+    """Read one bounded sync response header or trailer section."""
+    assert response.fp is not None
+    sock = _sync_response_socket(response)
+    original_timeout = sock.gettimeout() if sock is not None else None
+    deadline = time.monotonic() + DEFAULT_HEADER_TIMEOUT
+    count = 0
+    total_bytes = 0
+    lines: list[bytes] = []
+    try:
+        while True:
+            remaining = _remaining_header_timeout(deadline, original_timeout)
+            deadline_limited = original_timeout is None or remaining < original_timeout
+            if sock is not None:
+                sock.settimeout(remaining)
+            try:
+                line = response.fp.readline(DEFAULT_MAX_HEADER_BYTES - total_bytes + 1)
+            except socket.timeout:
+                if deadline_limited:
+                    raise _header_timeout_error() from None
+                raise
+            if time.monotonic() > deadline:
+                raise _header_timeout_error()
+            if not line:
+                raise HttpConnectionError("Incomplete HTTP response header section")
+            count, total_bytes = _check_header_line_budget(
+                line,
+                count=count,
+                total_bytes=total_bytes,
+            )
+            lines.append(line)
+            if line in (b"\r\n", b"\n"):
+                return lines
+    finally:
+        if sock is not None:
+            sock.settimeout(original_timeout)
+
+
+class _BoundedHTTPResponse(http.client.HTTPResponse):
+    """Stdlib-compatible response parser with bounded header sections."""
+
+    def begin(self) -> None:
+        """Read the response metadata, including bounded interim sections."""
+        if self.headers is not None:
+            return
+
+        while True:
+            version, status, reason = self._read_status()
+            if status != http.client.CONTINUE:
+                break
+            skipped_headers = _sync_read_header_section(self)
+            if self.debuglevel > 0:
+                print("headers:", skipped_headers)
+
+        self.code = self.status = status
+        self.reason = reason.strip()
+        if version in ("HTTP/1.0", "HTTP/0.9"):
+            self.version = 10
+        elif version.startswith("HTTP/1."):
+            self.version = 11
+        else:
+            raise http.client.UnknownProtocol(version)
+
+        raw_headers = b"".join(_sync_read_header_section(self))
+        header_text = raw_headers.decode("iso-8859-1")
+        self.headers = self.msg = email.parser.Parser(
+            _class=http.client.HTTPMessage
+        ).parsestr(header_text)
+
+        if self.debuglevel > 0:
+            for header, value in self.headers.items():
+                print("header:", header + ":", value)
+
+        transfer_encoding = self.headers.get("transfer-encoding")
+        if transfer_encoding and transfer_encoding.lower() == "chunked":
+            self.chunked = True
+            self.chunk_left = None
+        else:
+            self.chunked = False
+
+        self.will_close = self._check_close()
+        self.length = None
+        length = self.headers.get("content-length")
+        if length and not self.chunked:
+            try:
+                self.length = int(length)
+            except ValueError:
+                self.length = None
+            else:
+                if self.length < 0:
+                    self.length = None
+
+        if (
+            status == http.client.NO_CONTENT
+            or status == http.client.NOT_MODIFIED
+            or 100 <= status < 200
+            or self._method == "HEAD"
+        ):
+            self.length = 0
+
+        if not self.will_close and not self.chunked and self.length is None:
+            self.will_close = True
+
+    def _read_and_discard_trailer(self) -> None:
+        """Consume a bounded trailer section after a chunked body."""
+        _sync_read_header_section(self)
 
 
 # Backward-compatible aliases (deprecated: prefer HttpConnectionError/HttpTimeoutError)
@@ -709,6 +895,8 @@ class StreamingResponse:
         """Yield response body in chunks."""
         if self._sync_resp is None:
             raise RuntimeError("iter_bytes() on async response")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
         try:
             while True:
                 chunk = self._sync_resp.read(chunk_size)
@@ -721,20 +909,47 @@ class StreamingResponse:
                 remaining = self._decompressor.flush()
                 if remaining:
                     yield remaining
+        except GeneratorExit:
+            self.close()
+            raise
+        except HttpResponseLimitError:
+            self.close()
+            raise
         except (OSError, http.client.HTTPException) as exc:
+            self.close()
             raise HttpConnectionError(str(exc)) from exc
 
-    def iter_lines(self) -> Iterator[str]:
-        """Yield response body line by line (decoded)."""
+    def iter_lines(
+        self,
+        max_line_bytes: int | None = DEFAULT_MAX_LINE_BYTES,
+    ) -> Iterator[str]:
+        """Yield decoded response lines with an optional byte-size limit.
+
+        Args:
+            max_line_bytes: Maximum wire bytes per line, including its line
+                terminator. Pass ``None`` to disable the limit.
+        """
         if self._sync_resp is None:
             raise RuntimeError("iter_lines() on async response")
+        if max_line_bytes is not None and max_line_bytes <= 0:
+            raise ValueError("max_line_bytes must be positive or None")
         try:
             while True:
-                line = self._sync_resp.readline()
+                size = -1 if max_line_bytes is None else max_line_bytes + 1
+                line = self._sync_resp.readline(size)
                 if not line:
                     break
+                if max_line_bytes is not None and len(line) > max_line_bytes:
+                    raise HttpResponseLimitError("line", max_line_bytes, len(line))
                 yield line.decode(self._encoding, errors="replace").rstrip("\r\n")
+        except GeneratorExit:
+            self.close()
+            raise
+        except HttpResponseLimitError:
+            self.close()
+            raise
         except (OSError, http.client.HTTPException) as exc:
+            self.close()
             raise HttpConnectionError(str(exc)) from exc
 
     def read(self) -> bytes:
@@ -747,6 +962,8 @@ class StreamingResponse:
         """Async yield response body in chunks."""
         if self._async_reader is None:
             raise RuntimeError("aiter_bytes() on sync response")
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
         try:
             raw_iter = self._select_raw_iterator(chunk_size)
             async for chunk in raw_iter:
@@ -757,19 +974,30 @@ class StreamingResponse:
                 remaining = self._decompressor.flush()
                 if remaining:
                     yield remaining
+        except (asyncio.CancelledError, GeneratorExit):
+            await self.aclose()
+            raise
         except asyncio.TimeoutError:
+            await self.aclose()
             raise HttpTimeoutError(
                 f"Streaming read timed out for {self.url}",
                 url=self.url,
                 timeout=self._async_timeout or 0.0,
             )
-        except OSError as exc:
+        except (HttpTimeoutError, HttpResponseLimitError):
+            await self.aclose()
+            raise
+        except HttpConnectionError:
+            await self.aclose()
+            raise
+        except (OSError, asyncio.IncompleteReadError, ValueError) as exc:
+            await self.aclose()
             raise HttpConnectionError(str(exc)) from exc
 
     async def _select_raw_iterator(self, chunk_size: int) -> AsyncIterator[bytes]:
         """Select and yield from the appropriate raw byte iterator."""
         if self._is_chunked:
-            async for chunk in self._aiter_chunked():
+            async for chunk in self._aiter_chunked(chunk_size):
                 yield chunk
         elif self._bytes_remaining is not None:
             async for chunk in self._aiter_fixed_length(chunk_size):
@@ -804,9 +1032,11 @@ class StreamingResponse:
                 break
             yield data
 
-    async def _aiter_chunked(self) -> AsyncIterator[bytes]:
-        """Decode chunked transfer encoding from async reader."""
+    async def _aiter_chunked(self, read_size: int) -> AsyncIterator[bytes]:
+        """Decode chunked transfer encoding in bounded subchunks."""
         assert self._async_reader is not None  # guaranteed by aiter_bytes guard
+        if read_size <= 0:
+            raise ValueError("chunk_size must be positive")
         reader = self._async_reader
         timeout = self._async_timeout
         while True:
@@ -814,28 +1044,58 @@ class StreamingResponse:
             size_str = size_line.decode("latin-1").split(";")[0].strip()
             if not size_str:
                 break
-            chunk_size = int(size_str, 16)
-            if chunk_size == 0:
-                await asyncio.wait_for(
-                    reader.readline(), timeout=timeout
-                )  # trailing \r\n
+            declared_size = int(size_str, 16)
+            if declared_size == 0:
+                await _async_read_header_section(reader, timeout, discard=True)
                 break
-            data = await asyncio.wait_for(
-                reader.readexactly(chunk_size), timeout=timeout
-            )
-            await asyncio.wait_for(reader.readline(), timeout=timeout)  # trailing \r\n
-            yield data
+            remaining = declared_size
+            while remaining:
+                to_read = min(remaining, read_size)
+                data = await asyncio.wait_for(
+                    reader.readexactly(to_read), timeout=timeout
+                )
+                remaining -= len(data)
+                yield data
+            terminator = await asyncio.wait_for(reader.readexactly(2), timeout=timeout)
+            if terminator != b"\r\n":
+                raise HttpConnectionError("Invalid chunk terminator")
 
-    async def aiter_lines(self) -> AsyncIterator[str]:
-        """Async yield response body line by line (decoded)."""
-        buf = ""
-        async for chunk in self.aiter_bytes():
-            buf += chunk.decode(self._encoding, errors="replace")
-            while "\n" in buf:
-                line, buf = buf.split("\n", 1)
-                yield line.rstrip("\r")
-        if buf:
-            yield buf.rstrip("\r")
+    async def aiter_lines(
+        self,
+        max_line_bytes: int | None = DEFAULT_MAX_LINE_BYTES,
+    ) -> AsyncIterator[str]:
+        """Async yield decoded lines with an optional byte-size limit.
+
+        Args:
+            max_line_bytes: Maximum bytes per decoded line, including its line
+                terminator. Pass ``None`` to disable the limit.
+        """
+        if max_line_bytes is not None and max_line_bytes <= 0:
+            raise ValueError("max_line_bytes must be positive or None")
+        buf = bytearray()
+        try:
+            async for chunk in self.aiter_bytes():
+                buf.extend(chunk)
+                while True:
+                    newline = buf.find(b"\n")
+                    if newline < 0:
+                        break
+                    wire_size = newline + 1
+                    if max_line_bytes is not None and wire_size > max_line_bytes:
+                        raise HttpResponseLimitError("line", max_line_bytes, wire_size)
+                    line = bytes(buf[:newline])
+                    del buf[:wire_size]
+                    yield line.decode(self._encoding, errors="replace").rstrip("\r")
+                if max_line_bytes is not None and len(buf) > max_line_bytes:
+                    raise HttpResponseLimitError("line", max_line_bytes, len(buf))
+            if buf:
+                yield bytes(buf).decode(self._encoding, errors="replace").rstrip("\r")
+        except (asyncio.CancelledError, GeneratorExit):
+            await self.aclose()
+            raise
+        except HttpResponseLimitError:
+            await self.aclose()
+            raise
 
     async def aread(self) -> bytes:
         """Async consume entire stream into bytes."""
@@ -1587,6 +1847,7 @@ def _sync_connect_via_proxy(
 
     # CONNECT tunnel for HTTPS through proxy
     tunnel_conn = http.client.HTTPConnection(proxy_host, proxy_port, timeout=timeout)
+    tunnel_conn.response_class = _BoundedHTTPResponse
     connect_headers: dict[str, str] = {"Host": f"{host}:{port}"}
     if proxy_user and proxy_pass:
         connect_headers["Proxy-Authorization"] = _proxy_auth_header(
@@ -1825,6 +2086,7 @@ def _sync_request(
                 req_headers,
                 url,
             )
+            conn.response_class = _BoundedHTTPResponse
             if _pool and not proxy:
                 req_headers.setdefault("Connection", "keep-alive")
 
@@ -1907,26 +2169,64 @@ async def _async_read_response_headers(
     Returns:
         (status_code, headers_dict).
     """
-    # Status line: "HTTP/1.1 200 OK\r\n"
-    status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
-    status_str = status_line.decode("latin-1").rstrip("\r\n")
-    parts = status_str.split(" ", 2)
-    if len(parts) < 2:
-        raise HttpConnectionError(f"Malformed status line: {status_str}")
-    status_code = int(parts[1])
-
-    # Headers until empty line
-    headers: CaseInsensitiveDict = CaseInsensitiveDict()
     while True:
-        line = await asyncio.wait_for(reader.readline(), timeout=timeout)
-        decoded = line.decode("latin-1").rstrip("\r\n")
-        if not decoded:
-            break
-        if ":" in decoded:
-            k, v = decoded.split(":", 1)
-            headers[k.strip()] = v.strip()
+        status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        status_str = status_line.decode("latin-1").rstrip("\r\n")
+        parts = status_str.split(" ", 2)
+        if len(parts) < 2:
+            raise HttpConnectionError(f"Malformed status line: {status_str}")
+        try:
+            status_code = int(parts[1])
+        except ValueError:
+            raise HttpConnectionError(f"Malformed status line: {status_str}") from None
+        headers = await _async_read_header_section(reader, timeout)
+        if status_code != http.client.CONTINUE:
+            return status_code, headers
 
-    return status_code, headers
+
+async def _async_read_header_section(
+    reader: asyncio.StreamReader,
+    read_timeout: float | None,
+    *,
+    discard: bool = False,
+) -> CaseInsensitiveDict:
+    """Read one bounded async response header or trailer section."""
+    deadline = time.monotonic() + DEFAULT_HEADER_TIMEOUT
+    count = 0
+    total_bytes = 0
+    headers = CaseInsensitiveDict()
+    while True:
+        remaining = _remaining_header_timeout(deadline, read_timeout)
+        deadline_limited = read_timeout is None or remaining < read_timeout
+        try:
+            line = await asyncio.wait_for(reader.readline(), timeout=remaining)
+        except asyncio.TimeoutError:
+            if deadline_limited:
+                raise _header_timeout_error() from None
+            raise
+        except ValueError:
+            raise HttpResponseLimitError(
+                "header section",
+                DEFAULT_MAX_HEADER_BYTES,
+                DEFAULT_MAX_HEADER_BYTES + 1,
+            ) from None
+        if time.monotonic() > deadline:
+            raise _header_timeout_error()
+        if not line:
+            raise HttpConnectionError("Incomplete HTTP response header section")
+        count, total_bytes = _check_header_line_budget(
+            line,
+            count=count,
+            total_bytes=total_bytes,
+        )
+        if line in (b"\r\n", b"\n"):
+            return headers
+        if discard:
+            continue
+        decoded = line.decode("latin-1").rstrip("\r\n")
+        if ":" in decoded:
+            key, value = decoded.split(":", 1)
+            headers[key.strip()] = value.strip()
 
 
 async def _async_read_chunked_body(
@@ -1942,7 +2242,7 @@ async def _async_read_chunked_body(
             break
         chunk_size = int(size_str, 16)
         if chunk_size == 0:
-            await asyncio.wait_for(reader.readline(), timeout=timeout)  # trailing \r\n
+            await _async_read_header_section(reader, timeout, discard=True)
             break
         data = await asyncio.wait_for(reader.readexactly(chunk_size), timeout=timeout)
         await asyncio.wait_for(reader.readline(), timeout=timeout)  # trailing \r\n

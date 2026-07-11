@@ -27,6 +27,9 @@ config.jsonc
 .claude/
 .opencode/
 .codex/
+.codegraph/
+.agent-work/
+.agents/
 CLAUDE.md
 AGENTS.md
 

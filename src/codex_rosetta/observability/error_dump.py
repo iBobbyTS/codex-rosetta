@@ -205,6 +205,7 @@ def _dump_error_impl(
     # --- Process request body ---
     body_hash: str | None = None
     if request_body is not None:
+        request_body = persistence.redact_sensitive(request_body)
         raw_json = json.dumps(request_body, ensure_ascii=False).encode("utf-8")
         if len(raw_json) <= MAX_BODY_BYTES:
             offloaded = offload_images(request_body)
@@ -221,6 +222,7 @@ def _dump_error_impl(
     # --- Process converted body ---
     converted_body_hash: str | None = None
     if converted_body is not None:
+        converted_body = persistence.redact_sensitive(converted_body)
         raw_json = json.dumps(converted_body, ensure_ascii=False).encode("utf-8")
         if len(raw_json) <= MAX_BODY_BYTES:
             offloaded_conv = offload_images(converted_body)
@@ -229,6 +231,8 @@ def _dump_error_impl(
             persistence.insert_dump_body(
                 converted_body_hash, compressed_conv, orig_conv
             )
+
+    response_text = persistence.redact_sensitive(response_text)
 
     # --- Truncate response_text if excessively large ---
     if response_text and len(response_text) > 64 * 1024:

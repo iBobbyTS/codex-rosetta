@@ -6,12 +6,16 @@ logging, truncation, and sanitization.  Ported from argo-proxy's logger module.
 
 from __future__ import annotations
 
-import copy
 import json
 import logging
 import os
+import re
 import sys
+from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import Any
+
+from codex_rosetta.observability.redaction import REDACTED, SecretRedactor
 
 
 # ---------------------------------------------------------------------------
@@ -151,11 +155,167 @@ class ColoredFormatter(logging.Formatter):
 
 _handler: logging.Handler | None = None
 _logger: logging.Logger = logging.getLogger("codex-rosetta-gateway")
-_logger.setLevel(logging.DEBUG)
+_logger.setLevel(logging.INFO)
 _logger.propagate = False
+_body_logger: logging.Logger = logging.getLogger("codex-rosetta-gateway.body")
+_body_logger.setLevel(logging.DEBUG)
+_body_logger.propagate = True
 
-# Whether body logging is enabled (set by ``setup_logging``)
-_log_bodies: bool = False
+UPSTREAM_ERROR_MAX_CHARS = 4096
+BODY_LOG_MAX_CHARS = 20_000
+_TOKEN_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b(?:authorization|api[ _-]?key|[a-z0-9_-]*token)\b\s*[:=]\s*)"
+    r"(?:(['\"])(.*?)\2|([^,;\r\n]+))"
+)
+
+
+def _redact_token_assignments(value: str) -> str:
+    """Redact explicit auth/token assignments without hiding other secrets."""
+
+    def _replace(match: re.Match[str]) -> str:
+        quote = match.group(2) or ""
+        return f"{match.group(1)}{quote}{REDACTED}{quote}"
+
+    return _TOKEN_ASSIGNMENT_RE.sub(_replace, value)
+
+
+def _single_line(value: str) -> str:
+    """Escape control and line-separator characters for log-safe output."""
+    escaped: list[str] = []
+    for char in value:
+        code = ord(char)
+        if char == "\n":
+            escaped.append(r"\n")
+        elif char == "\r":
+            escaped.append(r"\r")
+        elif char == "\t":
+            escaped.append(r"\t")
+        elif code < 0x20 or 0x7F <= code <= 0x9F or code in (0x2028, 0x2029):
+            escaped.append(f"\\u{code:04x}")
+        else:
+            escaped.append(char)
+    return "".join(escaped)
+
+
+class UpstreamErrorLogState:
+    """Per-app token redactor and output policy for upstream error logs."""
+
+    def __init__(
+        self,
+        token_values: Iterable[str] = (),
+        *,
+        max_chars: int = UPSTREAM_ERROR_MAX_CHARS,
+    ) -> None:
+        if max_chars <= 0:
+            raise ValueError("max_chars must be positive")
+        self.max_chars = max_chars
+        self._redactor = SecretRedactor(token_values)
+
+    def prepare_update(self, token_values: Iterable[str]) -> SecretRedactor:
+        """Build a replacement redactor without mutating live state."""
+        return SecretRedactor(token_values)
+
+    def commit_update(self, redactor: SecretRedactor) -> None:
+        """Swap in a prepared token redactor."""
+        self._redactor = redactor
+
+    def sanitize(self, error_text: Any) -> str:
+        """Return redacted, single-line text bounded by ``max_chars``."""
+        text = error_text if isinstance(error_text, str) else str(error_text)
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            safe = self._redactor.redact(text)
+            safe = _redact_token_assignments(safe)
+        else:
+            safe = json.dumps(
+                self._redactor.redact(parsed),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        safe = _single_line(safe)
+        if len(safe) <= self.max_chars:
+            return safe
+        suffix = "...[truncated]"
+        if self.max_chars <= len(suffix):
+            return suffix[: self.max_chars]
+        return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
+
+
+@dataclass(frozen=True)
+class PreparedBodyLogConfig:
+    """Immutable per-app body-log policy ready for an assignment-only commit."""
+
+    enabled: bool
+    redactor: SecretRedactor
+
+
+class BodyLogState:
+    """Per-app opt-in policy for token-safe request and response body logs."""
+
+    def __init__(
+        self,
+        *,
+        enabled: bool = False,
+        token_values: Iterable[str] = (),
+        max_chars: int = BODY_LOG_MAX_CHARS,
+    ) -> None:
+        if max_chars <= 0:
+            raise ValueError("max_chars must be positive")
+        self.max_chars = max_chars
+        self.enabled = False
+        self._redactor = SecretRedactor()
+        self.commit_update(
+            self.prepare_update(enabled=enabled, token_values=token_values)
+        )
+
+    def prepare_update(
+        self,
+        *,
+        enabled: bool,
+        token_values: Iterable[str],
+    ) -> PreparedBodyLogConfig:
+        """Build a replacement body-log policy without mutating live state."""
+        return PreparedBodyLogConfig(
+            enabled=bool(enabled),
+            redactor=SecretRedactor(token_values),
+        )
+
+    def commit_update(self, prepared: PreparedBodyLogConfig) -> None:
+        """Commit a prepared body-log policy using assignment-only operations."""
+        self.enabled = prepared.enabled
+        self._redactor = prepared.redactor
+
+    def render(self, value: Any) -> str:
+        """Redact, serialize, single-line, and bound one body without raw fallback."""
+        try:
+            redacted = self._redactor.redact(value)
+        except Exception:
+            return "[body redaction failed]"
+        try:
+            serialized = json.dumps(
+                redacted,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        except Exception:
+            return "[body serialization failed]"
+        safe = _single_line(serialized)
+        suffix = "...[truncated]"
+        if len(safe) <= self.max_chars:
+            return safe
+        if self.max_chars <= len(suffix):
+            return suffix[: self.max_chars]
+        return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
+
+    def log(self, label: str, value: Any) -> None:
+        """Emit one single-line body record only when this app opted in."""
+        if not self.enabled:
+            return
+        _body_logger.debug("[%s] %s", label, self.render(value))
+
+
+_default_upstream_error_state = UpstreamErrorLogState()
 
 
 def get_logger() -> logging.Logger:
@@ -171,29 +331,26 @@ def get_logger() -> logging.Logger:
 def setup_logging(
     verbose: bool = False,
     use_colors: bool = True,
-    log_bodies: bool = False,
 ) -> logging.Logger:
     """Configure the gateway logger.
 
     Args:
         verbose: If *True*, set handler level to DEBUG; otherwise INFO.
         use_colors: Whether to use ANSI colours in output.
-        log_bodies: If *True*, enable request/response body logging at DEBUG level.
-
     Returns:
         The configured logger.
     """
-    global _handler, _log_bodies
-    _log_bodies = log_bodies
+    global _handler
 
     logger = get_logger()
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
 
     # Remove existing handler if present
     if _handler is not None:
         logger.removeHandler(_handler)
 
     _handler = logging.StreamHandler(sys.stderr)
-    _handler.setLevel(logging.DEBUG if verbose else logging.INFO)
+    _handler.setLevel(logging.DEBUG)
 
     formatter = ColoredFormatter(
         datefmt="%Y-%m-%d %H:%M:%S.%f",
@@ -203,97 +360,13 @@ def setup_logging(
     _handler.setFormatter(formatter)
     logger.addHandler(_handler)
 
+    # Body records use a dedicated DEBUG child logger. Every configured output
+    # handler must accept those records; ordinary DEBUG noise remains gated by
+    # the parent logger's level above.
+    for handler in logger.handlers:
+        handler.setLevel(logging.DEBUG)
+
     return logger
-
-
-# ---------------------------------------------------------------------------
-# String / base64 truncation
-# ---------------------------------------------------------------------------
-
-
-def truncate_string(s: str, max_length: int, suffix: str = "...") -> str:
-    """Truncate *s* to *max_length*, appending a char-count suffix."""
-    if len(s) <= max_length:
-        return s
-    remaining = len(s) - max_length
-    return f"{s[:max_length]}{suffix}[{remaining} more chars]"
-
-
-def truncate_base64(data_url: str, max_length: int = 100) -> str:
-    """Truncate base64 data-URLs for cleaner logging."""
-    if not data_url.startswith("data:"):
-        return data_url
-    if ";base64," in data_url:
-        header, base64_data = data_url.split(";base64,", 1)
-        if len(base64_data) > max_length:
-            truncated = base64_data[:max_length]
-            remaining_chars = len(base64_data) - max_length
-            return f"{header};base64,{truncated}...[{remaining_chars} more chars]"
-    return data_url
-
-
-# ---------------------------------------------------------------------------
-# Sanitisation
-# ---------------------------------------------------------------------------
-
-
-def _sanitize_content_part(
-    part: dict[str, Any],
-    *,
-    max_base64_length: int,
-    max_content_length: int,
-) -> None:
-    """Truncate a single content part in-place for logging.
-
-    Handles ``image_url`` parts (truncating base64 data-URLs) and
-    ``text`` parts (truncating long text content).
-    """
-    part_type = part.get("type")
-    if part_type == "image_url":
-        image_url = part.get("image_url")
-        if isinstance(image_url, dict):
-            url = image_url.get("url", "")
-            if url.startswith("data:"):
-                image_url["url"] = truncate_base64(url, max_base64_length)
-    elif part_type == "text":
-        text = part.get("text")
-        if isinstance(text, str) and len(text) > max_content_length:
-            part["text"] = truncate_string(text, max_content_length)
-
-
-def sanitize_request_data(
-    data: dict[str, Any],
-    *,
-    max_base64_length: int = 100,
-    max_content_length: int = 500,
-    max_tool_desc_length: int = 100,
-    truncate_tools: bool = True,
-    truncate_messages: bool = True,
-) -> dict[str, Any]:
-    """Deep-copy and truncate long content for logging."""
-    sanitized = copy.deepcopy(data)
-
-    if truncate_messages and isinstance(sanitized.get("messages"), list):
-        for message in sanitized["messages"]:
-            if not isinstance(message, dict) or "content" not in message:
-                continue
-            content = message["content"]
-            if isinstance(content, str) and len(content) > max_content_length:
-                message["content"] = truncate_string(content, max_content_length)
-            elif isinstance(content, list):
-                for part in content:
-                    if isinstance(part, dict):
-                        _sanitize_content_part(
-                            part,
-                            max_base64_length=max_base64_length,
-                            max_content_length=max_content_length,
-                        )
-
-    if truncate_tools and isinstance(sanitized.get("tools"), list):
-        tool_count = len(sanitized["tools"])
-        sanitized["tools"] = f"[{tool_count} tools defined - truncated for logging]"
-
-    return sanitized
 
 
 # ---------------------------------------------------------------------------
@@ -318,19 +391,6 @@ def create_request_summary(data: dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Visual separator
-# ---------------------------------------------------------------------------
-
-
-def _make_bar(message: str = "", bar_length: int = 60) -> str:
-    message = message.strip()
-    if message:
-        message = f" {message} "
-    dash_length = max((bar_length - len(message)) // 2, 2)
-    return "-" * dash_length + message + "-" * dash_length
-
-
-# ---------------------------------------------------------------------------
 # Log helpers
 # ---------------------------------------------------------------------------
 
@@ -339,89 +399,68 @@ def log_request(
     data: dict[str, Any],
     label: str = "REQUEST",
     *,
+    state: BodyLogState | None = None,
     show_summary: bool = True,
-    show_full: bool | None = None,
-    sanitize: bool = True,
-    max_content_length: int = 500,
-    truncate_tools: bool = True,
 ) -> None:
-    """Log a request with configurable verbosity.
-
-    *show_full* defaults to the module-level ``_log_bodies`` flag when *None*.
-    """
-    if show_full is None:
-        show_full = _log_bodies
-
+    """Log a request summary and its opt-in token-safe body."""
     if show_summary:
         summary = create_request_summary(data)
         _logger.info("[%s] %s", label, summary)
-
-    if show_full:
-        log_data = (
-            sanitize_request_data(
-                data,
-                max_content_length=max_content_length,
-                truncate_tools=truncate_tools,
-            )
-            if sanitize
-            else data
-        )
-        _logger.debug(_make_bar(f"[{label}]"))
-        _logger.debug(json.dumps(log_data, indent=2, ensure_ascii=False))
-        _logger.debug(_make_bar())
+    if state is not None:
+        state.log(label, data)
 
 
 def log_original_request(
     data: dict[str, Any],
     *,
-    max_content_length: int = 500,
+    state: BodyLogState | None = None,
 ) -> None:
     """Log the original (source-format) request."""
     log_request(
         data,
         label="ORIGINAL REQUEST",
+        state=state,
         show_summary=True,
-        max_content_length=max_content_length,
     )
 
 
 def log_converted_request(
     data: dict[str, Any],
     *,
-    max_content_length: int = 500,
+    state: BodyLogState | None = None,
 ) -> None:
     """Log the converted (target-format) request."""
     log_request(
         data,
         label="CONVERTED REQUEST",
+        state=state,
         show_summary=False,
-        max_content_length=max_content_length,
+    )
+
+
+def log_ir_request(
+    data: dict[str, Any],
+    *,
+    state: BodyLogState | None = None,
+) -> None:
+    """Log the intermediate-representation request body."""
+    log_request(
+        data,
+        label="IR REQUEST",
+        state=state,
+        show_summary=False,
     )
 
 
 def log_response(
-    data: dict[str, Any],
+    data: Any,
     label: str = "RESPONSE",
     *,
-    sanitize: bool = True,
-    max_content_length: int = 500,
+    state: BodyLogState | None = None,
 ) -> None:
-    """Log a response body (sanitized & truncated at DEBUG level)."""
-    if not _log_bodies:
-        return
-
-    log_data = (
-        sanitize_request_data(
-            data,
-            max_content_length=max_content_length,
-            truncate_tools=True,
-        )
-        if sanitize
-        else data
-    )
-    _logger.debug(_make_bar(f"[{label}]"))
-    _logger.debug(json.dumps(log_data, indent=2, ensure_ascii=False))
-    _logger.debug(_make_bar())
+    """Log one opt-in token-safe response body."""
+    if state is not None:
+        state.log(label, data)
 
 
 def log_stream_summary(
@@ -445,13 +484,15 @@ def log_upstream_error(
     *,
     endpoint: str = "unknown",
     is_streaming: bool = False,
+    state: UpstreamErrorLogState | None = None,
 ) -> None:
     """Log an upstream API error in a structured format."""
     request_type = "streaming" if is_streaming else "non-streaming"
+    safe_error = (state or _default_upstream_error_state).sanitize(error_text)
     _logger.error(
         "[UPSTREAM ERROR] endpoint=%s, type=%s, status=%d, error=%s",
         endpoint,
         request_type,
         status_code,
-        error_text,
+        safe_error,
     )

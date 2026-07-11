@@ -4,6 +4,10 @@
 
 - [Codex version compatibility](version-compatibility.md)
 
+## Gateway operations
+
+- [Security and authentication](gateway-security.md)
+
 ## Codex tool localization
 
 - [Basic conversation](codex-tool-localization/basic-conversation.md)

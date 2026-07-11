@@ -11,8 +11,11 @@ This module is framework-agnostic and can be used by any consumer
 from __future__ import annotations
 
 import time
+from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+
+from .redaction import SecretRedactor
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +90,38 @@ class _RollingWindow:
             else:
                 series.append({"t": key - now, "count": 0, "avg_ms": 0, "errors": 0})
         return series
+
+
+class _ErrorCountWindow:
+    """Compact per-second error counts for the public one-hour health view."""
+
+    def __init__(self, window_seconds: int = 3600) -> None:
+        self._buckets: deque[tuple[int, int]] = deque()
+        self._window = window_seconds
+        self._total = 0
+
+    def _expire(self, now: int) -> None:
+        cutoff = now - self._window
+        while self._buckets and self._buckets[0][0] < cutoff:
+            _key, count = self._buckets.popleft()
+            self._total -= count
+
+    def record(self) -> None:
+        """Record one error in the current monotonic second."""
+        key = int(time.monotonic())
+        self._expire(key)
+        if self._buckets and self._buckets[-1][0] == key:
+            _key, count = self._buckets.pop()
+            self._buckets.append((key, count + 1))
+        else:
+            self._buckets.append((key, 1))
+        self._total += 1
+
+    def total(self) -> int:
+        """Return errors within the exact retained window and expire older buckets."""
+        now = int(time.monotonic())
+        self._expire(now)
+        return self._total
 
 
 # ---------------------------------------------------------------------------
@@ -177,12 +212,33 @@ class MetricsCollector:
 
     # Time-series
     _window: _RollingWindow = field(default_factory=_RollingWindow)
+    _errors_last_hour: _ErrorCountWindow = field(default_factory=_ErrorCountWindow)
 
     # Per-provider rolling stats (keyed by provider_name)
     _provider_stats: dict[str, _ProviderStats] = field(default_factory=dict)
 
+    # Targeted redaction for provider error details. This intentionally keeps
+    # non-token diagnostics such as provider names, prompts, and PII.
+    _redactor: SecretRedactor = field(default_factory=SecretRedactor, repr=False)
+
     # Timing
     _start_time: float = field(default_factory=time.monotonic)
+
+    def update_token_values(self, token_values: Iterable[str]) -> None:
+        """Update exact token values removed from provider error details."""
+        self.commit_token_values(self.prepare_token_values(token_values))
+
+    def prepare_token_values(self, token_values: Iterable[str]) -> SecretRedactor:
+        """Construct a replacement redactor without mutating live state."""
+        return SecretRedactor(token_values)
+
+    def commit_token_values(self, redactor: SecretRedactor) -> None:
+        """Commit a prepared error-detail redactor using assignment only."""
+        self._redactor = redactor
+
+    def redact_sensitive(self, value: object) -> object:
+        """Return a token-redacted copy for public metrics presentation."""
+        return self._redactor.redact(value)
 
     def _get_provider_stats(self, provider_name: str) -> _ProviderStats:
         stats = self._provider_stats.get(provider_name)
@@ -208,6 +264,7 @@ class MetricsCollector:
         is_error = status_code >= 400
         if is_error:
             self.total_errors += 1
+            self._errors_last_hour.record()
         if is_stream:
             self.total_streams += 1
 
@@ -225,8 +282,11 @@ class MetricsCollector:
 
         # Per-provider stats (use provider_name if available, fall back to target)
         pname = provider_name or target
+        redacted_error = (
+            self._redactor.redact(error_detail) if error_detail is not None else None
+        )
         self._get_provider_stats(pname).record(
-            duration_ms, is_error=is_error, error_detail=error_detail
+            duration_ms, is_error=is_error, error_detail=redacted_error
         )
 
     def provider_health_snapshot(self) -> dict[str, dict]:
@@ -241,6 +301,10 @@ class MetricsCollector:
                 "last_error": stats.last_error,
             }
         return out
+
+    def errors_last_hour(self) -> int:
+        """Return the number of request errors retained over the last 3600 seconds."""
+        return self._errors_last_hour.total()
 
     def any_critical_provider(self) -> bool:
         """Return True if any tracked provider is critically unhealthy."""

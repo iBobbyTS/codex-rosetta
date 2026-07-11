@@ -9,6 +9,7 @@ from typing import Any, cast
 import pytest
 
 from codex_rosetta.converters.google_genai import GoogleConverter, GoogleGenAIConverter
+from codex_rosetta.converters.base import ConversionContext
 from codex_rosetta.types.ir import (
     IRRequest,
     IRResponse,
@@ -39,6 +40,45 @@ class TestGoogleGenAIConverter:
         assert len(result["contents"]) == 1
         assert result["contents"][0]["role"] == "user"
         assert result["contents"][0]["parts"][0]["text"] == "Hello!"
+
+    def test_request_threads_gateway_owned_proxy_to_image_fetch(self, monkeypatch):
+        ir_request = cast(
+            IRRequest,
+            {
+                "model": "gemini-2.0-flash",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "image_url": "https://example.test/image.png",
+                            }
+                        ],
+                    }
+                ],
+            },
+        )
+        captured: dict[str, Any] = {}
+
+        def convert_image(image: Any, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"inlineData": {"mimeType": "image/png", "data": "aW1hZ2U="}}
+
+        monkeypatch.setattr(self.converter.content_ops, "ir_image_to_p", convert_image)
+        context = ConversionContext(
+            options={"outbound_proxy_url": "http://hot-reloaded-proxy:9090"}
+        )
+
+        result, _warnings = self.converter.request_to_provider(
+            ir_request,
+            context=context,
+        )
+
+        assert (
+            captured["image_fetch_policy"].proxy_url == "http://hot-reloaded-proxy:9090"
+        )
+        assert result["contents"][0]["parts"][0]["inlineData"]["data"] == "aW1hZ2U="
 
     def test_request_with_system_instruction_string(self):
         """Test request with string system instruction."""

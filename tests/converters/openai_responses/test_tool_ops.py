@@ -15,6 +15,14 @@ from codex_rosetta.types.ir import (
 )
 
 
+def _single_tool(
+    value: ToolDefinition | list[ToolDefinition],
+) -> ToolDefinition:
+    """Narrow a converter result for cases that cannot produce a namespace."""
+    assert isinstance(value, dict)
+    return cast(ToolDefinition, value)
+
+
 class TestOpenAIResponsesToolOps:
     """Unit tests for OpenAIResponsesToolOps."""
 
@@ -80,7 +88,9 @@ class TestOpenAIResponsesToolOps:
                 "required": ["city"],
             },
         }
-        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        result = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        )
         assert result["type"] == "function"
         assert result["name"] == "get_weather"
         assert result["description"] == "Get weather"
@@ -102,7 +112,9 @@ class TestOpenAIResponsesToolOps:
             },
         }
 
-        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        result = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        )
 
         assert result["type"] == "function"
         assert result["name"] == "tool_search"
@@ -112,8 +124,10 @@ class TestOpenAIResponsesToolOps:
 
     def test_p_tool_definition_to_ir_web_search_synthesizes_query_schema(self):
         """Responses web_search degrades to a Chat-callable web_search function."""
-        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(
-            {"type": "web_search", "external_web_access": True}
+        result = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(
+                {"type": "web_search", "external_web_access": True}
+            )
         )
 
         assert result["type"] == "function"
@@ -137,7 +151,9 @@ class TestOpenAIResponsesToolOps:
                 },
             },
         }
-        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        result = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        )
         assert result["type"] == "function"
         assert result["name"] == "search"
         assert result["description"] == "Search"
@@ -162,7 +178,9 @@ class TestOpenAIResponsesToolOps:
                 "definition": "start: ...",
             },
         }
-        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        result = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+        )
         assert result["type"] == "function"
         assert result["name"] == "apply_patch"
         # Description is enriched with format hint for cross-provider.
@@ -249,7 +267,9 @@ class TestOpenAIResponsesToolOps:
             },
         )
         provider = OpenAIResponsesToolOps.ir_tool_definition_to_p(ir_tool)
-        restored = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider)
+        restored = _single_tool(
+            OpenAIResponsesToolOps.p_tool_definition_to_ir(provider)
+        )
         assert restored["name"] == ir_tool["name"]
         assert restored["description"] == ir_tool["description"]
 

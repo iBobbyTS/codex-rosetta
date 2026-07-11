@@ -625,22 +625,22 @@ def ir_to_openai_request(ir_request: IRRequest) -> ResponseCreateParams:
         "model": ir_request["model"],
         "input": convert_ir_messages_to_input(ir_request["messages"]),
     }
-    
+
     # System instruction
     if "system_instruction" in ir_request:
         params["instructions"] = ir_request["system_instruction"]
-    
+
     # Tools
     if "tools" in ir_request:
         params["tools"] = [
-            convert_tool_definition(tool) 
+            convert_tool_definition(tool)
             for tool in ir_request["tools"]
         ]
-    
+
     # Tool choice
     if "tool_choice" in ir_request:
         params["tool_choice"] = convert_tool_choice(ir_request["tool_choice"])
-    
+
     # Generation parameters
     if "generation" in ir_request:
         gen = ir_request["generation"]
@@ -650,7 +650,7 @@ def ir_to_openai_request(ir_request: IRRequest) -> ResponseCreateParams:
             params["top_p"] = gen["top_p"]
         if "max_tokens" in gen:
             params["max_output_tokens"] = gen["max_tokens"]
-    
+
     return params
 ```
 
@@ -669,7 +669,7 @@ def openai_to_ir_response(openai_response: Response) -> IRResponse:
                 "finish_reason": determine_finish_reason(openai_response),
             }
             choices.append(choice)
-    
+
     return {
         "id": openai_response.id,
         "object": "response",

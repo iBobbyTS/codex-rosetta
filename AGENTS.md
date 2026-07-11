@@ -115,19 +115,19 @@ examples/                    # Usage examples
 ## Setup and commands
 
 ```bash
-conda activate codex-rosetta
+conda activate llm-rosetta
 pip install -e ".[all]"
 ```
 
 Run `make help` for all targets. Key ones:
 
 ```bash
-make lint          # ruff check + ruff format --check
+make lint          # ruff check + ruff format --check + ty check
 make lint-fix      # ruff check --fix + ruff format
 make test          # pytest tests/ --ignore=tests/integration -v
 make build         # python -m build
-make push          # twine upload
-make build-docker  # Build gateway Docker image
+make push          # disabled; GitHub Releases are created manually
+make build-docker  # Build local gateway image from the current checkout wheel
 ```
 
 Tooling config (ruff, ty, complexipy) lives in `pyproject.toml`.

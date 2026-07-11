@@ -17,8 +17,11 @@
 ```bash
 git clone https://github.com/iBobbyTS/codex-rosetta.git
 cd codex-rosetta
-python -m pip install -U .
+python -m pip install -U '.[gateway]'
 ```
+
+`gateway` extra 会安装用于精确、跨重启工具历史持久化的成熟 AEAD 依赖。只使用核心
+转换库、不启动 gateway 的使用方仍可直接安装 `.`。
 
 ## 使用
 
@@ -27,6 +30,10 @@ python -m pip install -U .
 ```bash
 codex-rosetta-gateway init
 ```
+
+初始化会在仅当前用户可读的配置文件中生成必填的 Admin 密码和网关访问密钥。
+请安全保存两者；所有受保护的 `/v1` 请求都必须把生成的访问密钥作为 Bearer
+token 发送。详见[网关安全与认证](docs/zh-cn/gateway-security.md)。
 
 每次使用时启动本地网关：
 
@@ -37,6 +44,7 @@ codex-rosetta-gateway --host 127.0.0.1 -v
 ## 完整文档
 
 - [中文用户文档](docs/zh-cn/README.md)
+- [网关安全与认证](docs/zh-cn/gateway-security.md)
 - [开发者文档（英文）](docs/dev/README.md)
 
 ## 解决的问题

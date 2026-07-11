@@ -176,8 +176,8 @@ Still to be implemented: field types, serde rename/default/skip strategy, SSE ma
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
 
-- Responses→Responses direct path retains unknown fields, original JSON and original SSE bytes;
-- header allowlist, `x-codex-window-id` extraction and fallback when header is missing;
+- Responses→Responses direct path retains unknown fields, original JSON and original SSE bytes below the transport safety envelope;
+- header allowlist, `x-codex-window-id` extraction, correlation/state-key separation, private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
@@ -185,14 +185,23 @@ The following behavior can be automatically verified using the fixed Codex reque
 - message `commentary`/`final_answer` is consistent in added, done and completed;
 - Text followed by phase inference of function/custom/MCP/shell/computer/tool_search/web_search call;
 - custom/freeform `apply_patch` and code-mode `exec` definition, grammar, delta splicing, call/output and fallback command; among them, `exec`’s Chat downgrade return must be restored to `custom_tool_call`, and non-compliant JSON function parameter guessing must not be rewritten into JavaScript;
-- native/localized tool history mapping, TTL, persistence, failure results and subsequent round of replay;
-- namespace defer, `tool_search_call/output`, multiple searches and window isolation;
+- native/localized tool history mapping with exact encrypted SQLite payloads,
+  authenticated same-process/restart replay, missing/wrong key and tamper
+  fail-closed behavior, plaintext/encrypted-v1 migration, row/session/principal/
+  global row+byte budgets, replacement accounting, TTL release, transaction
+  rollback, abnormal replay bounds, failure results and subsequent-round replay;
+- provider continuation metadata principal entry quotas, same-principal global-oldest replacement, no cross-principal eviction, replacement/TTL/clear accounting, and concurrent saturation;
+- namespace defer, `tool_search_call/output`, multiple searches, window isolation, atomic per-scope/principal/global retained-state budgets, same-principal global-oldest replacement, no cross-principal eviction, and lifecycle accounting;
 - Captured wire fixtures for `multi_agent_v1`, `multi_agent_v2/collaboration`;
 - Captured wire fixtures for code mode `exec/wait`, nested call and wait continuation;
-- web search multi-round event reconstruction and downgrade paths for disabled/missing keys;
+- web search multi-round event reconstruction, downgrade paths for disabled/missing keys, and bounded identity-encoded auxiliary HTTP responses;
 - Cross-format round trip of reasoning effort/summary/content/encrypted state;
 - orphan call/result, residual tool choice/config and history trimming after compact;
-- Concurrency windows, cache expiration, normal EOF, abnormal EOF, upstream 4xx/5xx and retry boundaries;
+- Concurrency windows, cache expiration, normal EOF, abnormal EOF,
+  huge peer-declared HTTP chunks, oversized no-newline SSE lines, accumulated
+  no-delimiter events, converted/raw/web-search client cancellation, upstream
+  4xx/5xx and retry boundaries; verify that below-limit raw Responses SSE is
+  byte-identical and that overflow closes the upstream;
 - `/v1/models` current universal response, and future separately implemented Codex `ModelInfo` catalog contract;
 - Configuration/admin UI saving, defaults and runtime loading of Codex tool-adaptation switches.
 - Static tool-catalog contract: unique IDs, valid placement/policy references, required fixed tools, excluded dynamic tools, policy defaults, and exact CLI/source metadata binding.
@@ -201,9 +210,15 @@ New fixture/component coverage in this round:
 
 - Streaming item event and completed-only phase fallback of `tool_search_call`/`web_search_call`;
 - Two-way isolation of deferred namespace search of two Codex windows;
+- Reused `x-request-id` sequential/concurrent isolation, real-window continuity, and request-local normal/error/cancel cleanup;
+- Deferred-tool canonical UTF-8 byte/count budgets, atomic overflow, replacement, concurrent writers, and TTL/eviction/clear budget return;
+- Deferred-tool and provider-metadata per-principal count quotas, same-principal global-oldest replacement, cross-principal rejection, unique-scope accounting across loaded/deferred maps, and concurrent saturation;
+- Encrypted tool-mapping row/session/principal/global row+byte quotas, replacement without double counting, expiry budget release, raw SQLite accounting, encrypted-v1 backfill, bounded replay, concurrent saturation, and transactional write rollback;
+- Tavily real-loopback normal JSON, Content-Length/chunked/EOF overflow, compressed-response rejection, timeout and cancellation;
+- Tool-mapping TTL validation for environment strings, booleans, non-finite/overflow values, and the inclusive 720-hour boundary;
 - Codex source contract extractor tests for Rust comment/string/braces, enum wire rename, commit and contract drift separation, and baseline canonical serialization.
 
-The remaining items are still listed in this section as the automation backlog; in particular, window isolation is currently a store-level component test, and the complete local gateway concurrent playback has not yet been implemented.
+The remaining items are still listed in this section as the automation backlog. Request-handler lifecycle playback now covers concurrent no-window isolation and persistent-window continuity, while complete local gateway conversion playback with concurrent real HTTP clients remains to be implemented.
 
 Existing special test commands:
 
@@ -211,6 +226,8 @@ Existing special test commands:
 CONDA_ENV="${CODEX_ROSETTA_CONDA_ENV:-llm-rosetta}"
 conda run -n "$CONDA_ENV" python -m pytest \
   tests/gateway/test_app_headers.py \
+  tests/gateway/test_request_state_lifecycle.py \
+  tests/gateway/test_http_transport_limits.py \
   tests/gateway/test_responses_passthrough.py \
   tests/gateway/test_stream_phase_buffer.py \
   tests/gateway/test_window_tool_search_store.py \

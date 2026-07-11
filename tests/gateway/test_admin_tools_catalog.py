@@ -91,7 +91,16 @@ def _make_app():
                 }
             },
             "models": {"gpt-test": "test-provider"},
-            "server": {},
+            "server": {
+                "admin_password": "test-admin-password",
+                "api_keys": [
+                    {
+                        "id": "test-client",
+                        "label": "Test client",
+                        "key": "test-gateway-key",
+                    }
+                ],
+            },
         }
     )
     return create_app(config)
@@ -102,7 +111,7 @@ def _request(app, method: str = "GET") -> Request:
         method=method,
         path="/admin/api/tools/catalog",
         query_string="",
-        headers={},
+        headers={"x-admin-token": app.auth_state.admin_token},
         body=b"",
         client_addr=("127.0.0.1", 12345),
         app=app,

@@ -3,13 +3,68 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
 import codex_rosetta.gateway.app as app_module
-from codex_rosetta._vendor.httpserver import JSONResponse, StreamingResponse
+import pytest
+from codex_rosetta._vendor.httpserver import JSONResponse, Request, StreamingResponse
+from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.gateway.auth import api_key_principal_var
+from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.admin.routes.config import reload_config
 from codex_rosetta.gateway.headers import build_upstream_extra_headers
 from codex_rosetta.routing import ResolvedRoute
+
+
+def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "providers": {
+            "test-provider": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.test/v1",
+                "type": "openai",
+            }
+        },
+        "models": {"gpt-test": "test-provider"},
+        "server": {
+            "admin_password": "test-admin-password",
+            "api_keys": [
+                {
+                    "id": "test-client",
+                    "label": "Test client",
+                    "key": "test-gateway-key",
+                }
+            ],
+            "admin_cors_origins": admin_cors_origins or [],
+        },
+    }
+
+
+def _app_request(
+    app: Any,
+    *,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+) -> Request:
+    return Request(
+        method=method,
+        path=path,
+        query_string="",
+        headers=headers,
+        body=b"",
+        client_addr=("198.51.100.10", 12345),
+        app=app,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_principal():
+    token = api_key_principal_var.set("test-client")
+    yield
+    api_key_principal_var.reset(token)
 
 
 def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version():
@@ -30,6 +85,275 @@ def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version
     }
 
 
+def test_request_log_client_ip_ignores_untrusted_forwarded_headers():
+    request = MagicMock()
+    request.headers = {
+        "x-forwarded-for": "203.0.113.99, 192.0.2.10",
+        "x-real-ip": "203.0.113.100",
+    }
+    request.client_addr = ("198.51.100.10", 12345)
+
+    assert app_module._extract_client_ip(request) == "198.51.100.10"
+
+
+def test_admin_cors_preflight_and_actual_request_require_correct_boundaries(tmp_path):
+    config_data = _gateway_config(admin_cors_origins=["https://admin.example"])
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
+    app = app_module.create_app(
+        GatewayConfig(config_data), config_path=str(config_path)
+    )
+    try:
+        allowed = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="OPTIONS",
+                    path="/admin/api/config",
+                    headers={"origin": "https://admin.example"},
+                )
+            )
+        )
+        assert allowed.status_code == 204
+        assert allowed.headers["Access-Control-Allow-Origin"] == (
+            "https://admin.example"
+        )
+
+        denied = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="OPTIONS",
+                    path="/admin/api/config",
+                    headers={"origin": "https://attacker.example"},
+                )
+            )
+        )
+        assert denied.status_code == 403
+        assert "Access-Control-Allow-Origin" not in denied.headers
+
+        substring = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="OPTIONS",
+                    path="/admin/api/config",
+                    headers={"origin": "https://admin"},
+                )
+            )
+        )
+        assert substring.status_code == 403
+        assert "Access-Control-Allow-Origin" not in substring.headers
+
+        unauthenticated = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="GET",
+                    path="/admin/api/config",
+                    headers={"origin": "https://admin.example"},
+                )
+            )
+        )
+        assert unauthenticated.status_code == 401
+        assert unauthenticated.headers["Access-Control-Allow-Origin"] == (
+            "https://admin.example"
+        )
+        assert unauthenticated.headers["Vary"] == "Origin"
+
+        denied_actual = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="GET",
+                    path="/admin/api/config",
+                    headers={"origin": "https://attacker.example"},
+                )
+            )
+        )
+        assert denied_actual.status_code == 401
+        assert "Access-Control-Allow-Origin" not in denied_actual.headers
+
+        authenticated = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="GET",
+                    path="/admin/api/config",
+                    headers={
+                        "origin": "https://admin.example",
+                        "x-admin-token": getattr(app, "auth_state").admin_token,
+                    },
+                )
+            )
+        )
+        assert authenticated.status_code == 200
+        assert authenticated.headers["Access-Control-Allow-Origin"] == (
+            "https://admin.example"
+        )
+    finally:
+        persistence = getattr(app, "persistence", None)
+        if persistence is not None:
+            persistence.close()
+
+
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/embeddings", "/v1/models"])
+def test_protected_v1_preflight_reaches_public_cors_route(path: str):
+    app = app_module.create_app(GatewayConfig(_gateway_config()))
+
+    response = asyncio.run(
+        app._dispatch(
+            _app_request(
+                app,
+                method="OPTIONS",
+                path=path,
+                headers={
+                    "origin": "https://browser.example",
+                    "access-control-request-method": "POST",
+                    "access-control-request-headers": "authorization",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
+    assert response.headers["Access-Control-Allow-Headers"] == "*"
+
+
+def test_protected_v1_auth_failure_remains_browser_readable():
+    app = app_module.create_app(GatewayConfig(_gateway_config()))
+
+    response = asyncio.run(
+        app._dispatch(
+            _app_request(
+                app,
+                method="POST",
+                path="/v1/responses",
+                headers={
+                    "origin": "https://browser.example",
+                    "authorization": "Bearer wrong-key",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 401
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_dynamically_registered_v1_route_fails_closed():
+    app = app_module.create_app(GatewayConfig(_gateway_config()))
+
+    @app.post("/v1/dynamic")
+    async def dynamic_route(request: Any) -> JSONResponse:
+        return JSONResponse({"reached": True})
+
+    unauthenticated = asyncio.run(
+        app._dispatch(_app_request(app, method="POST", path="/v1/dynamic", headers={}))
+    )
+    authenticated = asyncio.run(
+        app._dispatch(
+            _app_request(
+                app,
+                method="POST",
+                path="/v1/dynamic",
+                headers={"authorization": "Bearer test-gateway-key"},
+            )
+        )
+    )
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code == 200
+
+
+def test_unknown_v1_path_requires_key_then_reaches_router_error():
+    app = app_module.create_app(GatewayConfig(_gateway_config()))
+
+    unauthenticated = asyncio.run(
+        app._dispatch(_app_request(app, method="GET", path="/v1/unknown", headers={}))
+    )
+    authenticated = asyncio.run(
+        app._dispatch(
+            _app_request(
+                app,
+                method="GET",
+                path="/v1/unknown",
+                headers={"authorization": "Bearer test-gateway-key"},
+            )
+        )
+    )
+
+    assert unauthenticated.status_code == 401
+    # The wildcard OPTIONS route makes the current router report 405 for an
+    # unknown non-OPTIONS method. Authentication must run before that result.
+    assert authenticated.status_code == 405
+
+
+def test_unknown_v1_preflight_remains_public():
+    app = app_module.create_app(GatewayConfig(_gateway_config()))
+
+    response = asyncio.run(
+        app._dispatch(
+            _app_request(
+                app,
+                method="OPTIONS",
+                path="/v1/unknown",
+                headers={"origin": "https://browser.example"},
+            )
+        )
+    )
+
+    assert response.status_code == 204
+    assert response.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_admin_cors_preflight_uses_hot_reloaded_allowlist(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    initial_data = _gateway_config(admin_cors_origins=["https://old-admin.example"])
+    config_path.write_text(json.dumps(initial_data), encoding="utf-8")
+    app = app_module.create_app(
+        GatewayConfig(initial_data), config_path=str(config_path)
+    )
+    try:
+        updated_data = _gateway_config(admin_cors_origins=["https://new-admin.example"])
+        config_path.write_text(json.dumps(updated_data), encoding="utf-8")
+
+        reload_response = asyncio.run(reload_config(MagicMock(app=app)))
+        assert reload_response.status_code == 200
+
+        old_origin = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="OPTIONS",
+                    path="/admin/api/config",
+                    headers={"origin": "https://old-admin.example"},
+                )
+            )
+        )
+        new_origin = asyncio.run(
+            app._dispatch(
+                _app_request(
+                    app,
+                    method="OPTIONS",
+                    path="/admin/api/config",
+                    headers={"origin": "https://new-admin.example"},
+                )
+            )
+        )
+
+        assert old_origin.status_code == 403
+        assert new_origin.status_code == 204
+        assert new_origin.headers["Access-Control-Allow-Origin"] == (
+            "https://new-admin.example"
+        )
+    finally:
+        persistence = getattr(app, "persistence", None)
+        if persistence is not None:
+            persistence.close()
+
+
 def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     """The main proxy handler should pass client User-Agent to the upstream call."""
     captured_headers: dict[str, str] = {}
@@ -37,7 +361,7 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     class _Config:
         models = {"gpt-test": "test-provider"}
 
-        def resolve(self, source_provider: str, model: str):
+        def resolve(self, source_provider: ProviderType, model: str):
             return (
                 ResolvedRoute(
                     source_provider=source_provider,
@@ -51,7 +375,6 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
         captured_headers.update(kwargs["extra_headers"])
         return JSONResponse({"ok": True}), {}
 
-    monkeypatch.setattr(app_module, "_config", _Config())
     monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
 
     request = MagicMock()
@@ -65,12 +388,54 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     request.app.request_log = None
     request.app.persistence = None
     request.app.profiler_state = None
+    request.app.gateway_config = _Config()
 
     response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
 
     assert response.status_code == 200
     assert captured_headers["User-Agent"] == "codex-cli/1.2.3"
     assert "x-request-id" in captured_headers
+
+
+def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
+    """Observability storage is best-effort and cannot replace a proxy response."""
+
+    class _Config:
+        models = {"gpt-test": "test-provider"}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name="test-provider",
+                ),
+                MagicMock(),
+            )
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {"model": "gpt-test", "messages": []}
+    request.app.metadata_store = MagicMock()
+    request.app.codex_tool_store = MagicMock()
+    request.app.window_tool_search_store = MagicMock()
+    request.app.transport = MagicMock()
+    request.app.metrics = None
+    request.app.request_log.add.side_effect = RuntimeError("sqlite unavailable")
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 200
+    assert isinstance(response, JSONResponse)
+    assert json.loads(response.body) == {"ok": True}
 
 
 def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
@@ -81,7 +446,7 @@ def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
         models = {"glm-5.2": "test-provider"}
         web_search: dict[str, Any] = {}
 
-        def resolve(self, source_provider: str, model: str):
+        def resolve(self, source_provider: ProviderType, model: str):
             return (
                 ResolvedRoute(
                     source_provider=source_provider,
@@ -100,7 +465,6 @@ def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
 
         return StreamingResponse(_empty_stream(), content_type="text/event-stream"), {}
 
-    monkeypatch.setattr(app_module, "_config", _Config())
     monkeypatch.setattr(app_module, "handle_streaming", _fake_handle_streaming)
 
     request = MagicMock()
@@ -120,12 +484,18 @@ def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
     request.app.profiler_state = None
     request.app.stream_trace_state = None
     request.app.transport = MagicMock()
+    request.app.gateway_config = _Config()
 
     response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
 
     assert response.status_code == 200
     assert captured_kwargs["codex_window_id"] == "thread-abc:0"
-    assert captured_kwargs["tool_cache_session_id"] == "thread-abc:0"
+    scope = captured_kwargs["state_scope"]
+    assert scope.principal_id == "test-client"
+    assert scope.provider_name == "test-provider"
+    assert scope.model == "glm-5.2"
+    assert scope.conversation_id == "thread-abc:0"
+    assert scope.persistent is True
     assert "x-codex-window-id" not in captured_kwargs["extra_headers"]
 
 
@@ -136,7 +506,7 @@ def test_proxy_handler_passes_codex_window_id_to_non_streaming_proxy(monkeypatch
     class _Config:
         models = {"glm-5.2": "test-provider"}
 
-        def resolve(self, source_provider: str, model: str):
+        def resolve(self, source_provider: ProviderType, model: str):
             return (
                 ResolvedRoute(
                     source_provider=source_provider,
@@ -150,7 +520,6 @@ def test_proxy_handler_passes_codex_window_id_to_non_streaming_proxy(monkeypatch
         captured_kwargs.update(kwargs)
         return JSONResponse({"ok": True}), {}
 
-    monkeypatch.setattr(app_module, "_config", _Config())
     monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
 
     request = MagicMock()
@@ -165,10 +534,16 @@ def test_proxy_handler_passes_codex_window_id_to_non_streaming_proxy(monkeypatch
     request.app.persistence = None
     request.app.profiler_state = None
     request.app.transport = MagicMock()
+    request.app.gateway_config = _Config()
 
     response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
 
     assert response.status_code == 200
     assert captured_kwargs["codex_window_id"] == "thread-abc:0"
-    assert captured_kwargs["tool_cache_session_id"] == "thread-abc:0"
+    scope = captured_kwargs["state_scope"]
+    assert scope.principal_id == "test-client"
+    assert scope.provider_name == "test-provider"
+    assert scope.model == "glm-5.2"
+    assert scope.conversation_id == "thread-abc:0"
+    assert scope.persistent is True
     assert "x-codex-window-id" not in captured_kwargs["extra_headers"]

@@ -19,7 +19,8 @@ chown -R appuser:appgroup /config
 if [ ! -f /config/config.jsonc ]; then
 	echo "No config.jsonc found in /config, generating template..."
 	su-exec appuser codex-rosetta-gateway --config /config/config.jsonc init
-	echo "Edit /config/config.jsonc with your API keys and restart the container."
+	echo "A mandatory random Admin password and gateway access key were generated."
+	echo "Store them securely, edit provider API keys, and restart the container."
 fi
 
 # Switch to appuser and execute the command passed as arguments

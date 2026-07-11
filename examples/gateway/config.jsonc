@@ -38,7 +38,18 @@
 
   // Server settings
   "server": {
-    "host": "0.0.0.0",
-    "port": 8765
+    // Keep loopback for local use. Docker overrides this to 0.0.0.0 and must
+    // retain the mandatory password and access key below.
+    "host": "127.0.0.1",
+    "port": 8765,
+    "admin_password": "${CODEX_ROSETTA_ADMIN_PASSWORD}",
+    "credential_visible": false,
+    "api_keys": [
+      {
+        "id": "default",
+        "label": "Default client",
+        "key": "${CODEX_ROSETTA_API_KEY}"
+      }
+    ]
   }
 }

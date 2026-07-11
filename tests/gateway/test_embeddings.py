@@ -88,6 +88,16 @@ def _make_config(base_url: str, upstream_model: str | None = None) -> GatewayCon
         "models": {
             "my-embed": model_entry,
         },
+        "server": {
+            "admin_password": "test-admin-password",
+            "api_keys": [
+                {
+                    "id": "test-client",
+                    "label": "Test client",
+                    "key": "test-gateway-key",
+                }
+            ],
+        },
     }
     return GatewayConfig(raw)
 

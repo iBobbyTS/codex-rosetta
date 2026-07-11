@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from codex_rosetta._vendor.httpclient import AsyncClient, Response as HttpResponse
+from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.reasoning_mapping import (
     normalize_reasoning_mapping,
@@ -16,7 +17,6 @@ from ...config import (
     GatewayConfig,
     load_config_raw,
     resolve_provider_config_type_and_shim,
-    write_config,
 )
 from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
@@ -25,12 +25,16 @@ from ...tool_adaptation import (
     DEFAULT_ENABLE_TOOL_DESCRIPTION_OPTIMIZATION,
     DEFAULT_TOOL_CALL_CACHE_TTL_HOURS,
     DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
+    validate_tool_call_cache_ttl_hours,
 )
+from ...transport.http.transport import request_bounded_response
 from ._shared import (
     _build_provider_entry,
+    _commit_gateway_config,
     _get_config_path,
     _handle_provider_rename,
     _mask_api_key,
+    _parse_json_object,
     _reload_gateway_config,
 )
 
@@ -52,6 +56,7 @@ def _mask_web_search_config(value: Any) -> dict[str, Any]:
 def _mask_server_config(value: Any) -> dict[str, Any]:
     """Return a copy of server config with sensitive admin values masked."""
     server = dict(value) if isinstance(value, dict) else {}
+    server.pop("admin_password", None)
     if "api_key" in server:
         server["api_key"] = _mask_api_key(server["api_key"])
     if "api_keys" in server:
@@ -99,10 +104,8 @@ def _apply_web_search_settings(
 
 
 def _get_gateway_config(request: Any) -> GatewayConfig | None:
-    """Return the live GatewayConfig from the app module."""
-    import codex_rosetta.gateway.app as _app_mod
-
-    return _app_mod._config
+    """Return the live GatewayConfig owned by this app instance."""
+    return getattr(request.app, "gateway_config", None)
 
 
 def _get_version() -> str:
@@ -120,14 +123,9 @@ def _clean_tool_adaptation(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
 
-    try:
-        ttl_hours = float(
-            value.get("tool_call_cache_ttl_hours", DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
-        )
-    except (TypeError, ValueError):
-        ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
-    if ttl_hours <= 0:
-        ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
+    ttl_hours = validate_tool_call_cache_ttl_hours(
+        value.get("tool_call_cache_ttl_hours", DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
+    )
 
     cleaned = {
         "localize_code_editing_tools": bool(value.get("localize_code_editing_tools")),
@@ -517,10 +515,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     name = request.path_params["name"]
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     api_key = body.get("api_key", "")
     base_url = body.get("base_url", "")
@@ -555,24 +552,10 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     data.setdefault("providers", {})[name] = provider_entry
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {
@@ -643,24 +626,10 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
 
     del providers[name]
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     result: dict[str, Any] = {
         "ok": True,
@@ -701,24 +670,9 @@ async def toggle_provider(request: Any, **kwargs: Any) -> Response:
     else:
         providers[name]["enabled"] = False
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
     return JSONResponse({"ok": True, "provider": name, "enabled": new_enabled})
 
@@ -731,10 +685,9 @@ async def put_model(request: Any, **kwargs: Any) -> Response:
 
     name = request.path_params["name"]
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     provider = body.get("provider")
     if not provider:
@@ -783,29 +736,18 @@ async def put_model(request: Any, **kwargs: Any) -> Response:
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
-    cleaned_tool_adaptation = _clean_tool_adaptation(body.get("tool_adaptation"))
+    try:
+        cleaned_tool_adaptation = _clean_tool_adaptation(body.get("tool_adaptation"))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
     if cleaned_tool_adaptation:
         model_entry["tool_adaptation"] = cleaned_tool_adaptation
     models[name] = model_entry
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {
@@ -837,24 +779,10 @@ async def delete_model(request: Any, **kwargs: Any) -> Response:
 
     del models[name]
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {
@@ -873,10 +801,9 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
 
     name = request.path_params["name"]
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     provider = body.get("provider")
     if not provider:
@@ -925,24 +852,10 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
 
     model_groups[name] = {"provider": provider, "models": cleaned_models}
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {
@@ -975,24 +888,10 @@ async def delete_model_group(request: Any, **kwargs: Any) -> Response:
 
     del model_groups[name]
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    try:
-        new_config = _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {
@@ -1009,10 +908,9 @@ async def put_server_settings(request: Any) -> Response:
     if not config_path:
         return JSONResponse({"error": "No config file path available"}, status_code=500)
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     try:
         data = load_config_raw(config_path)
@@ -1060,30 +958,11 @@ async def put_server_settings(request: Any) -> Response:
     if web_search_error:
         return JSONResponse({"error": web_search_error}, status_code=400)
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
+    _, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
 
-    try:
-        _reload_gateway_config(request, config_path)
-    except Exception as exc:
-        return JSONResponse(
-            {
-                "error": f"Config saved but reload failed: {exc}",
-                "saved": True,
-                "reloaded": False,
-            },
-            status_code=500,
-        )
-
-    response_server = dict(data.get("server", {}))
-    if "web_search" in response_server:
-        response_server["web_search"] = _mask_web_search_config(
-            response_server["web_search"]
-        )
+    response_server = _mask_server_config(data.get("server", {}))
     return JSONResponse({"ok": True, "server": response_server})
 
 
@@ -1156,11 +1035,15 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
     headers = pinfo.auth_headers()
 
     try:
-        client = AsyncClient(timeout=10.0, proxy=pinfo.proxy_url)
-        raw_resp = await client.get(models_url, headers=headers)
-        assert isinstance(raw_resp, HttpResponse), "Expected non-streaming response"
-        resp: HttpResponse = raw_resp
-        await client.aclose()
+        async with AsyncClient(timeout=10.0, proxy=pinfo.proxy_url) as client:
+            resp = await request_bounded_response(
+                client,
+                "GET",
+                models_url,
+                headers=headers,
+            )
+    except asyncio.CancelledError:
+        raise
     except Exception as exc:
         logger.warning("Failed to fetch models from %s: %s", provider_name, exc)
         msg = _format_connection_error(exc, models_url)
@@ -1225,10 +1108,9 @@ async def bulk_add_models(request: Any) -> Response:
     if not config_path:
         return JSONResponse({"error": "No config file path available"}, status_code=500)
 
-    try:
-        body = request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON body"}, status_code=400)
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
 
     provider = body.get("provider")
     models_to_add: list[str] = body.get("models", [])
@@ -1284,14 +1166,10 @@ async def bulk_add_models(request: Any) -> Response:
             }
         )
 
-    try:
-        write_config(config_path, data)
-    except Exception as exc:
-        return JSONResponse(
-            {"error": f"Failed to write config: {exc}"}, status_code=500
-        )
-
-    new_config = _reload_gateway_config(request, config_path)
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
 
     return JSONResponse(
         {

@@ -6,8 +6,11 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
+import pytest
+
+from codex_rosetta.gateway.admin.routes import _shared
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     get_config,
@@ -15,9 +18,15 @@ from codex_rosetta.gateway.admin.routes.config import (
     put_model_group,
     put_provider,
     put_server_settings,
+    reload_config,
 )
+from codex_rosetta.gateway.app import create_app
+from codex_rosetta.gateway.auth import AuthState
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.logging import BodyLogState
 from codex_rosetta.gateway.stream_trace import StreamTraceState
+from codex_rosetta.observability.metrics import MetricsCollector
+from codex_rosetta.observability.request_log import RequestLogEntry
 
 
 def _run(coro: Any) -> Any:
@@ -34,8 +43,54 @@ def _config_data() -> dict[str, Any]:
             }
         },
         "models": {"gpt-test": "openai"},
-        "server": {},
+        "server": {
+            "admin_password": "test-admin-password",
+            "api_keys": [
+                {
+                    "id": "test-client",
+                    "label": "Test client",
+                    "key": "test-gateway-key",
+                }
+            ],
+        },
     }
+
+
+class _PersistenceState:
+    def __init__(self, redactor: Any) -> None:
+        self._redactor = redactor
+        self.success_max = 50000
+        self.error_max = 10000
+
+    def prepare_update(
+        self,
+        values: set[str],
+        *,
+        success_max: int,
+        error_max: int,
+    ) -> tuple[set[str], int, int]:
+        return set(values), success_max, error_max
+
+    def commit_update(
+        self, prepared: tuple[set[str], int, int]
+    ) -> tuple[Any, int, int]:
+        rollback = (self._redactor, self.success_max, self.error_max)
+        self._redactor, self.success_max, self.error_max = prepared
+        return rollback
+
+    def rollback_update(self, rollback: tuple[Any, int, int]) -> None:
+        self._redactor, self.success_max, self.error_max = rollback
+
+
+def _log_entry(index: int, *, status_code: int = 200) -> dict[str, Any]:
+    return RequestLogEntry.create(
+        model=f"model-{index}",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        is_stream=False,
+        status_code=status_code,
+        duration_ms=1.0,
+    ).to_dict()
 
 
 def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
@@ -63,6 +118,7 @@ def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
     response = _run(put_server_settings(request))
 
     assert response.status_code == 200
+    assert "admin_password" not in json.loads(response.body.decode("utf-8"))["server"]
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["stream_trace"] == {
         "enabled": True,
@@ -73,6 +129,385 @@ def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
     assert app.stream_trace_state.config.enabled is True
     assert app.stream_trace_state.config.filter == "glm,opencode"
     assert app.stream_trace_state.config.path == "~/trace/log.jsonl"
+
+
+def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    initial_data = _config_data()
+    config_path.write_text(json.dumps(initial_data), encoding="utf-8")
+    initial_config = GatewayConfig(initial_data)
+    auth_state = AuthState(
+        dict(initial_config.api_key_principals),
+        dict(initial_config.api_key_labels),
+        "internal-token",
+        initial_config.admin_password,
+    )
+    previous_token = auth_state.admin_token
+    captured_tokens: set[str] = set()
+    persistence = _PersistenceState(captured_tokens)
+    metrics = MetricsCollector()
+    metrics.update_token_values(initial_config.token_values)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=None,
+        persistence=persistence,
+        metrics=metrics,
+        internal_token="internal-token",
+        auth_state=auth_state,
+    )
+
+    updated_data = _config_data()
+    updated_data["server"]["admin_password"] = "rotated-admin-password"
+    updated_data["server"]["api_keys"][0]["key"] = "rotated-gateway-token"
+    updated_data["server"]["proxy"] = "http://user:ordinary-proxy-password@example.test"
+    updated_data["providers"]["openai"]["api_key"] = "rotated-provider-token"
+    updated_data["providers"]["openai"]["client_secret"] = "ordinary-client-secret"
+    config_path.write_text(json.dumps(updated_data), encoding="utf-8")
+
+    response = _run(reload_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    assert auth_state.admin_password == "rotated-admin-password"
+    assert auth_state.admin_token is not None
+    assert auth_state.admin_token != previous_token
+    assert persistence._redactor == {
+        "internal-token",
+        "rotated-gateway-token",
+        "rotated-provider-token",
+    }
+    assert (
+        metrics.redact_sensitive(
+            "rotated-provider-token prompt=user@example.com password=ordinary-password"
+        )
+        == "[REDACTED] prompt=user@example.com password=ordinary-password"
+    )
+
+
+def test_reload_config_preserves_special_environment_password_as_data(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    special = 'admin","credential_visible":true,"injected":"\\line\nrest'
+    monkeypatch.setenv("SPECIAL_ADMIN_PASSWORD", special)
+    config_path = tmp_path / "config.jsonc"
+    stored_data = _config_data()
+    stored_data["server"]["admin_password"] = "${SPECIAL_ADMIN_PASSWORD}"
+    stored_data["server"]["credential_visible"] = False
+    config_path.write_text(json.dumps(stored_data), encoding="utf-8")
+
+    initial_config = GatewayConfig(_config_data())
+    auth_state = AuthState(
+        dict(initial_config.api_key_principals),
+        dict(initial_config.api_key_labels),
+        "internal-token",
+        initial_config.admin_password,
+    )
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=None,
+        persistence=None,
+        metrics=None,
+        internal_token="internal-token",
+        auth_state=auth_state,
+    )
+
+    response = _run(reload_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    assert app.gateway_config.admin_password == special
+    assert app.gateway_config.credential_visible is False
+    assert auth_state.admin_password == special
+    assert "injected" not in json.loads(config_path.read_text())["server"]
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ["auth", "trace", "body_log", "persistence", "metrics", "cors"],
+)
+def test_config_prepare_failure_leaves_disk_and_all_runtime_state_unchanged(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_stage: str,
+):
+    """Every fallible activation stage completes before config persistence."""
+    config_path = tmp_path / "config.jsonc"
+    initial_data = _config_data()
+    initial_data["server"]["admin_cors_origins"] = ["https://old.example"]
+    original = json.dumps(initial_data, indent=2).encode()
+    config_path.write_bytes(original)
+
+    initial_config = GatewayConfig(initial_data)
+    auth_state = AuthState(
+        dict(initial_config.api_key_principals),
+        dict(initial_config.api_key_labels),
+        "internal-token",
+        initial_config.admin_password,
+    )
+    trace_state = StreamTraceState(
+        initial_config.stream_trace,
+        token_values=initial_config.token_values,
+    )
+    persistence_redactor = object()
+    persistence = _PersistenceState(persistence_redactor)
+    body_log_state = BodyLogState(
+        enabled=False,
+        token_values={"test-gateway-key", "internal-token"},
+    )
+    metrics_redactor = object()
+    metrics = SimpleNamespace(
+        _redactor=metrics_redactor,
+        prepare_token_values=lambda values: object(),
+    )
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        auth_state=auth_state,
+        stream_trace_state=trace_state,
+        body_log_state=body_log_state,
+        persistence=persistence,
+        metrics=metrics,
+        internal_token="internal-token",
+        admin_cors_origins=("https://old.example",),
+    )
+    request = SimpleNamespace(app=app)
+
+    def _fail(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError(f"simulated {failure_stage} prepare failure")
+
+    if failure_stage == "auth":
+        monkeypatch.setattr(auth_state, "prepare_update", _fail)
+    elif failure_stage == "trace":
+        monkeypatch.setattr(trace_state, "prepare_update", _fail)
+    elif failure_stage == "body_log":
+        monkeypatch.setattr(body_log_state, "prepare_update", _fail)
+    elif failure_stage == "persistence":
+        monkeypatch.setattr(persistence, "prepare_update", _fail)
+    elif failure_stage == "metrics":
+        monkeypatch.setattr(metrics, "prepare_token_values", _fail)
+    else:
+        monkeypatch.setattr(_shared, "_prepare_admin_cors_origins", _fail)
+
+    candidate = _config_data()
+    candidate["server"]["admin_password"] = "new-admin-password"
+    candidate["server"]["api_keys"][0]["key"] = "new-gateway-key"
+    candidate["server"]["stream_trace"] = {"enabled": True}
+    candidate["server"]["admin_cors_origins"] = ["https://new.example"]
+    candidate["debug"] = {"log_bodies": True}
+
+    _config, error = _shared._commit_gateway_config(
+        request, str(config_path), candidate
+    )
+
+    assert _config is None
+    assert error is not None
+    assert error.status_code == 500
+    assert f"simulated {failure_stage} prepare failure" in error.body.decode()
+    assert config_path.read_bytes() == original
+    assert app.gateway_config is initial_config
+    assert auth_state.admin_password == "test-admin-password"
+    assert auth_state.principals == {"test-gateway-key": "test-client"}
+    assert trace_state.config is initial_config.stream_trace
+    assert body_log_state.enabled is False
+    assert "test-gateway-key" not in body_log_state.render("test-gateway-key")
+    assert persistence._redactor is persistence_redactor
+    assert metrics._redactor is metrics_redactor
+    assert app.admin_cors_origins == ("https://old.example",)
+
+
+def test_config_commit_persists_normalized_cors_and_updates_live_allowlist(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    initial_data = _config_data()
+    config_path.write_text(json.dumps(initial_data), encoding="utf-8")
+    initial_config = GatewayConfig(initial_data)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        auth_state=None,
+        stream_trace_state=None,
+        persistence=None,
+        admin_cors_origins=(),
+    )
+    candidate = _config_data()
+    candidate["server"]["admin_cors_origins"] = [
+        "HTTPS://ADMIN.EXAMPLE:443/",
+        "https://admin.example",
+    ]
+
+    config, error = _shared._commit_gateway_config(
+        SimpleNamespace(app=app), str(config_path), candidate
+    )
+
+    assert error is None
+    assert config is not None
+    assert app.admin_cors_origins == ("https://admin.example",)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["admin_cors_origins"] == ["https://admin.example"]
+
+
+def test_config_commit_hot_reloads_caps_and_prunes_immediately(tmp_path, monkeypatch):
+    monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX", raising=False)
+    monkeypatch.delenv("REQUEST_LOG_ERROR_MAX", raising=False)
+    initial_data = _config_data()
+    initial_data["server"]["request_log"] = {"success_max": 10, "error_max": 10}
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(initial_data), encoding="utf-8")
+    app = cast(
+        Any,
+        create_app(GatewayConfig(initial_data), config_path=str(config_path)),
+    )
+    app.persistence.insert_log_entries(
+        [_log_entry(index) for index in range(5)]
+        + [_log_entry(index, status_code=500) for index in range(5, 9)]
+    )
+    candidate = _config_data()
+    candidate["server"]["request_log"] = {"success_max": 2, "error_max": 1}
+
+    try:
+        config, error = _shared._commit_gateway_config(
+            SimpleNamespace(app=app),
+            str(config_path),
+            candidate,
+        )
+
+        assert error is None
+        assert config is not None
+        assert app.gateway_config is config
+        assert app.persistence.success_max == 2
+        assert app.persistence.error_max == 1
+        assert app.persistence.count_success_entries() == 2
+        assert app.persistence.count_error_entries() == 1
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert saved["server"]["request_log"] == {
+            "success_max": 2,
+            "error_max": 1,
+        }
+    finally:
+        app.persistence.close()
+
+
+def test_config_commit_zero_caps_prunes_both_request_classes(tmp_path, monkeypatch):
+    monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX", raising=False)
+    monkeypatch.delenv("REQUEST_LOG_ERROR_MAX", raising=False)
+    initial_data = _config_data()
+    initial_data["server"]["request_log"] = {"success_max": 10, "error_max": 10}
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(initial_data), encoding="utf-8")
+    app = cast(
+        Any, create_app(GatewayConfig(initial_data), config_path=str(config_path))
+    )
+    app.persistence.insert_log_entries(
+        [_log_entry(index) for index in range(3)]
+        + [_log_entry(index, status_code=500) for index in range(3, 6)]
+    )
+    candidate = _config_data()
+    candidate["server"]["request_log"] = {"success_max": 0, "error_max": 0}
+
+    try:
+        config, error = _shared._commit_gateway_config(
+            SimpleNamespace(app=app), str(config_path), candidate
+        )
+
+        assert error is None
+        assert config is not None
+        assert app.persistence.count_success_entries() == 0
+        assert app.persistence.count_error_entries() == 0
+    finally:
+        app.persistence.close()
+
+
+def test_config_write_failure_after_activation_restores_runtime_and_pruned_rows(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX", raising=False)
+    monkeypatch.delenv("REQUEST_LOG_ERROR_MAX", raising=False)
+    initial_data = _config_data()
+    initial_data["server"]["request_log"] = {"success_max": 10, "error_max": 10}
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(initial_data).encode("utf-8")
+    config_path.write_bytes(original)
+    initial_config = GatewayConfig(initial_data)
+    app = cast(Any, create_app(initial_config, config_path=str(config_path)))
+    app.persistence.insert_log_entries([_log_entry(index) for index in range(5)])
+    old_admin_token = app.auth_state.admin_token
+    candidate = _config_data()
+    candidate["server"]["admin_password"] = "new-admin-password"
+    candidate["server"]["request_log"] = {"success_max": 1, "error_max": 1}
+    candidate["debug"] = {"log_bodies": True}
+
+    def activate_then_fail(
+        _path: str,
+        _data: dict[str, Any],
+        *,
+        activate: Any,
+    ) -> None:
+        activate()
+        raise OSError("simulated post-activation write failure")
+
+    monkeypatch.setattr(_shared, "write_config", activate_then_fail)
+
+    try:
+        config, error = _shared._commit_gateway_config(
+            SimpleNamespace(app=app),
+            str(config_path),
+            candidate,
+        )
+
+        assert config is None
+        assert error is not None
+        assert error.status_code == 500
+        assert app.gateway_config is initial_config
+        assert app.auth_state.admin_password == "test-admin-password"
+        assert app.auth_state.admin_token == old_admin_token
+        assert app.body_log_state.enabled is False
+        assert "test-gateway-key" not in app.body_log_state.render("test-gateway-key")
+        assert app.persistence.success_max == 10
+        assert app.persistence.error_max == 10
+        assert app.persistence.count_success_entries() == 5
+        assert config_path.read_bytes() == original
+    finally:
+        app.persistence.close()
+
+
+def test_retention_activation_is_isolated_between_apps(tmp_path, monkeypatch):
+    monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX", raising=False)
+    monkeypatch.delenv("REQUEST_LOG_ERROR_MAX", raising=False)
+    initial_data = _config_data()
+    initial_data["server"]["request_log"] = {"success_max": 10, "error_max": 10}
+    path_a = tmp_path / "a" / "config.jsonc"
+    path_b = tmp_path / "b" / "config.jsonc"
+    path_a.parent.mkdir()
+    path_b.parent.mkdir()
+    path_a.write_text(json.dumps(initial_data), encoding="utf-8")
+    path_b.write_text(json.dumps(initial_data), encoding="utf-8")
+    app_a = cast(
+        Any,
+        create_app(GatewayConfig(initial_data), config_path=str(path_a)),
+    )
+    app_b = cast(
+        Any,
+        create_app(GatewayConfig(initial_data), config_path=str(path_b)),
+    )
+    app_a.persistence.insert_log_entries([_log_entry(index) for index in range(5)])
+    app_b.persistence.insert_log_entries([_log_entry(index) for index in range(5)])
+    updated_data = _config_data()
+    updated_data["server"]["request_log"] = {"success_max": 1, "error_max": 2}
+
+    try:
+        _shared._activate_gateway_config(
+            SimpleNamespace(app=app_a),
+            GatewayConfig(updated_data),
+        )
+
+        assert app_a.persistence.success_max == 1
+        assert app_a.persistence.count_success_entries() == 1
+        assert app_b.persistence.success_max == 10
+        assert app_b.persistence.count_success_entries() == 5
+    finally:
+        app_a.persistence.close()
+        app_b.persistence.close()
 
 
 def test_put_server_settings_persists_tavily_api_key(tmp_path):
@@ -139,6 +574,44 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
     assert body["server"]["web_search"]["tavily_api_key"] == "tvly***7890"
+
+
+@pytest.mark.parametrize("credential_visible", [False, True])
+@pytest.mark.parametrize(
+    ("stored_password", "runtime_password"),
+    [
+        ("literal-admin-password", "literal-admin-password"),
+        ("${TEST_ADMIN_PASSWORD}", "environment-admin-password"),
+    ],
+)
+def test_get_config_never_returns_admin_password(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    credential_visible: bool,
+    stored_password: str,
+    runtime_password: str,
+):
+    """Admin config responses never expose literal or env-backed passwords."""
+    monkeypatch.setenv("TEST_ADMIN_PASSWORD", runtime_password)
+    config = _config_data()
+    config["server"]["admin_password"] = stored_password
+    config["server"]["credential_visible"] = credential_visible
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig.from_raw_with_env(config),
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode("utf-8"))
+    assert "admin_password" not in body["server"]
+    assert stored_password not in response.body.decode("utf-8")
+    assert runtime_password not in response.body.decode("utf-8")
 
 
 def test_put_provider_persists_provider_and_api_type(tmp_path):
@@ -305,6 +778,59 @@ def test_put_model_omits_default_tool_adaptation(tmp_path):
         "tools",
         "reasoning",
     ]
+
+
+@pytest.mark.parametrize("ttl", [True, "nan", "inf", "1e999", 720.01])
+def test_put_model_rejects_invalid_tool_mapping_ttl_without_writing(tmp_path, ttl):
+    config_path = tmp_path / "config.jsonc"
+    original = _config_data()
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    initial_config = GatewayConfig(original)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "gpt-test"})
+    request.json = lambda: {
+        "provider": "openai",
+        "capabilities": ["text", "tools"],
+        "tool_adaptation": {"tool_call_cache_ttl_hours": ttl},
+    }
+
+    response = _run(put_model(request))
+
+    assert response.status_code == 400
+    assert b"at most 720 hours" in response.body
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+
+
+def test_put_model_accepts_maximum_tool_mapping_ttl(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "gpt-test"})
+    request.json = lambda: {
+        "provider": "openai",
+        "capabilities": ["text", "tools"],
+        "tool_adaptation": {"tool_call_cache_ttl_hours": 720},
+    }
+
+    response = _run(put_model(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        saved["models"]["gpt-test"]["tool_adaptation"]["tool_call_cache_ttl_hours"]
+        == 720.0
+    )
 
 
 def test_put_model_persists_reasoning_mapping_and_drops_legacy_override(tmp_path):

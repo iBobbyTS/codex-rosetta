@@ -9,13 +9,18 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import shlex
+import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
+from .state_scope import GatewayStateScope
+
 
 DEFAULT_TOOL_CALL_CACHE_TTL_HOURS = 24.0
+MAX_TOOL_CALL_CACHE_TTL_HOURS = 720.0
 DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS = True
 DEFAULT_ENABLE_TOOL_DESCRIPTION_OPTIMIZATION = True
 DEFAULT_ENABLE_PHASE_DETECTION = True
@@ -189,32 +194,70 @@ class CodexToolLocalizationStore:
     model when it recognizes the call_id.
     """
 
-    def __init__(self, *, max_size: int = 10_000) -> None:
-        self._items: OrderedDict[str, LocalizedToolMapping] = OrderedDict()
+    def __init__(
+        self,
+        *,
+        max_size: int = 10_000,
+        _items: OrderedDict[tuple[GatewayStateScope, str], LocalizedToolMapping]
+        | None = None,
+        _scope: GatewayStateScope | None = None,
+    ) -> None:
+        self._is_root = _items is None
+        self._items = _items if _items is not None else OrderedDict()
         self._max_size = max_size
+        self._scope = _scope or GatewayStateScope(
+            principal_id="__standalone_store__",
+            provider_name="",
+            model="",
+            conversation_id=f"request:{uuid.uuid4().hex}",
+            persistent=False,
+        )
+
+    def scoped(self, scope: GatewayStateScope) -> CodexToolLocalizationStore:
+        """Return a view whose keys are namespaced to *scope*."""
+        return CodexToolLocalizationStore(
+            max_size=self._max_size,
+            _items=self._items,
+            _scope=scope,
+        )
+
+    def _key(self, call_id: str) -> tuple[GatewayStateScope, str]:
+        return self._scope, call_id
 
     def remember(self, mapping: LocalizedToolMapping) -> None:
         """Remember one localized/native call mapping."""
         if not mapping.call_id:
             return
-        self._items[mapping.call_id] = mapping
-        self._items.move_to_end(mapping.call_id)
+        key = self._key(mapping.call_id)
+        self._items[key] = mapping
+        self._items.move_to_end(key)
         while len(self._items) > self._max_size:
             self._items.popitem(last=False)
 
     def get(self, call_id: str) -> LocalizedToolMapping | None:
         """Return a mapping by call_id, if present."""
-        mapping = self._items.get(call_id)
+        key = self._key(call_id)
+        mapping = self._items.get(key)
         if mapping is not None:
-            self._items.move_to_end(call_id)
+            self._items.move_to_end(key)
         return mapping
 
     def clear(self) -> None:
-        """Remove all remembered mappings."""
+        """Remove remembered mappings owned by this store's scope."""
+        keys = [key for key in self._items if key[0] == self._scope]
+        for key in keys:
+            del self._items[key]
+
+    def clear_all(self) -> None:
+        """Remove all mappings owned by this root store."""
+        if not self._is_root:
+            raise RuntimeError("clear_all() is only available on a root store")
         self._items.clear()
 
     def __len__(self) -> int:
-        return len(self._items)
+        if self._is_root:
+            return len(self._items)
+        return sum(1 for scope, _call_id in self._items if scope == self._scope)
 
 
 def should_localize_code_tools(route: Any) -> bool:
@@ -337,7 +380,12 @@ def restore_localized_history_from_mappings(
 
     used_call_ids: set[str] = set()
     adapted["messages"] = [
-        _localize_history_message(message, None, mappings, used_call_ids=used_call_ids)
+        _localize_history_message(
+            message,
+            None,
+            mappings,
+            used_call_ids=used_call_ids,
+        )
         for message in messages
     ]
     return adapted, used_call_ids
@@ -347,6 +395,7 @@ def translate_localized_ir_response(
     ir_response: dict[str, Any],
     *,
     store: CodexToolLocalizationStore | None = None,
+    on_mapping: Any | None = None,
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
     use_apply_patch: bool = DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
@@ -376,6 +425,8 @@ def translate_localized_ir_response(
             part.update(translated.part)
             if store is not None:
                 store.remember(translated.mapping)
+            if on_mapping is not None:
+                on_mapping(translated.mapping)
     return ir_response
 
 
@@ -1171,7 +1222,10 @@ def _localize_history_tool_call(
     call_id = tool_call.get("id", "")
     mapping = store.get(call_id) if store is not None else None
     if mapping is None:
-        mapping = _mapping_for_codex_tool_call(tool_call, mappings or [])
+        mapping = _mapping_for_codex_tool_call(
+            tool_call,
+            mappings or [],
+        )
     if mapping is not None and used_call_ids is not None:
         used_call_ids.add(mapping.call_id)
     if mapping is None:
@@ -1204,7 +1258,10 @@ def _mapping_for_codex_tool_call(
     mappings: list[LocalizedToolMapping],
 ) -> LocalizedToolMapping | None:
     for mapping in mappings:
-        if _tool_call_matches_mapping(tool_call, mapping):
+        if _tool_call_matches_mapping(
+            tool_call,
+            mapping,
+        ):
             return mapping
     return None
 
@@ -1276,12 +1333,40 @@ def tool_call_cache_ttl_hours(tool_adaptation: dict[str, Any] | None) -> float:
     if not isinstance(tool_adaptation, dict):
         return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
     value = tool_adaptation.get("tool_call_cache_ttl_hours")
+    if value is None:
+        return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
+
+    return validate_tool_call_cache_ttl_hours(value)
+
+
+def validate_tool_call_cache_ttl_hours(
+    value: Any,
+    *,
+    field: str = "tool_call_cache_ttl_hours",
+) -> float:
+    """Validate and normalize the persistent tool-mapping TTL.
+
+    Numeric strings are accepted so environment-substituted configuration uses
+    the same boundary as literal JSON numbers. Booleans, non-finite values,
+    and values outside the supported retention window are rejected.
+    """
+    if isinstance(value, bool):
+        raise ValueError(
+            f"{field} must be a finite number greater than 0 and at most "
+            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
+        )
     try:
         ttl = float(value)
     except (TypeError, ValueError):
-        return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
-    if ttl <= 0:
-        return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
+        raise ValueError(
+            f"{field} must be a finite number greater than 0 and at most "
+            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
+        ) from None
+    if not math.isfinite(ttl) or not 0 < ttl <= MAX_TOOL_CALL_CACHE_TTL_HOURS:
+        raise ValueError(
+            f"{field} must be a finite number greater than 0 and at most "
+            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
+        )
     return ttl
 
 

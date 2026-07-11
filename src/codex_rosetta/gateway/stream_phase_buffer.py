@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any
 
@@ -9,6 +10,8 @@ from codex_rosetta.converters.openai_responses._constants import ResponsesEventT
 
 COMMENTARY_PHASE = "commentary"
 FINAL_ANSWER_PHASE = "final_answer"
+DEFAULT_MAX_BUFFERED_EVENTS = 256
+DEFAULT_MAX_BUFFERED_BYTES = 1024 * 1024
 
 _MESSAGE_EVENT_TYPES = {
     ResponsesEventType.CONTENT_PART_ADDED,
@@ -47,15 +50,28 @@ class ResponsesPhaseBuffer:
     Codex-like clients without changing provider-neutral IR semantics.
     """
 
-    def __init__(self, *, window_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        window_id: str,
+        max_buffered_events: int = DEFAULT_MAX_BUFFERED_EVENTS,
+        max_buffered_bytes: int = DEFAULT_MAX_BUFFERED_BYTES,
+    ) -> None:
         self.window_id = window_id
+        self._max_buffered_events = max_buffered_events
+        self._max_buffered_bytes = max_buffered_bytes
         self._buffer: list[dict[str, Any]] = []
+        self._buffered_bytes = 0
         self._message_item_ids: set[str] = set()
         self._commentary = False
         self._terminal_seen = False
+        self._passthrough = False
 
     def process(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         """Process one Responses event and return events ready to send."""
+        if self._passthrough:
+            return [event]
+
         if self._terminal_seen:
             return [self._annotate_if_needed(event)]
 
@@ -80,8 +96,22 @@ class ResponsesPhaseBuffer:
             return emitted
 
         if self._should_buffer(event):
+            event_size = _serialized_size(event)
+            if (
+                len(self._buffer) >= self._max_buffered_events
+                or self._buffered_bytes + event_size > self._max_buffered_bytes
+            ):
+                # Phase inference is optional compatibility metadata.  If a
+                # provider emits an unusually large pre-tool message, preserve
+                # streaming and memory safety by releasing the prefix unchanged
+                # and disabling inference for the remainder of this response.
+                self._passthrough = True
+                emitted = self._flush_buffer(phase=None)
+                emitted.append(event)
+                return emitted
             self._remember_message_item(event)
             self._buffer.append(event)
+            self._buffered_bytes += event_size
             return []
 
         return [self._annotate_if_needed(event)]
@@ -96,6 +126,7 @@ class ResponsesPhaseBuffer:
 
         buffered = self._buffer
         self._buffer = []
+        self._buffered_bytes = 0
         if phase is None:
             return list(buffered)
         return [_with_message_phase(event, phase) for event in buffered]
@@ -152,6 +183,13 @@ def _item_type(event: dict[str, Any]) -> str | None:
         return None
     item_type = item.get("type")
     return item_type if isinstance(item_type, str) else None
+
+
+def _serialized_size(event: dict[str, Any]) -> int:
+    """Return the UTF-8 JSON size used for buffer accounting."""
+    return len(
+        json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
 
 
 def _completed_has_tool_output(event: dict[str, Any]) -> bool:

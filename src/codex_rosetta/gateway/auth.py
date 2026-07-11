@@ -6,32 +6,45 @@ authentication:
 
 - ``Authorization: Bearer <key>``
 
-Supports multiple API keys with labels for tracking. If no keys are
-configured, all requests pass through (backward compatible).
+Supports multiple API keys with stable principal IDs and labels for tracking.
 """
 
 from __future__ import annotations
 
 import contextvars
+import hmac
+from dataclasses import dataclass
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
+
+from .cors import apply_cors_headers
 
 # Per-request API key label — set by auth hook, read by proxy handler.
 api_key_label_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
     "api_key_label", default=None
 )
 
+# Stable authenticated principal for request-scoped state isolation.  The value
+# is the configured ``server.api_keys[].id`` and never a label or raw key.
+api_key_principal_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "api_key_principal", default=None
+)
+
+INTERNAL_ADMIN_PRINCIPAL = "__admin_internal__"
+
 # Paths that never require authentication
 _PUBLIC_PATHS = frozenset({"/health"})
 
-_PROTECTED_API_PATHS = frozenset(
-    {
-        "/v1/embeddings",
-        "/v1/models",
-        "/v1/responses",
-    }
-)
+
+@dataclass(frozen=True)
+class PreparedAuthConfig:
+    """Fully constructed auth state ready for an assignment-only commit."""
+
+    principals: dict[str, str]
+    labels: dict[str, str]
+    admin_password: str | None
+    admin_token: str | None
 
 
 def _extract_key(request: Any) -> str | None:
@@ -57,8 +70,12 @@ def _error_for_path(path: str, status: int, message: str) -> Response:
 
 
 def _is_protected_api_path(path: str) -> bool:
-    """Return whether gateway API-key auth applies to *path*."""
-    return path in _PROTECTED_API_PATHS
+    """Return whether gateway API-key auth applies to *path*.
+
+    The entire OpenAI-compatible ``/v1`` namespace fails closed so newly
+    registered, unknown, and removed endpoints cannot bypass authentication.
+    """
+    return path == "/v1" or path.startswith("/v1/")
 
 
 def check_admin_auth(request: Any, auth_state: AuthState) -> Response | None:
@@ -68,18 +85,24 @@ def check_admin_auth(request: Any, auth_state: AuthState) -> Response | None:
     Unauthenticated HTML page requests are allowed through so the JS
     login UI can render.
     """
-    if not auth_state.admin_password:
-        return None  # no password configured → pass through
-
     path = request.path
 
     # Login and auth-check endpoints are always accessible
     if path in ("/admin/api/login", "/admin/api/auth-check"):
         return None
 
+    # Browser preflight never carries the actual Admin token. Origin
+    # authorization is enforced by the strict CORS preflight route.
+    if getattr(request, "method", "") == "OPTIONS" and path.startswith("/admin/api/"):
+        return None
+
     # Check X-Admin-Token header
     admin_token = request.headers.get("x-admin-token", "")
-    if admin_token and admin_token == auth_state.admin_token:
+    if (
+        admin_token
+        and auth_state.admin_token
+        and hmac.compare_digest(admin_token, auth_state.admin_token)
+    ):
         return None
 
     # Block unauthenticated API calls
@@ -95,26 +118,56 @@ class AuthState:
 
     def __init__(
         self,
-        key_set: frozenset[str],
+        principals: dict[str, str],
         labels: dict[str, str],
         internal_token: str | None,
         admin_password: str | None = None,
     ) -> None:
-        self.key_set = key_set
-        self.labels = labels
         self.internal_token = internal_token
-        self.admin_password = admin_password
-        # Derive admin token from password + internal_token via HMAC
+        self.principals: dict[str, str] = {}
+        self.labels: dict[str, str] = {}
+        self.admin_password: str | None = None
         self.admin_token: str | None = None
-        if admin_password and internal_token:
-            import hashlib
-            import hmac as _hmac
+        self.update_config(principals, labels, admin_password)
 
-            self.admin_token = _hmac.new(
-                internal_token.encode(),
+    def prepare_update(
+        self,
+        principals: dict[str, str],
+        labels: dict[str, str],
+        admin_password: str | None,
+    ) -> PreparedAuthConfig:
+        """Build replacement credentials without mutating live auth state."""
+        admin_token = None
+        if admin_password and self.internal_token:
+            import hashlib
+
+            admin_token = hmac.new(
+                self.internal_token.encode(),
                 admin_password.encode(),
                 hashlib.sha256,
             ).hexdigest()
+        return PreparedAuthConfig(
+            principals=dict(principals),
+            labels=dict(labels),
+            admin_password=admin_password,
+            admin_token=admin_token,
+        )
+
+    def commit_update(self, prepared: PreparedAuthConfig) -> None:
+        """Commit a prepared credential replacement using assignments only."""
+        self.principals = prepared.principals
+        self.labels = prepared.labels
+        self.admin_password = prepared.admin_password
+        self.admin_token = prepared.admin_token
+
+    def update_config(
+        self,
+        principals: dict[str, str],
+        labels: dict[str, str],
+        admin_password: str | None,
+    ) -> None:
+        """Replace hot-reloadable credentials and rebuild the Admin token."""
+        self.commit_update(self.prepare_update(principals, labels, admin_password))
 
 
 def create_auth_hook(auth_state: AuthState) -> Any:
@@ -125,8 +178,9 @@ def create_auth_hook(auth_state: AuthState) -> Any:
     """
 
     async def auth_hook(request: Any) -> Response | None:
-        # Reset per-request label
+        # Reset request-local identity before every auth decision.
         api_key_label_var.set(None)
+        api_key_principal_var.set(None)
 
         path = request.path
 
@@ -136,26 +190,47 @@ def create_auth_hook(auth_state: AuthState) -> Any:
 
         # Admin panel auth is a separate concern from API key auth
         if path.startswith("/admin"):
-            return check_admin_auth(request, auth_state)
+            response = check_admin_auth(request, auth_state)
+            if response is not None:
+                apply_cors_headers(request, response)
+            return response
 
         if not _is_protected_api_path(path):
             return None
 
-        if not auth_state.key_set:
-            return None  # no gateway API keys configured → pass through
+        # Browser preflight carries the requested Authorization header name,
+        # not the API credential. The wildcard CORS route authorizes the
+        # browser origin; the subsequent real request is still authenticated.
+        if getattr(request, "method", "") == "OPTIONS":
+            return None
 
         key = _extract_key(request)
 
         # Check internal token first (admin panel test requests)
-        if key and auth_state.internal_token and key == auth_state.internal_token:
+        if (
+            key
+            and auth_state.internal_token
+            and hmac.compare_digest(key, auth_state.internal_token)
+        ):
             api_key_label_var.set("internal")
+            api_key_principal_var.set(INTERNAL_ADMIN_PRINCIPAL)
             return None
 
-        if key not in auth_state.key_set:
-            return _error_for_path(path, 401, "Invalid or missing API key")
+        matched_key = next(
+            (
+                configured_key
+                for configured_key in auth_state.principals
+                if key is not None and hmac.compare_digest(key, configured_key)
+            ),
+            None,
+        )
+        if matched_key is None:
+            response = _error_for_path(path, 401, "Invalid or missing API key")
+            return apply_cors_headers(request, response)
 
-        # Attach key label for request logging
-        api_key_label_var.set(auth_state.labels.get(key, ""))
+        # Attach display label and stable principal without exposing the raw key.
+        api_key_label_var.set(auth_state.labels.get(matched_key, ""))
+        api_key_principal_var.set(auth_state.principals[matched_key])
         return None
 
     return auth_hook

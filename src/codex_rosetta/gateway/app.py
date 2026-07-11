@@ -5,7 +5,8 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from datetime import UTC, datetime
+from collections.abc import AsyncIterator, Callable
+from datetime import datetime, timezone
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import (
@@ -15,16 +16,27 @@ from codex_rosetta._vendor.httpserver import (
     StreamingResponse,
 )
 from codex_rosetta.auto_detect import ProviderType
-
-from .auth import AuthState, api_key_label_var, create_auth_hook
-from .config import GatewayConfig
-from .embeddings import handle_embeddings as _handle_embeddings
-from .headers import build_upstream_extra_headers
-from .logging import get_logger
 from codex_rosetta.observability.error_dump import dump_error
 
+from .auth import (
+    AuthState,
+    api_key_label_var,
+    api_key_principal_var,
+    create_auth_hook,
+)
+from .config import GatewayConfig
+from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
+from .embeddings import handle_embeddings as _handle_embeddings
+from .headers import build_upstream_extra_headers
+from .health import build_health_payload, build_readiness_payload
+from .image_workers import ImageFetchWorkerPool
+from .logging import BodyLogState, UpstreamErrorLogState, get_logger
+
 from .proxy import (
+    ProviderMetadataCapacityError,
     ProviderMetadataStore,
+    ToolSearchCapacityError,
+    WindowToolSearchStore,
     close_resources,
     detect_stream_request,
     error_response_for_source,
@@ -32,10 +44,61 @@ from .proxy import (
     handle_non_streaming,
     handle_streaming,
 )
+from .state_scope import GatewayStateScope
+from .tool_adaptation import CodexToolLocalizationStore
 
 logger = get_logger()
 
 _TOOL_CALL_CACHE_CLEANUP_INTERVAL = 3600
+_INBOUND_REQUEST_LINE_TIMEOUT_SECONDS = 5.0
+_INBOUND_HEADER_TIMEOUT_SECONDS = 10.0
+_INBOUND_BODY_TIMEOUT_SECONDS = 30.0
+_INBOUND_MAX_CONCURRENT_REQUEST_PARSES = 64
+
+
+def _record_request_log_entry(
+    request: Any,
+    *,
+    model: str,
+    source_provider: ProviderType,
+    target_provider: ProviderType,
+    provider_name: str,
+    is_stream: bool,
+    status_code: int,
+    duration_ms: float,
+    error_detail: str | None,
+    profile: dict[str, Any] | None = None,
+    entry_id_override: str | None = None,
+) -> str | None:
+    """Safely add one request-log entry without affecting proxy delivery."""
+    request_log = getattr(request.app, "request_log", None)
+    if request_log is None:
+        return None
+    try:
+        from dataclasses import replace as _dc_replace
+
+        from codex_rosetta.observability import RequestLogEntry
+
+        entry = RequestLogEntry.create(
+            model=model,
+            source_provider=source_provider,
+            target_provider=target_provider,
+            target_provider_name=provider_name,
+            is_stream=is_stream,
+            status_code=status_code,
+            duration_ms=duration_ms,
+            error_detail=error_detail,
+            api_key_label=api_key_label_var.get(),
+            client_ip=_extract_client_ip(request),
+            profile=profile,
+        )
+        if entry_id_override:
+            entry = _dc_replace(entry, id=entry_id_override)
+        request_log.add(entry)
+        return entry.id
+    except Exception as exc:
+        logger.warning("Failed to record request log entry: %s", exc)
+        return None
 
 
 def _record_telemetry(
@@ -64,61 +127,278 @@ def _record_telemetry(
         configured.
     """
     metrics = getattr(request.app, "metrics", None)
-    if is_stream and metrics:
-        metrics.active_streams -= 1
     if metrics:
-        metrics.record_request(
-            model=model,
-            source=source_provider,
-            target=target_provider,
-            status_code=status_code,
-            duration_ms=duration_ms,
-            is_stream=is_stream,
-            provider_name=provider_name,
-            error_detail=error_detail,
-        )
+        try:
+            if is_stream:
+                metrics.active_streams -= 1
+            metrics.record_request(
+                model=model,
+                source=source_provider,
+                target=target_provider,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                is_stream=is_stream,
+                provider_name=provider_name,
+                error_detail=error_detail,
+            )
+        except Exception as exc:
+            logger.warning("Failed to record request metrics: %s", exc)
+
+    return _record_request_log_entry(
+        request,
+        model=model,
+        source_provider=source_provider,
+        target_provider=target_provider,
+        provider_name=provider_name,
+        is_stream=is_stream,
+        status_code=status_code,
+        duration_ms=duration_ms,
+        error_detail=error_detail,
+        profile=profile,
+        entry_id_override=entry_id_override,
+    )
+
+
+def _finalize_stream_telemetry(
+    request: Any,
+    *,
+    entry_id: str,
+    model: str,
+    source_provider: ProviderType,
+    target_provider: ProviderType,
+    provider_name: str,
+    status_code: int,
+    duration_ms: float,
+    error_detail: str | None,
+) -> None:
+    """Safely record the one terminal outcome of an open stream."""
+    metrics = getattr(request.app, "metrics", None)
+    if metrics:
+        try:
+            metrics.active_streams -= 1
+            metrics.record_request(
+                model=model,
+                source=source_provider,
+                target=target_provider,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                is_stream=True,
+                provider_name=provider_name,
+                error_detail=error_detail,
+            )
+        except Exception as exc:
+            logger.warning("Failed to finalize stream metrics: %s", exc)
 
     request_log = getattr(request.app, "request_log", None)
     if request_log is not None:
-        from dataclasses import replace as _dc_replace
+        profile_update: dict[str, Any] = {
+            "stream_complete": status_code < 400,
+        }
+        if error_detail is not None:
+            profile_update["stream_error"] = error_detail[:500]
+        try:
+            request_log.update_result(
+                entry_id,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                error_detail=error_detail,
+                profile_update=profile_update,
+            )
+        except Exception as exc:
+            logger.warning("Failed to finalize stream request log: %s", exc)
 
-        from codex_rosetta.observability import RequestLogEntry
 
-        entry = RequestLogEntry.create(
-            model=model,
-            source_provider=source_provider,
-            target_provider=target_provider,
-            target_provider_name=provider_name,
-            is_stream=is_stream,
-            status_code=status_code,
-            duration_ms=duration_ms,
-            error_detail=error_detail,
-            api_key_label=api_key_label_var.get(),
-            client_ip=_extract_client_ip(request),
-            profile=profile,
-        )
-        # For streaming, use the pre-generated ID so the stream
-        # generator can write back profile data by this ID.
-        if entry_id_override:
-            entry = _dc_replace(entry, id=entry_id_override)
-        request_log.add(entry)
-        return entry.id
-    return None
+class _InstrumentedStream:
+    """Async iterator that finalizes stream telemetry exactly once."""
+
+    def __init__(
+        self,
+        source: AsyncIterator[bytes | str],
+        *,
+        success_status: int,
+        finalize: Callable[[int, str | None], None],
+    ) -> None:
+        self._source = source
+        self._iterator = source.__aiter__()
+        self._success_status = success_status
+        self._finalize_callback = finalize
+        self._finished = False
+        self._source_closed = False
+
+    def __aiter__(self) -> _InstrumentedStream:
+        return self
+
+    async def __anext__(self) -> bytes | str:
+        try:
+            return await self._iterator.__anext__()
+        except StopAsyncIteration:
+            self._source_closed = True
+            self._finish(self._success_status, None)
+            raise
+        except asyncio.CancelledError:
+            try:
+                await self._close_source()
+            except BaseException:
+                logger.debug("Failed to close cancelled stream", exc_info=True)
+            finally:
+                self._finish(499, "Stream cancelled or client disconnected")
+            raise
+        except Exception as exc:
+            try:
+                await self._close_source()
+            except BaseException:
+                logger.debug("Failed to close errored stream", exc_info=True)
+            finally:
+                self._finish(502, str(exc))
+            raise
+
+    async def aclose(self) -> None:
+        """Close an incomplete stream and record a client-disconnect outcome."""
+        if self._finished:
+            return
+        status_code = 499
+        error_detail = "Stream closed before completion"
+        try:
+            await self._close_source()
+        except asyncio.CancelledError:
+            error_detail = "Stream cancelled or client disconnected"
+            raise
+        except Exception as exc:
+            status_code = 502
+            error_detail = str(exc)
+            logger.debug("Failed to close stream source", exc_info=True)
+        finally:
+            self._finish(status_code, error_detail)
+
+    async def _close_source(self) -> None:
+        if self._source_closed:
+            return
+        self._source_closed = True
+        aclose = getattr(self._iterator, "aclose", None)
+        if aclose is None and self._iterator is not self._source:
+            aclose = getattr(self._source, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+    def _finish(self, status_code: int, error_detail: str | None) -> None:
+        if self._finished:
+            return
+        self._finished = True
+        self._finalize_callback(status_code, error_detail)
+
+
+def _response_error_detail(response: Response | StreamingResponse) -> str | None:
+    """Decode a non-streaming error response body for telemetry."""
+    if response.status_code < 400 or not hasattr(response, "body"):
+        return None
+    body = response.body
+    return body.decode("utf-8", errors="replace") if isinstance(body, bytes) else None
+
+
+def _instrument_stream_response(
+    request: Any,
+    response: StreamingResponse,
+    *,
+    entry_id: str,
+    request_id: str,
+    model: str,
+    source_provider: ProviderType,
+    target_provider: ProviderType,
+    provider_name: str,
+    profile: dict[str, Any] | None,
+    profiler: Any,
+    started_at: float,
+    on_finish: Callable[[], None] | None = None,
+) -> None:
+    """Attach request logging and terminal telemetry to an open stream."""
+    _record_request_log_entry(
+        request,
+        model=model,
+        source_provider=source_provider,
+        target_provider=target_provider,
+        provider_name=provider_name,
+        is_stream=True,
+        status_code=response.status_code,
+        duration_ms=(time.monotonic() - started_at) * 1000,
+        error_detail=None,
+        profile=profile,
+        entry_id_override=entry_id,
+    )
+
+    def _finalize_stream(status: int, stream_error: str | None) -> None:
+        try:
+            duration_ms = (time.monotonic() - started_at) * 1000
+            _try_stop_profiler(
+                profiler,
+                request.app,
+                request_id=request_id,
+                model=model,
+                source=source_provider,
+                target=target_provider,
+                is_stream=True,
+                duration_ms=duration_ms,
+            )
+            _finalize_stream_telemetry(
+                request,
+                entry_id=entry_id,
+                model=model,
+                source_provider=source_provider,
+                target_provider=target_provider,
+                provider_name=provider_name,
+                status_code=status,
+                duration_ms=duration_ms,
+                error_detail=stream_error,
+            )
+            logger.info("[%s] stream finalized status=%s", request_id, status)
+        finally:
+            if on_finish is not None:
+                on_finish()
+
+    response._generator = _InstrumentedStream(
+        response._generator,
+        success_status=response.status_code,
+        finalize=_finalize_stream,
+    )
+
+
+def _clear_request_local_state(
+    scope: GatewayStateScope,
+    *,
+    metadata_store: ProviderMetadataStore,
+    codex_tool_store: CodexToolLocalizationStore,
+    window_tool_search_store: WindowToolSearchStore,
+) -> None:
+    """Clear every in-memory store owned by one non-persistent request scope."""
+    if scope.persistent:
+        return
+    for name, store in (
+        ("provider metadata", metadata_store),
+        ("tool localization", codex_tool_store),
+        ("deferred tool search", window_tool_search_store),
+    ):
+        try:
+            store.scoped(scope).clear()
+        except Exception:
+            logger.warning(
+                "Failed to clear request-local %s state", name, exc_info=True
+            )
+
+
+def _mark_stream_active(request: Any, *, is_stream: bool) -> None:
+    """Increment the active-stream gauge for an accepted streaming request."""
+    if not is_stream:
+        return
+    metrics = getattr(request.app, "metrics", None)
+    if metrics:
+        metrics.active_streams += 1
 
 
 def _extract_client_ip(request: Any) -> str | None:
-    """Extract the client IP from the request.
+    """Return the direct TCP peer address for request attribution.
 
-    Checks ``X-Forwarded-For`` and ``X-Real-IP`` headers first (set by
-    reverse proxies), then falls back to the TCP peer address.
+    Forwarded client-IP headers remain untrusted until the gateway exposes an
+    explicit trusted-proxy allowlist.
     """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        # X-Forwarded-For may contain a chain: "client, proxy1, proxy2"
-        return forwarded.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
     addr = getattr(request, "client_addr", None)
     if addr and isinstance(addr, (tuple, list)) and addr[0]:
         return str(addr[0])
@@ -182,10 +462,6 @@ def _try_stop_profiler(
         logger.debug("Failed to store profiling result")
 
 
-# Global config — set at startup
-_config: GatewayConfig | None = None
-
-
 async def _proxy_handler(
     request: Any,
     source_provider: ProviderType,
@@ -193,7 +469,7 @@ async def _proxy_handler(
     force_stream: bool = False,
 ) -> Response | StreamingResponse:
     """Shared handler for all proxy endpoints."""
-    assert _config is not None
+    config: GatewayConfig = request.app.gateway_config
 
     # Generate or honour a request ID for end-to-end traceability.
     request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
@@ -202,6 +478,12 @@ async def _proxy_handler(
         body: dict[str, Any] = request.json()
     except Exception:
         resp = error_response_for_source(source_provider, 400, "Invalid JSON body")
+        resp.headers["x-request-id"] = request_id
+        return resp
+    if not isinstance(body, dict):
+        resp = error_response_for_source(
+            source_provider, 400, "JSON body must be an object"
+        )
         resp.headers["x-request-id"] = request_id
         return resp
 
@@ -220,9 +502,9 @@ async def _proxy_handler(
 
     # Resolve target provider via unified routing
     try:
-        route, provider_info = _config.resolve(source_provider, model)
+        route, provider_info = config.resolve(source_provider, model)
     except KeyError:
-        configured = ", ".join(sorted(_config.models.keys()))
+        configured = ", ".join(sorted(config.models.keys()))
         resp = error_response_for_source(
             source_provider,
             404,
@@ -240,7 +522,19 @@ async def _proxy_handler(
     # Determine streaming
     is_stream = force_stream or detect_stream_request(source_provider, body)
     codex_window_id = request.headers.get("x-codex-window-id")
-    tool_cache_session_id = codex_window_id or f"model:{model}"
+    principal_id = api_key_principal_var.get()
+    if principal_id is None:
+        resp = error_response_for_source(
+            source_provider, 401, "Authenticated principal is unavailable"
+        )
+        resp.headers["x-request-id"] = request_id
+        return resp
+    state_scope = GatewayStateScope.for_request(
+        principal_id=principal_id,
+        provider_name=route.provider_name,
+        model=model,
+        window_id=codex_window_id,
+    )
 
     model_label = (
         f"{model} (upstream={route.upstream_model})" if route.upstream_model else model
@@ -255,15 +549,16 @@ async def _proxy_handler(
     )
 
     store: ProviderMetadataStore = request.app.metadata_store
+    codex_tool_store: CodexToolLocalizationStore = request.app.codex_tool_store
+    window_tool_search_store: WindowToolSearchStore = (
+        request.app.window_tool_search_store
+    )
 
     # Forward only explicitly supported client headers to upstream.
     extra_headers = build_upstream_extra_headers(request, request_id)
 
     # --- Metrics instrumentation ---
-    if is_stream:
-        metrics = getattr(request.app, "metrics", None)
-        if metrics:
-            metrics.active_streams += 1
+    _mark_stream_active(request, is_stream=is_stream)
 
     t0 = time.monotonic()
     status_code = 500
@@ -273,6 +568,9 @@ async def _proxy_handler(
 
     persistence = getattr(request.app, "persistence", None)
     deep_profiler = _try_start_profiler(request.app)
+    pre_entry_id: str | None = None
+    stream_telemetry_deferred = False
+    request_state_cleanup_deferred = False
 
     try:
         if is_stream:
@@ -286,14 +584,21 @@ async def _proxy_handler(
                 body,
                 transport=request.app.transport,
                 metadata_store=store,
+                codex_tool_store=codex_tool_store,
                 extra_headers=extra_headers,
                 entry_id=pre_entry_id,
                 request_log=request_log,
                 persistence=persistence,
-                tool_cache_session_id=tool_cache_session_id,
+                state_scope=state_scope,
                 codex_window_id=codex_window_id,
-                web_search_config=_config.web_search,
+                window_tool_search_store=window_tool_search_store,
+                web_search_config=config.web_search,
                 stream_trace_state=getattr(request.app, "stream_trace_state", None),
+                upstream_error_log_state=getattr(
+                    request.app, "upstream_error_log_state", None
+                ),
+                body_log_state=getattr(request.app, "body_log_state", None),
+                image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
             )
         else:
             pre_entry_id = None
@@ -303,19 +608,55 @@ async def _proxy_handler(
                 body,
                 transport=request.app.transport,
                 metadata_store=store,
+                codex_tool_store=codex_tool_store,
                 extra_headers=extra_headers,
                 persistence=persistence,
-                tool_cache_session_id=tool_cache_session_id,
+                state_scope=state_scope,
                 codex_window_id=codex_window_id,
+                window_tool_search_store=window_tool_search_store,
+                upstream_error_log_state=getattr(
+                    request.app, "upstream_error_log_state", None
+                ),
+                body_log_state=getattr(request.app, "body_log_state", None),
+                image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
             )
         status_code = response.status_code
-        if status_code >= 400 and hasattr(response, "body"):
-            body_bytes = response.body
-            if isinstance(body_bytes, bytes):
-                error_detail = body_bytes.decode("utf-8", errors="replace")
+        error_detail = _response_error_detail(response)
+        if isinstance(response, StreamingResponse):
+            assert is_stream
+            assert pre_entry_id is not None
+            _instrument_stream_response(
+                request,
+                response,
+                entry_id=pre_entry_id,
+                request_id=request_id,
+                model=model,
+                source_provider=source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+                profile=profile,
+                profiler=deep_profiler,
+                started_at=t0,
+                on_finish=lambda: _clear_request_local_state(
+                    state_scope,
+                    metadata_store=store,
+                    codex_tool_store=codex_tool_store,
+                    window_tool_search_store=window_tool_search_store,
+                ),
+            )
+            stream_telemetry_deferred = True
+            request_state_cleanup_deferred = True
         response.headers["x-request-id"] = request_id
         logger.info("[%s] response status=%s", request_id, status_code)
         return response
+    except (ToolSearchCapacityError, ProviderMetadataCapacityError) as exc:
+        error_detail = str(exc)
+        status_code = 413
+        pre_entry_id = None
+        logger.warning("[%s] deferred tool-search capacity rejected", request_id)
+        resp = error_response_for_source(source_provider, 413, str(exc))
+        resp.headers["x-request-id"] = request_id
+        return resp
     except Exception as exc:
         error_detail = str(exc)
         logger.exception("[%s] unhandled error in proxy handler", request_id)
@@ -339,31 +680,38 @@ async def _proxy_handler(
         return resp
     finally:
         duration_ms = (time.monotonic() - t0) * 1000
+        if not request_state_cleanup_deferred:
+            _clear_request_local_state(
+                state_scope,
+                metadata_store=store,
+                codex_tool_store=codex_tool_store,
+                window_tool_search_store=window_tool_search_store,
+            )
+        if not stream_telemetry_deferred:
+            _try_stop_profiler(
+                deep_profiler,
+                request.app,
+                request_id=request_id,
+                model=model,
+                source=source_provider,
+                target=route.target_provider,
+                is_stream=is_stream,
+                duration_ms=duration_ms,
+            )
 
-        _try_stop_profiler(
-            deep_profiler,
-            request.app,
-            request_id=request_id,
-            model=model,
-            source=source_provider,
-            target=route.target_provider,
-            is_stream=is_stream,
-            duration_ms=duration_ms,
-        )
-
-        _record_telemetry(
-            request,
-            model=model,
-            source_provider=source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            is_stream=is_stream,
-            status_code=status_code,
-            duration_ms=duration_ms,
-            error_detail=error_detail,
-            profile=profile,
-            entry_id_override=pre_entry_id,
-        )
+            _record_telemetry(
+                request,
+                model=model,
+                source_provider=source_provider,
+                target_provider=route.target_provider,
+                provider_name=route.provider_name,
+                is_stream=is_stream,
+                status_code=status_code,
+                duration_ms=duration_ms,
+                error_detail=error_detail,
+                profile=profile,
+                entry_id_override=pre_entry_id,
+            )
 
 
 # --- Endpoint handlers ---
@@ -374,8 +722,8 @@ async def handle_openai_chat(request: Any) -> Response | StreamingResponse:
 
 
 async def handle_embeddings(request: Any) -> Response:
-    assert _config is not None
-    return await _handle_embeddings(request, _config)
+    config: GatewayConfig = request.app.gateway_config
+    return await _handle_embeddings(request, config)
 
 
 async def handle_anthropic(request: Any) -> Response | StreamingResponse:
@@ -412,13 +760,13 @@ async def handle_google_genai(
 
 async def handle_list_models(request: Any) -> Response:
     """List configured models in a format compatible with OpenAI and Anthropic SDKs."""
-    assert _config is not None
-    models = sorted(_config.models.keys())
+    config: GatewayConfig = request.app.gateway_config
+    models = sorted(config.models.keys())
     data = []
     for name in models:
-        provider_name = _config.models[name]
-        api_standard = _config.provider_types.get(provider_name, "unknown")
-        capabilities = _config.model_capabilities.get(name, ["text"])
+        provider_name = config.models[name]
+        api_standard = config.provider_types.get(provider_name, "unknown")
+        capabilities = config.model_capabilities.get(name, ["text"])
         data.append(
             {
                 "id": name,
@@ -445,7 +793,7 @@ async def handle_list_models(request: Any) -> Response:
 
 async def handle_list_models_google(request: Any) -> Response:
     """List configured models in Google GenAI SDK format."""
-    assert _config is not None
+    config: GatewayConfig = request.app.gateway_config
     models_list = [
         {
             "name": f"models/{name}",
@@ -455,7 +803,7 @@ async def handle_list_models_google(request: Any) -> Response:
                 "streamGenerateContent",
             ],
         }
-        for name in sorted(_config.models.keys())
+        for name in sorted(config.models.keys())
     ]
     return JSONResponse({"models": models_list})
 
@@ -471,23 +819,7 @@ async def handle_health(request: Any) -> Response:
     if metrics is None:
         return JSONResponse({"status": "ok"})
 
-    snap = metrics.snapshot(series_seconds=3600)  # 1-hour window for errors_last_hour
-    errors_last_hour = sum(
-        pt["errors"] for pt in snap.get("series", []) if pt.get("errors", 0)
-    )
-
-    provider_health = metrics.provider_health_snapshot()
-    critical = metrics.any_critical_provider()
-    overall_status = "degraded" if critical else "ok"
-
-    payload = {
-        "status": overall_status,
-        "uptime_seconds": snap["uptime_seconds"],
-        "requests_total": snap["total_requests"],
-        "errors_last_hour": errors_last_hour,
-        "providers": provider_health,
-    }
-    return JSONResponse(payload, status_code=200)
+    return JSONResponse(build_health_payload(metrics), status_code=200)
 
 
 async def handle_health_live(request: Any) -> Response:
@@ -501,14 +833,8 @@ async def handle_health_ready(request: Any) -> Response:
     if metrics is None:
         return JSONResponse({"status": "ok"})
 
-    critical = metrics.any_critical_provider()
-    if critical:
-        provider_health = metrics.provider_health_snapshot()
-        return JSONResponse(
-            {"status": "not_ready", "providers": provider_health},
-            status_code=503,
-        )
-    return JSONResponse({"status": "ready"})
+    payload, status_code = build_readiness_payload(metrics)
+    return JSONResponse(payload, status_code=status_code)
 
 
 # ---------------------------------------------------------------------------
@@ -541,7 +867,7 @@ async def _periodic_tool_call_mapping_cleanup(app: App) -> None:
         if persistence is None:
             continue
         try:
-            now = datetime.now(UTC).isoformat()
+            now = datetime.now(timezone.utc).isoformat()
             persistence.cleanup_expired_tool_call_mappings(now)
         except Exception as exc:
             logger.warning("Failed to clean up tool-call mapping cache: %s", exc)
@@ -571,23 +897,23 @@ def _flush_now(app: App) -> None:
 
 def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
     """Create the httpserver application."""
-    global _config
-    _config = config
-
-    # Expose global proxy as env vars so downstream code (e.g. image
-    # downloads in converters) can use it without threading config through.
-    import os
-
-    if config.proxy:
-        os.environ.setdefault("HTTP_PROXY", config.proxy)
-        os.environ.setdefault("HTTPS_PROXY", config.proxy)
-
     from .transport import HttpTransport
 
     metadata_store = ProviderMetadataStore()
+    codex_tool_store = CodexToolLocalizationStore()
+    window_tool_search_store = WindowToolSearchStore()
+    image_fetch_workers = ImageFetchWorkerPool()
     transport = HttpTransport()
 
-    app = App(max_body_size=50_000_000, read_timeout=300.0)
+    app = App(
+        max_body_size=50_000_000,
+        request_line_timeout=_INBOUND_REQUEST_LINE_TIMEOUT_SECONDS,
+        header_timeout=_INBOUND_HEADER_TIMEOUT_SECONDS,
+        body_timeout=_INBOUND_BODY_TIMEOUT_SECONDS,
+        max_concurrent_request_parses=_INBOUND_MAX_CONCURRENT_REQUEST_PARSES,
+    )
+    setattr(app, "gateway_config", config)
+    app.admin_cors_origins = tuple(config.admin_cors_origins)  # type: ignore
 
     # --- Routes ---
     app.route("/v1/embeddings", methods=["POST"])(handle_embeddings)
@@ -602,79 +928,59 @@ def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
 
     internal_token = f"rsk-internal-{secrets.token_hex(16)}"
     auth_state = AuthState(
-        config.api_key_set,
+        config.api_key_principals,
         config.api_key_labels,
         internal_token,
         admin_password=config.admin_password,
     )
-    app.before_request(create_auth_hook(auth_state))
+    upstream_error_log_state = UpstreamErrorLogState(
+        {*config.token_values, internal_token}
+    )
+    body_log_state = BodyLogState(
+        enabled=config.log_bodies,
+        token_values={*config.token_values, internal_token},
+    )
+    auth_hook = create_auth_hook(auth_state)
+    app.before_body(auth_hook)
+    app.before_request(auth_hook)
 
     # --- CORS ---
     # Admin API endpoints are restricted to same-origin by default.
     # /v1/* proxy endpoints remain open (Access-Control-Allow-Origin: *).
     # The list of allowed origins for admin can be overridden via
     # server.admin_cors_origins in config (default [] = same-origin only).
-    _admin_cors_origins: list[str] = config.admin_cors_origins
-
-    def _is_admin_path(path: str) -> bool:
-        return path.startswith("/admin/") or path == "/admin"
-
-    def _apply_cors(response: Any, origin: str | None) -> None:
-        """Set CORS headers on *response* for admin requests.
-
-        When *_admin_cors_origins* is non-empty the request Origin is reflected
-        only if it matches the allow-list; otherwise no CORS header is emitted
-        so browsers fall back to same-origin behaviour.
-        """
-        if _admin_cors_origins and origin and origin in _admin_cors_origins:
-            response.headers["Access-Control-Allow-Origin"] = origin
-            response.headers["Vary"] = "Origin"
-            response.headers["Access-Control-Allow-Methods"] = "*"
-            response.headers["Access-Control-Allow-Headers"] = "*"
-        # Default: no header -> same-origin only (browser blocks cross-origin).
-
     @app.after_request
     async def add_cors_headers(request: Any, response: Any) -> Any:
-        if _is_admin_path(request.path):
+        apply_cors_headers(request, response)
+        if is_admin_path(request.path):
             # Restricted CORS for admin endpoints: same-origin only by default,
             # or explicit allow-list via server.admin_cors_origins.
-            _apply_cors(response, request.headers.get("origin"))
             # Prevent reverse-proxy caching of admin API responses (e.g. Caddy/Souin).
             # Uses the full directive set that Souin recognises as NO-STORE-DIRECTIVE.
             if request.path.startswith("/admin/api/"):
                 response.headers.setdefault(
                     "Cache-Control", "no-cache, no-store, must-revalidate"
                 )
-        else:
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            response.headers["Access-Control-Allow-Methods"] = "*"
-            response.headers["Access-Control-Allow-Headers"] = "*"
         return response
 
     @app.route("/<path:_path>", methods=["OPTIONS"])
     async def cors_preflight(request: Any, _path: str = "") -> Response:
+        if is_admin_path(request.path) and not is_admin_origin_allowed(request):
+            return JSONResponse(
+                {"error": "Admin CORS origin is not allowed"}, status_code=403
+            )
         resp = Response(body=b"", status_code=204)
-        if not _is_admin_path(request.path):
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            resp.headers["Access-Control-Allow-Methods"] = "*"
-            resp.headers["Access-Control-Allow-Headers"] = "*"
-        else:
-            _apply_cors(resp, request.headers.get("origin"))
-        return resp
+        return apply_cors_headers(request, resp)
 
     @app.errorhandler(404)
     async def handle_404(request: Any, exc: Any) -> Response:
         resp = JSONResponse({"error": "Not Found"}, status_code=404)
-        if not _is_admin_path(request.path):
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
+        return apply_cors_headers(request, resp)
 
     @app.errorhandler(405)
     async def handle_405(request: Any, exc: Any) -> Response:
         resp = JSONResponse({"error": "Method Not Allowed"}, status_code=405)
-        if not _is_admin_path(request.path):
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
+        return apply_cors_headers(request, resp)
 
     # --- Admin routes ---
     from .admin import setup_admin
@@ -685,8 +991,13 @@ def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
     # --- App-level state ---
     app.transport = transport  # type: ignore
     app.metadata_store = metadata_store  # type: ignore
+    app.codex_tool_store = codex_tool_store  # type: ignore
+    app.window_tool_search_store = window_tool_search_store  # type: ignore
+    app.image_fetch_workers = image_fetch_workers  # type: ignore
     app.internal_token = internal_token  # type: ignore
     app.auth_state = auth_state  # type: ignore
+    app.upstream_error_log_state = upstream_error_log_state  # type: ignore
+    app.body_log_state = body_log_state  # type: ignore
 
     setup_admin(app, config, config_path)
 
@@ -713,8 +1024,14 @@ async def run_gateway(
                 await task
             except asyncio.CancelledError:
                 pass
+        admin_runtime_state = getattr(app, "admin_runtime_state", None)
+        if admin_runtime_state is not None:
+            await admin_runtime_state.aclose()
         _flush_now(app)
         await close_resources(
             transport=app.transport,  # type: ignore
             metadata_store=app.metadata_store,  # type: ignore
+            codex_tool_store=app.codex_tool_store,  # type: ignore
+            window_tool_search_store=app.window_tool_search_store,  # type: ignore
+            image_fetch_workers=app.image_fetch_workers,  # type: ignore
         )

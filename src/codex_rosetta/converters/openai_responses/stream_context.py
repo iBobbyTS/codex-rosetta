@@ -80,21 +80,14 @@ class OpenAIResponsesStreamContext(StreamContext):
         ctx._tool_call_args = base._tool_call_args
         ctx._tool_call_order = base._tool_call_order
         ctx._tool_call_types = base._tool_call_types
-        if hasattr(base, "accumulated_reasoning"):
+        if isinstance(base, OpenAIResponsesStreamContext):
             ctx.accumulated_reasoning = base.accumulated_reasoning
-        if hasattr(base, "reasoning_seen"):
             ctx.reasoning_seen = base.reasoning_seen
-        if hasattr(base, "reasoning_item_id"):
             ctx.reasoning_item_id = base.reasoning_item_id
-        if hasattr(base, "reasoning_item_emitted"):
             ctx.reasoning_item_emitted = base.reasoning_item_emitted
-        if hasattr(base, "reasoning_item_done_emitted"):
             ctx.reasoning_item_done_emitted = base.reasoning_item_done_emitted
-        if hasattr(base, "passthrough_output_items"):
             ctx.passthrough_output_items = base.passthrough_output_items
-        if hasattr(base, "message_item_metadata"):
             ctx.message_item_metadata = base.message_item_metadata
-        if hasattr(base, "tool_call_provider_metadata_map"):
             ctx.tool_call_provider_metadata_map = base.tool_call_provider_metadata_map
         return ctx
 
