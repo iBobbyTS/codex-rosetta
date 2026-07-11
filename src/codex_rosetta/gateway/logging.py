@@ -172,6 +172,11 @@ class StatsStreamHandler(logging.StreamHandler):
             self.stream.write(f"\r{summary}")
             self.flush()
             self._stats_line_active = True
+        except Exception:
+            # Terminal stats are an optional side channel.  A closed pipe or
+            # logging driver must never replace a successful proxy response.
+            self.stats_enabled = False
+            self._stats_line_active = False
         finally:
             self.release()
 
@@ -190,12 +195,20 @@ class StatsStreamHandler(logging.StreamHandler):
         self.acquire()
         try:
             if self._stats_line_active:
-                self.stream.write(self.terminator)
-                self.flush()
-                self._stats_line_active = False
+                try:
+                    self.stream.write(self.terminator)
+                    self.flush()
+                except Exception:
+                    self.stats_enabled = False
+                finally:
+                    self._stats_line_active = False
         finally:
             self.release()
-        super().close()
+        try:
+            super().close()
+        except Exception:
+            # Handler shutdown is best-effort for the same reason as redraws.
+            pass
 
 
 # ---------------------------------------------------------------------------

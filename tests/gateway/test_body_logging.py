@@ -186,6 +186,54 @@ def test_stats_logging_serializes_concurrent_counter_updates(
     assert counts == {"model-1": 80, "model-2": 60}
 
 
+@pytest.mark.parametrize("failure", ["write", "flush"])
+def test_stats_logging_io_failure_is_best_effort(
+    failure: str,
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    class _BrokenStatsStream(io.StringIO):
+        def write(self, value: str) -> int:
+            if failure == "write":
+                raise OSError("stats stream write failed")
+            return super().write(value)
+
+        def flush(self) -> None:
+            if failure == "flush":
+                raise OSError("stats stream flush failed")
+            super().flush()
+
+    handler = gateway_logging.StatsStreamHandler(
+        _BrokenStatsStream(), stats_enabled=True
+    )
+
+    handler.record_request("model-1")
+
+    assert handler.stats_enabled is False
+    assert handler._stats_line_active is False
+
+
+def test_stats_logging_close_failure_is_best_effort(
+    isolated_gateway_loggers: logging.Logger,
+) -> None:
+    class _CloseBrokenStatsStream(io.StringIO):
+        fail_writes = False
+
+        def write(self, value: str) -> int:
+            if self.fail_writes:
+                raise OSError("stats stream close failed")
+            return super().write(value)
+
+    stream = _CloseBrokenStatsStream()
+    handler = gateway_logging.StatsStreamHandler(stream, stats_enabled=True)
+    handler.record_request("model-1")
+    stream.fail_writes = True
+
+    handler.close()
+
+    assert handler.stats_enabled is False
+    assert handler._stats_line_active is False
+
+
 def test_body_log_redacts_tokens_before_serialization_and_preserves_other_data(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
