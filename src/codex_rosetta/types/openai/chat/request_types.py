@@ -10,7 +10,6 @@ Reference: openai.types.chat.completion_create_params
 SDK Source: <python_env>/lib/python3.10/site-packages/openai/types/chat/
 """
 
-import sys
 from typing import (
     TYPE_CHECKING,
     Literal,
@@ -19,10 +18,7 @@ from typing import (
 )
 from collections.abc import Iterable
 
-if sys.version_info >= (3, 11):
-    from typing import NotRequired, Required
-else:
-    from typing_extensions import NotRequired, Required
+from typing import NotRequired, Required
 
 
 # ============================================================================

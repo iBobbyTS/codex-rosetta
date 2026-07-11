@@ -10,13 +10,9 @@ IR扩展项类型定义（实验性），用于特殊场景的扩展功能。
 这些类型目前没有任何 provider 实际支持，仅作为前瞻设计保留。
 """
 
-import sys
 from typing import Any, Literal, TypeGuard, Union
 
-if sys.version_info >= (3, 11):
-    from typing import NotRequired, Required, TypedDict
-else:
-    from typing_extensions import NotRequired, Required, TypedDict
+from typing import NotRequired, Required, TypedDict
 
 # ============================================================================
 # 扩展项类型（用于特殊场景） Extension item types (for special scenarios)

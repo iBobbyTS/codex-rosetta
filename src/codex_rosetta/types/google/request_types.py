@@ -9,13 +9,9 @@ SDK Source: <python_env>/lib/python3.10/site-packages/google/genai/types.py
 
 from __future__ import annotations
 
-import sys
 from typing import Any, TypedDict
 
-if sys.version_info >= (3, 11):
-    from typing import Required
-else:
-    from typing_extensions import Required
+from typing import Required
 
 from .content_types import Content, Part
 

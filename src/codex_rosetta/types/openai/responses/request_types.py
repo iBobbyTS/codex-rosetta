@@ -11,14 +11,10 @@ SDK Source: <python_env>/lib/python3.10/site-packages/openai/types/responses/
 
 from __future__ import annotations
 
-import sys
 from typing import Any, Literal, TypedDict, Union
 from collections.abc import Iterable
 
-if sys.version_info >= (3, 11):
-    from typing import Required
-else:
-    from typing_extensions import Required
+from typing import Required
 
 __all__ = [
     # Input types
