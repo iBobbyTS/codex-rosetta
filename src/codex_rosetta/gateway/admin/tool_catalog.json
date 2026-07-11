@@ -155,7 +155,8 @@
       "id": "function.request_user_input",
       "name": "request_user_input",
       "type": "function",
-      "policy_id": "targeted_chat_guidance"
+      "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.request_user_input"
     },
     {
       "id": "function.request_permissions",
@@ -245,13 +246,15 @@
       "id": "function.create_goal",
       "name": "create_goal",
       "type": "function",
-      "policy_id": "targeted_chat_guidance"
+      "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.create_goal"
     },
     {
       "id": "function.update_goal",
       "name": "update_goal",
       "type": "function",
-      "policy_id": "targeted_chat_guidance"
+      "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.update_goal"
     },
     {
       "id": "custom.apply_patch",

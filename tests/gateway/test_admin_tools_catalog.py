@@ -226,6 +226,20 @@ def test_catalog_defaults_and_shared_image_policy():
         and policies[item["policy_id"]]["default"] == "modified"
     } == modified
 
+    descriptions = {
+        item_id: item.get("description_i18n") for item_id, item in items.items()
+    }
+    assert {
+        item_id for item_id, description in descriptions.items() if description
+    } == {
+        "function.request_user_input",
+        "function.create_goal",
+        "function.update_goal",
+    }
+    assert descriptions["function.request_user_input"] == (
+        "tools.description.request_user_input"
+    )
+
     builtin = tool_profile_contract()["builtin"]
     assert builtin["function.exec_command"] == "passthrough"
     assert builtin["function.write_stdin"] == "passthrough"
@@ -308,6 +322,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "updateToolProfileState" in html
     assert 'type="checkbox"' not in page
     assert "tools.disabledHint" in page
+    assert "item.description_i18n" in html
+    assert "tools.description.request_user_input" in html
+    assert "tools.description.create_goal" in html
+    assert "tools.description.update_goal" in html
     assert "toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace'" in html
     assert "api.get('/admin/api/tools/profiles')" in html
 
