@@ -317,6 +317,9 @@
           "label_i18n": "tools.input.web_search.provider",
           "type": "select",
           "default": "tavily",
+          "visible_when": [
+            "modified"
+          ],
           "options": [
             {
               "value": "tavily",
@@ -329,7 +332,10 @@
           "label_i18n": "tools.input.web_search.token",
           "placeholder_i18n": "tools.input.web_search.token_placeholder",
           "type": "password",
-          "default": ""
+          "default": "",
+          "visible_when": [
+            "modified"
+          ]
         }
       ],
       "aliases": [
@@ -490,14 +496,20 @@
           "id": "base_url",
           "label_i18n": "tools.input.image_gen.base_url",
           "placeholder_i18n": "tools.input.image_gen.base_url_placeholder",
-          "default": "https://api.openai.com/v1"
+          "default": "https://api.openai.com/v1",
+          "visible_when": [
+            "modified"
+          ]
         },
         {
           "id": "token",
           "label_i18n": "tools.input.image_gen.token",
           "placeholder_i18n": "tools.input.image_gen.token_placeholder",
           "type": "password",
-          "default": ""
+          "default": "",
+          "visible_when": [
+            "modified"
+          ]
         }
       ],
       "aliases": [
@@ -518,6 +530,9 @@
           "label_i18n": "tools.input.web_search.provider",
           "type": "select",
           "default": "tavily",
+          "visible_when": [
+            "modified"
+          ],
           "options": [
             {
               "value": "tavily",
@@ -530,7 +545,10 @@
           "label_i18n": "tools.input.web_search.token",
           "placeholder_i18n": "tools.input.web_search.token_placeholder",
           "type": "password",
-          "default": ""
+          "default": "",
+          "visible_when": [
+            "modified"
+          ]
         }
       ]
     },

@@ -2033,9 +2033,7 @@ async function loadToolCatalog() {
     toolProfileInputDraft = cloneToolProfileInputs(selected.inputs);
     toolProfileDirty = false;
     for (const item of toolCatalogData.items || []) {
-      if (item.type === 'namespace' && item.default_expanded) {
-        expandedToolNamespaces.add(item.id);
-      }
+      if (item.type === 'namespace') expandedToolNamespaces.add(item.id);
     }
     renderToolCatalog();
   } catch (error) {
@@ -2079,7 +2077,7 @@ function updateToolProfileState(itemId, state) {
   if (currentToolProfile()?.readonly) return;
   toolProfileDraft[itemId] = state;
   toolProfileDirty = true;
-  renderToolProfileControls();
+  renderToolCatalog();
 }
 
 function updateToolProfileInput(itemId, inputId, value) {
@@ -2210,11 +2208,17 @@ function renderToolStateSelect(item) {
   return `<select class="tool-state-select" aria-label="${escAttr(item.name)}" onchange="updateToolProfileState(${handlerArg(item.id)}, this.value)"${disabled}>${options}</select>`;
 }
 
+function isToolCardContentVisible(itemId, visibleWhen) {
+  return !Array.isArray(visibleWhen) || visibleWhen.includes(toolProfileDraft[itemId]);
+}
+
 function renderToolProfileInputs(item) {
   if (!['function', 'hosted'].includes(item.type) || !Array.isArray(item.profile_inputs) || item.profile_inputs.length === 0) return '';
   const values = toolProfileInputDraft[item.id] || {};
   const disabled = currentToolProfile()?.readonly ? ' disabled' : '';
-  const groups = item.profile_inputs.map(input => {
+  const groups = item.profile_inputs.filter(input =>
+    isToolCardContentVisible(item.id, input.visible_when)
+  ).map(input => {
     const value = values[input.id] ?? input.default ?? '';
     if (input.type === 'select') {
       const options = (input.options || []).map(option =>
@@ -2227,11 +2231,12 @@ function renderToolProfileInputs(item) {
     const autocomplete = inputType === 'password' ? ' autocomplete="new-password"' : '';
     return `<label class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><input class="tool-profile-input" type="${inputType}" value="${escAttr(value)}" maxlength="16384"${placeholder}${autocomplete} oninput="updateToolProfileInput(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.value)"${disabled}></label>`;
   }).join('');
-  return `<div class="tool-profile-inputs">${groups}</div>`;
+  return groups ? `<div class="tool-profile-inputs">${groups}</div>` : '';
 }
 
 function renderToolItem(item, policies, nested=false) {
-  const description = item.description_i18n ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
+  const showDescription = item.description_i18n && isToolCardContentVisible(item.id, item.description_visible_when);
+  const description = showDescription ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
   return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}${description}${renderToolProfileInputs(item)}</div>`;
 }
 

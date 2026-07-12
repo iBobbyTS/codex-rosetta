@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from typing import Any, cast
 
 from .admin.tool_catalog import load_tool_catalog
 
@@ -11,6 +11,31 @@ BUILTIN_TOOL_PROFILE = "builtin"
 RESPONSES_PASS_THROUGH_TOOL_PROFILE = "responses_pass_through"
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
+
+
+def _normalize_visible_when(
+    item_id: str,
+    value: Any,
+    supported_states: tuple[str, ...],
+    *,
+    field: str,
+) -> list[str] | None:
+    """Validate an optional state-based card visibility condition."""
+    if value is None:
+        return None
+    if not isinstance(value, list) or any(
+        not isinstance(state, str) for state in value
+    ):
+        raise ValueError(f"catalog item {item_id!r} {field} must be a list of strings")
+    if len(value) != len(set(value)):
+        raise ValueError(f"catalog item {item_id!r} {field} contains duplicate states")
+    unsupported = sorted(set(value) - set(supported_states))
+    if unsupported:
+        raise ValueError(
+            f"catalog item {item_id!r} {field} contains unsupported states: "
+            f"{unsupported}"
+        )
+    return list(cast(list[str], value))
 
 
 def _normalize_profile_select_options(
@@ -69,6 +94,7 @@ def _normalize_profile_input_definition(
     item_id: str,
     value: Any,
     existing_ids: set[str],
+    supported_states: tuple[str, ...],
 ) -> tuple[str, dict[str, Any]]:
     """Validate one catalog-declared tool-card input definition."""
     if not isinstance(value, dict):
@@ -80,6 +106,7 @@ def _normalize_profile_input_definition(
         "type",
         "placeholder_i18n",
         "options",
+        "visible_when",
     }
     if unsupported:
         raise ValueError(
@@ -139,10 +166,21 @@ def _normalize_profile_input_definition(
             f"catalog item {item_id!r} profile input {input_id!r} "
             "placeholder_i18n must be a non-empty string"
         )
+    visible_when = _normalize_visible_when(
+        item_id,
+        value.get("visible_when"),
+        supported_states,
+        field=f"profile input {input_id!r} visible_when",
+    )
+    if visible_when is not None:
+        value = dict(value, visible_when=visible_when)
     return input_id, dict(value, default=default, type=input_type)
 
 
-def _profile_input_contract(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+def _profile_input_contract(
+    catalog: dict[str, Any],
+    supported: dict[str, tuple[str, ...]],
+) -> dict[str, dict[str, Any]]:
     """Return validated tool-card input definitions keyed by tool and input ID."""
     definitions: dict[str, dict[str, Any]] = {}
     for item in catalog["items"]:
@@ -159,7 +197,7 @@ def _profile_input_contract(catalog: dict[str, Any]) -> dict[str, dict[str, Any]
         item_inputs: dict[str, Any] = {}
         for raw_input in raw_inputs:
             input_id, input_definition = _normalize_profile_input_definition(
-                item["id"], raw_input, set(item_inputs)
+                item["id"], raw_input, set(item_inputs), supported[item["id"]]
             )
             item_inputs[input_id] = input_definition
         if item_inputs:
@@ -171,7 +209,6 @@ def _profile_input_contract(catalog: dict[str, Any]) -> dict[str, dict[str, Any]
 def tool_profile_contract() -> dict[str, Any]:
     """Return supported states and the immutable bundled profiles."""
     catalog = load_tool_catalog()
-    input_definitions = _profile_input_contract(catalog)
     policies = {policy["id"]: policy for policy in catalog["policies"]}
     supported: dict[str, tuple[str, ...]] = {}
     builtin: dict[str, str] = {}
@@ -197,6 +234,23 @@ def tool_profile_contract() -> dict[str, Any]:
         states = tuple(policy["supported"])
         supported[item_id] = states
         builtin[item_id] = policy["default"]
+
+    input_definitions = _profile_input_contract(catalog, supported)
+    for item in catalog["items"]:
+        description_visible_when = item.get("description_visible_when")
+        if description_visible_when is None:
+            continue
+        if not item.get("description_i18n"):
+            raise ValueError(
+                f"catalog item {item['id']!r} description_visible_when requires "
+                "description_i18n"
+            )
+        _normalize_visible_when(
+            item["id"],
+            description_visible_when,
+            supported[item["id"]],
+            field="description_visible_when",
+        )
 
     profiles = [
         {

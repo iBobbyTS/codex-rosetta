@@ -219,6 +219,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "label_i18n": "tools.input.image_gen.base_url",
             "placeholder_i18n": "tools.input.image_gen.base_url_placeholder",
             "default": "https://api.openai.com/v1",
+            "visible_when": ["modified"],
         },
         {
             "id": "token",
@@ -226,6 +227,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "placeholder_i18n": "tools.input.image_gen.token_placeholder",
             "type": "password",
             "default": "",
+            "visible_when": ["modified"],
         },
     ]
     search_inputs = [
@@ -234,6 +236,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "label_i18n": "tools.input.web_search.provider",
             "type": "select",
             "default": "tavily",
+            "visible_when": ["modified"],
             "options": [{"value": "tavily", "label": "Tavily"}],
         },
         {
@@ -242,6 +245,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "placeholder_i18n": "tools.input.web_search.token_placeholder",
             "type": "password",
             "default": "",
+            "visible_when": ["modified"],
         },
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
@@ -370,6 +374,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
     assert "option.value === value" in html
+    assert "input.visible_when" in html
+    assert "item.description_visible_when" in html
+    assert "isToolCardContentVisible" in html
+    assert "renderToolCatalog();" in html
     assert "${esc(option.label)}" in html
     assert '<select class="tool-profile-input"' in html
     assert "inputs: toolProfileInputDraft" in html
@@ -377,6 +385,8 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "tools.description.create_goal" in html
     assert "tools.description.update_goal" in html
     assert "toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace'" in html
+    assert "if (item.type === 'namespace') expandedToolNamespaces.add(item.id);" in html
+    assert "item.default_expanded" not in html
     assert "api.get('/admin/api/tools/profiles')" in html
     assert 'href="/admin/web-search"' not in html
     assert 'id="page-web-search"' not in html
