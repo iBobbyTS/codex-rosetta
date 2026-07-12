@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
+from codex_rosetta.gateway.codex_page import OpenedPage
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.transport import UpstreamConnectionError
 from codex_rosetta.gateway.transport._base import UpstreamResponse
+from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
 ENDPOINTS = ("alpha/search", "images/generations", "images/edits")
@@ -22,6 +26,7 @@ def _make_config(
     api_type: str = "responses_passthrough",
     *,
     upstream_model: str | None = "gpt-image-2",
+    tavily_api_key: str | None = None,
 ) -> GatewayConfig:
     provider_by_api_type = {
         "responses_passthrough": "openai",
@@ -59,6 +64,11 @@ def _make_config(
                         "key": "gateway-key",
                     }
                 ],
+                "web_search": (
+                    {"tavily_api_key": tavily_api_key}
+                    if tavily_api_key is not None
+                    else {}
+                ),
             },
         }
     )
@@ -128,6 +138,7 @@ def test_non_passthrough_modes_return_not_implemented(
         "only implemented for OpenAI Responses (Pass through)"
         in payload["error"]["message"]
     )
+    assert payload["error"]["message"].endswith('Consider "Browser Use" skill')
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
@@ -173,3 +184,169 @@ def test_auxiliary_endpoint_maps_upstream_connection_error() -> None:
     assert payload["error"]["message"] == (
         "Upstream request failed: connection refused"
     )
+
+
+class _FakeTavilyClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, WebSearchSettings]] = []
+
+    async def search(
+        self, query: str, *, settings: WebSearchSettings
+    ) -> dict[str, Any]:
+        self.calls.append((query, settings))
+        return {
+            "results": [
+                {
+                    "title": "Python documentation",
+                    "url": "https://docs.python.org/3/",
+                    "content": "Official Python documentation.",
+                }
+            ]
+        }
+
+
+class _FakePageClient:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def open(self, url: str) -> OpenedPage:
+        self.calls.append(url)
+        return OpenedPage(
+            url=url,
+            title="Python 3 Documentation",
+            lines=("Python 3 documentation", "Tutorial", "Library Reference"),
+        )
+
+
+def _search_body(commands: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": "search-session",
+        "model": "gateway-model",
+        "commands": commands,
+        "settings": {
+            "allowed_callers": ["direct"],
+            "external_web_access": True,
+        },
+    }
+
+
+def test_tavily_configuration_intercepts_passthrough_search() -> None:
+    config = _make_config(tavily_api_key="tvly-test", upstream_model="real-model")
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    client = _FakeTavilyClient()
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            search_client=client,
+        )
+    )
+
+    assert response.status_code == 200
+    assert "https://docs.python.org/3/" in json.loads(response.body)["output"]
+    assert client.calls == [("Python documentation", WebSearchSettings())]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:
+    trace_path = tmp_path / "search-trace.jsonl"
+    config = _make_config(tavily_api_key="tvly-test")
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            search_client=_FakeTavilyClient(),
+        )
+    )
+
+    assert response.status_code == 200
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "codex_search_request",
+        "codex_search_response",
+    ]
+    assert records[0]["data"]["command_types"] == ["search_query"]
+    assert records[1]["data"]["executor"] == "tavily_python"
+
+
+def test_non_passthrough_search_uses_local_tavily_bridge() -> None:
+    config = _make_config(
+        "chat", tavily_api_key="tvly-test", upstream_model="deepseek-v4-flash"
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            search_client=_FakeTavilyClient(),
+        )
+    )
+
+    assert response.status_code == 200
+    assert "docs.python.org" in json.loads(response.body)["output"]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_local_search_open_returns_static_page_content() -> None:
+    config = _make_config(tavily_api_key="tvly-test")
+    request = _make_request(
+        _search_body({"open": [{"ref_id": "https://docs.python.org/3/"}]})
+    )
+    page_client = _FakePageClient()
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            page_client=page_client,
+        )
+    )
+
+    assert response.status_code == 200
+    payload = json.loads(response.body)
+    assert "Python 3 Documentation" in payload["output"]
+    assert page_client.calls == ["https://docs.python.org/3/"]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_stored_reference_open_returns_not_implemented() -> None:
+    config = _make_config(tavily_api_key="tvly-test")
+    request = _make_request(_search_body({"open": [{"ref_id": "turn0search0"}]}))
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    payload = json.loads(response.body)
+    assert payload["error"]["type"] == "not_implemented_error"
+    assert "turn0search0" in payload["error"]["message"]
+    assert payload["error"]["message"].endswith('Consider "Browser Use" skill')
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_tavily_configuration_does_not_intercept_image_endpoints() -> None:
+    config = _make_config(tavily_api_key="tvly-test")
+    request = _make_request({"model": "gateway-model", "prompt": "draw a fox"})
+
+    response = asyncio.run(
+        handle_codex_auxiliary(request, config, "images/generations")
+    )
+
+    assert response.status_code == 202
+    request.app.transport.send_passthrough.assert_awaited_once()
