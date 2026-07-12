@@ -231,8 +231,8 @@ class TestOpenAIResponsesToolOps:
 
         assert isinstance(result, list)
         assert [tool["name"] for tool in result] == [
-            "multi_agent_v1__spawn_agent",
-            "multi_agent_v1__wait_agent",
+            "multi_agent_v1-spawn_agent",
+            "multi_agent_v1-wait_agent",
         ]
         assert result[0]["type"] == "function"
         assert result[0]["required_parameters"] == ["prompt"]
@@ -241,8 +241,12 @@ class TestOpenAIResponsesToolOps:
         assert result[0]["metadata"]["responses_namespace_child_name"] == "spawn_agent"
         assert (
             result[0]["metadata"]["responses_chat_tool_name"]
-            == "multi_agent_v1__spawn_agent"
+            == "multi_agent_v1-spawn_agent"
         )
+        assert result[0]["metadata"]["responses_chat_tool_aliases"] == [
+            "multi_agent_v1_spawn_agent",
+            "multi_agent_v1.spawn_agent",
+        ]
         assert (
             result[0]["metadata"]["responses_namespace_description"]
             == "Spawn and manage sub-agents."

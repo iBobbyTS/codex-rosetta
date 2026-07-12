@@ -871,7 +871,7 @@ def test_gateway_window_tool_search_output_expands_tools_for_same_window():
                             "id": "call_fetch",
                             "type": "function",
                             "function": {
-                                "name": "mcp__codex_apps__github___fetch",
+                                "name": "mcp__codex_apps__github._fetch",
                                 "arguments": '{"id":"issue-1"}',
                             },
                         }
@@ -952,7 +952,7 @@ def test_gateway_window_tool_search_output_expands_tools_for_same_window():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert "mcp__codex_apps__github___fetch" in _tool_names(captured_body["tools"])
+    assert "mcp__codex_apps__github-_fetch" in _tool_names(captured_body["tools"])
     source_body = json.loads(response.body)
     output = source_body["output"][0]
     assert output["type"] == "function_call"
@@ -1032,7 +1032,7 @@ def test_gateway_window_tool_search_output_requires_codex_window_id():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert "mcp__codex_apps__github___fetch" not in _tool_names(captured_body["tools"])
+    assert "mcp__codex_apps__github-_fetch" not in _tool_names(captured_body["tools"])
     assert len(window_store) == 0
 
 
@@ -1067,7 +1067,7 @@ def test_gateway_enriches_empty_tool_search_output_from_deferred_namespaces():
                             "id": "call_fetch_pr",
                             "type": "function",
                             "function": {
-                                "name": "mcp__codex_apps__github___fetch_pr",
+                                "name": "mcp__codex_apps__github._fetch_pr",
                                 "arguments": '{"number":42}',
                             },
                         }
@@ -1189,11 +1189,11 @@ def test_gateway_enriches_empty_tool_search_output_from_deferred_namespaces():
     assert second_response.status_code == 200
     first_names = _tool_names(captured_bodies[0]["tools"])
     assert "tool_search" in first_names
-    assert "mcp__codex_apps__github___fetch_pr" not in first_names
-    assert "mcp__codex_apps__gmail___search" not in first_names
+    assert "mcp__codex_apps__github-_fetch_pr" not in first_names
+    assert "mcp__codex_apps__gmail-_search" not in first_names
     second_names = _tool_names(captured_bodies[1]["tools"])
-    assert "mcp__codex_apps__github___fetch_pr" in second_names
-    assert "mcp__codex_apps__gmail___search" not in second_names
+    assert "mcp__codex_apps__github-_fetch_pr" in second_names
+    assert "mcp__codex_apps__gmail-_search" not in second_names
     source_body = json.loads(second_response.body)
     output = source_body["output"][0]
     assert output["type"] == "function_call"
@@ -1336,11 +1336,11 @@ def test_gateway_deferred_tool_search_limits_namespace_children():
         "_get_pr_info",
     ]
     names = _tool_names(captured_bodies[1]["tools"])
-    assert "mcp__codex_apps__github___fetch_pr" in names
-    assert "mcp__codex_apps__github___get_pr_info" in names
-    assert "mcp__codex_apps__github___create_issue" not in names
-    assert "mcp__codex_apps__github___delete_file" not in names
-    assert "mcp__codex_apps__gmail___search" not in names
+    assert "mcp__codex_apps__github-_fetch_pr" in names
+    assert "mcp__codex_apps__github-_get_pr_info" in names
+    assert "mcp__codex_apps__github-_create_issue" not in names
+    assert "mcp__codex_apps__github-_delete_file" not in names
+    assert "mcp__codex_apps__gmail-_search" not in names
 
 
 def test_gateway_patches_github_owner_repo_descriptions_only_for_chat_tools():
@@ -1465,7 +1465,7 @@ def test_gateway_patches_github_owner_repo_descriptions_only_for_chat_tools():
         tool
         for tool in chat_tools
         if tool.get("function", {}).get("name")
-        == "mcp__codex_apps__github___get_pr_info"
+        == "mcp__codex_apps__github-_get_pr_info"
     )
     properties = github_tool["function"]["parameters"]["properties"]
     assert "Do not guess" in properties["owner"]["description"]
@@ -1590,8 +1590,8 @@ def test_gateway_deferred_tool_search_matches_nested_schema_metadata():
         "_create_event"
     ]
     names = _tool_names(captured_body["tools"])
-    assert "mcp__calendar___create_event" in names
-    assert "mcp__calendar___delete_event" not in names
+    assert "mcp__calendar-_create_event" in names
+    assert "mcp__calendar-_delete_event" not in names
 
 
 def test_gateway_does_not_overwrite_non_empty_tool_search_output():
@@ -1692,8 +1692,8 @@ def test_gateway_does_not_overwrite_non_empty_tool_search_output():
 
     assert response.status_code == 200
     names = _tool_names(captured_body["tools"])
-    assert "mcp__codex_apps__gmail___search" in names
-    assert "mcp__codex_apps__github___fetch_pr" not in names
+    assert "mcp__codex_apps__gmail-_search" in names
+    assert "mcp__codex_apps__github-_fetch_pr" not in names
 
 
 def test_gateway_query_miss_does_not_load_deferred_tools():
@@ -1780,7 +1780,7 @@ def test_gateway_query_miss_does_not_load_deferred_tools():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert "mcp__codex_apps__github___fetch_pr" not in _tool_names(
+    assert "mcp__codex_apps__github-_fetch_pr" not in _tool_names(
         captured_body["tools"]
     )
 
@@ -1900,11 +1900,11 @@ def test_gateway_defers_preloaded_plugin_namespaces_but_keeps_base_tools():
     names = _tool_names(captured_body["tools"])
     assert "Bash" not in names
     assert "Edit" in names
-    assert "multi_agent_v1__spawn_agent" in names
-    assert "codex_app__load_workspace_dependencies" in names
+    assert "multi_agent_v1-spawn_agent" in names
+    assert "codex_app-load_workspace_dependencies" in names
     assert "tool_search" in names
-    assert "mcp__codex_apps__github___fetch_pr" not in names
-    assert "mcp__codex_apps__gmail___search" not in names
+    assert "mcp__codex_apps__github-_fetch_pr" not in names
+    assert "mcp__codex_apps__gmail-_search" not in names
     tool_search = next(
         tool
         for tool in captured_body["tools"]
@@ -1983,7 +1983,7 @@ def test_gateway_does_not_defer_preloaded_namespaces_without_codex_window_id():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert "mcp__codex_apps__github___fetch_pr" in _tool_names(captured_body["tools"])
+    assert "mcp__codex_apps__github-_fetch_pr" in _tool_names(captured_body["tools"])
 
 
 def test_persisted_mapping_restores_history_without_memory_store():

@@ -395,6 +395,72 @@ class TestOpenAIResponsesMessageOps:
         assert result[0]["content"][0]["type"] == "text"
         assert result[0]["content"][0]["text"] == "Hello string"
 
+    def test_p_agent_message_exposes_encrypted_payload_as_user_text(self):
+        """Codex child tasks retain their encrypted inter-agent payload for Chat."""
+        item = {
+            "type": "agent_message",
+            "author": "/root",
+            "recipient": "/root/spawn_probe",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "Message Type: NEW_TASK\nPayload:\n",
+                },
+                {
+                    "type": "encrypted_content",
+                    "encrypted_content": "Reply with only SUBAGENT:SPAWN_OK.",
+                },
+            ],
+        }
+
+        result = cast(list[Any], self.message_ops.p_messages_to_ir([item]))
+
+        assert result == [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Message Type: NEW_TASK\nPayload:\n",
+                    },
+                    {
+                        "type": "text",
+                        "text": "Reply with only SUBAGENT:SPAWN_OK.",
+                    },
+                ],
+                "metadata": {
+                    "custom": {
+                        "responses_agent_message": {
+                            "author": "/root",
+                            "recipient": "/root/spawn_probe",
+                        }
+                    }
+                },
+            }
+        ]
+
+    def test_p_agent_message_does_not_expose_unrelated_encrypted_content(self):
+        """Only agent_message items reinterpret encrypted_content as prompt text."""
+        result = cast(
+            list[Any],
+            self.message_ops.p_messages_to_ir(
+                [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "encrypted_content",
+                                "encrypted_content": "opaque-reasoning-payload",
+                            }
+                        ],
+                    }
+                ]
+            ),
+        )
+
+        assert result == []
+
     def test_p_function_call_to_ir(self):
         """Test OpenAI Responses function_call → IR assistant with ToolCallPart."""
         result = cast(

@@ -91,6 +91,67 @@ class TestOpenAIChatToolOps:
         assert "call create_goal first" in description
         assert result["function"]["parameters"]["required"] == ["status"]
 
+    def test_namespaced_collaboration_tools_get_chat_guidance(self):
+        """Flattened collaboration tools retain child-specific guidance."""
+        spawn_tool = cast(
+            ToolDefinition,
+            {
+                "type": "function",
+                "name": "collaboration-spawn_agent",
+                "description": "Spawn a child.",
+                "parameters": {"type": "object", "properties": {}},
+                "required_parameters": [],
+                "metadata": {},
+            },
+        )
+        wait_tool = cast(
+            ToolDefinition,
+            {
+                "type": "function",
+                "name": "collaboration-wait_agent",
+                "description": "Wait for a child.",
+                "parameters": {"type": "object", "properties": {}},
+                "required_parameters": [],
+                "metadata": {},
+            },
+        )
+
+        spawn_result = OpenAIChatToolOps.ir_tool_definition_to_p(spawn_tool)
+        wait_result = OpenAIChatToolOps.ir_tool_definition_to_p(wait_tool)
+
+        assert (
+            "message field is the complete child task"
+            in spawn_result["function"]["description"]
+        )
+        assert (
+            "does not replay a completion notification"
+            in wait_result["function"]["description"]
+        )
+
+    def test_collaboration_state_tools_get_chat_guidance(self):
+        """State-oriented collaboration tools retain parameter guidance."""
+        expected_guidance = {
+            "collaboration-list_agents": "path_prefix filters canonical task paths",
+            "collaboration-send_message": "target must be the canonical task path",
+        }
+
+        for tool_name, expected in expected_guidance.items():
+            ir_tool = cast(
+                ToolDefinition,
+                {
+                    "type": "function",
+                    "name": tool_name,
+                    "description": "Original description.",
+                    "parameters": {"type": "object", "properties": {}},
+                    "required_parameters": [],
+                    "metadata": {},
+                },
+            )
+
+            result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
+
+            assert expected in result["function"]["description"]
+
     def test_ir_tool_definition_to_p_skips_chat_guidance_when_disabled(self):
         """Chat tool description optimization can be disabled."""
         ir_tool = cast(

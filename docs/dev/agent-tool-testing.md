@@ -36,12 +36,24 @@ the generated summary.
 The Namespace-tools suite is
 [`tests/agent_workspace/namespace_tools`](../../tests/agent_workspace/namespace_tools/README.md).
 It gives the agent a fixed sequence of direct calls to `clock.curr_time`,
-`memories.list`, `skills.list`, `collaboration.spawn_agent`, and
-`collaboration.wait_agent`. It tests Namespace exposure, Responses-to-Chat
-flattening/restoration, and local tool execution rather than planning or
-subagent quality. The suite enables `current_time_reminder`, `memories`, and
-`multi_agent_v2`, seeds an isolated memory root, and treats an unavailable
-app-server orchestrator skill provider as a real `skills` Namespace failure.
+`memories.list`, and `skills.list`. It tests Namespace exposure,
+Responses-to-Chat flattening/restoration, and local tool execution rather than
+planning quality. The suite enables `current_time_reminder` and `memories`,
+seeds an isolated memory root, and treats an unavailable app-server
+orchestrator skill provider as a real `skills` Namespace failure.
+
+The Subagent-tools suite is
+[`tests/agent_workspace/subagent_tools`](../../tests/agent_workspace/subagent_tools/README.md).
+It isolates all six `collaboration` Functions into separate tasks for
+`spawn_agent`, `wait_agent`, `list_agents`, `send_message`, `followup_task`,
+and `interrupt_agent`. Supporting lifecycle calls may prepare or verify a
+scenario, but each task has exactly one core Function so failures remain
+attributable. The suite enables `multi_agent_v2` and evaluates canonical child
+paths, mailbox delivery, idle-agent follow-up, completion notifications, and
+resident state after interruption. It measures tool-call behavior rather than
+delegation judgment or subagent answer quality. Its provider matrix uses exact
+case-sensitive IDs and display names `custom` and `OpenAI`; lowercase `openai`
+does not satisfy the OpenAI identity cell.
 
 The GPT relay provider-identity suite is
 [`tests/integration/gpt_relay`](../../tests/integration/gpt_relay/README.md).
@@ -116,10 +128,15 @@ For Namespace-tool tasks, verify every required native Namespace call and
 successful result in the isolated rollout. Use Gateway Logs to record the
 model-facing call name: native Responses routes retain Namespace calls, while
 Responses-to-Chat routes expose unique flattened names such as
-`memories__list` and Rosetta must reconstruct the original Namespace before
+`memories.list` and Rosetta must reconstruct the original Namespace before
 Codex executes it. A textual mention, a shell substitute, or a local file read
-does not count. The collaboration check requires both spawning a child and
-waiting until the child returns the fixed marker.
+does not count.
+
+For Subagent-tool tasks, evaluate the one core `collaboration` Function named
+by `expected.json` plus the scenario-specific lifecycle proof. Spawn and wait
+calls used to prepare or clean up another scenario are supporting evidence, not
+additional target coverage. Run every scenario separately; a child or mailbox
+state created by one scenario must never be reused by another.
 
 Responses Lite models use Codex's standalone `web.run` extension instead of a
 hosted Responses search tool. An isolated custom-provider test must retain its

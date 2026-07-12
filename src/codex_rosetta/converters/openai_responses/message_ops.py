@@ -364,8 +364,8 @@ class OpenAIResponsesMessageOps(BaseMessageOps):
 
             item_type = item.get("type") if isinstance(item, dict) else None
 
-            if item_type == "message":
-                new_message = self._p_message_to_ir(item)
+            if item_type in ("message", "agent_message"):
+                new_message = self._p_provider_message_to_ir(item)
                 if new_message:
                     if current_message:
                         ir_input.append(current_message)
@@ -502,6 +502,47 @@ class OpenAIResponsesMessageOps(BaseMessageOps):
         # Empty messages are also created because subsequent tool calls
         # may need to be appended
         return {"role": ir_role, "content": ir_content}
+
+    def _p_provider_message_to_ir(self, provider_message: dict[str, Any]) -> Any:
+        """Dispatch ordinary and inter-agent Responses message items."""
+        if provider_message.get("type") == "agent_message":
+            return self._p_agent_message_to_ir(provider_message)
+        return self._p_message_to_ir(provider_message)
+
+    def _p_agent_message_to_ir(self, provider_message: Any) -> Any:
+        """Expose Codex inter-agent message text to non-Responses providers."""
+        if not isinstance(provider_message, dict):
+            return None
+
+        ir_content: list[ContentPart] = []
+        content = provider_message.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if (
+                    isinstance(part, dict)
+                    and part.get("type") == "encrypted_content"
+                    and isinstance(part.get("encrypted_content"), str)
+                ):
+                    ir_content.append(
+                        TextPart(type="text", text=part["encrypted_content"])
+                    )
+                    continue
+                ir_content.extend(self._p_content_part_to_ir(part))
+
+        if not ir_content:
+            return None
+        return {
+            "role": "user",
+            "content": ir_content,
+            "metadata": {
+                "custom": {
+                    "responses_agent_message": {
+                        "author": provider_message.get("author"),
+                        "recipient": provider_message.get("recipient"),
+                    }
+                }
+            },
+        }
 
     def _p_content_part_to_ir(self, provider_part: Any) -> list[ContentPart]:
         """Convert a single Responses API content part to IR content part(s).

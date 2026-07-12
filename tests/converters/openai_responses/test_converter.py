@@ -281,7 +281,7 @@ class TestOpenAIResponsesConverter:
             "tools": [
                 {
                     "type": "function",
-                    "name": "multi_agent_v1__spawn_agent",
+                    "name": "multi_agent_v1-spawn_agent",
                     "description": "top-level wins",
                     "parameters": {},
                 }
@@ -310,12 +310,12 @@ class TestOpenAIResponsesConverter:
         result = self.converter.request_from_provider(provider_request, context=context)
 
         assert [tool["name"] for tool in result["tools"]] == [
-            "multi_agent_v1__spawn_agent"
+            "multi_agent_v1-spawn_agent"
         ]
         assert result["tools"][0]["description"] == "top-level wins"
         assert context.warnings == [
             "Conflicting Responses tool definitions resolve to "
-            "'multi_agent_v1__spawn_agent'; keeping the first definition"
+            "'multi_agent_v1-spawn_agent'; keeping the first definition"
         ]
 
     def test_request_from_provider_with_text_format(self):

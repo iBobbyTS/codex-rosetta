@@ -44,18 +44,21 @@ def _sanitize_chat_tool_name_part(value: str, fallback: str) -> str:
     return sanitized or fallback
 
 
-def _responses_namespace_chat_tool_name(namespace: str, child_name: str) -> str:
-    """Build a stable unique Chat-visible name for a Responses namespace child."""
+def _responses_namespace_chat_tool_name(
+    namespace: str, child_name: str, *, separator: str = "-"
+) -> str:
+    """Build a stable Chat-visible name for a Responses namespace child."""
     namespace_part = _sanitize_chat_tool_name_part(namespace, "namespace")
     child_part = _sanitize_chat_tool_name_part(child_name, "tool")
-    tool_name = f"{namespace_part}__{child_part}"
+    tool_name = f"{namespace_part}{separator}{child_part}"
     if len(tool_name) <= _CHAT_TOOL_NAME_MAX_LEN:
         return tool_name
 
     digest = hashlib.sha1(f"{namespace}\0{child_name}".encode()).hexdigest()[:12]
-    prefix_len = _CHAT_TOOL_NAME_MAX_LEN - len(digest) - 2
-    prefix = tool_name[:prefix_len].rstrip("_-") or "tool"
-    return f"{prefix}__{digest}"
+    suffix = f"{separator}{digest}"
+    prefix_len = _CHAT_TOOL_NAME_MAX_LEN - len(suffix)
+    prefix = tool_name[:prefix_len].rstrip("._-") or "tool"
+    return f"{prefix}{suffix}"
 
 
 # ==================== Orphaned Tool Call Fix ====================
@@ -247,6 +250,12 @@ class OpenAIResponsesToolOps(BaseToolOps):
                     chat_tool_name = _responses_namespace_chat_tool_name(
                         namespace, child_name
                     )
+                    underscore_alias = _responses_namespace_chat_tool_name(
+                        namespace, child_name, separator="_"
+                    )
+                    dotted_alias = _responses_namespace_chat_tool_name(
+                        namespace, child_name, separator="."
+                    )
                     result = {
                         "type": "function",
                         "name": chat_tool_name,
@@ -261,6 +270,10 @@ class OpenAIResponsesToolOps(BaseToolOps):
                             "responses_namespace_description": namespace_description,
                             "responses_namespace_child_name": child_name,
                             "responses_chat_tool_name": chat_tool_name,
+                            "responses_chat_tool_aliases": [
+                                underscore_alias,
+                                dotted_alias,
+                            ],
                             "responses_namespace_child": dict(child),
                         },
                     }

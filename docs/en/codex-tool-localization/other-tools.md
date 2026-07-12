@@ -39,10 +39,10 @@ Codex exposes subagent capabilities through Responses namespace tools such as `m
 For Responses-to-Chat routes, Rosetta flattens namespace child tools into ordinary Chat function tools. For example:
 
 ```text
-multi_agent_v1.spawn_agent -> spawn_agent
+multi_agent_v1-spawn_agent
 ```
 
-During request conversion, Rosetta records the mapping from child tool name to Responses namespace. When the upstream Chat model returns a `spawn_agent` tool call, Rosetta restores the Responses namespace metadata before returning the event to Codex:
+During request conversion, Rosetta records the mapping from the flattened tool name to its Responses namespace. The hyphenated `multi_agent_v1-spawn_agent` form is canonical and valid on Chat APIs that restrict Function names to letters, digits, underscores, and hyphens. On return Rosetta also accepts `multi_agent_v1_spawn_agent`, `multi_agent_v1.spawn_agent`, and a bare `spawn_agent` when the selected name belongs to exactly one namespace and does not collide with an ordinary Function. Ambiguous names fail closed. Rosetta then restores the Responses namespace metadata before returning the event to Codex:
 
 ```json
 {

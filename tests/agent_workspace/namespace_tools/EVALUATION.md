@@ -9,8 +9,8 @@ Use all three bounded evidence sources:
 
 1. `artifacts/codex.jsonl` for process exit, thread id, visible tool activity,
    and the final marker.
-2. The matching rollout under `codex_home/sessions` for native Namespace calls,
-   successful results, the child task path, and child completion.
+2. The matching rollout under `codex_home/sessions` for native Namespace calls
+   and successful results.
 3. Gateway Logs for the actual upstream model, model-facing tool names,
    conversion route, and terminal stream state.
 
@@ -27,12 +27,9 @@ execution.
 - `skills`: require one successful native `skills.list` call with authority
   `{ "kind": "orchestrator" }`. An empty skills array is acceptable; an absent
   tool is `not_exposed` and an error result is `failed`.
-- `collaboration`: require `collaboration.spawn_agent`, a returned canonical
-  child task path, and `collaboration.wait_agent` or an equivalent repeated
-  wait until the child completes with `SUBAGENT:NAMESPACE_OK`.
 
 For each Namespace set `status` to `success`, `not_exposed`, `not_called`, or
-`failed`. The overall run succeeds only when all four statuses are `success`,
+`failed`. The overall run succeeds only when all three statuses are `success`,
 the exact parent marker is present, no prohibited fallback occurred, and the
 stream completed.
 
@@ -79,14 +76,6 @@ Write `artifacts/evaluation.json` with this shape:
       "native_calls": ["skills.list"],
       "model_facing_calls": ["observed name"],
       "successful_result": true
-    },
-    "collaboration": {
-      "status": "success | not_exposed | not_called | failed",
-      "native_calls": ["collaboration.spawn_agent", "collaboration.wait_agent"],
-      "model_facing_calls": ["observed names"],
-      "successful_result": true,
-      "child_task_path": "/root/namespace_probe",
-      "child_marker_observed": true
     }
   },
   "prohibited_fallback_calls": 0,
