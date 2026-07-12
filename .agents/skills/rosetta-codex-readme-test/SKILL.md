@@ -16,24 +16,17 @@ under this repository. Keep temporary configuration and Codex sessions inside
 the repository-local run root. On macOS, only the stream trace enabled by the
 Web Admin **Gateway Logs** page belongs on a RAM Disk.
 
-## Defaults
+## Runtime Contract
 
-- Repository root: resolve with `git rev-parse --show-toplevel`.
-- Default suite: `tests/agent_workspace/command_execution`.
-- Default task: `01`; select `02` for polling, `03` for one stdin intervention,
-  and `04` for two ordered interventions.
-- Network-search suite: `tests/agent_workspace/network_search`; task `01`
-  verifies a successful model-facing network search without command or browser
-  fallbacks.
-- Context-compaction suite: `tests/agent_workspace/context_compaction`; task
-  `01` forces one tool result followed by a second model turn and diagnoses the
-  remote-compaction response contract.
-- Default third-party model: `deepseek-v4-flash`.
-- Native GPT comparison model: `gpt-5.6-terra`. Confirm the upstream route in
-  the Rosetta trace; the Codex-facing alias alone is not evidence.
-- Default real-provider matrix: `deepseek-v4-flash` and `gpt-5.6-terra`.
-- Runtime root: `tmp/agent_testing_workspace/YYYYMMDDHHMM`, using local time.
-- macOS Gateway Logs root: `/Volumes/RAMDisk/YYYYMMDDHHMM`.
+- Resolve the repository root with `git rev-parse --show-toplevel`.
+- Select the suite and task from `tests/agent_workspace` as requested, then
+  read that suite's `README.md`, optional `EVALUATION.md`, and task
+  `expected.json` before configuring the run. Suite-specific models, feature
+  flags, provider identities, task order, and result fields live there rather
+  than in this skill.
+- Use `tmp/agent_testing_workspace/YYYYMMDDHHMM` as the runtime root, with
+  local time.
+- Use `/Volumes/RAMDisk/YYYYMMDDHHMM` as the macOS Gateway Logs root.
 
 The timestamp must be exactly 12 digits and the complete directory name. Do not
 include a model, task, suite, protocol, or tool name. If that minute already
@@ -45,8 +38,9 @@ exists, stop and use another unused minute rather than adding a suffix.
 
    ```bash
    ROOT=$(git rev-parse --show-toplevel)
-   SUITE="$ROOT/tests/agent_workspace/command_execution"
-   TASK_ID=02
+   SUITE="$ROOT/tests/agent_workspace/<suite>"
+   TASK_ID=<task-id>
+   test -f "$SUITE/README.md"
    test -f "$SUITE/$TASK_ID/TASK.md"
    test -f "$SUITE/$TASK_ID/expected.json"
    ```
@@ -117,78 +111,27 @@ exists, stop and use another unused minute rather than adding a suffix.
 
 5. Create `RUN_ROOT/codex_home/config.toml` pointing to the isolated gateway.
    Use a client API key from the copied gateway config as the bearer token, but
-   never include that value in reports:
+   never include that value in reports. Use the model, provider identity,
+   feature flags, and any diagnostic limits required by the selected suite's
+   own guide. A generic custom-provider shape is:
 
    ```toml
-   model_provider = "rosetta"
-   model = "deepseek-v4-flash"
+   model_provider = "<provider-id>"
+   model = "<model>"
    sandbox_mode = "danger-full-access"
    approval_policy = "never"
    model_reasoning_effort = "medium"
-   # Add `web_search = "live"` for tests/agent_workspace/network_search.
 
-   [model_providers.rosetta]
-   name = "rosetta"
+   [model_providers.<provider-id>]
+   name = "<provider-display-name>"
    wire_api = "responses"
    requires_openai_auth = true
-   base_url = "http://127.0.0.1:18765/v1"
+   base_url = "http://127.0.0.1:<port>/v1"
    experimental_bearer_token = "<copied-gateway-client-key>"
 
    [projects."<RUN_ROOT>/worktree"]
    trust_level = "trusted"
    ```
-
-   The network-search suite requires `web_search = "live"` at the top level of
-   this isolated Codex config so the model-facing search surface is present.
-   Do not add it for unrelated suites. When the tested model uses Responses
-   Lite, set the isolated provider's display `name = "openai"` while retaining
-   the Rosetta provider id and localhost `base_url`; current Codex gates the
-   standalone `web.run` extension on that provider identity. Record this
-   test-only identity override in the final report.
-
-   The context-compaction suite has a different required configuration. Use
-   the built-in provider id rather than defining `[model_providers.rosetta]`:
-
-   ```toml
-   model_provider = "openai"
-   model = "gpt-5.5"
-   openai_base_url = "http://127.0.0.1:18765/v1"
-   model_auto_compact_token_limit = 1000
-   sandbox_mode = "danger-full-access"
-   approval_policy = "never"
-   model_reasoning_effort = "medium"
-
-   [projects."<RUN_ROOT>/worktree"]
-   trust_level = "trusted"
-   ```
-
-   In the copied gateway config only, add a temporary `gpt-5.5` LLM model
-   group routed to the selected provider when that provider is not already in
-   a model group. For a TURNING run, preserve the copied `TURNING` provider and
-   route the model name unchanged. Pass the copied gateway client key to Codex
-   as `CODEX_API_KEY`; never print it or persist it outside the isolated run.
-   The low token limit is intentionally diagnostic and must not be reused for
-   normal agent tests.
-
-   To compare the same fixture with a custom Codex provider, keep the model,
-   Gateway provider, token limit, permissions, and task unchanged. Replace the
-   built-in provider selection with:
-
-   ```toml
-   model_provider = "custom"
-   model = "gpt-5.5"
-   model_auto_compact_token_limit = 1000
-
-   [model_providers.custom]
-   name = "custom"
-   wire_api = "responses"
-   requires_openai_auth = true
-   base_url = "http://127.0.0.1:18765/v1"
-   experimental_bearer_token = "<copied-gateway-client-key>"
-   ```
-
-   Use a separate timestamp run. This identity is expected to select local
-   model-summary compaction rather than remote v2.
 
 ## Run One Task
 
@@ -207,16 +150,15 @@ exists, stop and use another unused minute rather than adding a suffix.
    Poll `/v1/models` with the copied client key until ready. Do not use or
    modify the user's main gateway.
 
-2. Read `TASK.md` as the exact prompt. Do not paraphrase or add hints. Read
-   `expected.json` for the timeout and evidence contract, not as prompt text.
-   For context-compaction tasks, also read the suite's `EVALUATION.md`; it is
-   guidance for the parent agent and must not be inserted into the tested
-   model's prompt.
+2. Read `TASK.md` as the exact prompt. Do not paraphrase or add hints. Read the
+   suite `README.md`, optional `EVALUATION.md`, and task `expected.json` for
+   configuration, timeout, and evidence requirements. They are guidance for
+   the parent agent and must not be inserted into the tested model's prompt.
 
 3. Run Codex non-interactively with the isolated home and bounded duration:
 
    ```bash
-   MODEL=deepseek-v4-flash
+   MODEL=<model-required-by-suite>
    PROMPT=$(<"$RUN_ROOT/worktree/TASK.md")
    CODEX_HOME="$RUN_ROOT/codex_home" codex exec --json --skip-git-repo-check \
      -C "$RUN_ROOT/worktree" -m "$MODEL" "$PROMPT" \
@@ -245,25 +187,9 @@ Use three bounded evidence sources:
    successful stream completion. This is the only artifact stored on the RAM
    Disk. Filter by model, request id, thread id, and timestamp.
 
-Compare the evidence with `worktree/expected.json`:
-
-- final output should contain `success_marker`;
-- `command_starts` counts new process starts for the scenario;
-- `continuations_min` and `continuations_max` count later operations on a
-  returned process session;
-- `non_empty_writes` counts continuation operations that send input;
-- when `same_session_required` is true, every continuation must reuse the
-  session returned by the single initial command.
-- for network-search tasks, `network_search_calls_min` counts model-facing
-  namespace or hosted search calls, `successful_search_result_required`
-  requires a non-error result satisfying the task, and the command/browser
-  maxima prohibit bypassing the search surface.
-- for context-compaction tasks, confirm that an outgoing Responses input item
-  has `type: "compaction_trigger"`, then count completed output items whose
-  item type is `compaction` or the Codex-compatible wire alias
-  `compaction_summary`. Classify the run using `diagnostic_outcomes` in
-  `expected.json`; reproducing the declared remote-compaction error is a valid
-  diagnostic result even though the agent does not reach its final marker.
+Compare the evidence with `worktree/expected.json` and apply the field meanings
+and output schema defined by the selected suite's README/EVALUATION guide. Do
+not infer a suite-specific pass condition from this skill.
 
 The outer evaluating agent decides success by the task's core objective, not by
 perfect compliance with every incidental instruction. Mark the task successful
@@ -280,53 +206,24 @@ the marker only by inference, modifying unrelated files, or returning the wrong
 scenario result. `expected.json` is evidence guidance for this judgment; its
 counts are not a rigid benchmark when the core tool sequence is still clear.
 
-For Responses-to-Chat tests, explicitly distinguish:
-
-- the localized command call visible to the upstream model;
-- the native Codex command-start call returned by Rosetta;
-- any later native continuation call.
-
-This distinction is required when diagnosing a route that handles initial
-execution but loses polling or stdin intervention.
-
-For network-search tests, distinguish the model-facing search definition and
-call (`web.run`, `web_search`, or a localized bridge), the Codex-facing output
-item, and any separate HTTP request made by Codex or Rosetta. Inspect the
-gateway process and stream trace to record the actual destination host and port
-without exposing credentials.
-
-For context-compaction tests, distinguish a genuine request input item from
-the same string embedded in text. Record the provider id from the isolated
-Codex config, the Gateway provider and upstream model, the compact request's
-input item types, the compact response's output item types, and the exact
-bounded Codex error when present.
-
-After evaluating a context-compaction run, write the schema specified by the
-suite's `EVALUATION.md` to `RUN_ROOT/artifacts/evaluation.json`. Determine
-`compaction_method` from the request path and protocol evidence. For remote v2,
-require the trigger, exactly one accepted compaction output item, and a later
-installed `compaction` input. For local model-summary compaction, require a
-no-tools `request_kind: "compaction"` summarization turn, an ordinary summary
-message, and that summary installed in the later request. Both methods also
-require no compact-task error and the final marker. This method describes
-context compaction, not HTTP request compression.
+When the suite requires `artifacts/evaluation.json`, write exactly the schema
+specified by its `EVALUATION.md`. Keep all extracted evidence bounded and
+credential-free.
 
 ## Real Provider Matrix
 
-When comparing providers, create a separate timestamp run root for every model
-and task. Never reuse a Codex home, copied gateway config, process state, or
-workspace across matrix cells. Start with task `01`, then run `02` through `04`
-only for models whose basic command execution succeeds.
+When a suite guide requests a provider/model matrix, create a separate
+timestamp run root for every model, provider identity, and task. Never reuse a
+Codex home, copied gateway config, process state, or workspace across cells.
 
 For every cell, record:
 
-- model and task id;
+- model, provider identity, and task id;
 - Codex exit status and exact final marker;
 - thread id and rollout path;
 - Rosetta trace path and observed upstream model;
-- initial command count, continuation count, non-empty write count, and session
-  reuse result;
-- terminal stream shape and any warning that changes interpretation.
+- terminal stream shape and any warning that changes interpretation;
+- every additional measurement required by the suite guide.
 
 ## Safety Rules
 
@@ -349,16 +246,12 @@ For every cell, record:
 
 ## Final Report
 
-Report the model, task id, exit status, observed marker, native interaction
-counts, session reuse result, thread id, rollout path, trace path, observed
-upstream model, and any warning affecting interpretation. Classify each run as
-`success`, `success with deviations`, or `failure`, and briefly separate minor
-deviations from failures of the core objective. State explicitly that the
-result measures tool-call behavior only.
+Report the model, provider identity, task id, exit status, observed marker,
+thread id, rollout path, trace path, observed upstream model, and any warning
+affecting interpretation. Classify each run as `success`,
+`success with deviations`, or `failure`, and briefly separate minor deviations
+from failures of the core objective. State explicitly that the result measures
+tool-call behavior only.
 
-For context-compaction runs, the final report must additionally state
-`compaction_triggered`, `remote_compaction_trigger_observed`,
-`compaction_success`, `compaction_method`, the observed wire compaction or
-summary item type and count, whether the follow-up installed an opaque
-`compaction` input or a summary message, and any bounded compact-task error.
-These fields must agree with `RUN_ROOT/artifacts/evaluation.json`.
+Include every additional field required by the selected suite's guide. When an
+evaluation artifact is required, the final report must agree with it.

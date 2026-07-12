@@ -13,10 +13,28 @@ handling rather than prose quality.
 - [`command_execution`](command_execution/README.md): starting commands,
   polling a running process, and sending input to an existing process.
 - [`network_search`](network_search/README.md): selecting network search and
-  receiving a usable result without shell or browser fallbacks.
+  receiving a usable result without shell or browser fallbacks; its evaluator
+  uses Rosetta Gateway Logs to distinguish `web.run` from hosted
+  `web_search`.
 - [`context_compaction`](context_compaction/README.md): forcing a second
   model turn across Codex remote compaction and recording whether an
   OpenAI-identified provider returns a valid compaction item.
+
+When no suite is specified, start with `command_execution/01`. Suite README
+and EVALUATION files, rather than the runner skill, define task order, Codex
+configuration, feature flags, and pass criteria.
+
+## Real-provider defaults
+
+The default third-party comparison model is `deepseek-v4-flash`; the native
+GPT comparison model is `gpt-5.6-terra`. A normal real-provider comparison uses
+both. Always confirm the Gateway provider and actual upstream model in Rosetta
+Gateway Logs: a Codex-facing alias by itself is not evidence of the upstream
+route.
+
+Every model, provider identity, and task matrix cell requires a separate
+timestamp run root. Never reuse the Codex home, copied Gateway configuration,
+process state, or workspace across cells.
 
 ## Execution model
 

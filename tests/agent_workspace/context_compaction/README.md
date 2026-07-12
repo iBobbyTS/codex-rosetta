@@ -15,10 +15,54 @@ Codex attempt compaction after the first tool result and before the second
 model turn. Use a normal provider configuration and token limit for any
 non-diagnostic agent test.
 
+Use this isolated configuration for the remote-v2 run:
+
+```toml
+model_provider = "openai"
+model = "gpt-5.5"
+openai_base_url = "http://127.0.0.1:<port>/v1"
+model_auto_compact_token_limit = 1000
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+model_reasoning_effort = "medium"
+
+[projects."<RUN_ROOT>/worktree"]
+trust_level = "trusted"
+```
+
+In the copied Gateway configuration only, add a temporary `gpt-5.5` LLM model
+group routed to the selected provider when one does not already exist. For a
+TURNING run, preserve the copied `TURNING` provider and route the model name
+unchanged. Pass the copied Gateway client key to Codex as `CODEX_API_KEY`;
+never print it or persist it outside the isolated run.
+
 For a provider-identity comparison, keep every other runtime field unchanged
 and replace the Codex provider with an explicitly configured provider whose id
 and display name are both `custom`. The expected method then changes from
 remote v2 to `local_model_summary`.
+
+```toml
+model_provider = "custom"
+model = "gpt-5.5"
+model_auto_compact_token_limit = 1000
+sandbox_mode = "danger-full-access"
+approval_policy = "never"
+model_reasoning_effort = "medium"
+
+[model_providers.custom]
+name = "custom"
+wire_api = "responses"
+requires_openai_auth = true
+base_url = "http://127.0.0.1:<port>/v1"
+experimental_bearer_token = "<copied-gateway-client-key>"
+
+[projects."<RUN_ROOT>/worktree"]
+trust_level = "trusted"
+```
+
+Use a separate timestamp run for the custom comparison. This low token limit
+and model alias are diagnostic settings and must not be reused for normal agent
+tests.
 
 ## Result interpretation
 
