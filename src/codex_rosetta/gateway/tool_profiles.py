@@ -13,6 +13,58 @@ MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
 
 
+def _normalize_profile_select_options(
+    item_id: str,
+    input_id: str,
+    value: Any,
+    default: str,
+) -> list[dict[str, str]]:
+    """Validate one catalog-declared select option list."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "select options must be a non-empty list"
+        )
+    normalized: list[dict[str, str]] = []
+    option_values: set[str] = set()
+    for option in value:
+        if not isinstance(option, dict) or set(option) != {"value", "label"}:
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                "select options must contain exactly 'value' and 'label'"
+            )
+        option_value = option["value"]
+        option_label = option["label"]
+        if not isinstance(option_value, str) or not isinstance(option_label, str):
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                "select option value and label must be strings"
+            )
+        if not option_label:
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                "select option label must be non-empty"
+            )
+        if len(option_value) > MAX_TOOL_PROFILE_INPUT_LENGTH:
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                f"select option value exceeds {MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
+            )
+        if option_value in option_values:
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                f"has duplicate select option value {option_value!r}"
+            )
+        option_values.add(option_value)
+        normalized.append({"value": option_value, "label": option_label})
+    if default not in option_values:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "select default must match an option value"
+        )
+    return normalized
+
+
 def _normalize_profile_input_definition(
     item_id: str,
     value: Any,
@@ -27,6 +79,7 @@ def _normalize_profile_input_definition(
         "default",
         "type",
         "placeholder_i18n",
+        "options",
     }
     if unsupported:
         raise ValueError(
@@ -60,10 +113,23 @@ def _normalize_profile_input_definition(
             f"default exceeds {MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
         )
     input_type = value.get("type", "text")
-    if input_type not in {"text", "password"}:
+    if input_type not in {"text", "password", "select"}:
         raise ValueError(
             f"catalog item {item_id!r} profile input {input_id!r} "
-            "type must be 'text' or 'password'"
+            "type must be 'text', 'password', or 'select'"
+        )
+    options = value.get("options")
+    if input_type == "select":
+        value = dict(
+            value,
+            options=_normalize_profile_select_options(
+                item_id, input_id, options, default
+            ),
+        )
+    elif options is not None:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "options are only supported for type 'select'"
         )
     placeholder_i18n = value.get("placeholder_i18n")
     if placeholder_i18n is not None and (
@@ -261,6 +327,13 @@ def normalize_tool_profile_inputs(
                 raise ValueError(
                     f"{field}.inputs.{item_id}.{input_id} must be at most "
                     f"{MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
+                )
+            if definition["type"] == "select" and input_value not in {
+                option["value"] for option in definition["options"]
+            }:
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be one of "
+                    f"{[option['value'] for option in definition['options']]}"
                 )
             normalized[item_id][input_id] = input_value
     return normalized

@@ -2233,8 +2233,14 @@ function renderToolProfileInputs(item) {
   const values = toolProfileInputDraft[item.id] || {};
   const disabled = currentToolProfile()?.readonly ? ' disabled' : '';
   const groups = item.profile_inputs.map(input => {
-    const inputType = input.type === 'password' ? 'password' : 'text';
     const value = values[input.id] ?? input.default ?? '';
+    if (input.type === 'select') {
+      const options = (input.options || []).map(option =>
+        `<option value="${escAttr(option.value)}"${option.value === value ? ' selected' : ''}>${esc(option.label)}</option>`
+      ).join('');
+      return `<label class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><select class="tool-profile-input" onchange="updateToolProfileInput(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.value)"${disabled}>${options}</select></label>`;
+    }
+    const inputType = input.type === 'password' ? 'password' : 'text';
     const placeholder = input.placeholder_i18n ? ` placeholder="${escAttr(t(input.placeholder_i18n))}"` : '';
     const autocomplete = inputType === 'password' ? ' autocomplete="new-password"' : '';
     return `<label class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><input class="tool-profile-input" type="${inputType}" value="${escAttr(value)}" maxlength="16384"${placeholder}${autocomplete} oninput="updateToolProfileInput(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.value)"${disabled}></label>`;
