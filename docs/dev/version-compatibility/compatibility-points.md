@@ -188,6 +188,16 @@ peer-declared chunk size. Overflows close the upstream and become a stable
 rewritten. A Codex upgrade that introduces larger required single events must
 be measured and reviewed explicitly rather than disabling the limits.
 
+The Gateway also bounds streaming connection establishment to 30 seconds,
+upstream SSE inactivity to 60 seconds, and connection cleanup to 2 seconds.
+This prevents a route change from leaving Codex attached to a black-holed
+upstream socket: the downstream stream is closed so Codex can apply its own
+request and stream retry policy. Rosetta does not replay a stream after any
+upstream bytes have been delivered. Automated coverage must retain stalled
+open, stalled parsed/raw body, bounded cleanup, and normal long-stream framing;
+real Codex testing must switch Wi-Fi or enable a route-changing VPN during a
+turn and confirm that a later retry completes without restarting the Gateway.
+
 `phase` is inside the message item, not a separate event. `commentary` is not just a UI label: the current Codex checks the mailbox after the commentary item is completed, and may change subsequent sampling behavior. Therefore the phase in added, done and completed output must be consistent.
 
 Currently `ResponsesPhaseBuffer` treats function/custom/MCP/shell/computer/tool_search/ web_search calls as tool signals. Automated regression covers "text followed by native search tool" and the scenario where there is only native search call in `response.completed.output`, ensuring that the previous text is marked as `commentary` instead of erroneously marked as `final_answer`. When adding a new Codex output item type, you still need to clearly determine whether it will continue the agent loop, and expand this set and the tests of the two event paths accordingly.

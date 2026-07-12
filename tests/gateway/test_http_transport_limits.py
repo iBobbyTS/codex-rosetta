@@ -625,6 +625,125 @@ def test_cancelled_parsed_sse_closes_once(
     assert response.close_calls == 1
 
 
+@pytest.mark.parametrize("raw", [False, True])
+def test_stalled_upstream_stream_times_out_and_closes(raw: bool) -> None:
+    started = asyncio.Event()
+
+    class _BlockingResponse(_FakeStreamingResponse):
+        async def aiter_bytes(self, chunk_size: int = 4096):
+            del chunk_size
+            started.set()
+            await asyncio.Event().wait()
+            yield b"unreachable"
+
+        async def aiter_lines(self, max_line_bytes: int | None = None):
+            self.line_limit = max_line_bytes
+            started.set()
+            await asyncio.Event().wait()
+            yield 'data: {"unreachable":true}'
+
+    response = _BlockingResponse(200, [])
+    stream = HttpUpstreamStream(
+        cast(Any, response),
+        idle_timeout=0.01,
+        close_timeout=0.05,
+    )
+
+    async def _collect() -> None:
+        if raw:
+            _ = [chunk async for chunk in stream.aiter_raw_bytes()]
+        else:
+            _ = [event async for event in stream]
+
+    with pytest.raises(transport_module.UpstreamConnectionError, match="no data"):
+        asyncio.run(_collect())
+    assert response.closed is True
+    assert response.close_calls == 1
+
+
+def test_hanging_stream_close_is_bounded(caplog: pytest.LogCaptureFixture) -> None:
+    close_started = asyncio.Event()
+
+    class _BlockingCloseResponse(_FakeStreamingResponse):
+        async def aclose(self) -> None:
+            self.close_calls += 1
+            self.closed = True
+            close_started.set()
+            await asyncio.Event().wait()
+
+    response = _BlockingCloseResponse(200, [])
+    stream = HttpUpstreamStream(cast(Any, response), close_timeout=0.01)
+
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+    started_at = time.monotonic()
+    asyncio.run(stream.close())
+
+    assert time.monotonic() - started_at < 0.5
+    assert response.closed is True
+    assert response.close_calls == 1
+    assert "Timed out closing upstream stream" in caplog.text
+
+
+def test_stream_open_timeout_returns_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+
+    class _BlockingClient:
+        async def post(self, _url: str, **_kwargs: Any) -> Any:
+            started.set()
+            await asyncio.Event().wait()
+
+    transport = HttpTransport(stream_open_timeout=0.01)
+    transport._pool = cast(
+        Any,
+        SimpleNamespace(get=lambda _proxy=None: _BlockingClient()),
+    )
+
+    with pytest.raises(
+        transport_module.UpstreamConnectionError,
+        match="did not open a streaming response",
+    ):
+        asyncio.run(
+            transport.send_streaming(
+                _provider(), "openai_chat", {"model": "test"}, "test"
+            )
+        )
+
+
+def test_stream_open_cancellation_cancels_upstream_operation() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    class _BlockingClient:
+        async def post(self, _url: str, **_kwargs: Any) -> Any:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    transport = HttpTransport(stream_open_timeout=5)
+    transport._pool = cast(
+        Any,
+        SimpleNamespace(get=lambda _proxy=None: _BlockingClient()),
+    )
+
+    async def _cancel() -> None:
+        task = asyncio.create_task(
+            transport.send_streaming(
+                _provider(), "openai_chat", {"model": "test"}, "test"
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        await asyncio.wait_for(cancelled.wait(), timeout=0.5)
+
+    asyncio.run(_cancel())
+
+
 def test_real_client_rejects_oversized_content_length(
     monkeypatch: pytest.MonkeyPatch,
     local_upstream: tuple[_LocalUpstreamServer, str],
