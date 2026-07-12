@@ -197,6 +197,9 @@ upstream bytes have been delivered. Automated coverage must retain stalled
 open, stalled parsed/raw body, bounded cleanup, and normal long-stream framing;
 real Codex testing must switch Wi-Fi or enable a route-changing VPN during a
 turn and confirm that a later retry completes without restarting the Gateway.
+Expected upstream stream timeouts and disconnects are normalized to one
+traceback-free `ERROR` line and an incomplete 502 stream outcome; protocol,
+safety, and unknown failures retain their diagnostic exception path.
 
 `phase` is inside the message item, not a separate event. `commentary` is not just a UI label: the current Codex checks the mailbox after the commentary item is completed, and may change subsequent sampling behavior. Therefore the phase in added, done and completed output must be consistent.
 

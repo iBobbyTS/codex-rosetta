@@ -122,6 +122,10 @@ class UpstreamConnectionError(Exception):
     """Raised when the transport cannot reach the upstream provider."""
 
 
+class UpstreamNetworkError(UpstreamConnectionError):
+    """Raised when an established upstream operation times out or disconnects."""
+
+
 class UpstreamSafetyError(UpstreamConnectionError):
     """Raised when an upstream response violates a bounded transport contract."""
 

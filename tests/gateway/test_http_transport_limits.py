@@ -21,6 +21,7 @@ from codex_rosetta.gateway.transport import (
     UpstreamProtocolError,
     UpstreamResponseTooLargeError,
     UpstreamSafetyError,
+    UpstreamNetworkError,
     UpstreamStreamLimitError,
 )
 from codex_rosetta.gateway.transport.http import transport as transport_module
@@ -407,6 +408,29 @@ def test_stream_http_error_body_and_outer_cleanup_close_once(
     assert response.close_calls == 1
 
 
+def test_stream_body_uses_idle_timeout_not_open_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(
+        200,
+        [],
+        lines=['data: {"delta":"ok"}', "", "data: [DONE]", ""],
+    )
+    transport, client = _transport(monkeypatch, response)
+    transport._stream_open_timeout = 3
+    transport._stream_idle_timeout = 17
+
+    async def _collect() -> list[dict[str, Any]]:
+        stream = await transport.send_streaming(
+            _provider(), "openai_chat", {"model": "test"}, "test"
+        )
+        async with stream:
+            return [event async for event in stream]
+
+    assert asyncio.run(_collect()) == [{"delta": "ok"}]
+    assert client.calls[0]["timeout"] == 17
+
+
 @pytest.mark.parametrize(
     "malformed_data",
     [
@@ -658,6 +682,33 @@ def test_stalled_upstream_stream_times_out_and_closes(raw: bool) -> None:
     with pytest.raises(transport_module.UpstreamConnectionError, match="no data"):
         asyncio.run(_collect())
     assert response.closed is True
+    assert response.close_calls == 1
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_vendored_stream_timeout_maps_to_network_error(raw: bool) -> None:
+    class _TimedOutResponse(_FakeStreamingResponse):
+        async def aiter_bytes(self, chunk_size: int = 4096):
+            del chunk_size
+            raise transport_module.HttpClientError("stream read timed out")
+            yield b"unreachable"
+
+        async def aiter_lines(self, max_line_bytes: int | None = None):
+            self.line_limit = max_line_bytes
+            raise transport_module.HttpClientError("stream read timed out")
+            yield "unreachable"
+
+    response = _TimedOutResponse(200, [])
+    stream = HttpUpstreamStream(cast(Any, response), idle_timeout=1)
+
+    async def _collect() -> None:
+        if raw:
+            _ = [chunk async for chunk in stream.aiter_raw_bytes()]
+        else:
+            _ = [event async for event in stream]
+
+    with pytest.raises(UpstreamNetworkError, match="stream read timed out"):
+        asyncio.run(_collect())
     assert response.close_calls == 1
 
 

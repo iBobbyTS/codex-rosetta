@@ -13,6 +13,7 @@ sub-packages:
 from ._base import (
     UpstreamContentEncodingError,
     UpstreamConnectionError,
+    UpstreamNetworkError,
     UpstreamProtocolError,
     UpstreamResponse,
     UpstreamResponseTooLargeError,
@@ -35,6 +36,7 @@ from .sse_format import SSE_FORMATTERS, format_sse_done
 __all__ = [
     # Protocol + response types
     "UpstreamConnectionError",
+    "UpstreamNetworkError",
     "UpstreamProtocolError",
     "UpstreamContentEncodingError",
     "UpstreamResponse",

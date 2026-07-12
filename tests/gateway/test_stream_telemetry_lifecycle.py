@@ -18,7 +18,7 @@ from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
     LocalizedToolMapping,
 )
-from codex_rosetta.gateway.transport import UpstreamProtocolError
+from codex_rosetta.gateway.transport import UpstreamNetworkError, UpstreamProtocolError
 from codex_rosetta.observability import MetricsCollector, RequestLog
 from codex_rosetta.routing import ResolvedRoute
 
@@ -211,6 +211,41 @@ def test_stream_protocol_failure_records_stable_502_exactly_once(monkeypatch):
         _assert_request_state_empty(request)
 
     asyncio.run(_scenario())
+
+
+def test_stream_network_failure_logs_one_error_without_escaping(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _stream():
+        raise UpstreamNetworkError("Streaming read timed out for upstream")
+        yield "unreachable"
+
+    async def _scenario():
+        response, request = await _open_stream(monkeypatch, _stream)
+
+        with pytest.raises(StopAsyncIteration):
+            await response._generator.__anext__()
+
+        metrics = request.app.metrics
+        assert metrics.total_requests == 1
+        assert metrics.total_errors == 1
+        assert metrics.by_status_code == {502: 1}
+        entries, total = request.app.request_log.get_entries()
+        assert total == 1
+        assert entries[0]["status_code"] == 502
+        assert entries[0]["error_detail"] == "Streaming read timed out for upstream"
+        _assert_request_state_empty(request)
+
+    caplog.set_level("ERROR", logger="codex-rosetta-gateway")
+    asyncio.run(_scenario())
+
+    error_records = [record for record in caplog.records if record.levelname == "ERROR"]
+    assert len(error_records) == 1
+    assert error_records[0].getMessage() == (
+        "Upstream stream disconnected: Streaming read timed out for upstream"
+    )
+    assert error_records[0].exc_info is None
 
 
 def test_stream_aclose_records_499_once_without_double_finalize(monkeypatch):

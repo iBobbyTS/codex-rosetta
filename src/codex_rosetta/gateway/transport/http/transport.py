@@ -26,6 +26,7 @@ from .._base import (
     UpstreamConnectionError,
     UpstreamContentEncodingError,
     UpstreamProtocolError,
+    UpstreamNetworkError,
     UpstreamResponse,
     UpstreamResponseTooLargeError,
     UpstreamSafetyError,
@@ -74,7 +75,7 @@ async def _await_with_deadline(
 
     task.cancel()
     task.add_done_callback(_consume_background_task_result)
-    raise UpstreamConnectionError(timeout_message)
+    raise UpstreamNetworkError(timeout_message)
 
 
 @dataclass(frozen=True)
@@ -360,9 +361,14 @@ class HttpUpstreamStream(UpstreamStream):
                     f"{self._idle_timeout:g} seconds"
                 ),
             )
-        except UpstreamConnectionError:
+        except UpstreamNetworkError:
             await self.close()
             raise
+        except HttpResponseLimitError:
+            raise
+        except HttpClientError as exc:
+            await self.close()
+            raise UpstreamNetworkError(str(exc)) from exc
 
     async def _iter_lines_with_idle_timeout(self) -> AsyncIterator[str]:
         lines = self._resp.aiter_lines(max_line_bytes=MAX_UPSTREAM_SSE_LINE_BYTES)
@@ -556,7 +562,7 @@ class HttpTransport:
                     json=req_body,
                     headers=headers,
                     stream=True,
-                    timeout=self._stream_open_timeout,
+                    timeout=self._stream_idle_timeout,
                 ),
                 timeout=self._stream_open_timeout,
                 timeout_message=(
