@@ -545,8 +545,8 @@
         },
         {
           "id": "token",
-          "label_i18n": "tools.input.web_search.token",
-          "placeholder_i18n": "tools.input.web_search.token_placeholder",
+          "label_i18n": "tools.input.web_run.token",
+          "placeholder_i18n": "tools.input.web_run.token_placeholder",
           "type": "password",
           "default": "",
           "visible_when": [
