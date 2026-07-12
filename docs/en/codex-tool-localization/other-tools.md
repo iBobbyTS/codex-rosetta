@@ -79,4 +79,6 @@ An input may declare `visible_when` with a list of tool states, for example `["m
 
 All Namespace rows start expanded on the Tools page. This display default is independent of each Namespace Profile state, and users can still collapse rows locally.
 
+The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
+
 User-entered values are saved with a user Profile under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current values into the new Profile; switching or resetting a Profile restores its saved values. Every bundled Profile also allows these fields to be edited and explicitly saved; those values are stored in `tool_profile_input_overrides.<profile-id>` without changing the bundled JSON. A bundled Profile's tool delivery states remain read-only. Inputs have no effect unless their runtime feature consumes them; currently `image_gen.imagegen` consumes its Base URL and Token when set to Modified.

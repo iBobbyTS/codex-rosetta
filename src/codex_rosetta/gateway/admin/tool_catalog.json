@@ -9,7 +9,10 @@
   },
   "builtin_profile": {
     "id": "builtin",
-    "name": "Chat Default"
+    "name": "Chat Default",
+    "tools": {
+      "namespace.multi_agent_v1": "disabled"
+    }
   },
   "preset_profiles": [
     {

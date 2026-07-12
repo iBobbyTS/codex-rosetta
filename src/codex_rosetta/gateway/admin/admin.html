@@ -2079,7 +2079,13 @@ function selectToolProfile(profileId) {
 
 function updateToolProfileState(itemId, state) {
   if (currentToolProfile()?.readonly) return;
+  const item = toolCatalogIndex().items.get(itemId);
+  if (item?.namespace_id && toolProfileDraft[item.namespace_id] === 'disabled') return;
   toolProfileDraft[itemId] = state;
+  if (item?.type === 'namespace' && state === 'disabled') {
+    const childIds = toolCatalogIndex().namespaces.get(itemId)?.child_ids || [];
+    for (const childId of childIds) toolProfileDraft[childId] = 'disabled';
+  }
   toolProfileDirty = true;
   renderToolCatalog();
 }
@@ -2203,8 +2209,9 @@ function renderToolPolicy(item, policy) {
 
 function renderToolStateSelect(item) {
   const states = toolProfilesData?.supported_states?.[item.id] || [];
-  const selected = toolProfileDraft[item.id];
-  const disabled = currentToolProfile()?.readonly ? ' disabled' : '';
+  const namespaceDisabled = item.namespace_id && toolProfileDraft[item.namespace_id] === 'disabled';
+  const selected = namespaceDisabled ? 'disabled' : toolProfileDraft[item.id];
+  const disabled = currentToolProfile()?.readonly || namespaceDisabled ? ' disabled' : '';
   const options = states.map(state =>
     `<option value="${escAttr(state)}"${state === selected ? ' selected' : ''}>${esc(t('tools.policy.' + state))}</option>`
   ).join('');
