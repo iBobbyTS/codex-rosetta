@@ -249,7 +249,13 @@ def test_catalog_defaults_and_namespace_image_policy():
         },
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
-    assert items["namespace.web.run"]["profile_inputs"] == search_inputs
+    web_run_inputs = [dict(input_definition) for input_definition in search_inputs]
+    web_run_inputs[1] = {
+        **web_run_inputs[1],
+        "label_i18n": "tools.input.web_run.token",
+        "placeholder_i18n": "tools.input.web_run.token_placeholder",
+    }
+    assert items["namespace.web.run"]["profile_inputs"] == web_run_inputs
 
     for namespace_id in ("namespace.multi_agent_v1", "namespace.multi_agent_v2"):
         namespace = items[namespace_id]
