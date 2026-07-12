@@ -12,6 +12,7 @@ from ...config import (
     provider_supports_tool_profiles,
 )
 from ...tool_profiles import (
+    normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     normalize_tool_profile_inputs,
     normalize_tool_profile_tools,
@@ -70,12 +71,15 @@ async def get_tool_profiles(request: Any) -> Response:
     _config_path, data = loaded
     try:
         profiles = normalize_tool_profile_documents(data.get("tool_profiles"))
+        input_overrides = normalize_tool_profile_input_overrides(
+            data.get("tool_profile_input_overrides")
+        )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     return JSONResponse(
         {
-            "profiles": tool_profiles_for_admin(profiles),
+            "profiles": tool_profiles_for_admin(profiles, input_overrides),
             "supported_states": {
                 item_id: list(states)
                 for item_id, states in tool_profile_contract()["supported"].items()
@@ -86,10 +90,11 @@ async def get_tool_profiles(request: Any) -> Response:
 
 
 async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
-    """Create or replace one complete user tool profile."""
+    """Save a user Profile or the editable inputs of a bundled Profile."""
     try:
         name = validate_tool_profile_name(
-            kwargs.get("name") or request.path_params.get("name")
+            kwargs.get("name") or request.path_params.get("name"),
+            allow_readonly=True,
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -110,6 +115,26 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
     if isinstance(loaded, Response):
         return loaded
     config_path, data = loaded
+    readonly = tool_profile_contract()["readonly"]
+    if name in readonly:
+        if tools != readonly[name]["tools"]:
+            return JSONResponse(
+                {"error": (f"bundled tool profile '{name}' tool states are read-only")},
+                status_code=400,
+            )
+        try:
+            overrides = normalize_tool_profile_input_overrides(
+                data.get("tool_profile_input_overrides")
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        overrides[name] = inputs
+        data["tool_profile_input_overrides"] = overrides
+        _config, error = _commit_gateway_config(request, config_path, data)
+        if error is not None:
+            return error
+        return JSONResponse({"ok": True, "profile": name})
+
     profiles = data.setdefault("tool_profiles", {})
     if not isinstance(profiles, dict):
         return JSONResponse(

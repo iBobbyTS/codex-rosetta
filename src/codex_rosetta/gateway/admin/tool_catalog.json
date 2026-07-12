@@ -9,7 +9,7 @@
   },
   "builtin_profile": {
     "id": "builtin",
-    "name": "Built-in"
+    "name": "Chat Default"
   },
   "preset_profiles": [
     {
@@ -194,7 +194,8 @@
       "name": "request_user_input",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.request_user_input"
+      "description_i18n": "tools.description.request_user_input",
+      "description_visible_when": ["modified"]
     },
     {
       "id": "function.request_permissions",
@@ -285,14 +286,16 @@
       "name": "create_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.create_goal"
+      "description_i18n": "tools.description.create_goal",
+      "description_visible_when": ["modified"]
     },
     {
       "id": "function.update_goal",
       "name": "update_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.update_goal"
+      "description_i18n": "tools.description.update_goal",
+      "description_visible_when": ["modified"]
     },
     {
       "id": "custom.apply_patch",

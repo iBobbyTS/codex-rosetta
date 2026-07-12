@@ -14,8 +14,10 @@ from codex_rosetta.gateway.proxy import (
     _apply_tool_adaptation,
 )
 from codex_rosetta.gateway.tool_profiles import (
+    normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
+    resolve_tool_profile_inputs,
     tool_profile_contract,
 )
 from codex_rosetta.routing import ResolvedRoute
@@ -147,6 +149,59 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
 
 
 @pytest.mark.parametrize(
+    "name",
+    ["builtin", "responses_pass_through", "responses_web_run_mapping"],
+)
+def test_bundled_profile_input_overrides_are_normalized_without_tool_states(name):
+    overrides = normalize_tool_profile_input_overrides(
+        {
+            name: {
+                "hosted.web_search": {
+                    "provider": "tavily",
+                    "token": "profile-token",
+                }
+            }
+        }
+    )
+
+    assert overrides[name]["hosted.web_search"] == {
+        "provider": "tavily",
+        "token": "profile-token",
+    }
+    assert overrides[name]["namespace.image_gen.imagegen"] == {
+        "base_url": "https://api.openai.com/v1",
+        "token": "",
+    }
+    assert "tools" not in overrides[name]
+
+
+def test_bundled_profile_input_overrides_reject_user_profiles():
+    with pytest.raises(ValueError, match="may only contain bundled Profiles"):
+        normalize_tool_profile_input_overrides({"custom": {}})
+
+
+def test_bundled_profile_input_override_changes_fields_but_not_tool_states():
+    name = "responses_web_run_mapping"
+    tools_before = resolve_tool_profile(name, {})
+    overrides = normalize_tool_profile_input_overrides(
+        {
+            name: {
+                "namespace.web.run": {
+                    "provider": "tavily",
+                    "token": "search-token",
+                }
+            }
+        }
+    )
+
+    inputs = resolve_tool_profile_inputs(name, {}, overrides)
+
+    assert inputs["namespace.web.run"]["token"] == "search-token"
+    assert resolve_tool_profile(name, {}) == tools_before
+    assert tools_before["namespace.web.run"] == "modified"
+
+
+@pytest.mark.parametrize(
     ("definition", "message"),
     [
         (
@@ -210,9 +265,10 @@ def test_description_visibility_defaults_to_all_states_and_supports_override(
 ):
     catalog = copy.deepcopy(load_tool_catalog())
     item = next(
-        item for item in catalog["items"] if item["id"] == "function.request_user_input"
+        item for item in catalog["items"] if item["id"] == "function.exec_command"
     )
     assert "description_visible_when" not in item
+    item["description_i18n"] = "tools.description.exec_command"
     item["description_visible_when"] = ["modified"]
     monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
     tool_profiles_module.tool_profile_contract.cache_clear()
@@ -303,6 +359,46 @@ def test_gateway_config_rejects_unknown_group_profile():
 
     with pytest.raises(ValueError, match="unknown tool profile 'missing'"):
         GatewayConfig(raw)
+
+
+def test_gateway_config_resolves_bundled_profile_input_overrides():
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": "responses_rosetta",
+            }
+        },
+        "tool_profile_input_overrides": {
+            "builtin": {
+                "hosted.web_search": {
+                    "provider": "tavily",
+                    "token": "builtin-search-token",
+                }
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "builtin",
+                "models": {"gpt-test": {"capabilities": ["text"]}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+
+    assert route.tool_profile == tool_profile_contract()["builtin"]
+    assert route.tool_profile_inputs["hosted.web_search"] == {
+        "provider": "tavily",
+        "token": "builtin-search-token",
+    }
 
 
 def test_tool_mapping_only_provider_applies_selected_group_profile():

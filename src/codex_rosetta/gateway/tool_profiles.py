@@ -433,6 +433,31 @@ def normalize_tool_profiles(value: Any) -> dict[str, dict[str, str]]:
     }
 
 
+def normalize_tool_profile_input_overrides(
+    value: Any,
+) -> dict[str, dict[str, dict[str, str]]]:
+    """Validate input-only overrides for immutable bundled Profiles."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("config: 'tool_profile_input_overrides' must be an object")
+
+    readonly = tool_profile_contract()["readonly"]
+    overrides: dict[str, dict[str, dict[str, str]]] = {}
+    for raw_name, raw_inputs in value.items():
+        name = validate_tool_profile_name(raw_name, allow_readonly=True)
+        if name not in readonly:
+            raise ValueError(
+                "config: tool_profile_input_overrides may only contain bundled "
+                f"Profiles; got '{name}'"
+            )
+        overrides[name] = normalize_tool_profile_inputs(
+            raw_inputs,
+            field=f"config: tool_profile_input_overrides.{name}",
+        )
+    return overrides
+
+
 def resolve_tool_profile(
     name: str,
     profiles: dict[str, dict[str, str]],
@@ -450,12 +475,17 @@ def resolve_tool_profile(
 def resolve_tool_profile_inputs(
     name: str,
     profiles: dict[str, dict[str, Any]],
+    input_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
 ) -> dict[str, dict[str, str]]:
     """Resolve persisted tool-card input values for one Profile."""
     readonly = tool_profile_contract()["readonly"]
     profile = readonly.get(name, profiles.get(name))
     if profile is None:
         raise ValueError(f"unknown tool profile '{name}'")
+    if name in readonly and input_overrides and name in input_overrides:
+        return {
+            item_id: dict(values) for item_id, values in input_overrides[name].items()
+        }
     return {
         item_id: dict(values) for item_id, values in profile.get("inputs", {}).items()
     }
@@ -476,6 +506,7 @@ def validate_tool_profile_reference(
 
 def tool_profiles_for_admin(
     profiles: dict[str, dict[str, Any]],
+    input_overrides: dict[str, dict[str, dict[str, str]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Build the ordered public representation consumed by the Admin UI."""
     contract = tool_profile_contract()
@@ -484,9 +515,9 @@ def tool_profiles_for_admin(
             "id": profile["id"],
             "name": profile["name"],
             "tools": dict(profile["tools"]),
-            "inputs": {
-                item_id: dict(values) for item_id, values in profile["inputs"].items()
-            },
+            "inputs": resolve_tool_profile_inputs(
+                profile["id"], profiles, input_overrides
+            ),
             "readonly": True,
         }
         for profile in contract["profiles"]

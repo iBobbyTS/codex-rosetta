@@ -198,7 +198,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["metadata"]["schema_version"] == 2
     assert catalog["metadata"]["codex_cli_version"] == "0.144.0"
     assert catalog["metadata"]["profile_selection"] == "model_group"
-    assert catalog["builtin_profile"] == {"id": "builtin", "name": "Built-in"}
+    assert catalog["builtin_profile"] == {"id": "builtin", "name": "Chat Default"}
     assert [profile["id"] for profile in catalog["preset_profiles"]] == [
         "responses_pass_through",
         "responses_web_run_mapping",
@@ -283,6 +283,15 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert descriptions["function.request_user_input"] == (
         "tools.description.request_user_input"
     )
+    assert {
+        item_id: items[item_id].get("description_visible_when")
+        for item_id, description in descriptions.items()
+        if description
+    } == {
+        "function.request_user_input": ["modified"],
+        "function.create_goal": ["modified"],
+        "function.update_goal": ["modified"],
+    }
 
     builtin = tool_profile_contract()["builtin"]
     assert builtin["function.exec_command"] == "passthrough"
@@ -371,6 +380,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "renderToolProfileInputs(item)" in html
     assert "['function', 'hosted'].includes(item.type)" in html
     assert "updateToolProfileInput" in html
+    assert "saveToolProfileBtn').disabled = !toolProfileDirty" in html
+    assert "if (currentToolProfile()?.readonly) return;" in html
+    assert "if (!profile || profile.readonly)" not in html
+    assert html.count("const disabled = currentToolProfile()?.readonly") == 1
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
     assert "option.value === value" in html
@@ -445,6 +458,47 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
         )
     )
     assert response.status_code == 400
+
+    pass_through_tools = dict(
+        tool_profile_contract()["readonly"]["responses_pass_through"]["tools"]
+    )
+    response = asyncio.run(
+        app._dispatch(
+            _api_request(
+                app,
+                "PUT",
+                "/admin/api/tools/profiles/responses_pass_through",
+                {
+                    "tools": pass_through_tools,
+                    "inputs": {
+                        "hosted.web_search": {
+                            "provider": "tavily",
+                            "token": "bundled-profile-token",
+                        }
+                    },
+                },
+            )
+        )
+    )
+    assert response.status_code == 200
+
+    response = asyncio.run(
+        app._dispatch(_api_request(app, "GET", "/admin/api/tools/profiles"))
+    )
+    pass_through = next(
+        profile
+        for profile in json.loads(getattr(response, "body"))["profiles"]
+        if profile["id"] == "responses_pass_through"
+    )
+    assert pass_through["inputs"]["hosted.web_search"]["token"] == (
+        "bundled-profile-token"
+    )
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        saved["tool_profile_input_overrides"]["responses_pass_through"]
+        == (pass_through["inputs"])
+    )
+    assert "responses_pass_through" not in saved["tool_profiles"]
 
     response = asyncio.run(
         app._dispatch(
