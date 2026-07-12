@@ -240,6 +240,9 @@ conda run -n "$CONDA_ENV" python -m pytest \
   tests/gateway/test_stream_phase_buffer.py \
   tests/gateway/test_window_tool_search_store.py \
   tests/gateway/test_tool_adaptation.py \
+  tests/gateway/test_codex_page.py \
+  tests/gateway/test_codex_search.py \
+  tests/gateway/test_codex_auxiliary.py \
   tests/gateway/test_web_search_bridge.py \
   tests/gateway/test_config.py \
   tests/gateway/test_admin_config_routes.py \

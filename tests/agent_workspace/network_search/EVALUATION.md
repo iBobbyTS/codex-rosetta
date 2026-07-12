@@ -28,7 +28,10 @@ Set `search_surface` using the Gateway Logs:
 Require an executed namespace/nested call, not instructional prose. Accepted
 evidence includes a model output call to `web.run`, or an `exec` custom-tool
 call whose executable input invokes `tools.web__run`. When route telemetry is
-available, also record the subsequent `POST /v1/alpha/search` request.
+available, also record the subsequent `POST /v1/alpha/search` request. A local
+Rosetta execution is proven by `codex_search_request` followed by
+`codex_search_response`; use the response's executor summary to distinguish
+Tavily, Python time handling, or a mixed local execution.
 
 The string `web.run` inside instructions, descriptions, input history, or an
 error message is not sufficient by itself.
@@ -83,7 +86,7 @@ Write `artifacts/evaluation.json` with this shape:
   "process_exit_code": 0,
   "success_marker_observed": true,
   "search_surface": "web.run | web_search | none | ambiguous",
-  "search_executor": "alpha_search | upstream_responses | tavily | none | unknown",
+  "search_executor": "alpha_search | upstream_responses | tavily | python | tavily_python | none | unknown",
   "network_search_calls": 1,
   "successful_search_result": true,
   "command_calls": 0,

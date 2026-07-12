@@ -38,7 +38,30 @@ Codex's standalone Search and Images clients use three additional JSON endpoints
 - `POST /v1/images/generations`
 - `POST /v1/images/edits`
 
-The gateway forwards these endpoints only when the request model resolves to an **OpenAI Responses (Pass through)** provider. The configured upstream model alias is applied, but the payload and JSON response otherwise bypass IR conversion. Responses (Rosetta), Chat, Anthropic, and Google routes return `501 Not Implemented` for these endpoints.
+Images remain native pass-through endpoints: the gateway forwards them only
+when the request model resolves to an **OpenAI Responses (Pass through)**
+provider. The configured upstream model alias is applied, but the payload and
+JSON response otherwise bypass IR conversion.
+
+Standalone Search has an additional local bridge. When
+`server.web_search.tavily_api_key` is configured, `/v1/alpha/search` executes
+the reliable subset locally for every model route: `search_query` uses Tavily,
+direct-URL `open` fetches public static HTML or plain text, and `time` uses
+Python fixed-UTC-offset calculation. Open validates every redirect target,
+rejects credentials and non-public addresses, permits at most five redirects,
+and applies a 15-second and 2 MiB response limit. It returns normalized,
+line-addressable text and supports `lineno`; stored references such as
+`turn0search0`, JavaScript rendering, compressed pages, and non-text content
+remain unsupported. Supported search options are query/domain filters, search
+context size, response length, and a conservative output budget. Requests
+containing `click`, `find`, `image_query`, `screenshot`, finance, weather,
+sports, recency, blocked-domain, location, or non-live access semantics return
+HTTP `501` with `code: "not_implemented"` before any partial operation runs.
+Every `501` message from these auxiliary endpoints also ends with
+`Consider "Browser Use" skill` so Codex can choose the browser fallback.
+Without a Tavily key, a Responses Pass-through route retains native
+`/alpha/search` pass-through for search queries; direct-URL `open` and
+time-only requests can still use the local Python executor.
 
 ## Responses To Chat Conversion
 

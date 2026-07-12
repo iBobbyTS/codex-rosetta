@@ -8,19 +8,35 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.routing import is_openai_responses_passthrough
 
+from .codex_page import StaticPageClient
+from .codex_search import (
+    CodexSearchExecutionError,
+    CodexSearchInvalidRequest,
+    CodexSearchNotImplemented,
+    codex_search_request_summary,
+    execute_local_codex_search,
+    should_use_local_codex_search,
+)
 from .config import GatewayConfig
 from .headers import build_upstream_extra_headers, resolve_request_id
 from .logging import record_request_stat
 from .proxy import error_response_for_source, extract_model
+from .stream_trace import StreamTraceLogger, StreamTraceState
 from .transport import UpstreamConnectionError, UpstreamTransport
+from .web_search import TavilySearchClient
+
+_BROWSER_USE_HINT = 'Consider "Browser Use" skill'
 
 
 async def handle_codex_auxiliary(
     request: Any,
     config: GatewayConfig,
     upstream_path: str,
+    *,
+    search_client: TavilySearchClient | None = None,
+    page_client: StaticPageClient | None = None,
 ) -> Response:
-    """Pass a Codex Search or Images request to a Responses provider."""
+    """Handle Codex Search locally when configured, or pass auxiliaries through."""
 
     try:
         request_id = resolve_request_id(request.headers.get("x-request-id"))
@@ -62,11 +78,20 @@ async def handle_codex_auxiliary(
             status_code=404,
         )
 
-    if not is_openai_responses_passthrough(route):
+    native_passthrough = is_openai_responses_passthrough(route)
+    use_local_search = (
+        upstream_path == "alpha/search"
+        and should_use_local_codex_search(
+            body,
+            config.web_search,
+            native_passthrough_available=native_passthrough,
+        )
+    )
+    if not native_passthrough and not use_local_search:
         return error_response_for_source(
             "openai_responses",
             501,
-            (
+            _with_browser_use_hint(
                 f"POST /v1/{upstream_path} is only implemented for "
                 "OpenAI Responses (Pass through) providers"
             ),
@@ -80,11 +105,27 @@ async def handle_codex_auxiliary(
     upstream_url = f"{provider_info.base_url}/{upstream_path}"
     transport: UpstreamTransport = request.app.transport
     extra_headers = build_upstream_extra_headers(request, request_id)
+    trace = _create_auxiliary_trace(
+        request,
+        request_id=request_id,
+        model=model,
+        route=route,
+    )
     started_at = time.monotonic()
     status_code = 500
     error_detail: str | None = None
 
     try:
+        if use_local_search:
+            response, status_code, error_detail = await _handle_local_search(
+                trace,
+                body,
+                config.web_search,
+                search_client,
+                page_client,
+            )
+            return response
+
         response = await transport.send_passthrough(
             provider_info,
             upstream_url,
@@ -122,3 +163,77 @@ async def handle_codex_auxiliary(
             duration_ms=(time.monotonic() - started_at) * 1000,
             error_detail=error_detail,
         )
+
+
+async def _handle_local_search(
+    trace: StreamTraceLogger | None,
+    body: dict[str, Any],
+    web_search_config: dict[str, Any],
+    search_client: TavilySearchClient | None,
+    page_client: StaticPageClient | None,
+) -> tuple[Response, int, str | None]:
+    if trace is not None:
+        trace.log("codex_search_request", codex_search_request_summary(body))
+    try:
+        result = await execute_local_codex_search(
+            body,
+            web_search_config,
+            client=search_client,
+            page_client=page_client,
+        )
+    except CodexSearchNotImplemented as exc:
+        error = str(exc)
+        if trace is not None:
+            trace.log("codex_search_not_implemented", {"error": error})
+        return _not_implemented_response(error), 501, error
+    except CodexSearchInvalidRequest as exc:
+        error = str(exc)
+        if trace is not None:
+            trace.log("codex_search_invalid_request", {"error": error})
+        return error_response_for_source("openai_responses", 400, error), 400, error
+    except CodexSearchExecutionError as exc:
+        error = str(exc)
+        if trace is not None:
+            trace.log("codex_search_execution_error", {"error": error})
+        return error_response_for_source("openai_responses", 502, error), 502, error
+
+    if trace is not None:
+        trace.log("codex_search_response", result.trace_summary())
+    return JSONResponse(result.response_body()), 200, None
+
+
+def _not_implemented_response(message: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "error": {
+                "message": _with_browser_use_hint(message),
+                "type": "not_implemented_error",
+                "code": "not_implemented",
+            }
+        },
+        status_code=501,
+    )
+
+
+def _with_browser_use_hint(message: str) -> str:
+    return f"{message.rstrip('.')}. {_BROWSER_USE_HINT}"
+
+
+def _create_auxiliary_trace(
+    request: Any,
+    *,
+    request_id: str,
+    model: str,
+    route: Any,
+) -> StreamTraceLogger | None:
+    state = getattr(request.app, "stream_trace_state", None)
+    if not isinstance(state, StreamTraceState):
+        return None
+    return state.create_logger(
+        request_id=request_id,
+        request_log_id=None,
+        model=model,
+        source_provider=route.source_provider,
+        target_provider=route.target_provider,
+        provider_name=route.provider_name,
+    )

@@ -38,7 +38,26 @@ Codex 的独立 Search 和 Images 客户端还会使用三个 JSON 端点：
 - `POST /v1/images/generations`
 - `POST /v1/images/edits`
 
-只有当请求中的模型解析到 **OpenAI Responses (Pass through)** 供应商时，网关才会转发这些端点。网关会应用配置的上游模型别名，但请求载荷和 JSON 响应不会经过 IR 转换。Responses (Rosetta)、Chat、Anthropic 和 Google 路由访问这些端点时返回 `501 Not Implemented`。
+Images 仍是原生透传端点：只有当请求中的模型解析到 **OpenAI Responses
+(Pass through)** 供应商时，网关才会转发。网关会应用配置的上游模型别名，
+但请求载荷和 JSON 响应不会经过 IR 转换。
+
+独立 Search 还提供本地 bridge。配置
+`server.web_search.tavily_api_key` 后，所有模型路由的
+`/v1/alpha/search` 都会在本地执行可靠子集：`search_query` 使用 Tavily，
+直接 URL 的 `open` 获取公开静态 HTML 或纯文本，`time` 使用 Python 的固定
+UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
+允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
+`lineno`。`turn0search0` 等已保存引用、JavaScript 渲染、压缩页面和非文本
+内容仍不支持。支持的搜索选项包括查询/domain 过滤、搜索上下文大小、响应
+长度和保守输出预算。请求中只要包含 `click`、`find`、`image_query`、
+`screenshot`、finance、weather、sports、recency、blocked-domain、location
+或非 live 访问语义，就会在任何部分操作执行前返回 HTTP `501` 和
+`code: "not_implemented"`。这些辅助端点的所有 `501` 文案还会以
+`Consider "Browser Use" skill` 结尾，提示 Codex 改用浏览器回退。未配置
+Tavily key 时，Responses Pass-through
+路由仍保留搜索查询的原生 `/alpha/search` 透传；直接 URL 的 `open` 和只有
+`time` 的请求仍可使用本地 Python executor。
 
 ## Responses 转 Chat 转换
 
