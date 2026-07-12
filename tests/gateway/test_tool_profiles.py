@@ -7,11 +7,14 @@ import copy
 import pytest
 
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.admin.tool_catalog import load_tool_catalog
+from codex_rosetta.gateway import tool_profiles as tool_profiles_module
 from codex_rosetta.gateway.proxy import (
     _apply_converted_request_tool_adaptation,
     _apply_tool_adaptation,
 )
 from codex_rosetta.gateway.tool_profiles import (
+    normalize_tool_profile_documents,
     resolve_tool_profile,
     tool_profile_contract,
 )
@@ -49,6 +52,65 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         "injected",
     )
     assert contract["builtin"]["injection.claude_code.read"] == "injected"
+
+
+def test_function_profile_inputs_support_multiple_text_and_password_values(monkeypatch):
+    catalog = copy.deepcopy(load_tool_catalog())
+    function_item = next(
+        item for item in catalog["items"] if item["id"] == "function.update_plan"
+    )
+    function_item["profile_inputs"] = [
+        {
+            "id": "endpoint",
+            "label_i18n": "tools.input.endpoint",
+            "default": "https://example.test/v1",
+        },
+        {
+            "id": "token",
+            "label_i18n": "tools.input.token",
+            "type": "password",
+            "default": "",
+            "placeholder_i18n": "tools.input.tokenPlaceholder",
+        },
+    ]
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        contract = tool_profiles_module.tool_profile_contract()
+        assert contract["readonly"]["builtin"]["inputs"] == {
+            "function.update_plan": {
+                "endpoint": "https://example.test/v1",
+                "token": "",
+            }
+        }
+        assert contract["input_definitions"]["function.update_plan"]["token"] == {
+            "id": "token",
+            "label_i18n": "tools.input.token",
+            "type": "password",
+            "default": "",
+            "placeholder_i18n": "tools.input.tokenPlaceholder",
+        }
+
+        tools = dict(contract["builtin"])
+        documents = normalize_tool_profile_documents(
+            {
+                "custom": {
+                    "tools": tools,
+                    "inputs": {
+                        "function.update_plan": {
+                            "endpoint": "https://gateway.test/v1",
+                            "token": "secret-token",
+                        }
+                    },
+                }
+            }
+        )
+        assert documents["custom"]["inputs"]["function.update_plan"] == {
+            "endpoint": "https://gateway.test/v1",
+            "token": "secret-token",
+        }
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
 
 
 @pytest.mark.parametrize(

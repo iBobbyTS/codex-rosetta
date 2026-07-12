@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "schema_version": 1,
+    "schema_version": 2,
     "catalog_version": "codex-0.144.0",
     "codex_cli_version": "0.144.0",
     "codex_source_commit": "2e8c3756f95789c215d9ea9a5ade6ec377934b3f",

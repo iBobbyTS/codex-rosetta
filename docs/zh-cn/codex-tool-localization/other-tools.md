@@ -70,3 +70,9 @@ multi_agent_v1.spawn_agent -> spawn_agent
 **OpenAI Responses (Tool Mapping only)** 支持 Tool Profile，同时让 Responses 请求和响应的其余部分继续走直接路径。内置的 **Responses pass through** Profile 保持传入工具不变；**Responses web.run mapping** 只修改 `web.run`，让 `/v1/alpha/search` 使用 Rosetta 的本地映射。Responses Rosetta、Chat、Anthropic 和 Google 模型组仍支持 Profile 选择与处理。
 
 打包的 Profile 通过 `image_gen.imagegen` 管理当前 Codex 图片生成工具，不再包含已废弃的 Hosted `image_generation` 工具。
+
+### Function 卡片输入项
+
+Function 目录项可以声明多组 `profile_inputs`。每组包含稳定 ID、本地化小标题、默认值，以及 `text` 或 `password` 输入类型。工具页面会按照目录中的声明顺序，在 Function 状态选择器下方渲染这些输入项。
+
+用户填写的值随 Profile 保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前值；切换或重置 Profile 时会恢复已保存的值。只读的打包 Profile 会显示声明的默认值，但不能编辑。此输入机制只负责持久化 Function 专用设置；只有对应运行时功能显式读取设置后，它才会改变网关行为。

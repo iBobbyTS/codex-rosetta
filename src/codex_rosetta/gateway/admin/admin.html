@@ -452,6 +452,11 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-item.nested { background:var(--bg-card); }
 .tool-name { min-width:0;font:12px var(--mono);overflow-wrap:anywhere; }
 .tool-description { grid-column:1 / -1;color:var(--text-dim);font-size:11px;line-height:1.45; }
+.tool-profile-inputs { grid-column:1 / -1;display:grid;gap:8px;min-width:0; }
+.tool-profile-input-group { display:grid;gap:4px;min-width:0; }
+.tool-profile-input-label { color:var(--text-dim);font-size:10px;font-weight:600;line-height:1.3; }
+.tool-profile-input { width:100%;min-width:0;padding:6px 8px;background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font:11px var(--mono); }
+.tool-profile-input:disabled { opacity:.75;cursor:not-allowed; }
 .tool-badges { display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end; }
 .tool-badge { display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:10px;line-height:1.4;color:var(--text-dim);background:var(--bg);white-space:nowrap; }
 .tool-badge.kind { color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--border)); }
@@ -1954,6 +1959,7 @@ let toolCatalogFilter = 'all';
 let toolProfilesData = null;
 let toolSelectedProfile = 'builtin';
 let toolProfileDraft = {};
+let toolProfileInputDraft = {};
 let toolProfileDirty = false;
 const expandedToolNamespaces = new Set();
 
@@ -2009,6 +2015,10 @@ function toggleToolNamespace(namespaceId) {
   renderToolCatalog();
 }
 
+function cloneToolProfileInputs(inputs) {
+  return Object.fromEntries(Object.entries(inputs || {}).map(([itemId, values]) => [itemId, {...values}]));
+}
+
 async function loadToolCatalog() {
   if (toolCatalogData && toolProfilesData) {
     renderToolCatalog();
@@ -2030,6 +2040,7 @@ async function loadToolCatalog() {
       || toolProfilesData.profiles[0];
     toolSelectedProfile = selected.id;
     toolProfileDraft = {...selected.tools};
+    toolProfileInputDraft = cloneToolProfileInputs(selected.inputs);
     toolProfileDirty = false;
     for (const item of toolCatalogData.items || []) {
       if (item.type === 'namespace' && item.default_expanded) {
@@ -2069,6 +2080,7 @@ function selectToolProfile(profileId) {
   if (!profile) return;
   toolSelectedProfile = profile.id;
   toolProfileDraft = {...profile.tools};
+  toolProfileInputDraft = cloneToolProfileInputs(profile.inputs);
   toolProfileDirty = false;
   renderToolCatalog();
 }
@@ -2080,10 +2092,18 @@ function updateToolProfileState(itemId, state) {
   renderToolProfileControls();
 }
 
+function updateToolProfileInput(itemId, inputId, value) {
+  if (currentToolProfile()?.readonly) return;
+  toolProfileInputDraft[itemId] = {...(toolProfileInputDraft[itemId] || {}), [inputId]: value};
+  toolProfileDirty = true;
+  renderToolProfileControls();
+}
+
 function resetToolProfileDraft() {
   const profile = currentToolProfile();
   if (!profile) return;
   toolProfileDraft = {...profile.tools};
+  toolProfileInputDraft = cloneToolProfileInputs(profile.inputs);
   toolProfileDirty = false;
   renderToolCatalog();
 }
@@ -2091,9 +2111,10 @@ function resetToolProfileDraft() {
 async function saveToolProfile() {
   const profile = currentToolProfile();
   if (!profile || profile.readonly) { showToast(t('tools.builtinReadonly'), 'error'); return; }
-  const res = await api.put(`/admin/api/tools/profiles/${encodeURIComponent(profile.id)}`, {tools: toolProfileDraft});
+  const res = await api.put(`/admin/api/tools/profiles/${encodeURIComponent(profile.id)}`, {tools: toolProfileDraft, inputs: toolProfileInputDraft});
   if (!res.ok) { showToast(res.error || 'Failed', 'error'); return; }
   profile.tools = {...toolProfileDraft};
+  profile.inputs = cloneToolProfileInputs(toolProfileInputDraft);
   toolProfileDirty = false;
   showToast(t('tools.profileSaved', {name: profile.name}));
   renderToolProfileControls();
@@ -2109,12 +2130,13 @@ async function createToolProfileCopy() {
   if (!name || toolProfilesData.profiles.some(profile => profile.id === name)) {
     showToast(t('tools.profileNameRequired'), 'error'); return;
   }
-  const res = await api.put(`/admin/api/tools/profiles/${encodeURIComponent(name)}`, {tools: toolProfileDraft});
+  const res = await api.put(`/admin/api/tools/profiles/${encodeURIComponent(name)}`, {tools: toolProfileDraft, inputs: toolProfileInputDraft});
   if (!res.ok) { showToast(res.error || 'Failed', 'error'); return; }
   toolProfilesData = await api.get('/admin/api/tools/profiles');
-  if (configData) configData.tool_profiles = {...(configData.tool_profiles || {}), [name]: {tools: {...toolProfileDraft}}};
+  if (configData) configData.tool_profiles = {...(configData.tool_profiles || {}), [name]: {tools: {...toolProfileDraft}, inputs: cloneToolProfileInputs(toolProfileInputDraft)}};
   toolSelectedProfile = name;
   toolProfileDraft = {...toolProfilesData.profiles.find(profile => profile.id === name).tools};
+  toolProfileInputDraft = cloneToolProfileInputs(toolProfilesData.profiles.find(profile => profile.id === name).inputs);
   toolProfileDirty = false;
   closeModal('toolProfileCloneModal');
   renderToolCatalog();
@@ -2198,9 +2220,23 @@ function renderToolStateSelect(item) {
   return `<select class="tool-state-select" aria-label="${escAttr(item.name)}" onchange="updateToolProfileState(${handlerArg(item.id)}, this.value)"${disabled}>${options}</select>`;
 }
 
+function renderToolProfileInputs(item) {
+  if (item.type !== 'function' || !Array.isArray(item.profile_inputs) || item.profile_inputs.length === 0) return '';
+  const values = toolProfileInputDraft[item.id] || {};
+  const disabled = currentToolProfile()?.readonly ? ' disabled' : '';
+  const groups = item.profile_inputs.map(input => {
+    const inputType = input.type === 'password' ? 'password' : 'text';
+    const value = values[input.id] ?? input.default ?? '';
+    const placeholder = input.placeholder_i18n ? ` placeholder="${escAttr(t(input.placeholder_i18n))}"` : '';
+    const autocomplete = inputType === 'password' ? ' autocomplete="new-password"' : '';
+    return `<label class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><input class="tool-profile-input" type="${inputType}" value="${escAttr(value)}" maxlength="16384"${placeholder}${autocomplete} oninput="updateToolProfileInput(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.value)"${disabled}></label>`;
+  }).join('');
+  return `<div class="tool-profile-inputs">${groups}</div>`;
+}
+
 function renderToolItem(item, policies, nested=false) {
   const description = item.description_i18n ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
-  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}${description}</div>`;
+  return `<div class="tool-item${nested ? ' nested' : ''}" data-tool-id="${escAttr(item.id)}"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}${description}${renderToolProfileInputs(item)}</div>`;
 }
 
 function renderToolNamespace(namespaceItem, childIds, index) {
