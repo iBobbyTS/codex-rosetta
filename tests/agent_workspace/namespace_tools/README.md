@@ -1,19 +1,22 @@
 # Namespace Tool Test
 
-This suite verifies direct use of four Codex Namespace surfaces through
-Codex-Rosetta: `clock`, `memories`, `skills`, and `collaboration`. It does not
-measure planning, research, coding, prose, or general subagent quality.
+This suite verifies direct use of three Codex Namespace surfaces through
+Codex-Rosetta: `clock`, `memories`, and `skills`. It does not measure planning,
+research, coding, prose, or general agent quality.
 
 ## Scenario
 
 - `01`: call one deterministic read-only operation from `clock`, `memories`,
-  and `skills`, then spawn and wait for one subagent that returns a fixed
-  marker.
+  and `skills`.
 
-All four Namespace checks live in one short task so a normal two-model matrix
+All three Namespace checks live in one short task so a normal two-model matrix
 needs only one isolated run for `gpt-5.6-terra` and one for
 `deepseek-v4-flash`. Evaluation remains per Namespace: one missing or failed
 Namespace does not erase evidence collected for the others.
+
+Subagent lifecycle behavior is intentionally isolated in the
+[`subagent_tools`](../subagent_tools/README.md) suite so each `collaboration`
+Function can be evaluated independently.
 
 ## Required Codex configuration
 
@@ -29,7 +32,6 @@ Add these feature flags to the isolated `config.toml`:
 [features]
 current_time_reminder = true
 memories = true
-multi_agent_v2 = true
 
 [memories]
 generate_memories = false
@@ -73,9 +75,8 @@ the native call and a non-error result. Gateway Logs must additionally prove
 the model-facing call name and conversion route.
 
 For the Chat route, expected model-facing names are the unique flattened forms
-`clock__curr_time`, `memories__list`, `skills__list`,
-`collaboration__spawn_agent`, and `collaboration__wait_agent`; Rosetta must
-restore their native Namespace metadata before Codex executes them. The exact
-name may differ only if the current Codex/Rosetta contract deliberately changes
-the stable flattening scheme, in which case record the observed name and review
-the compatibility ledger.
+`clock.curr_time`, `memories.list`, and `skills.list`; Rosetta must restore
+their native Namespace metadata before Codex executes them. The exact name may
+differ only if the current Codex/Rosetta contract deliberately changes the
+stable flattening scheme, in which case record the observed name and review the
+compatibility ledger.

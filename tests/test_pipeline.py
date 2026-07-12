@@ -597,7 +597,7 @@ class TestConversionPipeline:
         )
 
         tool_names = [tool["function"]["name"] for tool in target["tools"]]
-        assert tool_names == ["multi_agent_v1__spawn_agent"]
+        assert tool_names == ["multi_agent_v1-spawn_agent"]
         assert "multi_agent_v1" not in tool_names
 
     def test_responses_lite_tools_are_flattened_for_chat_target(self):
@@ -655,7 +655,7 @@ class TestConversionPipeline:
             "content": "Use tools carefully.",
         }
         assert [tool["function"]["name"] for tool in target["tools"]] == [
-            "multi_agent_v1__spawn_agent"
+            "multi_agent_v1-spawn_agent"
         ]
         assert target["parallel_tool_calls"] is False
 
@@ -720,8 +720,8 @@ class TestConversionPipeline:
 
         tool_names = [tool["function"]["name"] for tool in target["tools"]]
         assert tool_names == [
-            "mcp__codex_apps__github___fetch",
-            "mcp__codex_apps__gmail___fetch",
+            "mcp__codex_apps__github-_fetch",
+            "mcp__codex_apps__gmail-_fetch",
         ]
         assert len(tool_names) == len(set(tool_names))
 
@@ -849,7 +849,18 @@ class TestConversionPipeline:
             }
         ]
 
-    def test_chat_response_tool_call_restores_responses_namespace(self):
+    @pytest.mark.parametrize(
+        "model_tool_name",
+        [
+            "multi_agent_v1-spawn_agent",
+            "multi_agent_v1.spawn_agent",
+            "multi_agent_v1_spawn_agent",
+            "spawn_agent",
+        ],
+    )
+    def test_chat_response_tool_call_restores_responses_namespace(
+        self, model_tool_name
+    ):
         """Chat tool calls restore Responses namespace for Codex runtime."""
         from codex_rosetta.pipeline import ConversionPipeline
 
@@ -893,7 +904,7 @@ class TestConversionPipeline:
                                     "id": "call_123",
                                     "type": "function",
                                     "function": {
-                                        "name": "multi_agent_v1__spawn_agent",
+                                        "name": model_tool_name,
                                         "arguments": '{"prompt":"Translate README"}',
                                     },
                                 }
@@ -909,6 +920,276 @@ class TestConversionPipeline:
         assert tool_call["type"] == "function_call"
         assert tool_call["name"] == "spawn_agent"
         assert tool_call["namespace"] == "multi_agent_v1"
+
+    @pytest.mark.parametrize(
+        ("namespace_children", "model_tool_name"),
+        [
+            (("alpha", "beta_gamma", "alpha_beta", "gamma"), "alpha_beta_gamma"),
+            (("alpha", "beta-gamma", "alpha-beta", "gamma"), "alpha-beta-gamma"),
+            (("alpha", "beta.gamma", "alpha.beta", "gamma"), "alpha.beta.gamma"),
+        ],
+    )
+    def test_chat_response_namespace_alias_stays_flat_when_ambiguous(
+        self,
+        namespace_children,
+        model_tool_name,
+    ):
+        """An alias shared by multiple Namespaces is not guessed."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        namespace_a, child_a, namespace_b, child_b = namespace_children
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "call one tool",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace_a,
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": child_a,
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                    {
+                        "type": "namespace",
+                        "name": namespace_b,
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": child_b,
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                ],
+            }
+        )
+
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": model_tool_name,
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        tool_call = response["output"][0]
+        assert tool_call["name"] == model_tool_name
+        assert "namespace" not in tool_call
+
+    def test_chat_response_bare_child_stays_flat_when_namespaces_conflict(self):
+        """A child shared by multiple Namespaces is not guessed."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "call one tool",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": namespace,
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "shared",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    }
+                    for namespace in ("alpha", "beta")
+                ],
+            }
+        )
+
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "shared",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        tool_call = response["output"][0]
+        assert tool_call["name"] == "shared"
+        assert "namespace" not in tool_call
+
+    @pytest.mark.parametrize(
+        "top_level_name",
+        [
+            "multi_agent_v1-spawn_agent",
+            "multi_agent_v1_spawn_agent",
+            "multi_agent_v1.spawn_agent",
+        ],
+    )
+    def test_chat_response_namespace_name_does_not_shadow_top_level_function(
+        self, top_level_name
+    ):
+        """A top-level Function wins over a matching Namespace name."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "call one tool",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "multi_agent_v1",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "spawn_agent",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                    {
+                        "type": "function",
+                        "name": top_level_name,
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            }
+        )
+
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": top_level_name,
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        tool_call = response["output"][0]
+        assert tool_call["name"] == top_level_name
+        assert "namespace" not in tool_call
+
+    def test_chat_response_bare_child_does_not_shadow_top_level_function(self):
+        """A bare child alias does not replace a same-named top-level Function."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": "call one tool",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "multi_agent_v1",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "spawn_agent",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    },
+                    {
+                        "type": "function",
+                        "name": "spawn_agent",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                ],
+            }
+        )
+
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl-1",
+                "created": 1,
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "spawn_agent",
+                                        "arguments": "{}",
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
+
+        tool_call = response["output"][0]
+        assert tool_call["name"] == "spawn_agent"
+        assert "namespace" not in tool_call
 
     def test_chat_response_tool_search_call_restores_responses_item(self):
         """Chat tool_search calls restore Responses tool_search_call items."""
@@ -1020,7 +1301,7 @@ class TestConversionPipeline:
                                     "id": "call_123",
                                     "type": "function",
                                     "function": {
-                                        "name": "mcp__codex_apps__github___fetch",
+                                        "name": "mcp__codex_apps__github._fetch",
                                         "arguments": '{"id":"issue-1"}',
                                     },
                                 }
@@ -1205,7 +1486,18 @@ class TestConversionPipeline:
         if events:
             assert len(captured) > 0
 
-    def test_stream_processor_restores_responses_namespace_for_chat_tool_call(self):
+    @pytest.mark.parametrize(
+        "model_tool_name",
+        [
+            "multi_agent_v1-spawn_agent",
+            "multi_agent_v1.spawn_agent",
+            "multi_agent_v1_spawn_agent",
+            "spawn_agent",
+        ],
+    )
+    def test_stream_processor_restores_responses_namespace_for_chat_tool_call(
+        self, model_tool_name
+    ):
         """Streaming Chat tool calls restore Responses namespace metadata."""
         from codex_rosetta.pipeline import ConversionPipeline
 
@@ -1251,7 +1543,7 @@ class TestConversionPipeline:
                                     "id": "call_123",
                                     "type": "function",
                                     "function": {
-                                        "name": "multi_agent_v1__spawn_agent",
+                                        "name": model_tool_name,
                                         "arguments": "",
                                     },
                                 }

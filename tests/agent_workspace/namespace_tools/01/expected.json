@@ -13,10 +13,7 @@
     "clock.curr_time": 1,
     "memories.list": 1,
     "skills.list": 1,
-    "collaboration.spawn_agent": 1,
-    "collaboration.wait_agent_min": 1,
     "memory_fixture_required": "memory_summary.md",
-    "child_marker_required": "SUBAGENT:NAMESPACE_OK",
     "gateway_log_evidence_required": true,
     "prohibited_fallback_calls_max": 0
   }

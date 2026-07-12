@@ -241,12 +241,11 @@ class OpenAIResponsesConverter(BaseConverter):
                 if not (isinstance(t, dict) and t.get("external_web_access") is False)
             ]
             if active_tools:
-                ir_tools = self._deduplicate_ir_tools(
-                    self._get_cached_tools_from_p(active_tools), ctx
-                )
+                expanded_ir_tools = self._get_cached_tools_from_p(active_tools)
+                self._store_namespace_tool_map(expanded_ir_tools, ctx)
+                ir_tools = self._deduplicate_ir_tools(expanded_ir_tools, ctx)
                 if ir_tools:
                     ir_request["tools"] = ir_tools
-                    self._store_namespace_tool_map(ir_tools, ctx)
                     self._store_native_tool_type_map(ir_tools, ctx)
 
         # 4-5. Tool choice + tool config
@@ -633,37 +632,74 @@ class OpenAIResponsesConverter(BaseConverter):
         return output
 
     @staticmethod
+    def _namespace_restore_entry(
+        tool: dict[str, Any],
+    ) -> tuple[dict[str, str], set[str]] | None:
+        """Build the canonical mapping and compatible aliases for one child."""
+        metadata = tool.get("metadata") or {}
+        if metadata.get("provider_type") != "namespace":
+            return None
+
+        namespace = metadata.get("responses_namespace")
+        chat_tool_name = metadata.get("responses_chat_tool_name") or tool.get("name")
+        if not isinstance(namespace, str) or not namespace:
+            return None
+        if not isinstance(chat_tool_name, str) or not chat_tool_name:
+            return None
+
+        child_name = metadata.get("responses_namespace_child_name")
+        if not isinstance(child_name, str) or not child_name:
+            child = metadata.get("responses_namespace_child")
+            child_name = child.get("name") if isinstance(child, dict) else None
+
+        entry: dict[str, str] = {"namespace": namespace}
+        if isinstance(child_name, str) and child_name:
+            entry["child_name"] = child_name
+        raw_aliases = metadata.get("responses_chat_tool_aliases")
+        aliases = (
+            {alias for alias in raw_aliases if isinstance(alias, str) and alias}
+            if isinstance(raw_aliases, list)
+            else set()
+        )
+        aliases.update(
+            alias
+            for alias in (
+                chat_tool_name,
+                metadata.get("responses_chat_tool_alias"),
+                child_name,
+            )
+            if isinstance(alias, str) and alias
+        )
+        return entry, {alias for alias in aliases if isinstance(alias, str) and alias}
+
+    @staticmethod
     def _store_namespace_tool_map(
         ir_tools: list[Any],
         ctx: ConversionContext,
     ) -> None:
         """Record Responses namespace child tool mappings for response restore."""
         mapping: dict[str, ResponsesNamespaceToolMapping] = {}
+        restore_candidates: dict[str, list[dict[str, str]]] = {}
+        top_level_names: set[str] = set()
         for tool in ir_tools:
             if not isinstance(tool, dict):
                 continue
             metadata = tool.get("metadata") or {}
             if metadata.get("provider_type") != "namespace":
+                tool_name = tool.get("name")
+                if isinstance(tool_name, str) and tool_name:
+                    top_level_names.add(tool_name)
                 continue
-            namespace = metadata.get("responses_namespace")
-            chat_tool_name = metadata.get("responses_chat_tool_name") or tool.get(
-                "name"
-            )
-            child_name = metadata.get("responses_namespace_child_name")
-            if not isinstance(child_name, str) or not child_name:
-                child = metadata.get("responses_namespace_child")
-                if isinstance(child, dict):
-                    child_name = child.get("name")
-            if (
-                isinstance(namespace, str)
-                and namespace
-                and isinstance(chat_tool_name, str)
-                and chat_tool_name
-            ):
-                entry: dict[str, str] = {"namespace": namespace}
-                if isinstance(child_name, str) and child_name:
-                    entry["child_name"] = child_name
-                mapping[chat_tool_name] = entry
+            restore = OpenAIResponsesConverter._namespace_restore_entry(tool)
+            if restore is None:
+                continue
+            entry, restore_names = restore
+            for name in restore_names:
+                restore_candidates.setdefault(name, []).append(entry)
+
+        for name, candidates in restore_candidates.items():
+            if len(candidates) == 1 and name not in top_level_names:
+                mapping[name] = candidates[0]
         ctx.store_responses_namespace_tool_map(mapping)
 
     @staticmethod

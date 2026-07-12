@@ -55,6 +55,28 @@ _CHAT_TOOL_DESCRIPTION_SUFFIXES = {
         "objective and no token_budget unless explicitly requested, then retry "
         "update_goal with the requested status."
     ),
+    "spawn_agent": (
+        "Chat-model guidance: the message field is the complete child task. "
+        'With fork_turns="none", the child receives no surrounding user '
+        "turns, so include every instruction the child must follow in message "
+        "and do not expect it to reconstruct the task from workspace files."
+    ),
+    "wait_agent": (
+        "Chat-model guidance: this waits for a future mailbox update; it does "
+        "not replay a completion notification already delivered in the current "
+        "input. If that completion is already visible, treat it as authoritative "
+        "instead of repeatedly waiting by reflex."
+    ),
+    "list_agents": (
+        "Chat-model guidance: path_prefix filters canonical task paths. Use the "
+        "requested child task-name segment, and treat the returned status and "
+        "result for that canonical path as authoritative."
+    ),
+    "send_message": (
+        "Chat-model guidance: target must be the canonical task path returned by "
+        "spawn_agent. Send the requested message exactly; this delivers to the "
+        "existing child and does not start a replacement task."
+    ),
 }
 
 
@@ -68,6 +90,8 @@ def _adapt_chat_tool_description(
     if not enabled:
         return description
     suffix = _CHAT_TOOL_DESCRIPTION_SUFFIXES.get(tool_name)
+    if suffix is None and "-" in tool_name:
+        suffix = _CHAT_TOOL_DESCRIPTION_SUFFIXES.get(tool_name.rsplit("-", 1)[-1])
     if not suffix or suffix in description:
         return description
     return f"{description}\n\n{suffix}" if description else suffix

@@ -20,8 +20,10 @@ handling rather than prose quality.
   model turn across Codex remote compaction and recording whether an
   OpenAI-identified provider returns a valid compaction item.
 - [`namespace_tools`](namespace_tools/README.md): directly exercising the
-  `clock`, `memories`, `skills`, and `collaboration` Namespace tools, including
-  one spawned subagent and its completion wait.
+  `clock`, `memories`, and `skills` Namespace tools.
+- [`subagent_tools`](subagent_tools/README.md): six isolated lifecycle
+  scenarios covering every `collaboration` Function: spawn, wait, list,
+  message, follow-up, and interrupt.
 
 When no suite is specified, start with `command_execution/01`. Suite README
 and EVALUATION files, rather than the runner skill, define task order, Codex

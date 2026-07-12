@@ -25,18 +25,18 @@ Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first t
 
 ## Current pending inspection baseline
 
-Inspection date: 2026-07-10
+Inspection date: 2026-07-12
 
 | Project | Current Value | Description |
 | --- | --- | --- |
 | Local Codex CLI | `codex-cli 0.144.1` | From `codex --version`; newer than the `0.144.0.r0` compatibility target |
-| Codex source branch | `main` | `../openai-codex-src` |
-| Codex source commit | `2e8c3756f95789c215d9ea9a5ade6ec377934b3f` | `build: ratchet direct reqwest dependencies (#31431)` |
-| Codex source timestamp | `2026-07-09T11:53:18-07:00` | Latest commit in the source checkout |
+| Codex source branch | detached `rust-v0.144.1` | Exact release reference in `../openai-codex-src` |
+| Codex source commit | `44918ea10c0f99151c6710411b4322c2f5c96bea` | Exact peeled commit for `rust-v0.144.1` |
+| Codex source timestamp | `2026-07-09T15:10:27-07:00` | Release commit timestamp |
 | Codex-Rosetta package version | `0.144.0.r0` | First Rosetta patch for Codex `0.144.0` |
 | Codex-Rosetta review snapshot | HEAD `eb947426572ad7658c4b5ad19688fa68659a06b6` plus uncommitted work | Seventh-round repair close observed 86 tracked modified files, 20 untracked files, and a tracked diff of 4,757 additions / 1,175 deletions |
 
-This is a dirty inspection snapshot, not a clean reproducible release revision. The `0.144.0` compatibility decision is **pending / not approved** until every triggered live gate passes against an exact clean Codex-Rosetta commit. The Codex CLI release version, Codex source commit, Codex-Rosetta source version, and Codex-Rosetta commit remain independent compatibility identifiers.
+This is a dirty inspection snapshot, not a clean reproducible release revision. The `0.144.1` reference review and the earlier `0.144.0` compatibility decision are **pending / not approved** until every triggered live gate passes against an exact clean Codex-Rosetta commit. The Codex CLI release version, Codex source commit, Codex-Rosetta source version, and Codex-Rosetta commit remain independent compatibility identifiers. See [`reports/20260712-codex-v0.144.1.md`](reports/20260712-codex-v0.144.1.md) for the scoped source review and remaining gates.
 
 ## Recorded verification results (partial)
 
