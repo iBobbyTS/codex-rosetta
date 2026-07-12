@@ -349,6 +349,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "renderToolProfileInputs(item)" in html
     assert "updateToolProfileInput" in html
     assert "input.type === 'password'" in html
+    assert "input.type === 'select'" in html
+    assert "option.value === value" in html
+    assert "${esc(option.label)}" in html
+    assert '<select class="tool-profile-input"' in html
     assert "inputs: toolProfileInputDraft" in html
     assert "tools.description.request_user_input" in html
     assert "tools.description.create_goal" in html

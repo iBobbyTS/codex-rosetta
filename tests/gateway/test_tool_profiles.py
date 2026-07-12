@@ -54,7 +54,7 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     assert contract["builtin"]["injection.claude_code.read"] == "injected"
 
 
-def test_function_profile_inputs_support_multiple_text_and_password_values(monkeypatch):
+def test_function_profile_inputs_support_text_password_and_select_values(monkeypatch):
     catalog = copy.deepcopy(load_tool_catalog())
     function_item = next(
         item for item in catalog["items"] if item["id"] == "function.update_plan"
@@ -72,6 +72,16 @@ def test_function_profile_inputs_support_multiple_text_and_password_values(monke
             "default": "",
             "placeholder_i18n": "tools.input.tokenPlaceholder",
         },
+        {
+            "id": "quality",
+            "label_i18n": "tools.input.quality",
+            "type": "select",
+            "default": "standard",
+            "options": [
+                {"value": "standard", "label": "Standard"},
+                {"value": "hd", "label": "HD"},
+            ],
+        },
     ]
     monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
     tool_profiles_module.tool_profile_contract.cache_clear()
@@ -80,6 +90,7 @@ def test_function_profile_inputs_support_multiple_text_and_password_values(monke
         assert contract["readonly"]["builtin"]["inputs"]["function.update_plan"] == {
             "endpoint": "https://example.test/v1",
             "token": "",
+            "quality": "standard",
         }
         assert contract["input_definitions"]["function.update_plan"]["token"] == {
             "id": "token",
@@ -87,6 +98,16 @@ def test_function_profile_inputs_support_multiple_text_and_password_values(monke
             "type": "password",
             "default": "",
             "placeholder_i18n": "tools.input.tokenPlaceholder",
+        }
+        assert contract["input_definitions"]["function.update_plan"]["quality"] == {
+            "id": "quality",
+            "label_i18n": "tools.input.quality",
+            "type": "select",
+            "default": "standard",
+            "options": [
+                {"value": "standard", "label": "Standard"},
+                {"value": "hd", "label": "HD"},
+            ],
         }
 
         tools = dict(contract["builtin"])
@@ -98,6 +119,7 @@ def test_function_profile_inputs_support_multiple_text_and_password_values(monke
                         "function.update_plan": {
                             "endpoint": "https://gateway.test/v1",
                             "token": "secret-token",
+                            "quality": "hd",
                         }
                     },
                 }
@@ -106,7 +128,69 @@ def test_function_profile_inputs_support_multiple_text_and_password_values(monke
         assert documents["custom"]["inputs"]["function.update_plan"] == {
             "endpoint": "https://gateway.test/v1",
             "token": "secret-token",
+            "quality": "hd",
         }
+
+        with pytest.raises(ValueError, match="quality must be one of"):
+            normalize_tool_profile_documents(
+                {
+                    "invalid": {
+                        "tools": tools,
+                        "inputs": {"function.update_plan": {"quality": "ultra"}},
+                    }
+                }
+            )
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("definition", "message"),
+    [
+        (
+            {"type": "select", "default": "x"},
+            "select options must be a non-empty list",
+        ),
+        (
+            {
+                "type": "select",
+                "default": "missing",
+                "options": [{"value": "x", "label": "X"}],
+            },
+            "select default must match an option value",
+        ),
+        (
+            {
+                "type": "select",
+                "default": "x",
+                "options": [
+                    {"value": "x", "label": "X"},
+                    {"value": "x", "label": "Duplicate"},
+                ],
+            },
+            "duplicate select option value",
+        ),
+    ],
+)
+def test_function_profile_select_definition_validation(
+    monkeypatch, definition, message
+):
+    catalog = copy.deepcopy(load_tool_catalog())
+    function_item = next(
+        item for item in catalog["items"] if item["id"] == "function.update_plan"
+    )
+    function_item["profile_inputs"] = [
+        {
+            "id": "mode",
+            "label_i18n": "tools.input.mode",
+            **definition,
+        }
+    ]
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        with pytest.raises(ValueError, match=message):
+            tool_profiles_module.tool_profile_contract()
     finally:
         tool_profiles_module.tool_profile_contract.cache_clear()
 
