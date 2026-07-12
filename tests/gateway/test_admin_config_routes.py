@@ -777,7 +777,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert body["tool_profile_presets"] == [
-        {"id": "builtin", "name": "Built-in"},
+        {"id": "builtin", "name": "Chat Default"},
         {"id": "responses_pass_through", "name": "Responses pass through"},
         {
             "id": "responses_web_run_mapping",

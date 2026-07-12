@@ -18,6 +18,7 @@ from ...config import (
 from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
+    normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     normalize_tool_profiles,
     tool_profile_contract,
@@ -307,6 +308,9 @@ async def get_config(request: Any) -> Response:
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
     model_groups = _normalize_model_groups_for_admin(raw_model_groups, providers)
     tool_profiles = normalize_tool_profile_documents(raw.get("tool_profiles"))
+    tool_profile_input_overrides = normalize_tool_profile_input_overrides(
+        raw.get("tool_profile_input_overrides")
+    )
 
     config: GatewayConfig = request.app.gateway_config
     server = _mask_server_config(raw.get("server", {}))
@@ -318,6 +322,7 @@ async def get_config(request: Any) -> Response:
             "models": models_normalized,
             "model_groups": model_groups,
             "tool_profiles": tool_profiles,
+            "tool_profile_input_overrides": tool_profile_input_overrides,
             "tool_profile_presets": [
                 {"id": profile["id"], "name": profile["name"]}
                 for profile in tool_profile_contract()["profiles"]

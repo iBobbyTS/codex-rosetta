@@ -75,8 +75,8 @@ multi_agent_v1.spawn_agent -> spawn_agent
 
 Function 或 Hosted 目录项可以声明多组 `profile_inputs`。每组包含稳定 ID、本地化小标题、默认值，以及 `text`、`password` 或 `select` 输入类型。Select 使用有序的 `{value, label}` 选项：工具页面显示 label，并将 value 保存进 Profile。工具页面会按照目录中的声明顺序，在工具状态选择器下方渲染这些输入项。`web_search` 和 `web.run` 卡片分别保存自己的搜索 Provider 与 Token；目前 Provider 只支持 Tavily。原先独立的 Web Search 设置页签已移除。
 
-输入项可以通过 `visible_when` 声明需要显示的工具状态，例如 `["modified"]`。输入项隐藏后，其已保存的 Profile 值不会被清除。卡片 description 默认在该工具支持的所有状态下显示；条目可以使用相同状态列表格式的 `description_visible_when` 自定义显示条件。内置 `web_search`、`web.run` 和 `image_gen.imagegen` 的设置项只在状态为 Modified 时显示。
+输入项可以通过 `visible_when` 声明需要显示的工具状态，例如 `["modified"]`。输入项隐藏后，其已保存的 Profile 值不会被清除。卡片 description 默认在该工具支持的所有状态下显示；条目可以使用相同状态列表格式的 `description_visible_when` 自定义显示条件。内置 `request_user_input`、`create_goal` 和 `update_goal` 的 description，以及 `web_search`、`web.run` 和 `image_gen.imagegen` 的设置项，都只在状态为 Modified 时显示。
 
 工具页面首次加载时会默认展开所有 Namespace 行。该展示状态与 Namespace 在 Profile 中的状态无关，用户仍可在当前页面手动折叠。
 
-用户填写的值随 Profile 保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前值；切换或重置 Profile 时会恢复已保存的值。只读的打包 Profile 会显示声明的默认值，但不能编辑。输入项只有被对应运行时功能读取后才会生效；当前 `image_gen.imagegen` 在设为 Modified 时会读取其 Base URL 和 Token。
+用户填写的值随用户 Profile 保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前值；切换或重置 Profile 时会恢复已保存的值。所有打包的内置 Profile 也允许编辑并显式保存这些 field；保存值写入 `tool_profile_input_overrides.<profile-id>`，不会改写打包 JSON。内置 Profile 的工具传递状态仍保持只读。输入项只有被对应运行时功能读取后才会生效；当前 `image_gen.imagegen` 在设为 Modified 时会读取其 Base URL 和 Token。

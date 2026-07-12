@@ -23,6 +23,7 @@ from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
     RESPONSES_PASS_THROUGH_TOOL_PROFILE,
+    normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
     resolve_tool_profile_inputs,
@@ -504,6 +505,9 @@ class GatewayConfig:
         self.tool_profile_documents = normalize_tool_profile_documents(
             raw.get("tool_profiles")
         )
+        self.tool_profile_input_overrides = normalize_tool_profile_input_overrides(
+            raw.get("tool_profile_input_overrides")
+        )
         self.tool_profiles = {
             name: profile["tools"]
             for name, profile in self.tool_profile_documents.items()
@@ -864,7 +868,9 @@ class GatewayConfig:
             ),
             tool_profile_inputs=(
                 resolve_tool_profile_inputs(
-                    tool_profile_name, self.tool_profile_documents
+                    tool_profile_name,
+                    self.tool_profile_documents,
+                    self.tool_profile_input_overrides,
                 )
                 if tool_profile_name is not None
                 else {}
