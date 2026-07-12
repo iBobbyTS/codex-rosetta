@@ -77,6 +77,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
             "label_i18n": "tools.input.quality",
             "type": "select",
             "default": "standard",
+            "visible_when": ["disabled"],
             "options": [
                 {"value": "standard", "label": "Standard"},
                 {"value": "hd", "label": "HD"},
@@ -104,6 +105,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
             "label_i18n": "tools.input.quality",
             "type": "select",
             "default": "standard",
+            "visible_when": ["disabled"],
             "options": [
                 {"value": "standard", "label": "Standard"},
                 {"value": "hd", "label": "HD"},
@@ -170,6 +172,14 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
             },
             "duplicate select option value",
         ),
+        (
+            {"type": "text", "visible_when": ["modified"]},
+            "visible_when contains unsupported states",
+        ),
+        (
+            {"type": "text", "visible_when": "disabled"},
+            "visible_when must be a list of strings",
+        ),
     ],
 )
 def test_function_profile_select_definition_validation(
@@ -190,6 +200,27 @@ def test_function_profile_select_definition_validation(
     tool_profiles_module.tool_profile_contract.cache_clear()
     try:
         with pytest.raises(ValueError, match=message):
+            tool_profiles_module.tool_profile_contract()
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
+
+
+def test_description_visibility_defaults_to_all_states_and_supports_override(
+    monkeypatch,
+):
+    catalog = copy.deepcopy(load_tool_catalog())
+    item = next(
+        item for item in catalog["items"] if item["id"] == "function.request_user_input"
+    )
+    assert "description_visible_when" not in item
+    item["description_visible_when"] = ["modified"]
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        tool_profiles_module.tool_profile_contract()
+        item["description_visible_when"] = ["expanded"]
+        tool_profiles_module.tool_profile_contract.cache_clear()
+        with pytest.raises(ValueError, match="contains unsupported states"):
             tool_profiles_module.tool_profile_contract()
     finally:
         tool_profiles_module.tool_profile_contract.cache_clear()
