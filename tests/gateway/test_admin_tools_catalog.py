@@ -198,7 +198,11 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["metadata"]["schema_version"] == 2
     assert catalog["metadata"]["codex_cli_version"] == "0.144.0"
     assert catalog["metadata"]["profile_selection"] == "model_group"
-    assert catalog["builtin_profile"] == {"id": "builtin", "name": "Chat Default"}
+    assert catalog["builtin_profile"] == {
+        "id": "builtin",
+        "name": "Chat Default",
+        "tools": {"namespace.multi_agent_v1": "disabled"},
+    }
     assert [profile["id"] for profile in catalog["preset_profiles"]] == [
         "responses_pass_through",
         "responses_web_run_mapping",
@@ -300,6 +304,12 @@ def test_catalog_defaults_and_namespace_image_policy():
     }
 
     builtin = tool_profile_contract()["builtin"]
+    assert builtin["namespace.multi_agent_v1"] == "disabled"
+    assert all(
+        builtin[child_id] == "disabled"
+        for child_id in _namespaces["namespace.multi_agent_v1"]
+    )
+    assert builtin["namespace.multi_agent_v2"] == "expanded"
     assert builtin["function.exec_command"] == "passthrough"
     assert builtin["function.write_stdin"] == "passthrough"
     assert builtin["function.shell_command"] == "disabled"
@@ -389,7 +399,13 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "saveToolProfileBtn').disabled = !toolProfileDirty" in html
     assert "if (currentToolProfile()?.readonly) return;" in html
     assert "if (!profile || profile.readonly)" not in html
-    assert html.count("const disabled = currentToolProfile()?.readonly") == 1
+    assert "namespaceDisabled" in html
+    assert "toolProfileDraft[item.namespace_id] === 'disabled'" in html
+    assert (
+        "for (const childId of childIds) toolProfileDraft[childId] = 'disabled';"
+        in html
+    )
+    assert "currentToolProfile()?.readonly || namespaceDisabled" in html
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
     assert "option.value === value" in html

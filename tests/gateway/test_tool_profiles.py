@@ -49,11 +49,35 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         "expanded",
     )
     assert contract["builtin"]["namespace.clock"] == "expanded"
+    assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
+    assert all(
+        contract["builtin"][child_id] == "disabled"
+        for child_id in contract["namespace_children"]["namespace.multi_agent_v1"]
+    )
     assert contract["supported"]["injection.claude_code.read"] == (
         "disabled",
         "injected",
     )
     assert contract["builtin"]["injection.claude_code.read"] == "injected"
+
+
+def test_disabled_namespace_forces_all_child_states_to_disabled():
+    tools = dict(tool_profile_contract()["builtin"])
+    tools["namespace.multi_agent_v2"] = "disabled"
+    for child_id in tool_profile_contract()["namespace_children"][
+        "namespace.multi_agent_v2"
+    ]:
+        tools[child_id] = "passthrough"
+
+    documents = normalize_tool_profile_documents({"custom": {"tools": tools}})
+
+    assert documents["custom"]["tools"]["namespace.multi_agent_v2"] == "disabled"
+    assert all(
+        documents["custom"]["tools"][child_id] == "disabled"
+        for child_id in tool_profile_contract()["namespace_children"][
+            "namespace.multi_agent_v2"
+        ]
+    )
 
 
 def test_function_profile_inputs_support_text_password_and_select_values(monkeypatch):

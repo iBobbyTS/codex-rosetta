@@ -205,6 +205,64 @@ def _profile_input_contract(
     return definitions
 
 
+def _disable_namespace_children(
+    tools: dict[str, str], namespace_children: dict[str, tuple[str, ...]]
+) -> dict[str, str]:
+    """Force every child of a disabled Namespace to Disabled."""
+    normalized = dict(tools)
+    for namespace_id, child_ids in namespace_children.items():
+        if normalized.get(namespace_id) == "disabled":
+            for child_id in child_ids:
+                normalized[child_id] = "disabled"
+    return normalized
+
+
+def _namespace_children_contract(
+    catalog: dict[str, Any], supported: dict[str, tuple[str, ...]]
+) -> dict[str, tuple[str, ...]]:
+    """Validate and return the configured Namespace-to-child relationships."""
+    namespace_children = {
+        placement["namespace_id"]: tuple(placement["child_ids"])
+        for placement in catalog.get("placements", {}).get("namespaces", [])
+    }
+    for namespace_id, child_ids in namespace_children.items():
+        if namespace_id not in supported:
+            raise ValueError(f"unknown Namespace catalog ID {namespace_id!r}")
+        for child_id in child_ids:
+            if child_id not in supported:
+                raise ValueError(
+                    f"Namespace {namespace_id!r} contains unknown child {child_id!r}"
+                )
+            if "disabled" not in supported[child_id]:
+                raise ValueError(
+                    f"Namespace child {child_id!r} must support the disabled state"
+                )
+    return namespace_children
+
+
+def _apply_bundled_tool_overrides(
+    field: str,
+    tools: dict[str, str],
+    overrides: Any,
+    supported: dict[str, tuple[str, ...]],
+    namespace_children: dict[str, tuple[str, ...]],
+) -> dict[str, str]:
+    """Validate bundled overrides and enforce Namespace child states."""
+    if not isinstance(overrides, dict):
+        raise ValueError(f"{field} must be an object")
+    unknown_ids = sorted(set(overrides) - set(supported))
+    if unknown_ids:
+        raise ValueError(f"{field} contains unknown catalog IDs: {unknown_ids}")
+    merged = dict(tools)
+    for item_id, state in overrides.items():
+        if state not in supported[item_id]:
+            raise ValueError(
+                f"{field}.{item_id} must be one of {list(supported[item_id])}"
+            )
+        merged[item_id] = state
+    return _disable_namespace_children(merged, namespace_children)
+
+
 @lru_cache(maxsize=1)
 def tool_profile_contract() -> dict[str, Any]:
     """Return supported states and the immutable bundled profiles."""
@@ -235,6 +293,18 @@ def tool_profile_contract() -> dict[str, Any]:
         supported[item_id] = states
         builtin[item_id] = policy["default"]
 
+    namespace_children = _namespace_children_contract(catalog, supported)
+
+    builtin_profile = dict(catalog["builtin_profile"])
+    builtin_overrides = builtin_profile.pop("tools", {})
+    builtin = _apply_bundled_tool_overrides(
+        "builtin_profile.tools",
+        builtin,
+        builtin_overrides,
+        supported,
+        namespace_children,
+    )
+
     input_definitions = _profile_input_contract(catalog, supported)
     for item in catalog["items"]:
         description_visible_when = item.get("description_visible_when")
@@ -254,7 +324,7 @@ def tool_profile_contract() -> dict[str, Any]:
 
     profiles = [
         {
-            **dict(catalog["builtin_profile"]),
+            **builtin_profile,
             "tools": dict(builtin),
             "inputs": {
                 item_id: {
@@ -278,6 +348,7 @@ def tool_profile_contract() -> dict[str, Any]:
                     f"{state!r} for {item_id}"
                 )
             tools[item_id] = state
+        tools = _disable_namespace_children(tools, namespace_children)
         profiles.append(
             {
                 "id": preset["id"],
@@ -298,6 +369,7 @@ def tool_profile_contract() -> dict[str, Any]:
         "supported": supported,
         "builtin": builtin,
         "input_definitions": input_definitions,
+        "namespace_children": namespace_children,
         "readonly": {profile["id"]: profile for profile in profiles},
     }
 
@@ -339,7 +411,7 @@ def normalize_tool_profile_tools(value: Any, *, field: str) -> dict[str, str]:
                 f"{field}.tools.{item_id} must be one of {list(supported[item_id])}"
             )
         normalized[item_id] = state
-    return normalized
+    return _disable_namespace_children(normalized, contract["namespace_children"])
 
 
 def normalize_tool_profile_inputs(
