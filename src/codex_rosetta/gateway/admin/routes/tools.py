@@ -12,8 +12,9 @@ from ...config import (
     provider_supports_tool_profiles,
 )
 from ...tool_profiles import (
+    normalize_tool_profile_documents,
+    normalize_tool_profile_inputs,
     normalize_tool_profile_tools,
-    normalize_tool_profiles,
     tool_profile_contract,
     tool_profiles_for_admin,
     validate_tool_profile_name,
@@ -68,7 +69,7 @@ async def get_tool_profiles(request: Any) -> Response:
         return loaded
     _config_path, data = loaded
     try:
-        profiles = normalize_tool_profiles(data.get("tool_profiles"))
+        profiles = normalize_tool_profile_documents(data.get("tool_profiles"))
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -99,6 +100,9 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
         tools = normalize_tool_profile_tools(
             body.get("tools"), field=f"tool profile '{name}'"
         )
+        inputs = normalize_tool_profile_inputs(
+            body.get("inputs"), field=f"tool profile '{name}'"
+        )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -111,7 +115,7 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
         return JSONResponse(
             {"error": "'tool_profiles' must be an object"}, status_code=400
         )
-    profiles[name] = {"tools": tools}
+    profiles[name] = {"tools": tools, "inputs": inputs}
     _config, error = _commit_gateway_config(request, config_path, data)
     if error is not None:
         return error

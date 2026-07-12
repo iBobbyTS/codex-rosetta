@@ -10,12 +10,102 @@ from .admin.tool_catalog import load_tool_catalog
 BUILTIN_TOOL_PROFILE = "builtin"
 RESPONSES_PASS_THROUGH_TOOL_PROFILE = "responses_pass_through"
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
+MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
+
+
+def _normalize_profile_input_definition(
+    item_id: str,
+    value: Any,
+    existing_ids: set[str],
+) -> tuple[str, dict[str, Any]]:
+    """Validate one catalog-declared Function-card input definition."""
+    if not isinstance(value, dict):
+        raise ValueError(f"catalog item {item_id!r} profile input must be an object")
+    unsupported = set(value) - {
+        "id",
+        "label_i18n",
+        "default",
+        "type",
+        "placeholder_i18n",
+    }
+    if unsupported:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input has unsupported fields: "
+            f"{sorted(unsupported)}"
+        )
+    input_id = value.get("id")
+    if not isinstance(input_id, str) or not input_id:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input id must be a non-empty string"
+        )
+    if input_id in existing_ids:
+        raise ValueError(
+            f"catalog item {item_id!r} has duplicate profile input {input_id!r}"
+        )
+    label_i18n = value.get("label_i18n")
+    if not isinstance(label_i18n, str) or not label_i18n:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "label_i18n must be a non-empty string"
+        )
+    default = value.get("default", "")
+    if not isinstance(default, str):
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "default must be a string"
+        )
+    if len(default) > MAX_TOOL_PROFILE_INPUT_LENGTH:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            f"default exceeds {MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
+        )
+    input_type = value.get("type", "text")
+    if input_type not in {"text", "password"}:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "type must be 'text' or 'password'"
+        )
+    placeholder_i18n = value.get("placeholder_i18n")
+    if placeholder_i18n is not None and (
+        not isinstance(placeholder_i18n, str) or not placeholder_i18n
+    ):
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "placeholder_i18n must be a non-empty string"
+        )
+    return input_id, dict(value, default=default, type=input_type)
+
+
+def _profile_input_contract(catalog: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Return validated Function-card input definitions keyed by tool and input ID."""
+    definitions: dict[str, dict[str, Any]] = {}
+    for item in catalog["items"]:
+        raw_inputs = item.get("profile_inputs", [])
+        if not isinstance(raw_inputs, list):
+            raise ValueError(
+                f"catalog item {item['id']!r} profile_inputs must be a list"
+            )
+        if raw_inputs and item["type"] != "function":
+            raise ValueError(
+                f"catalog item {item['id']!r} profile_inputs are only supported "
+                "for Function tools"
+            )
+        item_inputs: dict[str, Any] = {}
+        for raw_input in raw_inputs:
+            input_id, input_definition = _normalize_profile_input_definition(
+                item["id"], raw_input, set(item_inputs)
+            )
+            item_inputs[input_id] = input_definition
+        if item_inputs:
+            definitions[item["id"]] = item_inputs
+    return definitions
 
 
 @lru_cache(maxsize=1)
 def tool_profile_contract() -> dict[str, Any]:
     """Return supported states and the immutable bundled profiles."""
     catalog = load_tool_catalog()
+    input_definitions = _profile_input_contract(catalog)
     policies = {policy["id"]: policy for policy in catalog["policies"]}
     supported: dict[str, tuple[str, ...]] = {}
     builtin: dict[str, str] = {}
@@ -46,6 +136,13 @@ def tool_profile_contract() -> dict[str, Any]:
         {
             **dict(catalog["builtin_profile"]),
             "tools": dict(builtin),
+            "inputs": {
+                item_id: {
+                    input_id: definition["default"]
+                    for input_id, definition in item_inputs.items()
+                }
+                for item_id, item_inputs in input_definitions.items()
+            },
         }
     ]
     for preset in catalog.get("preset_profiles", []):
@@ -66,6 +163,13 @@ def tool_profile_contract() -> dict[str, Any]:
                 "id": preset["id"],
                 "name": preset["name"],
                 "tools": tools,
+                "inputs": {
+                    item_id: {
+                        input_id: definition["default"]
+                        for input_id, definition in item_inputs.items()
+                    }
+                    for item_id, item_inputs in input_definitions.items()
+                },
             }
         )
 
@@ -73,6 +177,7 @@ def tool_profile_contract() -> dict[str, Any]:
         "profiles": profiles,
         "supported": supported,
         "builtin": builtin,
+        "input_definitions": input_definitions,
         "readonly": {profile["id"]: profile for profile in profiles},
     }
 
@@ -117,28 +222,88 @@ def normalize_tool_profile_tools(value: Any, *, field: str) -> dict[str, str]:
     return normalized
 
 
-def normalize_tool_profiles(value: Any) -> dict[str, dict[str, str]]:
-    """Validate user-defined profiles from the top-level config object."""
+def normalize_tool_profile_inputs(
+    value: Any, *, field: str
+) -> dict[str, dict[str, str]]:
+    """Validate and fill Function-card input values from the bundled defaults."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field}.inputs must be an object")
+
+    definitions: dict[str, dict[str, Any]] = tool_profile_contract()[
+        "input_definitions"
+    ]
+    unknown_items = sorted(set(value) - set(definitions))
+    if unknown_items:
+        raise ValueError(
+            f"{field}.inputs contains unknown catalog IDs: {unknown_items}"
+        )
+
+    normalized: dict[str, dict[str, str]] = {}
+    for item_id, item_definitions in definitions.items():
+        raw_item_values = value.get(item_id, {})
+        if not isinstance(raw_item_values, dict):
+            raise ValueError(f"{field}.inputs.{item_id} must be an object")
+        unknown_inputs = sorted(set(raw_item_values) - set(item_definitions))
+        if unknown_inputs:
+            raise ValueError(
+                f"{field}.inputs.{item_id} contains unknown input IDs: {unknown_inputs}"
+            )
+        normalized[item_id] = {}
+        for input_id, definition in item_definitions.items():
+            input_value = raw_item_values.get(input_id, definition["default"])
+            if not isinstance(input_value, str):
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be a string"
+                )
+            if len(input_value) > MAX_TOOL_PROFILE_INPUT_LENGTH:
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be at most "
+                    f"{MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
+                )
+            normalized[item_id][input_id] = input_value
+    return normalized
+
+
+def normalize_tool_profile_documents(
+    value: Any,
+) -> dict[str, dict[str, Any]]:
+    """Validate complete persisted Profile documents for Admin editing."""
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise ValueError("config: 'tool_profiles' must be an object")
 
-    profiles: dict[str, dict[str, str]] = {}
+    profiles: dict[str, dict[str, Any]] = {}
     for raw_name, raw_profile in value.items():
         name = validate_tool_profile_name(raw_name)
         if not isinstance(raw_profile, dict):
             raise ValueError(f"config: tool_profiles.{name} must be an object")
-        unsupported_fields = set(raw_profile) - {"tools"}
+        unsupported_fields = set(raw_profile) - {"tools", "inputs"}
         if unsupported_fields:
             raise ValueError(
                 f"config: tool_profiles.{name} has unsupported fields: "
                 f"{sorted(unsupported_fields)}"
             )
-        profiles[name] = normalize_tool_profile_tools(
-            raw_profile.get("tools"), field=f"config: tool_profiles.{name}"
-        )
+        field = f"config: tool_profiles.{name}"
+        profiles[name] = {
+            "tools": normalize_tool_profile_tools(
+                raw_profile.get("tools"), field=field
+            ),
+            "inputs": normalize_tool_profile_inputs(
+                raw_profile.get("inputs"), field=field
+            ),
+        }
     return profiles
+
+
+def normalize_tool_profiles(value: Any) -> dict[str, dict[str, str]]:
+    """Validate user-defined profiles from the top-level config object."""
+    return {
+        name: profile["tools"]
+        for name, profile in normalize_tool_profile_documents(value).items()
+    }
 
 
 def resolve_tool_profile(
@@ -169,7 +334,7 @@ def validate_tool_profile_reference(
 
 
 def tool_profiles_for_admin(
-    profiles: dict[str, dict[str, str]],
+    profiles: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """Build the ordered public representation consumed by the Admin UI."""
     contract = tool_profile_contract()
@@ -178,13 +343,24 @@ def tool_profiles_for_admin(
             "id": profile["id"],
             "name": profile["name"],
             "tools": dict(profile["tools"]),
+            "inputs": {
+                item_id: dict(values) for item_id, values in profile["inputs"].items()
+            },
             "readonly": True,
         }
         for profile in contract["profiles"]
     ]
     result.extend(
-        {"id": name, "name": name, "tools": dict(tools), "readonly": False}
-        for name, tools in sorted(profiles.items())
+        {
+            "id": name,
+            "name": name,
+            "tools": dict(profile["tools"]),
+            "inputs": {
+                item_id: dict(values) for item_id, values in profile["inputs"].items()
+            },
+            "readonly": False,
+        }
+        for name, profile in sorted(profiles.items())
     )
     return result
 

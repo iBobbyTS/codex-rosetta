@@ -18,6 +18,7 @@ from ...config import (
 from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
+    normalize_tool_profile_documents,
     normalize_tool_profiles,
     tool_profile_contract,
     validate_tool_profile_reference,
@@ -339,7 +340,7 @@ async def get_config(request: Any) -> Response:
     expanded_raw_models = GatewayConfig._expand_model_groups(raw_model_groups)
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
     model_groups = _normalize_model_groups_for_admin(raw_model_groups, providers)
-    tool_profiles = normalize_tool_profiles(raw.get("tool_profiles"))
+    tool_profiles = normalize_tool_profile_documents(raw.get("tool_profiles"))
 
     config: GatewayConfig = request.app.gateway_config
     server = _mask_server_config(raw.get("server", {}))
@@ -350,9 +351,7 @@ async def get_config(request: Any) -> Response:
             "providers": masked_providers,
             "models": models_normalized,
             "model_groups": model_groups,
-            "tool_profiles": {
-                name: {"tools": dict(tools)} for name, tools in tool_profiles.items()
-            },
+            "tool_profiles": tool_profiles,
             "tool_profile_presets": [
                 {"id": profile["id"], "name": profile["name"]}
                 for profile in tool_profile_contract()["profiles"]

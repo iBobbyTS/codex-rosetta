@@ -195,7 +195,7 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 1
+    assert catalog["metadata"]["schema_version"] == 2
     assert catalog["metadata"]["codex_cli_version"] == "0.144.0"
     assert catalog["metadata"]["profile_selection"] == "model_group"
     assert catalog["builtin_profile"] == {"id": "builtin", "name": "Built-in"}
@@ -325,6 +325,11 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert 'type="checkbox"' not in page
     assert "tools.disabledHint" in page
     assert "item.description_i18n" in html
+    assert "item.profile_inputs" in html
+    assert "renderToolProfileInputs(item)" in html
+    assert "updateToolProfileInput" in html
+    assert "input.type === 'password'" in html
+    assert "inputs: toolProfileInputDraft" in html
     assert "tools.description.request_user_input" in html
     assert "tools.description.create_goal" in html
     assert "tools.description.update_goal" in html
@@ -391,11 +396,23 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 app,
                 "PUT",
                 "/admin/api/tools/profiles/restricted",
-                {"tools": tools},
+                {"tools": tools, "inputs": {}},
             )
         )
     )
     assert response.status_code == 200
+
+    response = asyncio.run(
+        app._dispatch(_api_request(app, "GET", "/admin/api/tools/profiles"))
+    )
+    restricted = next(
+        profile
+        for profile in json.loads(getattr(response, "body"))["profiles"]
+        if profile["id"] == "restricted"
+    )
+    assert restricted["inputs"] == {}
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["tool_profiles"]["restricted"]["inputs"] == {}
 
     response = asyncio.run(
         app._dispatch(

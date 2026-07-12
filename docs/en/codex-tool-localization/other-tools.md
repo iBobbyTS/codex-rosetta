@@ -70,3 +70,9 @@ The important behavior is that tool calls must survive the round trip:
 **OpenAI Responses (Tool Mapping only)** supports Tool Profiles while keeping the rest of the Responses request and response on the direct path. The bundled **Responses pass through** Profile preserves incoming tools; **Responses web.run mapping** changes only `web.run` so `/v1/alpha/search` uses Rosetta's local mapping. Responses Rosetta, Chat, Anthropic, and Google model groups continue to support Profile selection and processing.
 
 The bundled Profiles manage current Codex image generation through `image_gen.imagegen`. They do not contain the obsolete hosted `image_generation` tool.
+
+### Function Card Inputs
+
+A Function catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text` or `password` input type. The Tools page renders the entries in catalog order beneath the Function status selector.
+
+User-entered values are saved with the Profile under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current values into the new Profile; switching or resetting a Profile restores its saved values. Read-only bundled Profiles expose their declared defaults without allowing edits. This input mechanism only persists Function-specific settings; a runtime feature must explicitly consume a setting before it changes gateway behavior.

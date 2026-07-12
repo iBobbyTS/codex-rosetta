@@ -183,7 +183,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Responses→Responses Tool Mapping only applies the selected Profile, retains unknown non-tool fields and preserves original response JSON/SSE bytes below the transport safety envelope, while Rosetta mode selects Responses→IR→Responses without changing the wire protocol;
 - header allowlist; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
-- Verify model-group Tool Profiles on Tool Mapping only, Responses Rosetta, Chat, Anthropic, and Google routes, including Disabled filtering, Modified handling, Namespace pass-through/expansion, Rosetta injection selection, and all bundled defaults; verify Responses pass through preserves native tools and Responses web.run mapping changes only `web.run` endpoint handling;
+- Verify model-group Tool Profiles on Tool Mapping only, Responses Rosetta, Chat, Anthropic, and Google routes, including Disabled filtering, Modified handling, multiple Function text/password input persistence, Namespace pass-through/expansion, Rosetta injection selection, and all bundled defaults; verify Responses pass through preserves native tools and Responses web.run mapping changes only `web.run` endpoint handling;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
 - The order of `response.created`, item added/delta/done, completed/failed/incomplete;
@@ -212,7 +212,7 @@ The following behavior can be automatically verified using the fixed Codex reque
   former 50 MB ceiling;
 - `/v1/models` current universal response, and future separately implemented Codex `ModelInfo` catalog contract;
 - Configuration/admin UI saving, defaults and runtime loading of Codex tool-adaptation switches.
-- Static tool-catalog contract: unique IDs, valid placement/policy references, required fixed tools, excluded dynamic tools and obsolete hosted `image_generation`, current `image_gen.imagegen` coverage, Built-in Profile defaults, supported states, and exact CLI/source metadata binding.
+- Static tool-catalog contract: unique IDs, valid placement/policy references, required fixed tools, Function input IDs/types/defaults/localization keys, excluded dynamic tools and obsolete hosted `image_generation`, current `image_gen.imagegen` coverage, Built-in Profile defaults, supported states, and exact CLI/source metadata binding.
 
 New fixture/component coverage in this round:
 
