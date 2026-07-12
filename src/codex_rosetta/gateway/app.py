@@ -58,6 +58,7 @@ from .proxy import (
 )
 from .state_scope import GatewayStateScope
 from .tool_adaptation import CodexToolLocalizationStore
+from .transport._base import UpstreamNetworkError
 
 logger = get_logger()
 
@@ -255,6 +256,15 @@ class _InstrumentedStream:
             finally:
                 self._finish(499, "Stream cancelled or client disconnected")
             raise
+        except UpstreamNetworkError as exc:
+            try:
+                await self._close_source()
+            except BaseException:
+                logger.debug("Failed to close disconnected stream", exc_info=True)
+            finally:
+                self._finish(502, str(exc))
+            logger.error("Upstream stream disconnected: %s", exc)
+            raise StopAsyncIteration from None
         except Exception as exc:
             try:
                 await self._close_source()
