@@ -23,7 +23,8 @@ The network-search suite is
 [`tests/agent_workspace/network_search`](../../tests/agent_workspace/network_search/README.md).
 It verifies that the agent selects the model-facing search surface, receives a
 successful result containing an official Python documentation URL, and does not bypass the
-tool with a shell command or browser automation.
+tool with a shell command or browser automation. Its outer evaluator follows
+the suite's `EVALUATION.md` and writes `artifacts/evaluation.json`.
 
 The context-compaction suite is
 [`tests/agent_workspace/context_compaction`](../../tests/agent_workspace/context_compaction/README.md).
@@ -80,8 +81,12 @@ the same final marker.
 
 For network-search tasks, confirm at least one model-facing search call, a
 non-error search result satisfying the task, and the absence of prohibited
-command or browser calls. Record whether the model used a namespace function,
-a hosted tool, or a Rosetta-translated bridge.
+command or browser calls. The final `web.run` versus `web_search`
+classification must come from Rosetta Gateway Logs. Do not infer it from the
+Codex CLI item type because Codex displays both paths as `web_search`.
+Responses-to-Chat localization and Tavily execution remain a `web_search`
+surface; record Tavily separately as the executor. Missing or inconclusive
+Gateway Logs make the surface `ambiguous` and the run cannot pass.
 
 For context-compaction tasks, require a genuine `compaction_trigger` input item
 in the Gateway Logs trace. Classify the run as completed, error reproduced, or

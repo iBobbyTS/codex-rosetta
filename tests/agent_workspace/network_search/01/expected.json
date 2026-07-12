@@ -5,6 +5,11 @@
   "expected_native_pattern": {
     "network_search_calls_min": 1,
     "successful_search_result_required": true,
+    "gateway_log_evidence_required": true,
+    "search_surface_required": [
+      "web.run",
+      "web_search"
+    ],
     "command_calls_max": 0,
     "browser_calls_max": 0
   }
