@@ -42,6 +42,39 @@ MAX_UPSTREAM_ERROR_BODY_BYTES = 1_000_000
 MAX_UPSTREAM_SSE_LINE_BYTES = 1024 * 1024
 MAX_UPSTREAM_SSE_EVENT_BYTES = 8 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
+DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS = 30.0
+DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS = 60.0
+DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS = 2.0
+
+
+def _consume_background_task_result(task: asyncio.Task[Any]) -> None:
+    """Drain a detached cleanup task without surfacing its terminal exception."""
+    try:
+        task.result()
+    except BaseException:
+        pass
+
+
+async def _await_with_deadline(
+    awaitable: Any,
+    *,
+    timeout: float,
+    timeout_message: str,
+) -> Any:
+    """Wait for one operation without waiting indefinitely for cancellation cleanup."""
+    task = asyncio.create_task(awaitable)
+    try:
+        done, _pending = await asyncio.wait({task}, timeout=timeout)
+    except BaseException:
+        task.cancel()
+        task.add_done_callback(_consume_background_task_result)
+        raise
+    if task in done:
+        return task.result()
+
+    task.cancel()
+    task.add_done_callback(_consume_background_task_result)
+    raise UpstreamConnectionError(timeout_message)
 
 
 @dataclass(frozen=True)
@@ -306,11 +339,38 @@ class HttpUpstreamStream(UpstreamStream):
         *,
         error_text: str | None = None,
         response_closed: bool = False,
+        idle_timeout: float = DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS,
+        close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self.status_code = resp.status_code
         self._resp = resp
         self._error_text = error_text
         self._closed = response_closed
+        self._idle_timeout = idle_timeout
+        self._close_timeout = close_timeout
+
+    async def _next_with_idle_timeout(self, iterator: Any) -> Any:
+        """Read one upstream item and fail fast when the route becomes a black hole."""
+        try:
+            return await _await_with_deadline(
+                anext(iterator),
+                timeout=self._idle_timeout,
+                timeout_message=(
+                    "Upstream stream produced no data for "
+                    f"{self._idle_timeout:g} seconds"
+                ),
+            )
+        except UpstreamConnectionError:
+            await self.close()
+            raise
+
+    async def _iter_lines_with_idle_timeout(self) -> AsyncIterator[str]:
+        lines = self._resp.aiter_lines(max_line_bytes=MAX_UPSTREAM_SSE_LINE_BYTES)
+        while True:
+            try:
+                yield await self._next_with_idle_timeout(lines)
+            except StopAsyncIteration:
+                return
 
     async def read_error(self) -> str:
         """Read one bounded error body as a string and close the response."""
@@ -327,9 +387,8 @@ class HttpUpstreamStream(UpstreamStream):
         ``[DONE]`` marker and stops iteration.
         """
         try:
-            lines = self._resp.aiter_lines(max_line_bytes=MAX_UPSTREAM_SSE_LINE_BYTES)
             async for event in AsyncEventSource(
-                lines,
+                self._iter_lines_with_idle_timeout(),
                 max_event_bytes=MAX_UPSTREAM_SSE_EVENT_BYTES,
             ):
                 if event.data == "[DONE]":
@@ -364,7 +423,12 @@ class HttpUpstreamStream(UpstreamStream):
                 max_event_bytes=MAX_UPSTREAM_SSE_EVENT_BYTES,
             )
             try:
-                async for chunk in self._resp.aiter_bytes(chunk_size=_READ_CHUNK_BYTES):
+                raw_chunks = self._resp.aiter_bytes(chunk_size=_READ_CHUNK_BYTES)
+                while True:
+                    try:
+                        chunk = await self._next_with_idle_timeout(raw_chunks)
+                    except StopAsyncIteration:
+                        break
                     tracker.feed(chunk)
                     yield chunk
                 tracker.finish()
@@ -385,7 +449,17 @@ class HttpUpstreamStream(UpstreamStream):
         if self._closed:
             return
         self._closed = True
-        await self._resp.aclose()
+        try:
+            await _await_with_deadline(
+                self._resp.aclose(),
+                timeout=self._close_timeout,
+                timeout_message=(
+                    "Timed out closing upstream stream after "
+                    f"{self._close_timeout:g} seconds"
+                ),
+            )
+        except UpstreamConnectionError as exc:
+            logger.warning("%s", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -399,8 +473,18 @@ class HttpTransport:
     Implements the :class:`~transport._base.UpstreamTransport` protocol.
     """
 
-    def __init__(self, *, timeout: float = 300.0) -> None:
+    def __init__(
+        self,
+        *,
+        timeout: float = 300.0,
+        stream_open_timeout: float = DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS,
+        stream_idle_timeout: float = DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS,
+        close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,
+    ) -> None:
         self._pool = HttpClientPool(timeout=timeout)
+        self._stream_open_timeout = stream_open_timeout
+        self._stream_idle_timeout = stream_idle_timeout
+        self._close_timeout = close_timeout
 
     async def send_request(
         self,
@@ -466,7 +550,20 @@ class HttpTransport:
         )
         client = self._pool.get(provider_info.proxy_url)
         try:
-            resp = await client.post(url, json=req_body, headers=headers, stream=True)
+            resp = await _await_with_deadline(
+                client.post(
+                    url,
+                    json=req_body,
+                    headers=headers,
+                    stream=True,
+                    timeout=self._stream_open_timeout,
+                ),
+                timeout=self._stream_open_timeout,
+                timeout_message=(
+                    "Upstream did not open a streaming response within "
+                    f"{self._stream_open_timeout:g} seconds"
+                ),
+            )
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpClientError, ValueError) as exc:
@@ -483,8 +580,14 @@ class HttpTransport:
                 resp,
                 error_text=raw_error.decode("utf-8", errors="replace"),
                 response_closed=True,
+                idle_timeout=self._stream_idle_timeout,
+                close_timeout=self._close_timeout,
             )
-        return HttpUpstreamStream(resp)
+        return HttpUpstreamStream(
+            resp,
+            idle_timeout=self._stream_idle_timeout,
+            close_timeout=self._close_timeout,
+        )
 
     async def send_passthrough(
         self,
