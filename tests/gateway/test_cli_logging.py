@@ -70,6 +70,35 @@ def test_main_passes_selected_log_level_to_logging_setup(
     assert selected_levels == [expected_level]
 
 
+@pytest.mark.parametrize("explicit_config", [False, True])
+def test_main_initializes_missing_config_and_continues_startup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    explicit_config: bool,
+) -> None:
+    config_dir = tmp_path / ("explicit" if explicit_config else "default")
+    argv = ["codex-rosetta-gateway", "--no-banner"]
+    if explicit_config:
+        argv.extend(["--config", str(config_dir)])
+    else:
+        monkeypatch.setattr(cli, "DEFAULT_CONFIG_DIR", str(config_dir))
+    monkeypatch.setattr(cli.sys, "argv", argv)
+    monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(gateway_app, "create_app", lambda *_args, **_kwargs: object())
+    started: list[tuple[str, int]] = []
+
+    async def fake_run_gateway(_app, host, port, **_kwargs) -> None:
+        started.append((host, port))
+
+    monkeypatch.setattr(gateway_app, "run_gateway", fake_run_gateway)
+
+    cli.main()
+
+    config_path = config_dir / "config.jsonc"
+    assert config_path.is_file()
+    assert started == [("127.0.0.1", 8765)]
+
+
 @pytest.mark.parametrize("removed_option", ["--verbose", "-v"])
 def test_main_rejects_removed_verbose_option(
     monkeypatch: pytest.MonkeyPatch,

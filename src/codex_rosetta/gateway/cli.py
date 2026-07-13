@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import secrets
 import subprocess
@@ -125,19 +124,8 @@ def _write_jsonc(path: str, data: dict[str, Any]) -> None:
     write_config(path, data)
 
 
-# ---------------------------------------------------------------------------
-# Subcommands
-# ---------------------------------------------------------------------------
-
-
-def _cmd_init(args: argparse.Namespace) -> None:
-    """Create a template config.jsonc at the XDG default location."""
-    config_path = config_path_for_dir(args.config or DEFAULT_CONFIG_DIR)
-    if os.path.isfile(config_path):
-        print(f"Config already exists at {config_path}", file=sys.stderr)
-        print("Use --edit / -e to modify it, or remove it first.", file=sys.stderr)
-        sys.exit(1)
-
+def _create_initial_config(config_path: str) -> None:
+    """Create the standard secure gateway configuration at *config_path*."""
     template = {
         "providers": {
             "openai_chat": {
@@ -183,6 +171,22 @@ def _cmd_init(args: argparse.Namespace) -> None:
         "Generated a mandatory Admin password and gateway access key under "
         "server. Store them securely."
     )
+
+
+# ---------------------------------------------------------------------------
+# Subcommands
+# ---------------------------------------------------------------------------
+
+
+def _cmd_init(args: argparse.Namespace) -> None:
+    """Create a template config.jsonc at the XDG default location."""
+    config_path = config_path_for_dir(args.config or DEFAULT_CONFIG_DIR)
+    if os.path.isfile(config_path):
+        print(f"Config already exists at {config_path}", file=sys.stderr)
+        print("Use --edit / -e to modify it, or remove it first.", file=sys.stderr)
+        sys.exit(1)
+
+    _create_initial_config(config_path)
     print("Edit provider API keys, then run: codex-rosetta-gateway")
 
 
@@ -287,7 +291,10 @@ def main() -> None:
         "--config",
         "-c",
         default=None,
-        help="Path to directory containing config.jsonc (default: ~/.config/codex-rosetta-gateway)",
+        help=(
+            "Path to directory containing config.jsonc; initialized if missing "
+            "(default: ~/.config/codex-rosetta-gateway)"
+        ),
     )
     parser.add_argument(
         "--version",
@@ -389,27 +396,10 @@ def main() -> None:
     if not args.no_banner:
         print_banner()
 
-    config_path = discover_config(args.config)
-    if config_path is None:
-        # Minimal fallback logging so the error is visible before setup_logging
-        logging.basicConfig(level=logging.ERROR)
-        logger.error(
-            "No config file found. Searched directories:\n  %s\n"
-            "Provide a directory with --config or create config.jsonc in one of the above directories.\n"
-            "Tip: use 'codex-rosetta-gateway init' to create a template config.",
-            "\n  ".join(CONFIG_DIRS_TO_TRY),
-        )
-        sys.exit(1)
-
+    config_dir = args.config or DEFAULT_CONFIG_DIR
+    config_path = config_path_for_dir(config_dir)
     if not os.path.isfile(config_path):
-        logging.basicConfig(level=logging.ERROR)
-        logger.error(
-            "Config file not found: %s\n"
-            "Tip: use 'codex-rosetta-gateway --config %s init' to create one.",
-            config_path,
-            args.config or DEFAULT_CONFIG_DIR,
-        )
-        sys.exit(1)
+        _create_initial_config(config_path)
 
     raw_config = load_config(config_path)
 
