@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport import UpstreamConnectionError
@@ -21,6 +23,15 @@ from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
 ENDPOINTS = ("alpha/search", "images/generations", "images/edits")
+
+
+@pytest.fixture(autouse=True)
+def _authenticated_principal() -> Any:
+    token = api_key_principal_var.set("test-client")
+    try:
+        yield
+    finally:
+        api_key_principal_var.reset(token)
 
 
 def _make_config(
@@ -117,6 +128,7 @@ def _make_request(body: Any) -> MagicMock:
     request.app = MagicMock()
     request.app.metrics = None
     request.app.request_log = None
+    request.app.codex_search_reference_store = CodexSearchReferenceStore()
     request.app.transport.send_passthrough = AsyncMock(
         return_value=UpstreamResponse(
             status_code=202,
@@ -406,19 +418,39 @@ def test_local_search_open_returns_static_page_content() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_stored_reference_open_returns_not_implemented() -> None:
+def test_stored_reference_open_uses_the_app_owned_search_store() -> None:
     config = _make_config(
         tavily_api_key="tvly-test", tool_profile="responses_web_run_mapping"
     )
+    search_request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    store = search_request.app.codex_search_reference_store
+    search_response = asyncio.run(
+        handle_codex_auxiliary(
+            search_request,
+            config,
+            "alpha/search",
+            search_client=_FakeTavilyClient(),
+        )
+    )
     request = _make_request(_search_body({"open": [{"ref_id": "turn0search0"}]}))
+    request.app.codex_search_reference_store = store
+    page_client = _FakePageClient()
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            page_client=page_client,
+        )
+    )
 
-    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
-
-    assert response.status_code == 501
-    payload = json.loads(response.body)
-    assert payload["error"]["type"] == "not_implemented_error"
-    assert "turn0search0" in payload["error"]["message"]
-    assert payload["error"]["message"].endswith('Consider "Browser Use" skill')
+    assert search_response.status_code == 200
+    assert "turn0search0" in json.loads(search_response.body)["output"]
+    assert response.status_code == 200
+    assert "Python 3 Documentation" in json.loads(response.body)["output"]
+    assert page_client.calls == ["https://docs.python.org/3/"]
     request.app.transport.send_passthrough.assert_not_awaited()
 
 

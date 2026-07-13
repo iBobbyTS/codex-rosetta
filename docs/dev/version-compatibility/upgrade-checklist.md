@@ -201,7 +201,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - namespace defer, `tool_search_call/output`, multiple searches, window isolation, atomic per-scope/principal/global retained-state budgets, same-principal global-oldest replacement, no cross-principal eviction, and lifecycle accounting;
 - Captured wire fixtures for `multi_agent_v1`, `multi_agent_v2/collaboration`;
 - Captured wire fixtures for code mode `exec/wait`, nested call and wait continuation;
-- web search multi-round event reconstruction, downgrade paths for disabled/missing keys, and bounded identity-encoded auxiliary HTTP responses;
+- web search multi-round event reconstruction, downgrade paths for disabled/missing keys, bounded identity-encoded auxiliary HTTP responses, and standalone Search `turnXsearchY` allocation/open scoped by authenticated principal plus `SearchRequest.id`, including retry stability, concurrent allocation, cross-session failure, TTL/capacity cleanup, and app shutdown cleanup;
 - Cross-format round trip of reasoning effort/summary/content/encrypted state;
 - orphan call/result, residual tool choice/config and history trimming after compact;
 - Concurrency windows, cache expiration, normal EOF, abnormal EOF,
