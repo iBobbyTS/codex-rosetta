@@ -121,6 +121,14 @@ multi-turn Lite/code-mode run through `deepseek-v4-flash`. Native GPT routing
 and untriggered catalog combinations remain real-test gaps, not an
 `additional_tools` implementation gap.
 
+Codex returns freeform Code Mode results as `custom_tool_call_output`, including
+multi-part `input_text` output from `exec`. Responses→Chat converts those items
+to the same IR tool-result path as `function_call_output` so the paired Chat
+tool message contains the actual script/search result instead of an orphan-call
+placeholder. A real `gpt-5.6-sol` alias backed by `deepseek-v4-flash` consumed
+that output and completed `web.run` through local Tavily in the controlled
+network-search test.
+
 ## 3. Codex-native tools and history replay
 
 The current Codex source code exposes `apply_patch` as a freeform grammar tool with Responses `type: "custom"`; the call uses `custom_tool_call`, the parameter is a string, and the result uses `custom_tool_call_output`. Catalogs with code mode enabled also expose `exec` on the same wire type, whose `input` must be a raw JavaScript source, not a shell parameter object. Rosetta maintains two layers simultaneously and is compatible with:

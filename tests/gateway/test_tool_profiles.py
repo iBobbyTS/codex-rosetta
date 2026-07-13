@@ -29,13 +29,17 @@ def _profile(**overrides: str) -> dict[str, str]:
     return profile
 
 
-def _route(profile: dict[str, str]) -> ResolvedRoute:
+def _route(
+    profile: dict[str, str],
+    inputs: dict[str, dict[str, str]] | None = None,
+) -> ResolvedRoute:
     return ResolvedRoute(
         source_provider="openai_responses",
         target_provider="openai_chat",
         provider_name="test",
         tool_profile_name="custom",
         tool_profile=profile,
+        tool_profile_inputs=inputs or {},
     )
 
 
@@ -51,6 +55,7 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     assert contract["builtin"]["namespace.clock"] == "expanded"
     assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
     assert contract["builtin"]["namespace.mcp_github"] == "modified"
+    assert contract["builtin"]["custom.exec"] == "modified"
     assert contract["builtin"]["namespace.multi_agent_v2.spawn_agent"] == "modified"
     assert contract["supported"]["namespace.multi_agent_v2.spawn_agent"] == (
         "disabled",
@@ -69,6 +74,13 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         ]["guidance"]
         == ""
     )
+    assert (
+        "Pass raw JavaScript source"
+        in contract["readonly"]["builtin"]["inputs"]["custom.exec"]["guidance"]
+    )
+    assert contract["readonly"]["responses_pass_through"]["inputs"]["custom.exec"] == {
+        "guidance": ""
+    }
     assert all(
         contract["builtin"][child_id] == "disabled"
         for child_id in contract["namespace_children"]["namespace.multi_agent_v1"]
@@ -210,6 +222,7 @@ def test_bundled_profile_input_overrides_are_normalized_without_tool_states(name
     assert overrides[name]["hosted.web_search"] == {
         "provider": "tavily",
         "token": "profile-token",
+        "guidance": "",
     }
     assert overrides[name]["namespace.image_gen.imagegen"] == {
         "base_url": "https://api.openai.com/v1",
@@ -441,6 +454,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
     assert route.tool_profile_inputs["hosted.web_search"] == {
         "provider": "tavily",
         "token": "builtin-search-token",
+        "guidance": "",
     }
 
 
@@ -550,13 +564,15 @@ def test_modified_profile_guidance_is_appended_to_direct_and_namespace_tools():
             "namespace.multi_agent_v2.spawn_agent": "modified",
         }
     )
-    route = _route(profile)
-    route.tool_profile_inputs = {
-        "function.create_goal": {"guidance": "Create only when required."},
-        "namespace.multi_agent_v2.spawn_agent": {
-            "guidance": "The child message is complete."
+    route = _route(
+        profile,
+        {
+            "function.create_goal": {"guidance": "Create only when required."},
+            "namespace.multi_agent_v2.spawn_agent": {
+                "guidance": "The child message is complete."
+            },
         },
-    }
+    )
     body = {
         "tools": [
             {
@@ -590,14 +606,44 @@ def test_modified_profile_guidance_is_appended_to_direct_and_namespace_tools():
     )
 
 
-def test_modified_github_namespace_profile_appends_parameter_guidance():
-    route = _route(_profile(**{"namespace.mcp_github": "modified"}))
-    route.tool_profile_inputs = {
-        "namespace.mcp_github": {
-            "owner_guidance": "Inspect git remote before choosing the owner.",
-            "repo_guidance": "Inspect git remote before choosing the repository.",
-        }
+def test_modified_custom_exec_profile_appends_raw_javascript_guidance():
+    route = _route(
+        _profile(**{"custom.exec": "modified"}),
+        {"custom.exec": {"guidance": "Pass raw JavaScript source only."}},
+    )
+    body = {
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "exec",
+                        "description": "Run JavaScript.",
+                        "format": {"type": "grammar"},
+                    }
+                ],
+            }
+        ]
     }
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert adapted["input"][0]["tools"][0]["description"] == (
+        "Run JavaScript.\n\nPass raw JavaScript source only."
+    )
+
+
+def test_modified_github_namespace_profile_appends_parameter_guidance():
+    route = _route(
+        _profile(**{"namespace.mcp_github": "modified"}),
+        {
+            "namespace.mcp_github": {
+                "owner_guidance": "Inspect git remote before choosing the owner.",
+                "repo_guidance": "Inspect git remote before choosing the repository.",
+            }
+        },
+    )
     body = {
         "tools": [
             {
@@ -640,10 +686,10 @@ def test_modified_web_search_profile_only_changes_description_from_its_input():
             }
         ]
     }
-    route = _route(_profile(**{"hosted.web_search": "modified"}))
-    route.tool_profile_inputs = {
-        "hosted.web_search": {"guidance": "Prefer primary sources."}
-    }
+    route = _route(
+        _profile(**{"hosted.web_search": "modified"}),
+        {"hosted.web_search": {"guidance": "Prefer primary sources."}},
+    )
 
     modified = _apply_tool_adaptation(body, route)
     passthrough = _apply_tool_adaptation(
@@ -654,6 +700,27 @@ def test_modified_web_search_profile_only_changes_description_from_its_input():
         "Search current documentation.\n\nPrefer primary sources."
     )
     assert passthrough is body
+
+
+def test_modified_web_search_profile_matches_preview_alias():
+    body = {
+        "tools": [
+            {
+                "type": "web_search_preview",
+                "description": "Search current documentation.",
+            }
+        ]
+    }
+    route = _route(
+        _profile(**{"hosted.web_search": "modified"}),
+        {"hosted.web_search": {"guidance": "Prefer primary sources."}},
+    )
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert adapted["tools"][0]["description"] == (
+        "Search current documentation.\n\nPrefer primary sources."
+    )
 
 
 def test_profile_limits_localized_native_and_injected_tools():

@@ -659,6 +659,61 @@ class TestConversionPipeline:
         ]
         assert target["parallel_tool_calls"] is False
 
+    def test_responses_custom_tool_output_reaches_chat_target(self):
+        """Codex exec output is paired with its Chat-visible function call."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        target = pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": [
+                    {
+                        "type": "custom_tool_call",
+                        "call_id": "call_exec",
+                        "name": "exec",
+                        "input": "text(await tools.web__run({}));",
+                    },
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_exec",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed\n"},
+                            {
+                                "type": "input_text",
+                                "text": "URL: https://docs.python.org",
+                            },
+                        ],
+                    },
+                ],
+            }
+        )
+
+        assert target["messages"] == [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_exec",
+                        "type": "function",
+                        "function": {
+                            "name": "exec",
+                            "arguments": '{"input": "text(await tools.web__run({}));"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_exec",
+                "content": (
+                    '[{"type": "text", "text": "Script completed\\n"}, '
+                    '{"type": "text", "text": "URL: https://docs.python.org"}]'
+                ),
+            },
+        ]
+
     def test_responses_reasoning_context_is_omitted_for_chat_target(self):
         """Responses-only reasoning context does not leak into Chat requests."""
         from codex_rosetta.pipeline import ConversionPipeline

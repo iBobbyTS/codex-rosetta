@@ -23,6 +23,9 @@
       "function.update_goal": {
         "guidance": "Before updating a goal, use get_goal when goal state is uncertain. If no active goal exists or this tool reports that the thread has no goal, call create_goal first with a concise objective and no token_budget unless explicitly requested, then retry update_goal with the requested status."
       },
+      "custom.exec": {
+        "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...) or image(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
+      },
       "namespace.multi_agent_v2.list_agents": {
         "guidance": "path_prefix filters canonical task paths. Use the requested child task-name segment, and treat the returned status and result for that canonical path as authoritative."
       },
@@ -373,7 +376,16 @@
       "id": "custom.exec",
       "name": "exec",
       "type": "custom",
-      "policy_id": "passthrough"
+      "policy_id": "targeted_chat_guidance",
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "hosted.web_search",

@@ -1799,6 +1799,14 @@ class OpenAIResponsesConverter(BaseConverter):
             "web_search",
         ):
             return {}
+        if (
+            tool_type == "custom"
+            and provider_metadata.get("responses_tool_type") == "custom"
+        ):
+            # Chat represents a downgraded custom tool as a JSON function.
+            # Buffer its arguments until the complete object can be safely
+            # restored to the native freeform input string.
+            return {}
         event_type = (
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DELTA
             if tool_type == "custom"
@@ -1934,6 +1942,9 @@ class OpenAIResponsesConverter(BaseConverter):
                     status="completed",
                 )
             elif tool_type == "custom":
+                arguments = self._restore_bridged_custom_tool_input(
+                    arguments, provider_metadata
+                )
                 item = {
                     "id": tc_item_id,
                     "type": "custom_tool_call",
@@ -2203,6 +2214,21 @@ class OpenAIResponsesConverter(BaseConverter):
                     }
                 )
             elif tool_type == "custom":
+                arguments = self._restore_bridged_custom_tool_input(
+                    arguments, provider_metadata
+                )
+                if (
+                    arguments
+                    and provider_metadata.get("responses_tool_type") == "custom"
+                ):
+                    results.append(
+                        {
+                            "type": ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DELTA,
+                            "item_id": item_id,
+                            "output_index": output_index,
+                            "delta": arguments,
+                        }
+                    )
                 # response.custom_tool_call_input.done
                 results.append(
                     {
@@ -2258,6 +2284,21 @@ class OpenAIResponsesConverter(BaseConverter):
                         "item": item,
                     }
                 )
+
+    @staticmethod
+    def _restore_bridged_custom_tool_input(
+        arguments: str, provider_metadata: dict[str, Any]
+    ) -> str:
+        """Undo the JSON function wrapper used to expose a custom tool to Chat."""
+        if provider_metadata.get("responses_tool_type") != "custom":
+            return arguments
+        try:
+            parsed = json.loads(arguments)
+        except TypeError, json.JSONDecodeError:
+            return arguments
+        if not isinstance(parsed, dict) or list(parsed.keys()) != ["input"]:
+            return arguments
+        return OpenAIResponsesToolOps.custom_tool_input_to_text(parsed)
 
     @staticmethod
     def _build_tool_search_call_item(
