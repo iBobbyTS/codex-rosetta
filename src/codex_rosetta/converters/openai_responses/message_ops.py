@@ -337,7 +337,9 @@ class OpenAIResponsesMessageOps(BaseMessageOps):
         }
     )
 
-    _TOOL_RESULT_TYPES = frozenset({"function_call_output", "mcp_call_output"})
+    _TOOL_RESULT_TYPES = frozenset(
+        {"function_call_output", "custom_tool_call_output", "mcp_call_output"}
+    )
 
     def p_messages_to_ir(
         self,

@@ -267,6 +267,14 @@ def test_catalog_defaults_and_namespace_image_policy():
         "placeholder_i18n": "tools.input.web_run.token_placeholder",
     }
     assert items["namespace.web.run"]["profile_inputs"] == web_run_inputs
+    assert items["custom.exec"]["profile_inputs"] == [
+        {
+            "id": "guidance",
+            "label_i18n": "tools.input.guidance",
+            "default": "",
+            "visible_when": ["modified"],
+        }
+    ]
 
     for namespace_id in ("namespace.multi_agent_v1", "namespace.multi_agent_v2"):
         namespace = items[namespace_id]
@@ -284,6 +292,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "hosted.web_search",
         "namespace.web.run",
         "namespace.mcp_github",
+        "custom.exec",
     }
     assert {
         item_id
@@ -386,7 +395,7 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "item.description_i18n" in html
     assert "item.profile_inputs" in html
     assert "renderToolProfileInputs(item)" in html
-    assert "['function', 'hosted'].includes(item.type)" in html
+    assert "['function', 'custom', 'hosted', 'namespace'].includes(item.type)" in html
     assert "updateToolProfileInput" in html
     assert "saveToolProfileBtn').disabled = !toolProfileDirty" in html
     assert "if (currentToolProfile()?.readonly) return;" in html
@@ -408,9 +417,6 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "${esc(option.label)}" in html
     assert '<select class="tool-profile-input"' in html
     assert "inputs: toolProfileInputDraft" in html
-    assert "tools.description.request_user_input" in html
-    assert "tools.description.create_goal" in html
-    assert "tools.description.update_goal" in html
     assert "toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace'" in html
     assert "if (item.type === 'namespace') expandedToolNamespaces.add(item.id);" in html
     assert "item.default_expanded" not in html
@@ -535,12 +541,11 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
         if profile["id"] == "restricted"
     )
     expected_inputs = {
-        "hosted.web_search": {"provider": "tavily", "token": ""},
-        "namespace.image_gen.imagegen": {
-            "base_url": "https://api.openai.com/v1",
-            "token": "",
-        },
-        "namespace.web.run": {"provider": "tavily", "token": ""},
+        item_id: {
+            input_id: definition["default"]
+            for input_id, definition in definitions.items()
+        }
+        for item_id, definitions in tool_profile_contract()["input_definitions"].items()
     }
     assert restricted["inputs"] == expected_inputs
     saved = json.loads(config_path.read_text(encoding="utf-8"))

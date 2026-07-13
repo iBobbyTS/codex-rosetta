@@ -505,6 +505,36 @@ class TestOpenAIResponsesMessageOps:
         assert tr["tool_call_id"] == "call_1"
         assert tr["result"] == "Sunny, 25°C"
 
+    def test_p_custom_tool_call_output_to_ir_with_text_blocks(self):
+        """Codex custom-tool output blocks remain available to Chat bridges."""
+        result = cast(
+            list[Any],
+            self.message_ops.p_messages_to_ir(
+                [
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_exec",
+                        "output": [
+                            {"type": "input_text", "text": "Script completed\n"},
+                            {
+                                "type": "input_text",
+                                "text": "URL: https://docs.python.org",
+                            },
+                        ],
+                    }
+                ]
+            ),
+        )
+
+        assert len(result) == 1
+        assert result[0]["role"] == "tool"
+        tool_result = result[0]["content"][0]
+        assert tool_result["tool_call_id"] == "call_exec"
+        assert tool_result["result"] == [
+            {"type": "text", "text": "Script completed\n"},
+            {"type": "text", "text": "URL: https://docs.python.org"},
+        ]
+
     def test_p_reasoning_to_ir(self):
         """Test OpenAI Responses reasoning item → IR assistant with ReasoningPart."""
         result = cast(

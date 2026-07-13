@@ -2223,7 +2223,7 @@ function isToolCardContentVisible(itemId, visibleWhen) {
 }
 
 function renderToolProfileInputs(item) {
-  if (!['function', 'hosted', 'namespace'].includes(item.type) || !Array.isArray(item.profile_inputs) || item.profile_inputs.length === 0) return '';
+  if (!['function', 'custom', 'hosted', 'namespace'].includes(item.type) || !Array.isArray(item.profile_inputs) || item.profile_inputs.length === 0) return '';
   const values = toolProfileInputDraft[item.id] || {};
   const groups = item.profile_inputs.filter(input =>
     isToolCardContentVisible(item.id, input.visible_when)

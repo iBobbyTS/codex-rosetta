@@ -299,9 +299,7 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 if provider_tool.get("name"):
                     synth_params = {
                         "type": "object",
-                        "properties": {
-                            "input": {"type": "string"}
-                        },
+                        "properties": {"input": {"type": "string"}},
                         "required": ["input"],
                     }
                 desc = provider_tool.get("description", "")
@@ -507,19 +505,11 @@ class OpenAIResponsesToolOps(BaseToolOps):
             # Custom tool calls use plain text 'input' instead of JSON
             # 'arguments'.  If tool_input has a single "input" key, unwrap
             # it to plain text; otherwise JSON-serialize the dict.
-            if isinstance(tool_input, dict) and list(tool_input.keys()) == ["input"]:
-                input_str = str(tool_input["input"])
-            else:
-                input_str = (
-                    json.dumps(tool_input)
-                    if isinstance(tool_input, dict)
-                    else str(tool_input)
-                )
             return {
                 "type": "custom_tool_call",
                 "call_id": tool_call_id,
                 "name": tool_name,
-                "input": input_str,
+                "input": OpenAIResponsesToolOps.custom_tool_input_to_text(tool_input),
             }
         elif tool_type == "web_search":
             return {
@@ -585,9 +575,7 @@ class OpenAIResponsesToolOps(BaseToolOps):
 
         synth_params = {
             "type": "object",
-            "properties": {
-                "query": {"type": "string"}
-            },
+            "properties": {"query": {"type": "string"}},
             "required": ["query"],
         }
         description = provider_tool.get("description", "")
@@ -799,7 +787,7 @@ class OpenAIResponsesToolOps(BaseToolOps):
     def p_tool_result_to_ir(provider_tool_result: Any, **kwargs: Any) -> ToolResultPart:
         """OpenAI Responses function_call_output → IR ToolResultPart.
 
-        Handles both function_call_output and mcp_call_output.
+        Handles function_call_output, custom_tool_call_output, and mcp_call_output.
 
         Args:
             provider_tool_result: OpenAI Responses tool result item dict.
@@ -881,3 +869,12 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 result["max_calls"] = max_calls
 
         return cast(ToolCallConfig, result)
+
+    @staticmethod
+    def custom_tool_input_to_text(tool_input: Any) -> str:
+        """Serialize IR custom-tool input to the native freeform text shape."""
+        if isinstance(tool_input, dict) and list(tool_input.keys()) == ["input"]:
+            return str(tool_input["input"])
+        return (
+            json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)
+        )

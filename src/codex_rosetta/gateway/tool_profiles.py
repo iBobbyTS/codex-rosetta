@@ -189,10 +189,15 @@ def _profile_input_contract(
             raise ValueError(
                 f"catalog item {item['id']!r} profile_inputs must be a list"
             )
-        if raw_inputs and item["type"] not in {"function", "hosted", "namespace"}:
+        if raw_inputs and item["type"] not in {
+            "function",
+            "custom",
+            "hosted",
+            "namespace",
+        }:
             raise ValueError(
                 f"catalog item {item['id']!r} profile_inputs are only supported "
-                "for Function, Hosted, and Namespace tools"
+                "for Function, Custom, Hosted, and Namespace tools"
             )
         item_inputs: dict[str, Any] = {}
         for raw_input in raw_inputs:
@@ -216,7 +221,9 @@ def _profile_mutation_contract(
         item_id = item["id"]
         raw_mutations = item.get("profile_mutations", [])
         if not isinstance(raw_mutations, list):
-            raise ValueError(f"catalog item {item_id!r} profile_mutations must be a list")
+            raise ValueError(
+                f"catalog item {item_id!r} profile_mutations must be a list"
+            )
         if raw_mutations and "modified" not in supported[item_id]:
             raise ValueError(
                 f"catalog item {item_id!r} profile_mutations requires Modified support"
@@ -259,7 +266,11 @@ def _profile_mutation_contract(
                 {
                     "target": target,
                     "input_id": input_id,
-                    **({"parameter": parameter} if target == "parameter_description" else {}),
+                    **(
+                        {"parameter": parameter}
+                        if target == "parameter_description"
+                        else {}
+                    ),
                 }
             )
         if normalized:
@@ -293,8 +304,7 @@ def _normalize_profile_input_values(
         unknown_inputs = sorted(set(raw_item_values) - set(item_definitions))
         if unknown_inputs:
             raise ValueError(
-                f"{field}.inputs.{item_id} contains unknown input IDs: "
-                f"{unknown_inputs}"
+                f"{field}.inputs.{item_id} contains unknown input IDs: {unknown_inputs}"
             )
         normalized[item_id] = {}
         for input_id, definition in item_definitions.items():
@@ -617,7 +627,9 @@ def normalize_tool_profile_input_overrides(
             for item_id, values in readonly[name]["inputs"].items()
         }
         for item_id, values in raw_inputs.items():
-            if isinstance(values, dict) and isinstance(merged_inputs.get(item_id), dict):
+            if isinstance(values, dict) and isinstance(
+                merged_inputs.get(item_id), dict
+            ):
                 merged_inputs[item_id].update(values)
             else:
                 merged_inputs[item_id] = values
@@ -714,6 +726,12 @@ def tool_catalog_lookups() -> dict[str, Any]:
     by_type_name = {
         (item["type"], item["name"]): item["id"] for item in catalog["items"]
     }
+    for item in catalog["items"]:
+        if item["type"] != "hosted":
+            continue
+        provider_types = (item["name"], *item.get("aliases", []))
+        for provider_type in provider_types:
+            by_type_name[(provider_type, provider_type)] = item["id"]
     namespace_children: dict[tuple[str, str], str] = {}
     for placement in catalog["placements"]["namespaces"]:
         namespace = items[placement["namespace_id"]]["name"]
