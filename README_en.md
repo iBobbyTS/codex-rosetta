@@ -50,6 +50,74 @@ errors. In stats mode, warnings and errors start on a new line; the counters
 resume on the next request. Use the WebUI **Request Log** for complete request
 history and **Gateway Logs** for streaming trace diagnostics.
 
+## Codex Model Names and Built-in Roles
+
+Avoid exposing third-party model names such as `deepseek-v4-pro` or `glm-5.2`
+directly to Codex. Unknown names receive fallback model metadata, which can
+change the tools, Responses request shape, reasoning controls, context limits,
+and multi-agent behavior that Codex enables. Instead, configure a Rosetta model
+group whose public model name is one of Codex's built-in names and whose
+`upstream_model` is the provider's real model ID.
+
+Recommended public model names are:
+
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
+- `gpt-5.5`
+- `gpt-5.4`
+- `gpt-5.4-mini`
+- `gpt-5.2`
+
+The public name controls the model metadata and tool surface selected by Codex;
+Rosetta replaces it with `upstream_model` before sending the request to the
+provider. Choose a built-in name whose advertised context window, modalities,
+reasoning behavior, and tool mode are compatible with the actual upstream
+model. A name mapping does not make the upstream model acquire capabilities it
+does not support.
+
+The following built-in names have special roles:
+
+- `gpt-5.6-luna` uses the legacy multi-agent v1 tool surface. Subagent behavior
+  may be unreliable, and Rosetta's built-in **Chat Default** Tool Profile
+  disables the `multi_agent_v1` namespace.
+- `gpt-5.4` is the default model for memory consolidation. Override it with
+  `memories.consolidation_model` in Codex `config.toml` when the provider uses a
+  different public model name.
+- `gpt-5.4-mini` is the default model for extracting memories from historical
+  threads. Override it with `memories.extract_model`.
+- `codex-auto-review` is the default automatic approval-review model, including
+  command-execution approval review. Override it through the active model's
+  `auto_review_model_override` field in a Codex model catalog; this is model
+  metadata, not a top-level `config.toml` option.
+
+For example, memory models can be overridden in Codex `config.toml`:
+
+```toml
+[memories]
+consolidation_model = "your-consolidation-model"
+extract_model = "your-extraction-model"
+```
+
+### Enable v2 Collaboration for Models Without a Fixed Version
+
+`gpt-5.6-sol` and `gpt-5.6-terra` already select v2 `collaboration` through
+their built-in model metadata. `gpt-5.6-luna` explicitly selects legacy v1, so
+the feature setting below does not upgrade Luna. For built-in models whose
+catalog entry does not specify a multi-agent version, such as `gpt-5.5`,
+`gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.2`, enable v2 in Codex `config.toml`:
+
+```toml
+[features]
+multi_agent_v2 = true
+```
+
+Start a new Codex task after changing this setting. The selected multi-agent
+version is retained by an existing task, so switching models or changing the
+feature during that task may not replace its current tool surface. The stable
+`multi_agent` feature (also accepted through its legacy `collab` alias) selects
+the legacy v1 tools when v2 is not enabled; new configurations should prefer
+`multi_agent_v2` when the target model can use the `collaboration` namespace.
+
 ## Full Documentation
 
 - [English user documentation](docs/en/README.md)
