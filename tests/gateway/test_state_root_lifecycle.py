@@ -9,6 +9,11 @@ import pytest
 
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.codex_search_references import (
+    CodexSearchReferenceScope,
+    SearchQueryDraft,
+    SearchResultDraft,
+)
 from codex_rosetta.gateway.proxy import close_resources
 from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.tool_adaptation import LocalizedToolMapping
@@ -94,12 +99,26 @@ def test_close_resources_clears_every_app_owned_state_root():
         LocalizedToolMapping("call-1", "Read", {}, "exec_command", {})
     )
     window_tools.remember_deferred_tools("window-1", [_namespace_tool()])
+    search_scope = CodexSearchReferenceScope("test-client", "search-session")
+    app.codex_search_reference_store.remember_search(
+        search_scope,
+        "fingerprint",
+        (
+            SearchQueryDraft(
+                "python",
+                None,
+                (SearchResultDraft("Python", "https://docs.python.org", "Docs"),),
+                1,
+            ),
+        ),
+    )
 
     asyncio.run(
         close_resources(
             metadata_store=app.metadata_store,
             codex_tool_store=app.codex_tool_store,
             window_tool_search_store=app.window_tool_search_store,
+            codex_search_reference_store=app.codex_search_reference_store,
         )
     )
 
@@ -117,6 +136,9 @@ def test_close_resources_clears_every_app_owned_state_root():
     }
     window_tools.enrich_tool_search_outputs("window-1", search_body)
     assert search_body["input"][1]["tools"] == []
+    assert (
+        app.codex_search_reference_store.resolve(search_scope, "turn0search0") is None
+    )
 
 
 def test_create_app_uses_fresh_state_roots_after_same_process_shutdown():
@@ -126,6 +148,7 @@ def test_create_app_uses_fresh_state_roots_after_same_process_shutdown():
             metadata_store=old_app.metadata_store,
             codex_tool_store=old_app.codex_tool_store,
             window_tool_search_store=old_app.window_tool_search_store,
+            codex_search_reference_store=old_app.codex_search_reference_store,
         )
     )
 
@@ -134,6 +157,9 @@ def test_create_app_uses_fresh_state_roots_after_same_process_shutdown():
     assert new_app.metadata_store is not old_app.metadata_store
     assert new_app.codex_tool_store is not old_app.codex_tool_store
     assert new_app.window_tool_search_store is not old_app.window_tool_search_store
+    assert (
+        new_app.codex_search_reference_store is not old_app.codex_search_reference_store
+    )
 
 
 def test_scoped_views_cannot_clear_their_shared_root():

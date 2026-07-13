@@ -39,6 +39,7 @@ from codex_rosetta.routing import ResolvedRoute, is_openai_responses_passthrough
 
 from codex_rosetta.observability.error_dump import dump_error
 
+from .codex_search_references import CodexSearchReferenceStore
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -632,7 +633,9 @@ def _apply_profile_tool_mutations(
         if not isinstance(value, str) or not (append := value.strip()):
             continue
         if mutation["target"] == "description":
-            description = _append_profile_description(adapted.get("description"), append)
+            description = _append_profile_description(
+                adapted.get("description"), append
+            )
             if description != adapted.get("description"):
                 adapted["description"] = description
                 changed = True
@@ -958,6 +961,7 @@ async def close_resources(
     metadata_store: ProviderMetadataStore | None = None,
     codex_tool_store: CodexToolLocalizationStore | None = None,
     window_tool_search_store: WindowToolSearchStore | None = None,
+    codex_search_reference_store: CodexSearchReferenceStore | None = None,
     image_fetch_workers: ImageFetchWorkerPool | None = None,
 ) -> None:
     """Close transport and clear all app-owned cross-request state."""
@@ -977,6 +981,8 @@ async def close_resources(
         else _default_window_tool_search_store
     )
     window_tools.clear_all()
+    if codex_search_reference_store is not None:
+        codex_search_reference_store.clear_all()
 
 
 # ---------------------------------------------------------------------------

@@ -15,12 +15,14 @@ from codex_rosetta.gateway.codex_search import (
     execute_local_codex_search,
     should_use_local_codex_search,
 )
+from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
 class _FakeTavilyClient:
-    def __init__(self) -> None:
+    def __init__(self, *, url: str = "https://docs.python.org/3/") -> None:
         self.calls: list[tuple[str, WebSearchSettings]] = []
+        self.url = url
 
     async def search(
         self,
@@ -34,7 +36,7 @@ class _FakeTavilyClient:
             "results": [
                 {
                     "title": "Python documentation",
-                    "url": "https://docs.python.org/3/",
+                    "url": self.url,
                     "content": "The official Python 3 documentation.",
                     "score": 0.99,
                 }
@@ -159,15 +161,122 @@ def test_open_direct_url_returns_line_addressable_static_page() -> None:
     assert "L0: Overview" not in result.output
 
 
-def test_open_stored_reference_is_explicitly_not_implemented() -> None:
-    with pytest.raises(CodexSearchNotImplemented, match="turn0search0"):
+def test_search_result_reference_can_be_opened_in_the_same_session() -> None:
+    store = CodexSearchReferenceStore()
+    search_result = asyncio.run(
+        execute_local_codex_search(
+            _body({"search_query": [{"q": "python"}]}),
+            {"tavily_api_key": "tvly-test"},
+            client=_FakeTavilyClient(),
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+    page_client = _FakePageClient()
+    open_result = asyncio.run(
+        execute_local_codex_search(
+            _body({"open": [{"ref_id": "turn0search0"}]}),
+            {},
+            page_client=page_client,
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+
+    assert "[turn0search0] Python documentation" in search_result.output
+    assert page_client.calls == ["https://docs.python.org/3/"]
+    assert "Title: Python 3 Documentation" in open_result.output
+    assert open_result.stored_reference_open_count == 1
+
+
+@pytest.mark.parametrize(
+    ("principal_id", "session_id"),
+    [("client-b", "search-session"), ("client-a", "other-session")],
+)
+def test_stored_reference_fails_closed_outside_its_owner_session(
+    principal_id: str,
+    session_id: str,
+) -> None:
+    store = CodexSearchReferenceStore()
+    asyncio.run(
+        execute_local_codex_search(
+            _body({"search_query": [{"q": "python"}]}),
+            {"tavily_api_key": "tvly-test"},
+            client=_FakeTavilyClient(),
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+
+    body = _body({"open": [{"ref_id": "turn0search0"}]})
+    body["id"] = session_id
+    with pytest.raises(CodexSearchInvalidRequest, match="Unknown search reference"):
         asyncio.run(
             execute_local_codex_search(
-                _body({"open": [{"ref_id": "turn0search0"}]}),
+                body,
                 {},
                 page_client=_FakePageClient(),
+                reference_store=store,
+                principal_id=principal_id,
             )
         )
+
+
+def test_retried_search_reuses_results_and_reference_ids() -> None:
+    store = CodexSearchReferenceStore()
+    client = _FakeTavilyClient()
+    body = _body({"search_query": [{"q": "python"}]})
+
+    first = asyncio.run(
+        execute_local_codex_search(
+            body,
+            {"tavily_api_key": "tvly-test"},
+            client=client,
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+    second = asyncio.run(
+        execute_local_codex_search(
+            body,
+            {"tavily_api_key": "tvly-test"},
+            client=client,
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+
+    assert first.output == second.output
+    assert first.search_cache_hit is False
+    assert second.search_cache_hit is True
+    assert len(client.calls) == 1
+
+
+def test_parallel_searches_allocate_distinct_turn_references() -> None:
+    store = CodexSearchReferenceStore()
+
+    async def run() -> list[str]:
+        results = await asyncio.gather(
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "python one"}]}),
+                {"tavily_api_key": "tvly-test"},
+                client=_FakeTavilyClient(url="https://docs.python.org/3/"),
+                reference_store=store,
+                principal_id="client-a",
+            ),
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "python two"}]}),
+                {"tavily_api_key": "tvly-test"},
+                client=_FakeTavilyClient(url="https://docs.python.org/3/tutorial/"),
+                reference_store=store,
+                principal_id="client-a",
+            ),
+        )
+        return [result.output for result in results]
+
+    outputs = asyncio.run(run())
+    assert any("[turn0search0]" in output for output in outputs)
+    assert any("[turn1search0]" in output for output in outputs)
 
 
 @pytest.mark.parametrize(

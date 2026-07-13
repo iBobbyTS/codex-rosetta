@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
@@ -13,6 +15,14 @@ from .codex_page import (
     PageOpenNotImplemented,
     StaticPageClient,
     StaticPageHTTPClient,
+)
+from .codex_search_references import (
+    SEARCH_REFERENCE_RE,
+    CodexSearchReferenceScope,
+    CodexSearchReferenceStore,
+    SearchQueryDraft,
+    SearchResultDraft,
+    StoredSearchBatch,
 )
 from .web_search import (
     TavilyHTTPClient,
@@ -72,6 +82,9 @@ class CodexSearchBridgeResult:
     open_count: int
     time_count: int
     tavily_result_count: int
+    stored_reference_open_count: int = 0
+    search_reference_count: int = 0
+    search_cache_hit: bool = False
 
     def response_body(self) -> dict[str, str]:
         return {"output": self.output}
@@ -83,8 +96,19 @@ class CodexSearchBridgeResult:
             "open_count": self.open_count,
             "time_count": self.time_count,
             "tavily_result_count": self.tavily_result_count,
+            "stored_reference_open_count": self.stored_reference_open_count,
+            "search_reference_count": self.search_reference_count,
+            "search_cache_hit": self.search_cache_hit,
             "output_chars": len(self.output),
         }
+
+
+@dataclass(frozen=True)
+class _SearchExecution:
+    sections: tuple[str, ...]
+    result_count: int
+    reference_count: int
+    cache_hit: bool
 
 
 def should_use_local_codex_search(
@@ -112,6 +136,8 @@ async def execute_local_codex_search(
     client: TavilySearchClient | None = None,
     page_client: StaticPageClient | None = None,
     now: Callable[[], datetime] | None = None,
+    reference_store: CodexSearchReferenceStore | None = None,
+    principal_id: str | None = None,
 ) -> CodexSearchBridgeResult:
     """Execute the deterministic Tavily/Python subset of ``SearchRequest``."""
     _validate_request_identity(body)
@@ -145,33 +171,23 @@ async def execute_local_codex_search(
     resolved_page_client = page_client or (
         StaticPageHTTPClient() if open_operations else None
     )
+    scope = _reference_scope(body, principal_id, reference_store)
 
-    sections: list[str] = []
-    tavily_result_count = 0
-    for query, settings in queries:
-        assert search_client is not None
-        try:
-            raw = await search_client.search(query, settings=settings)
-        except Exception as exc:
-            raise CodexSearchExecutionError(
-                f"Tavily search failed for query {query!r}: {exc}"
-            ) from exc
-        results = raw.get("results")
-        if isinstance(results, list):
-            tavily_result_count += len(results)
-        sections.append(format_tavily_result_for_model(query, raw))
-
-    for url, lineno in open_operations:
-        assert resolved_page_client is not None
-        try:
-            page = await resolved_page_client.open(url)
-            sections.append(page.format_for_model(lineno=lineno))
-        except PageOpenInvalidRequest as exc:
-            raise CodexSearchInvalidRequest(str(exc)) from exc
-        except PageOpenNotImplemented as exc:
-            raise CodexSearchNotImplemented(str(exc)) from exc
-        except PageOpenExecutionError as exc:
-            raise CodexSearchExecutionError(str(exc)) from exc
+    search_execution = await _execute_search_queries(
+        queries,
+        body=body,
+        search_client=search_client,
+        reference_store=reference_store,
+        scope=scope,
+    )
+    sections = list(search_execution.sections)
+    open_sections, stored_reference_open_count = await _execute_open_operations(
+        open_operations,
+        page_client=resolved_page_client,
+        reference_store=reference_store,
+        scope=scope,
+    )
+    sections.extend(open_sections)
 
     if time_offsets:
         clock = now or (lambda: datetime.now(timezone.utc))
@@ -192,8 +208,107 @@ async def execute_local_codex_search(
         search_count=len(queries),
         open_count=len(open_operations),
         time_count=len(time_offsets),
-        tavily_result_count=tavily_result_count,
+        tavily_result_count=search_execution.result_count,
+        stored_reference_open_count=stored_reference_open_count,
+        search_reference_count=search_execution.reference_count,
+        search_cache_hit=search_execution.cache_hit,
     )
+
+
+async def _execute_search_queries(
+    queries: list[tuple[str, WebSearchSettings]],
+    *,
+    body: dict[str, Any],
+    search_client: TavilySearchClient | None,
+    reference_store: CodexSearchReferenceStore | None,
+    scope: CodexSearchReferenceScope | None,
+) -> _SearchExecution:
+    if not queries:
+        return _SearchExecution((), 0, 0, False)
+
+    fingerprint = _search_request_fingerprint(body)
+    if reference_store is not None and scope is not None:
+        cached = reference_store.get_search(scope, fingerprint)
+        if cached is not None:
+            return _stored_search_execution(cached, cache_hit=True)
+
+    query_drafts: list[SearchQueryDraft] = []
+    for query, settings in queries:
+        assert search_client is not None
+        try:
+            raw = await search_client.search(query, settings=settings)
+        except Exception as exc:
+            raise CodexSearchExecutionError(
+                f"Tavily search failed for query {query!r}: {exc}"
+            ) from exc
+        query_drafts.append(_search_query_draft(query, raw))
+
+    if reference_store is not None and scope is not None:
+        batch, cache_hit = reference_store.remember_search(
+            scope,
+            fingerprint,
+            tuple(query_drafts),
+        )
+        return _stored_search_execution(batch, cache_hit=cache_hit)
+
+    return _SearchExecution(
+        sections=tuple(
+            format_tavily_result_for_model(
+                draft.query,
+                _draft_as_tavily_result(draft),
+            )
+            for draft in query_drafts
+        ),
+        result_count=sum(draft.source_result_count for draft in query_drafts),
+        reference_count=0,
+        cache_hit=False,
+    )
+
+
+def _stored_search_execution(
+    batch: StoredSearchBatch,
+    *,
+    cache_hit: bool,
+) -> _SearchExecution:
+    return _SearchExecution(
+        sections=tuple(_format_stored_search_batch(batch)),
+        result_count=sum(query.source_result_count for query in batch.queries),
+        reference_count=sum(
+            result.ref_id is not None
+            for query in batch.queries
+            for result in query.results
+        ),
+        cache_hit=cache_hit,
+    )
+
+
+async def _execute_open_operations(
+    open_operations: list[tuple[str, int | None]],
+    *,
+    page_client: StaticPageClient | None,
+    reference_store: CodexSearchReferenceStore | None,
+    scope: CodexSearchReferenceScope | None,
+) -> tuple[list[str], int]:
+    sections: list[str] = []
+    stored_reference_count = 0
+    for ref_id, lineno in open_operations:
+        assert page_client is not None
+        url = _resolve_open_url(
+            ref_id,
+            scope=scope,
+            reference_store=reference_store,
+        )
+        stored_reference_count += url != ref_id
+        try:
+            page = await page_client.open(url)
+            sections.append(page.format_for_model(lineno=lineno))
+        except PageOpenInvalidRequest as exc:
+            raise CodexSearchInvalidRequest(str(exc)) from exc
+        except PageOpenNotImplemented as exc:
+            raise CodexSearchNotImplemented(str(exc)) from exc
+        except PageOpenExecutionError as exc:
+            raise CodexSearchExecutionError(str(exc)) from exc
+    return sections, stored_reference_count
 
 
 def codex_search_request_summary(body: dict[str, Any]) -> dict[str, Any]:
@@ -218,6 +333,8 @@ def _validate_request_identity(body: dict[str, Any]) -> None:
     session_id = body.get("id")
     if not isinstance(session_id, str) or not session_id.strip():
         raise CodexSearchInvalidRequest("Missing or invalid search request 'id'")
+    if len(session_id) > 256:
+        raise CodexSearchInvalidRequest("Search request 'id' exceeds 256 characters")
     model = body.get("model")
     if not isinstance(model, str) or not model.strip():
         raise CodexSearchInvalidRequest("Missing or invalid search request 'model'")
@@ -412,10 +529,6 @@ def _parse_open_operations(value: Any) -> list[tuple[str, int | None]]:
             raise CodexSearchInvalidRequest(
                 f"'commands.open[{index}].ref_id' must be a non-empty string"
             )
-        if not ref_id.strip().lower().startswith(("http://", "https://")):
-            raise CodexSearchNotImplemented(
-                "Codex search stored references such as turn0search0 are not implemented"
-            )
         lineno = item.get("lineno")
         if lineno is not None and (
             isinstance(lineno, bool) or not isinstance(lineno, int) or lineno < 0
@@ -425,6 +538,133 @@ def _parse_open_operations(value: Any) -> list[tuple[str, int | None]]:
             )
         parsed.append((ref_id.strip(), lineno))
     return parsed
+
+
+def _reference_scope(
+    body: dict[str, Any],
+    principal_id: str | None,
+    reference_store: CodexSearchReferenceStore | None,
+) -> CodexSearchReferenceScope | None:
+    if reference_store is None:
+        return None
+    if not isinstance(principal_id, str) or not principal_id:
+        raise CodexSearchInvalidRequest(
+            "Authenticated principal is required for stored search references"
+        )
+    return CodexSearchReferenceScope(
+        principal_id=principal_id,
+        session_id=str(body["id"]),
+    )
+
+
+def _search_request_fingerprint(body: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        body,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def _search_query_draft(query: str, raw: dict[str, Any]) -> SearchQueryDraft:
+    answer = raw.get("answer")
+    answer = (
+        _trim_search_text(answer.strip(), 4_000)
+        if isinstance(answer, str) and answer.strip()
+        else None
+    )
+    raw_results = raw.get("results")
+    source_result_count = len(raw_results) if isinstance(raw_results, list) else 0
+    results: list[SearchResultDraft] = []
+    if isinstance(raw_results, list):
+        for result in raw_results[:10]:
+            if not isinstance(result, dict):
+                continue
+            score = result.get("score")
+            results.append(
+                SearchResultDraft(
+                    title=_trim_search_text(
+                        str(result.get("title") or "Untitled").strip(), 500
+                    ),
+                    url=_trim_search_text(str(result.get("url") or "").strip(), 8_192),
+                    content=_trim_search_text(
+                        str(result.get("content") or "").strip(), 1_200
+                    ),
+                    score=score if isinstance(score, int | float) else None,
+                )
+            )
+    return SearchQueryDraft(query, answer, tuple(results), source_result_count)
+
+
+def _draft_as_tavily_result(draft: SearchQueryDraft) -> dict[str, Any]:
+    raw: dict[str, Any] = {
+        "results": [
+            {
+                "title": result.title,
+                "url": result.url,
+                "content": result.content,
+                **({"score": result.score} if result.score is not None else {}),
+            }
+            for result in draft.results
+        ]
+    }
+    if draft.answer is not None:
+        raw["answer"] = draft.answer
+    return raw
+
+
+def _format_stored_search_batch(batch: StoredSearchBatch) -> list[str]:
+    sections: list[str] = []
+    for query in batch.queries:
+        lines = [f"Web search query: {query.query}"]
+        if query.answer:
+            lines.extend(["", f"Answer summary: {query.answer}"])
+        if not query.results:
+            lines.extend(["", "No web search results were returned."])
+            sections.append("\n".join(lines))
+            continue
+        lines.extend(["", "Sources:"])
+        for index, result in enumerate(query.results, start=1):
+            label = result.ref_id or str(index)
+            lines.append(f"[{label}] {result.title}")
+            if result.url:
+                lines.append(f"URL: {result.url}")
+            if result.content:
+                lines.append(f"Content: {_trim_search_text(result.content, 1200)}")
+            if result.score is not None:
+                lines.append(f"Score: {result.score}")
+            lines.append("")
+        sections.append("\n".join(lines).rstrip())
+    return sections
+
+
+def _resolve_open_url(
+    ref_id: str,
+    *,
+    scope: CodexSearchReferenceScope | None,
+    reference_store: CodexSearchReferenceStore | None,
+) -> str:
+    if ref_id.lower().startswith(("http://", "https://")):
+        return ref_id
+    if SEARCH_REFERENCE_RE.fullmatch(ref_id) is None:
+        raise CodexSearchNotImplemented(
+            f"Codex search reference type is not implemented: {ref_id}"
+        )
+    url = (
+        reference_store.resolve(scope, ref_id)
+        if reference_store is not None and scope is not None
+        else None
+    )
+    if url is None:
+        raise CodexSearchInvalidRequest(f"Unknown search reference: {ref_id}")
+    return url
+
+
+def _trim_search_text(value: str, max_chars: int) -> str:
+    if len(value) <= max_chars:
+        return value
+    return value[: max_chars - 3].rstrip() + "..."
 
 
 def _parse_domains(value: Any, field: str) -> tuple[str, ...]:

@@ -26,6 +26,7 @@ from .auth import (
 )
 from .config import GatewayConfig
 from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
+from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
 from .embeddings import handle_embeddings as _handle_embeddings
 from .headers import (
@@ -974,6 +975,7 @@ def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
     metadata_store = ProviderMetadataStore()
     codex_tool_store = CodexToolLocalizationStore()
     window_tool_search_store = WindowToolSearchStore()
+    codex_search_reference_store = CodexSearchReferenceStore()
     image_fetch_workers = ImageFetchWorkerPool()
     transport = HttpTransport()
 
@@ -1075,6 +1077,7 @@ def create_app(config: GatewayConfig, config_path: str | None = None) -> App:
     app.metadata_store = metadata_store  # type: ignore
     app.codex_tool_store = codex_tool_store  # type: ignore
     app.window_tool_search_store = window_tool_search_store  # type: ignore
+    app.codex_search_reference_store = codex_search_reference_store  # type: ignore
     app.image_fetch_workers = image_fetch_workers  # type: ignore
     app.internal_token = internal_token  # type: ignore
     app.auth_state = auth_state  # type: ignore
@@ -1115,5 +1118,6 @@ async def run_gateway(
             metadata_store=app.metadata_store,  # type: ignore
             codex_tool_store=app.codex_tool_store,  # type: ignore
             window_tool_search_store=app.window_tool_search_store,  # type: ignore
+            codex_search_reference_store=app.codex_search_reference_store,  # type: ignore
             image_fetch_workers=app.image_fetch_workers,  # type: ignore
         )

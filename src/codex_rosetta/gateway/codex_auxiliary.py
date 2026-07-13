@@ -8,6 +8,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.routing import is_openai_responses_passthrough
 
+from .auth import api_key_principal_var
 from .codex_images import (
     IMAGE_ENDPOINTS,
     IMAGEGEN_PROFILE_ITEM_ID,
@@ -24,6 +25,7 @@ from .codex_search import (
     execute_local_codex_search,
     should_use_local_codex_search,
 )
+from .codex_search_references import CodexSearchReferenceStore
 from .config import GatewayConfig
 from .headers import build_upstream_extra_headers, resolve_request_id
 from .logging import record_request_stat
@@ -212,12 +214,15 @@ async def handle_codex_auxiliary(
 
     try:
         if use_local_search:
+            reference_store, principal_id = _search_reference_context(request)
             response, status_code, error_detail = await _handle_local_search(
                 trace,
                 body,
                 web_run_config,
                 search_client,
                 page_client,
+                reference_store,
+                principal_id,
             )
             return response
 
@@ -272,12 +277,24 @@ async def handle_codex_auxiliary(
         )
 
 
+def _search_reference_context(
+    request: Any,
+) -> tuple[CodexSearchReferenceStore | None, str | None]:
+    store = getattr(request.app, "codex_search_reference_store", None)
+    return (
+        store if isinstance(store, CodexSearchReferenceStore) else None,
+        api_key_principal_var.get(),
+    )
+
+
 async def _handle_local_search(
     trace: StreamTraceLogger | None,
     body: dict[str, Any],
     web_search_config: dict[str, Any],
     search_client: TavilySearchClient | None,
     page_client: StaticPageClient | None,
+    reference_store: CodexSearchReferenceStore | None,
+    principal_id: str | None,
 ) -> tuple[Response, int, str | None]:
     if trace is not None:
         trace.log("codex_search_request", codex_search_request_summary(body))
@@ -287,6 +304,8 @@ async def _handle_local_search(
             web_search_config,
             client=search_client,
             page_client=page_client,
+            reference_store=reference_store,
+            principal_id=principal_id,
         )
     except CodexSearchNotImplemented as exc:
         error = str(exc)
