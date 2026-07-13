@@ -183,9 +183,8 @@ class TestOpenAIResponsesToolOps:
         )
         assert result["type"] == "function"
         assert result["name"] == "apply_patch"
-        # Description is enriched with format hint for cross-provider.
-        assert "Apply a unified-diff style patch." in result["description"]
-        assert "[Output format: grammar, syntax: lark]" in result["description"]
+        # Protocol degradation preserves the provider description verbatim.
+        assert result["description"] == "Apply a unified-diff style patch."
         # Synthesized parameters for cross-provider degradation.
         params = result["parameters"]
         assert params["type"] == "object"

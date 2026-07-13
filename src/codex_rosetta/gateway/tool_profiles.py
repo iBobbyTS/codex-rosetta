@@ -189,10 +189,10 @@ def _profile_input_contract(
             raise ValueError(
                 f"catalog item {item['id']!r} profile_inputs must be a list"
             )
-        if raw_inputs and item["type"] not in {"function", "hosted"}:
+        if raw_inputs and item["type"] not in {"function", "hosted", "namespace"}:
             raise ValueError(
                 f"catalog item {item['id']!r} profile_inputs are only supported "
-                "for Function and Hosted tools"
+                "for Function, Hosted, and Namespace tools"
             )
         item_inputs: dict[str, Any] = {}
         for raw_input in raw_inputs:
@@ -203,6 +203,120 @@ def _profile_input_contract(
         if item_inputs:
             definitions[item["id"]] = item_inputs
     return definitions
+
+
+def _profile_mutation_contract(
+    catalog: dict[str, Any],
+    input_definitions: dict[str, dict[str, Any]],
+    supported: dict[str, tuple[str, ...]],
+) -> dict[str, tuple[dict[str, str], ...]]:
+    """Validate declarative Profile-owned model-description mutations."""
+    mutations: dict[str, tuple[dict[str, str], ...]] = {}
+    for item in catalog["items"]:
+        item_id = item["id"]
+        raw_mutations = item.get("profile_mutations", [])
+        if not isinstance(raw_mutations, list):
+            raise ValueError(f"catalog item {item_id!r} profile_mutations must be a list")
+        if raw_mutations and "modified" not in supported[item_id]:
+            raise ValueError(
+                f"catalog item {item_id!r} profile_mutations requires Modified support"
+            )
+        normalized: list[dict[str, str]] = []
+        for raw_mutation in raw_mutations:
+            if not isinstance(raw_mutation, dict):
+                raise ValueError(
+                    f"catalog item {item_id!r} profile mutation must be an object"
+                )
+            unsupported = set(raw_mutation) - {"target", "input_id", "parameter"}
+            if unsupported:
+                raise ValueError(
+                    f"catalog item {item_id!r} profile mutation has unsupported "
+                    f"fields: {sorted(unsupported)}"
+                )
+            target = raw_mutation.get("target")
+            input_id = raw_mutation.get("input_id")
+            parameter = raw_mutation.get("parameter")
+            if target not in {"description", "parameter_description"}:
+                raise ValueError(
+                    f"catalog item {item_id!r} profile mutation has unsupported target"
+                )
+            if not isinstance(input_id, str) or input_id not in input_definitions.get(
+                item_id, {}
+            ):
+                raise ValueError(
+                    f"catalog item {item_id!r} profile mutation references unknown input"
+                )
+            if target == "parameter_description":
+                if not isinstance(parameter, str) or not parameter:
+                    raise ValueError(
+                        f"catalog item {item_id!r} parameter mutation needs parameter"
+                    )
+            elif parameter is not None:
+                raise ValueError(
+                    f"catalog item {item_id!r} description mutation cannot set parameter"
+                )
+            normalized.append(
+                {
+                    "target": target,
+                    "input_id": input_id,
+                    **({"parameter": parameter} if target == "parameter_description" else {}),
+                }
+            )
+        if normalized:
+            mutations[item_id] = tuple(normalized)
+    return mutations
+
+
+def _normalize_profile_input_values(
+    value: Any,
+    definitions: dict[str, dict[str, Any]],
+    *,
+    field: str,
+) -> dict[str, dict[str, str]]:
+    """Validate values against catalog input definitions and fill defaults."""
+    if value is None:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field}.inputs must be an object")
+
+    unknown_items = sorted(set(value) - set(definitions))
+    if unknown_items:
+        raise ValueError(
+            f"{field}.inputs contains unknown catalog IDs: {unknown_items}"
+        )
+
+    normalized: dict[str, dict[str, str]] = {}
+    for item_id, item_definitions in definitions.items():
+        raw_item_values = value.get(item_id, {})
+        if not isinstance(raw_item_values, dict):
+            raise ValueError(f"{field}.inputs.{item_id} must be an object")
+        unknown_inputs = sorted(set(raw_item_values) - set(item_definitions))
+        if unknown_inputs:
+            raise ValueError(
+                f"{field}.inputs.{item_id} contains unknown input IDs: "
+                f"{unknown_inputs}"
+            )
+        normalized[item_id] = {}
+        for input_id, definition in item_definitions.items():
+            input_value = raw_item_values.get(input_id, definition["default"])
+            if not isinstance(input_value, str):
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be a string"
+                )
+            if len(input_value) > MAX_TOOL_PROFILE_INPUT_LENGTH:
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be at most "
+                    f"{MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
+                )
+            if definition["type"] == "select" and input_value not in {
+                option["value"] for option in definition["options"]
+            }:
+                raise ValueError(
+                    f"{field}.inputs.{item_id}.{input_id} must be one of "
+                    f"{[option['value'] for option in definition['options']]}"
+                )
+            normalized[item_id][input_id] = input_value
+    return normalized
 
 
 def _disable_namespace_children(
@@ -284,9 +398,18 @@ def tool_profile_contract() -> dict[str, Any]:
             supported[item_id] = tuple(
                 policy.get("namespace_supported", ("disabled", "expanded"))
             )
-            builtin[item_id] = (
-                "disabled" if policy["default"] == "disabled" else "expanded"
-            )
+            namespace_default = policy.get("namespace_default")
+            if namespace_default is not None:
+                if namespace_default not in supported[item_id]:
+                    raise ValueError(
+                        f"namespace default {namespace_default!r} is unsupported "
+                        f"for {item_id!r}"
+                    )
+                builtin[item_id] = namespace_default
+            else:
+                builtin[item_id] = (
+                    "disabled" if policy["default"] == "disabled" else "expanded"
+                )
             continue
 
         states = tuple(policy["supported"])
@@ -306,6 +429,14 @@ def tool_profile_contract() -> dict[str, Any]:
     )
 
     input_definitions = _profile_input_contract(catalog, supported)
+    profile_mutations = _profile_mutation_contract(
+        catalog, input_definitions, supported
+    )
+    builtin_inputs = _normalize_profile_input_values(
+        builtin_profile.pop("inputs", {}),
+        input_definitions,
+        field="builtin_profile",
+    )
     for item in catalog["items"]:
         description_visible_when = item.get("description_visible_when")
         if description_visible_when is None:
@@ -326,13 +457,7 @@ def tool_profile_contract() -> dict[str, Any]:
         {
             **builtin_profile,
             "tools": dict(builtin),
-            "inputs": {
-                item_id: {
-                    input_id: definition["default"]
-                    for input_id, definition in item_inputs.items()
-                }
-                for item_id, item_inputs in input_definitions.items()
-            },
+            "inputs": builtin_inputs,
         }
     ]
     for preset in catalog.get("preset_profiles", []):
@@ -369,6 +494,7 @@ def tool_profile_contract() -> dict[str, Any]:
         "supported": supported,
         "builtin": builtin,
         "input_definitions": input_definitions,
+        "profile_mutations": profile_mutations,
         "namespace_children": namespace_children,
         "readonly": {profile["id"]: profile for profile in profiles},
     }
@@ -418,51 +544,10 @@ def normalize_tool_profile_inputs(
     value: Any, *, field: str
 ) -> dict[str, dict[str, str]]:
     """Validate and fill tool-card input values from the bundled defaults."""
-    if value is None:
-        value = {}
-    if not isinstance(value, dict):
-        raise ValueError(f"{field}.inputs must be an object")
-
     definitions: dict[str, dict[str, Any]] = tool_profile_contract()[
         "input_definitions"
     ]
-    unknown_items = sorted(set(value) - set(definitions))
-    if unknown_items:
-        raise ValueError(
-            f"{field}.inputs contains unknown catalog IDs: {unknown_items}"
-        )
-
-    normalized: dict[str, dict[str, str]] = {}
-    for item_id, item_definitions in definitions.items():
-        raw_item_values = value.get(item_id, {})
-        if not isinstance(raw_item_values, dict):
-            raise ValueError(f"{field}.inputs.{item_id} must be an object")
-        unknown_inputs = sorted(set(raw_item_values) - set(item_definitions))
-        if unknown_inputs:
-            raise ValueError(
-                f"{field}.inputs.{item_id} contains unknown input IDs: {unknown_inputs}"
-            )
-        normalized[item_id] = {}
-        for input_id, definition in item_definitions.items():
-            input_value = raw_item_values.get(input_id, definition["default"])
-            if not isinstance(input_value, str):
-                raise ValueError(
-                    f"{field}.inputs.{item_id}.{input_id} must be a string"
-                )
-            if len(input_value) > MAX_TOOL_PROFILE_INPUT_LENGTH:
-                raise ValueError(
-                    f"{field}.inputs.{item_id}.{input_id} must be at most "
-                    f"{MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
-                )
-            if definition["type"] == "select" and input_value not in {
-                option["value"] for option in definition["options"]
-            }:
-                raise ValueError(
-                    f"{field}.inputs.{item_id}.{input_id} must be one of "
-                    f"{[option['value'] for option in definition['options']]}"
-                )
-            normalized[item_id][input_id] = input_value
-    return normalized
+    return _normalize_profile_input_values(value, definitions, field=field)
 
 
 def normalize_tool_profile_documents(
@@ -523,9 +608,21 @@ def normalize_tool_profile_input_overrides(
                 "config: tool_profile_input_overrides may only contain bundled "
                 f"Profiles; got '{name}'"
             )
+        if not isinstance(raw_inputs, dict):
+            raise ValueError(
+                f"config: tool_profile_input_overrides.{name}.inputs must be an object"
+            )
+        merged_inputs = {
+            item_id: dict(values)
+            for item_id, values in readonly[name]["inputs"].items()
+        }
+        for item_id, values in raw_inputs.items():
+            if isinstance(values, dict) and isinstance(merged_inputs.get(item_id), dict):
+                merged_inputs[item_id].update(values)
+            else:
+                merged_inputs[item_id] = values
         overrides[name] = normalize_tool_profile_inputs(
-            raw_inputs,
-            field=f"config: tool_profile_input_overrides.{name}",
+            merged_inputs, field=f"config: tool_profile_input_overrides.{name}"
         )
     return overrides
 
@@ -635,15 +732,3 @@ def route_tool_state(route: Any, item_id: str, default: str = "passthrough") -> 
     if not profile:
         return default
     return profile.get(item_id, default)
-
-
-def modified_tool_names(route: Any) -> set[str] | None:
-    """Return catalog names whose Chat definitions may be modified."""
-    if not getattr(route, "tool_profile", None):
-        return None
-    return {
-        item["name"]
-        for item_id, item in tool_catalog_lookups()["items"].items()
-        if item["type"] not in {"namespace", "custom_injection"}
-        and route_tool_state(route, item_id) == "modified"
-    }

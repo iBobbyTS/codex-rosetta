@@ -1,12 +1,12 @@
 # Other Codex Tools
 
-Codex has several agent/runtime tools whose behavior depends on more than a simple function call schema. Codex-Rosetta keeps those tools usable for Chat-only upstream models by preserving Responses-specific structure where needed and adding targeted Chat-model guidance where the native tool descriptions are too terse.
+Codex has several agent/runtime tools whose behavior depends on more than a simple function call schema. Codex-Rosetta keeps those tools usable for Chat-only upstream models by preserving Responses-specific structure where needed. Targeted model guidance is a Profile-owned Function field rather than a hard-coded converter rule.
 
 ## Plan Mode
 
 Plan mode uses `request_user_input` when the model needs a real user decision before producing or revising a plan. Chat models can confuse that with the final approval step and ask the user whether to proceed after they already emitted a proposed plan.
 
-For Chat targets, Rosetta appends extra guidance to the `request_user_input` tool description:
+The bundled **Chat Default** Profile marks `request_user_input` as Modified and supplies this editable Tool Guidance field:
 
 - Use it only for preferences or decisions that materially change the plan.
 - Do not use it to ask whether to approve, proceed with, or implement a proposed plan.
@@ -25,7 +25,7 @@ It is exposed to Chat providers as a regular function tool after Responses-to-Ch
 
 Goal state is managed through `get_goal`, `create_goal`, and `update_goal`. Chat models may not infer the right sequence from the terse native tool descriptions.
 
-For Chat targets, Rosetta appends extra guidance to:
+The bundled **Chat Default** Profile marks these Functions as Modified and supplies editable Tool Guidance fields for:
 
 - `create_goal`: call it when the user explicitly asks to mark a goal complete or blocked but no active goal exists, or when `update_goal` reports that the thread has no goal. Do not set `token_budget` unless the user explicitly provided a numeric token budget.
 - `update_goal`: when goal state is uncertain, call `get_goal` first. If there is no active goal, call `create_goal` with a concise objective and no token budget unless explicitly requested, then retry `update_goal`.
@@ -73,12 +73,12 @@ The bundled Profiles manage current Codex image generation through `image_gen.im
 
 ### Function Card Inputs
 
-A Function or Hosted catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text`, `password`, or `select` input type. A select declares ordered `{value, label}` options: the Tools page displays each label and persists its value. The Tools page renders the entries in catalog order beneath the tool status selector. The `web_search` and `web.run` cards each own their search Provider and Token; Tavily is currently the only provider. The former standalone Web Search settings tab has been removed.
+A Function, Hosted, or Namespace catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text`, `password`, or `select` input type. A select declares ordered `{value, label}` options: the Tools page displays each label and persists its value. The Tools page renders the entries in catalog order beneath the tool status selector. The `web_search` and `web.run` cards each own their search Provider and Token; Tavily is currently the only provider. The former standalone Web Search settings tab has been removed.
 
-An input may declare `visible_when` with a list of tool states, for example `["modified"]`. Hidden inputs retain their saved Profile values. Card descriptions appear in every supported state by default; an item may restrict them with `description_visible_when` using the same state-list format. The bundled descriptions for `request_user_input`, `create_goal`, and `update_goal`, plus the settings for `web_search`, `web.run`, and `image_gen.imagegen`, are visible only while their state is Modified.
+An input may declare `visible_when` with a list of tool states, for example `["modified"]`. Hidden inputs retain their saved Profile values. Card descriptions appear in every supported state by default; an item may restrict them with `description_visible_when` using the same state-list format. A catalog item may also declare `profile_mutations`: generic Profile processing applies their configured description or parameter-description append operations only in the Modified state. The Chat Default Tool Guidance fields for `request_user_input`, the Goal tools, selected `collaboration` Functions, and the GitHub MCP Namespace use this mechanism; the converter contains no Function-name-specific guidance. Hosted `web_search` remains protocol-converted in either state, but only Modified can append its Profile guidance.
 
 All Namespace rows start expanded on the Tools page. This display default is independent of each Namespace Profile state, and users can still collapse rows locally.
 
 The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
 
-User-entered values are saved with a user Profile under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current values into the new Profile; switching or resetting a Profile restores its saved values. Every bundled Profile also allows these fields to be edited and explicitly saved; those values are stored in `tool_profile_input_overrides.<profile-id>` without changing the bundled JSON. A bundled Profile's tool delivery states remain read-only. Inputs have no effect unless their runtime feature consumes them; currently `image_gen.imagegen` consumes its Base URL and Token when set to Modified.
+User-entered values are saved with a user Profile under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current values into the new Profile; switching or resetting a Profile restores its saved values. Every bundled Profile also allows these fields to be edited and explicitly saved; those values are stored in `tool_profile_input_overrides.<profile-id>` without changing the bundled JSON. A bundled Profile's tool delivery states remain read-only. Inputs have no effect unless their runtime feature consumes them; currently Modified Functions consume `guidance`, and `image_gen.imagegen` consumes its Base URL and Token.

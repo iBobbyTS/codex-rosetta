@@ -29,74 +29,6 @@ from ..base.helpers import log_orphan_warnings, sanitize_schema
 logger = logging.getLogger(__name__)
 
 
-# Extra guidance for selected Codex tools when they are exposed through Chat
-# Completions-style function descriptions. Some Chat models do not reliably infer
-# Codex UI conventions from terse native Responses tool names.
-_CHAT_TOOL_DESCRIPTION_SUFFIXES = {
-    "request_user_input": (
-        "Chat-model guidance: use this only for real user preferences or "
-        "decisions that materially change the plan. Do not use it to ask "
-        "whether to approve, proceed with, or implement a proposed plan; after "
-        "emitting the final <proposed_plan> block, let the Codex UI handle "
-        "approval and implementation. Keep option labels short natural phrases "
-        "without A:/B:/C: prefixes."
-    ),
-    "create_goal": (
-        "Chat-model guidance: call this when the user explicitly asks to mark "
-        "a goal complete or blocked but get_goal returns no active goal, or "
-        "update_goal reports that the thread has no goal. Do not set "
-        "token_budget unless the user explicitly provided a numeric token "
-        "budget."
-    ),
-    "update_goal": (
-        "Chat-model guidance: before updating a goal, use get_goal when goal "
-        "state is uncertain. If no active goal exists or this tool reports "
-        "that the thread has no goal, call create_goal first with a concise "
-        "objective and no token_budget unless explicitly requested, then retry "
-        "update_goal with the requested status."
-    ),
-    "spawn_agent": (
-        "Chat-model guidance: the message field is the complete child task. "
-        'With fork_turns="none", the child receives no surrounding user '
-        "turns, so include every instruction the child must follow in message "
-        "and do not expect it to reconstruct the task from workspace files."
-    ),
-    "wait_agent": (
-        "Chat-model guidance: this waits for a future mailbox update; it does "
-        "not replay a completion notification already delivered in the current "
-        "input. If that completion is already visible, treat it as authoritative "
-        "instead of repeatedly waiting by reflex."
-    ),
-    "list_agents": (
-        "Chat-model guidance: path_prefix filters canonical task paths. Use the "
-        "requested child task-name segment, and treat the returned status and "
-        "result for that canonical path as authoritative."
-    ),
-    "send_message": (
-        "Chat-model guidance: target must be the canonical task path returned by "
-        "spawn_agent. Send the requested message exactly; this delivers to the "
-        "existing child and does not start a replacement task."
-    ),
-}
-
-
-def _adapt_chat_tool_description(
-    tool_name: str,
-    description: str,
-    *,
-    enabled: bool = True,
-) -> str:
-    """Add Chat-model guidance for selected Codex tool descriptions."""
-    if not enabled:
-        return description
-    suffix = _CHAT_TOOL_DESCRIPTION_SUFFIXES.get(tool_name)
-    if suffix is None and "-" in tool_name:
-        suffix = _CHAT_TOOL_DESCRIPTION_SUFFIXES.get(tool_name.rsplit("-", 1)[-1])
-    if not suffix or suffix in description:
-        return description
-    return f"{description}\n\n{suffix}" if description else suffix
-
-
 # ==================== Orphaned Tool Call Fix ====================
 
 
@@ -213,18 +145,11 @@ class OpenAIChatToolOps(BaseToolOps):
         Returns:
             OpenAI Chat tool definition dict.
         """
-        optimize_description = bool(
-            kwargs.get("enable_tool_description_optimization", True)
-        )
         if ir_tool.get("type", "function") == "function":
             name = ir_tool["name"]
             func_def: dict[str, Any] = {
                 "name": name,
-                "description": _adapt_chat_tool_description(
-                    name,
-                    ir_tool.get("description", ""),
-                    enabled=optimize_description,
-                ),
+                "description": ir_tool.get("description", ""),
             }
             parameters = ir_tool.get("parameters")
             if parameters and isinstance(parameters, dict):
@@ -244,11 +169,7 @@ class OpenAIChatToolOps(BaseToolOps):
             "type": "function",
             "function": {
                 "name": ir_tool["name"],
-                "description": _adapt_chat_tool_description(
-                    ir_tool["name"],
-                    ir_tool.get("description", ""),
-                    enabled=optimize_description,
-                ),
+                "description": ir_tool.get("description", ""),
                 "parameters": params,
             },
         }

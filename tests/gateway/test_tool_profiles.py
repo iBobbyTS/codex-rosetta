@@ -50,6 +50,25 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     )
     assert contract["builtin"]["namespace.clock"] == "expanded"
     assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
+    assert contract["builtin"]["namespace.mcp_github"] == "modified"
+    assert contract["builtin"]["namespace.multi_agent_v2.spawn_agent"] == "modified"
+    assert contract["supported"]["namespace.multi_agent_v2.spawn_agent"] == (
+        "disabled",
+        "passthrough",
+        "modified",
+    )
+    assert (
+        "message field is the complete child task"
+        in contract["readonly"]["builtin"]["inputs"][
+            "namespace.multi_agent_v2.spawn_agent"
+        ]["guidance"]
+    )
+    assert (
+        tool_profile_contract()["readonly"]["responses_pass_through"]["inputs"][
+            "namespace.multi_agent_v2.spawn_agent"
+        ]["guidance"]
+        == ""
+    )
     assert all(
         contract["builtin"][child_id] == "disabled"
         for child_id in contract["namespace_children"]["namespace.multi_agent_v1"]
@@ -522,6 +541,119 @@ def test_profile_filters_top_level_lite_and_namespace_children():
     assert [tool["name"] for tool in adapted["tools"][0]["tools"]] == ["curr_time"]
     assert adapted["input"] == []
     assert "tool_choice" not in adapted
+
+
+def test_modified_profile_guidance_is_appended_to_direct_and_namespace_tools():
+    profile = _profile(
+        **{
+            "function.create_goal": "modified",
+            "namespace.multi_agent_v2.spawn_agent": "modified",
+        }
+    )
+    route = _route(profile)
+    route.tool_profile_inputs = {
+        "function.create_goal": {"guidance": "Create only when required."},
+        "namespace.multi_agent_v2.spawn_agent": {
+            "guidance": "The child message is complete."
+        },
+    }
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "name": "create_goal",
+                "description": "Create a goal.",
+                "parameters": {},
+            },
+            {
+                "type": "namespace",
+                "name": "collaboration",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "spawn_agent",
+                        "description": "Spawn a child.",
+                        "parameters": {},
+                    }
+                ],
+            },
+        ]
+    }
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert adapted["tools"][0]["description"] == (
+        "Create a goal.\n\nCreate only when required."
+    )
+    assert adapted["tools"][1]["tools"][0]["description"] == (
+        "Spawn a child.\n\nThe child message is complete."
+    )
+
+
+def test_modified_github_namespace_profile_appends_parameter_guidance():
+    route = _route(_profile(**{"namespace.mcp_github": "modified"}))
+    route.tool_profile_inputs = {
+        "namespace.mcp_github": {
+            "owner_guidance": "Inspect git remote before choosing the owner.",
+            "repo_guidance": "Inspect git remote before choosing the repository.",
+        }
+    }
+    body = {
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__codex_apps__github",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "create_issue",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "owner": {"type": "string"},
+                                "repo": {"type": "string"},
+                            },
+                        },
+                    }
+                ],
+            }
+        ]
+    }
+
+    adapted = _apply_tool_adaptation(body, route)
+    properties = adapted["tools"][0]["tools"][0]["parameters"]["properties"]
+
+    assert properties["owner"]["description"] == (
+        "Inspect git remote before choosing the owner."
+    )
+    assert properties["repo"]["description"] == (
+        "Inspect git remote before choosing the repository."
+    )
+
+
+def test_modified_web_search_profile_only_changes_description_from_its_input():
+    body = {
+        "tools": [
+            {
+                "type": "web_search",
+                "description": "Search current documentation.",
+            }
+        ]
+    }
+    route = _route(_profile(**{"hosted.web_search": "modified"}))
+    route.tool_profile_inputs = {
+        "hosted.web_search": {"guidance": "Prefer primary sources."}
+    }
+
+    modified = _apply_tool_adaptation(body, route)
+    passthrough = _apply_tool_adaptation(
+        body, _route(_profile(**{"hosted.web_search": "passthrough"}))
+    )
+
+    assert modified["tools"][0]["description"] == (
+        "Search current documentation.\n\nPrefer primary sources."
+    )
+    assert passthrough is body
 
 
 def test_profile_limits_localized_native_and_injected_tools():

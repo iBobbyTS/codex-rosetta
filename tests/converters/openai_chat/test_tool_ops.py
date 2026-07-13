@@ -65,14 +65,14 @@ class TestOpenAIChatToolOps:
         assert result["function"]["name"] == "apply_patch"
         assert result["function"]["description"] == "Apply a patch"
 
-    def test_ir_tool_definition_to_p_adds_goal_chat_guidance(self):
-        """Goal tools get extra guidance when exposed as Chat functions."""
+    def test_ir_tool_definition_to_p_preserves_profile_prepared_goal_description(self):
+        """Goal guidance belongs to the Profile-prepared description."""
         ir_tool = cast(
             ToolDefinition,
             {
                 "type": "function",
                 "name": "update_goal",
-                "description": "Update the existing goal.",
+                "description": "Update the existing goal.\n\nProfile-owned guidance.",
                 "parameters": {
                     "type": "object",
                     "properties": {"status": {"type": "string"}},
@@ -85,14 +85,13 @@ class TestOpenAIChatToolOps:
 
         result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
 
-        description = result["function"]["description"]
-        assert description.startswith("Update the existing goal.")
-        assert "Chat-model guidance" in description
-        assert "call create_goal first" in description
+        assert result["function"]["description"] == (
+            "Update the existing goal.\n\nProfile-owned guidance."
+        )
         assert result["function"]["parameters"]["required"] == ["status"]
 
-    def test_namespaced_collaboration_tools_get_chat_guidance(self):
-        """Flattened collaboration tools retain child-specific guidance."""
+    def test_namespaced_collaboration_tools_preserve_prepared_descriptions(self):
+        """Flattened tools do not receive hard-coded descriptions."""
         spawn_tool = cast(
             ToolDefinition,
             {
@@ -119,23 +118,14 @@ class TestOpenAIChatToolOps:
         spawn_result = OpenAIChatToolOps.ir_tool_definition_to_p(spawn_tool)
         wait_result = OpenAIChatToolOps.ir_tool_definition_to_p(wait_tool)
 
-        assert (
-            "message field is the complete child task"
-            in spawn_result["function"]["description"]
-        )
-        assert (
-            "does not replay a completion notification"
-            in wait_result["function"]["description"]
-        )
+        assert spawn_result["function"]["description"] == "Spawn a child."
+        assert wait_result["function"]["description"] == "Wait for a child."
 
-    def test_collaboration_state_tools_get_chat_guidance(self):
-        """State-oriented collaboration tools retain parameter guidance."""
-        expected_guidance = {
-            "collaboration-list_agents": "path_prefix filters canonical task paths",
-            "collaboration-send_message": "target must be the canonical task path",
-        }
+    def test_collaboration_state_tools_preserve_prepared_descriptions(self):
+        """State tool descriptions are untouched by the Chat converter."""
+        tool_names = ["collaboration-list_agents", "collaboration-send_message"]
 
-        for tool_name, expected in expected_guidance.items():
+        for tool_name in tool_names:
             ir_tool = cast(
                 ToolDefinition,
                 {
@@ -150,10 +140,10 @@ class TestOpenAIChatToolOps:
 
             result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
 
-            assert expected in result["function"]["description"]
+            assert result["function"]["description"] == "Original description."
 
-    def test_ir_tool_definition_to_p_skips_chat_guidance_when_disabled(self):
-        """Chat tool description optimization can be disabled."""
+    def test_ir_tool_definition_to_p_preserves_unmodified_description(self):
+        """The converter does not inject tool-name-specific guidance."""
         ir_tool = cast(
             ToolDefinition,
             {
@@ -170,15 +160,12 @@ class TestOpenAIChatToolOps:
             },
         )
 
-        result = OpenAIChatToolOps.ir_tool_definition_to_p(
-            ir_tool,
-            enable_tool_description_optimization=False,
-        )
+        result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
 
         assert result["function"]["description"] == "Update the existing goal."
 
-    def test_ir_tool_definition_to_p_adds_request_user_input_chat_guidance(self):
-        """request_user_input gets Plan-mode guidance for Chat models."""
+    def test_ir_tool_definition_to_p_preserves_request_user_input_description(self):
+        """request_user_input guidance is Profile-owned rather than hard-coded."""
         ir_tool = cast(
             ToolDefinition,
             {
@@ -197,10 +184,7 @@ class TestOpenAIChatToolOps:
 
         result = OpenAIChatToolOps.ir_tool_definition_to_p(ir_tool)
 
-        description = result["function"]["description"]
-        assert description.startswith("Request user input.")
-        assert "let the Codex UI handle approval and implementation" in description
-        assert "without A:/B:/C: prefixes" in description
+        assert result["function"]["description"] == "Request user input."
         assert result["function"]["parameters"]["required"] == ["questions"]
 
     def test_p_tool_definition_to_ir(self):

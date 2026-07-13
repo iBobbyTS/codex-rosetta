@@ -74,7 +74,7 @@ from .tool_adaptation import (
     should_localize_code_tools,
     translate_localized_ir_response,
 )
-from .tool_profiles import modified_tool_names, route_tool_state, tool_catalog_lookups
+from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
@@ -260,16 +260,6 @@ _DIRECT_RESPONSES_NAMESPACE_TOOLS = {
     "multi_agent_v1",
 }
 
-_GITHUB_NAMESPACE_NAME = "mcp__codex_apps__github"
-_GITHUB_OWNER_HINT = (
-    "Do not guess. If the owner is not explicitly provided, inspect the local "
-    "git remote first, for example by running git remote -v."
-)
-_GITHUB_REPO_HINT = (
-    "Do not guess. If the repository name is not explicitly provided, derive "
-    "it from the user request or inspect the local git remote first, for example "
-    "by running git remote -v."
-)
 _TOOL_SEARCH_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
@@ -284,51 +274,6 @@ def _should_defer_responses_namespace_tool(tool: Any) -> bool:
         return False
     name = tool.get("name")
     return isinstance(name, str) and name not in _DIRECT_RESPONSES_NAMESPACE_TOOLS
-
-
-def _append_schema_description_hint(schema: dict[str, Any], hint: str) -> None:
-    description = schema.get("description")
-    if isinstance(description, str) and description.strip():
-        if hint not in description:
-            schema["description"] = f"{description.rstrip()} {hint}"
-    else:
-        schema["description"] = hint
-
-
-def _patch_github_namespace_tool_schema_for_chat(
-    tool: dict[str, Any],
-) -> dict[str, Any]:
-    """Add Chat-only GitHub owner/repo hints to loadable namespace tools."""
-    metadata = tool.get("metadata")
-    if not isinstance(metadata, dict):
-        return tool
-    if metadata.get("responses_namespace") != _GITHUB_NAMESPACE_NAME:
-        return tool
-
-    parameters = tool.get("parameters")
-    if not isinstance(parameters, dict):
-        return tool
-    properties = parameters.get("properties")
-    if not isinstance(properties, dict):
-        return tool
-
-    patched = copy.deepcopy(tool)
-    patched_parameters = patched.get("parameters")
-    if not isinstance(patched_parameters, dict):
-        return patched
-    patched_properties = patched_parameters.get("properties")
-    if not isinstance(patched_properties, dict):
-        return patched
-
-    owner_schema = patched_properties.get("owner")
-    if isinstance(owner_schema, dict):
-        _append_schema_description_hint(owner_schema, _GITHUB_OWNER_HINT)
-
-    repo_schema = patched_properties.get("repo")
-    if isinstance(repo_schema, dict):
-        _append_schema_description_hint(repo_schema, _GITHUB_REPO_HINT)
-
-    return patched
 
 
 def _synthetic_responses_tool_search_definition(
@@ -607,7 +552,9 @@ def _profile_item_id(tool: Any, *, namespace: str | None = None) -> str | None:
 
 
 def _filter_profile_namespace_children(
-    tool: dict[str, Any], route: ResolvedRoute
+    tool: dict[str, Any],
+    namespace_item_id: str,
+    route: ResolvedRoute,
 ) -> tuple[dict[str, Any] | None, set[str]]:
     """Filter disabled children from one enabled namespace definition."""
     namespace = tool.get("name")
@@ -623,10 +570,17 @@ def _filter_profile_namespace_children(
             if isinstance(child_name, str):
                 removed.add(child_name)
         else:
-            kept.append(child)
+            adapted_child = child
+            if child_id is not None:
+                adapted_child = _apply_profile_tool_mutations(
+                    adapted_child, child_id, route
+                )
+            kept.append(
+                _apply_profile_tool_mutations(adapted_child, namespace_item_id, route)
+            )
     if not kept:
         return None, removed
-    if len(kept) == len(children):
+    if kept == children:
         return tool, removed
     adapted = dict(tool)
     adapted["tools"] = kept
@@ -644,11 +598,59 @@ def _filter_profile_tool(
     if route_tool_state(route, item_id) == "disabled":
         return None, {name} if isinstance(name, str) else set()
     if isinstance(tool, dict) and tool.get("type") == "namespace":
-        adapted, removed = _filter_profile_namespace_children(tool, route)
+        adapted, removed = _filter_profile_namespace_children(tool, item_id, route)
         if adapted is None and isinstance(name, str):
             removed.add(name)
         return adapted, removed
-    return tool, set()
+    return _apply_profile_tool_mutations(tool, item_id, route), set()
+
+
+def _append_profile_description(value: Any, append: str) -> str:
+    """Append one Profile-owned model instruction without duplication."""
+    description = value if isinstance(value, str) else ""
+    if append in description:
+        return description
+    return f"{description}\n\n{append}" if description else append
+
+
+def _apply_profile_tool_mutations(
+    tool: Any,
+    item_id: str,
+    route: ResolvedRoute,
+) -> Any:
+    """Apply catalog-declared model-description mutations for a Modified item."""
+    if not isinstance(tool, dict) or route_tool_state(route, item_id) != "modified":
+        return tool
+    mutations = tool_profile_contract()["profile_mutations"].get(item_id, ())
+    values = route.tool_profile_inputs.get(item_id, {})
+    if not mutations or not isinstance(values, dict):
+        return tool
+    adapted = copy.deepcopy(tool)
+    changed = False
+    for mutation in mutations:
+        value = values.get(mutation["input_id"])
+        if not isinstance(value, str) or not (append := value.strip()):
+            continue
+        if mutation["target"] == "description":
+            description = _append_profile_description(adapted.get("description"), append)
+            if description != adapted.get("description"):
+                adapted["description"] = description
+                changed = True
+            continue
+        parameters = adapted.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        parameter = properties.get(mutation["parameter"])
+        if not isinstance(parameter, dict):
+            continue
+        description = _append_profile_description(parameter.get("description"), append)
+        if description != parameter.get("description"):
+            parameter["description"] = description
+            changed = True
+    return adapted if changed else tool
 
 
 def _filter_profile_tools(
@@ -2226,8 +2228,6 @@ class WindowToolSearchStore:
             name = tool.get("name")
             if not isinstance(name, str) or name in existing_names:
                 continue
-            if optimize_tool_descriptions:
-                tool = _patch_github_namespace_tool_schema_for_chat(tool)
             existing_tools.append(tool)
             existing_names.add(name)
             added.append(tool)
@@ -2465,8 +2465,6 @@ async def handle_non_streaming(
         reasoning_mapping=None,
         provider_name=route.provider_name,
         conversion_options={
-            "enable_tool_description_optimization": True,
-            "modified_tool_names": modified_tool_names(route),
             "image_fetch_policy": image_fetch_policy,
         },
     )
@@ -3332,8 +3330,6 @@ async def handle_streaming(
         reasoning_mapping=None,
         provider_name=route.provider_name,
         conversion_options={
-            "enable_tool_description_optimization": True,
-            "modified_tool_names": modified_tool_names(route),
             "image_fetch_policy": image_fetch_policy,
         },
     )

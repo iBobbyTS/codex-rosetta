@@ -23,7 +23,6 @@ from .tool_profiles import route_tool_state, tool_catalog_lookups
 DEFAULT_TOOL_CALL_CACHE_TTL_HOURS = 24.0
 MAX_TOOL_CALL_CACHE_TTL_HOURS = 720.0
 DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS = True
-DEFAULT_ENABLE_TOOL_DESCRIPTION_OPTIMIZATION = True
 DEFAULT_ENABLE_PHASE_DETECTION = True
 LOCALIZED_CODE_TOOL_NAMES = frozenset({"Read", "Edit", "Write", "Glob", "Grep"})
 RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES = LOCALIZED_CODE_TOOL_NAMES | {"Bash"}
@@ -324,20 +323,6 @@ def use_apply_patch_for_code_edits(tool_adaptation: dict[str, Any] | None) -> bo
         tool_adaptation.get(
             "use_apply_patch_for_code_edits",
             DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
-        )
-    )
-
-
-def enable_tool_description_optimization(
-    tool_adaptation: dict[str, Any] | None,
-) -> bool:
-    """Return whether Chat-facing tool descriptions may be enhanced."""
-    if not isinstance(tool_adaptation, dict):
-        return DEFAULT_ENABLE_TOOL_DESCRIPTION_OPTIMIZATION
-    return bool(
-        tool_adaptation.get(
-            "enable_tool_description_optimization",
-            DEFAULT_ENABLE_TOOL_DESCRIPTION_OPTIMIZATION,
         )
     )
 

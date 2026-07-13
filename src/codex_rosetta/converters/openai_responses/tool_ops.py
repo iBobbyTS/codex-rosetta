@@ -300,26 +300,11 @@ class OpenAIResponsesToolOps(BaseToolOps):
                     synth_params = {
                         "type": "object",
                         "properties": {
-                            "input": {
-                                "type": "string",
-                                "description": "Free-form text input",
-                            }
+                            "input": {"type": "string"}
                         },
                         "required": ["input"],
                     }
-                # Append format constraint info to description so
-                # cross-provider models get a hint about the expected
-                # output shape (best-effort, not enforced).
                 desc = provider_tool.get("description", "")
-                fmt = provider_tool.get("format")
-                if fmt:
-                    fmt_type = fmt.get("type", "unknown")
-                    fmt_syntax = fmt.get("syntax", "")
-                    hint = f"[Output format: {fmt_type}"
-                    if fmt_syntax:
-                        hint += f", syntax: {fmt_syntax}"
-                    hint += "]"
-                    desc = f"{desc}\n\n{hint}" if desc else hint
                 result = {
                     "type": "function",
                     "name": provider_tool.get("name", tool_type),
@@ -601,18 +586,11 @@ class OpenAIResponsesToolOps(BaseToolOps):
         synth_params = {
             "type": "object",
             "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The web search query to run.",
-                }
+                "query": {"type": "string"}
             },
             "required": ["query"],
         }
-        description = provider_tool.get("description") or (
-            "Search the web for current or external information. "
-            "Use this when the answer depends on recent facts, "
-            "web pages, or source material outside the prompt."
-        )
+        description = provider_tool.get("description", "")
         return cast(
             ToolDefinition,
             {
