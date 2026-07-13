@@ -41,6 +41,65 @@ token 发送。详见[网关安全与认证](docs/zh-cn/gateway-security.md)。
 codex-rosetta-gateway --host 127.0.0.1 -v
 ```
 
+## Codex 模型名称与内置功能模型
+
+不建议把 `deepseek-v4-pro`、`glm-5.2` 等第三方模型名直接暴露给 Codex。
+未知模型名会使用 fallback 模型元数据，进而改变 Codex 启用的工具、Responses
+请求形态、推理控制、上下文限制和多 Agent 行为。建议在 Rosetta 模型组中使用
+Codex 内置模型名作为公开名称，并用 `upstream_model` 保存服务商的真实模型 ID。
+
+建议使用以下公开模型名：
+
+- `gpt-5.6-sol`
+- `gpt-5.6-terra`
+- `gpt-5.5`
+- `gpt-5.4`
+- `gpt-5.4-mini`
+- `gpt-5.2`
+
+公开名称决定 Codex 选择的模型元数据和工具表；Rosetta 会在向服务商发送请求前
+将其替换为 `upstream_model`。应选择上下文窗口、输入模态、推理行为和工具模式
+与真实上游模型相符的内置名称。名称映射不会让上游模型获得其本身不支持的能力。
+
+以下内置名称具有特殊用途：
+
+- `gpt-5.6-luna` 使用旧版 multi-agent v1 工具，Subagent 可能工作异常；Rosetta
+  内置的 **Chat Default** Tool Profile 还会禁用 `multi_agent_v1` Namespace。
+- `gpt-5.4` 默认用于合并、整理记忆。如果服务商使用其他公开模型名，可在 Codex
+  `config.toml` 中通过 `memories.consolidation_model` 覆盖。
+- `gpt-5.4-mini` 默认用于从历史 Thread 提取记忆，可通过
+  `memories.extract_model` 覆盖。
+- `codex-auto-review` 默认用于自动审批审查，包括命令执行批准。可通过当前模型在
+  Codex 模型目录中的 `auto_review_model_override` 字段覆盖；它是模型元数据，
+  不是 `config.toml` 顶层配置项。
+
+例如，可在 Codex `config.toml` 中覆盖记忆模型：
+
+```toml
+[memories]
+consolidation_model = "your-consolidation-model"
+extract_model = "your-extraction-model"
+```
+
+### 为未固定版本的模型启用 v2 Collaboration
+
+`gpt-5.6-sol` 和 `gpt-5.6-terra` 已通过内置模型元数据选择 v2
+`collaboration`。`gpt-5.6-luna` 明确选择旧版 v1，因此下面的 Feature 配置
+不会把 Luna 升级为 v2。对于模型目录中没有指定 multi-agent 版本的内置模型，
+例如 `gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini` 和 `gpt-5.2`，可在 Codex
+`config.toml` 中启用 v2：
+
+```toml
+[features]
+multi_agent_v2 = true
+```
+
+修改后请新建 Codex 任务。已有任务会保留首次选择的 multi-agent 版本，因此在
+同一任务中切换模型或修改 Feature，不一定会替换当前工具表。稳定版
+`multi_agent` Feature（也接受旧名称 `collab`）会在未启用 v2 时选择旧版 v1
+工具；新配置在目标模型能够使用 `collaboration` Namespace 时应优先启用
+`multi_agent_v2`。
+
 ## 完整文档
 
 - [中文用户文档](docs/zh-cn/README.md)
