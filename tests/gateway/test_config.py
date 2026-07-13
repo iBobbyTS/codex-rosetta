@@ -9,6 +9,7 @@ from argparse import Namespace
 
 import pytest
 
+import codex_rosetta.gateway.config as gateway_config
 from codex_rosetta.gateway.cli import (
     _cmd_add_model,
     _cmd_add_model_group,
@@ -16,25 +17,44 @@ from codex_rosetta.gateway.cli import (
     _empty_config_template,
 )
 from codex_rosetta.gateway.config import (
-    DEFAULT_CONFIG_PATH,
-    PATHS_TO_TRY,
+    CONFIG_DIRS_TO_TRY,
+    DEFAULT_CONFIG_DIR,
     GatewayConfig,
+    config_path_for_dir,
+    discover_config,
     load_config,
 )
 
 
-def test_default_config_search_only_uses_xdg_path() -> None:
-    expected = os.path.expanduser("~/.config/codex-rosetta-gateway/config.jsonc")
+def test_default_config_search_only_uses_xdg_directory() -> None:
+    expected = os.path.expanduser("~/.config/codex-rosetta-gateway")
 
-    assert DEFAULT_CONFIG_PATH == expected
-    assert PATHS_TO_TRY == [expected]
+    assert DEFAULT_CONFIG_DIR == expected
+    assert CONFIG_DIRS_TO_TRY == [expected]
+    assert config_path_for_dir(expected) == os.path.join(expected, "config.jsonc")
 
 
-def test_init_uses_the_single_default_config_path(tmp_path, monkeypatch) -> None:
-    config_path = tmp_path / "xdg" / "config.jsonc"
-    monkeypatch.setattr(
-        "codex_rosetta.gateway.cli.DEFAULT_CONFIG_PATH", str(config_path)
-    )
+def test_discover_config_resolves_explicit_directory() -> None:
+    assert discover_config("/tmp/gateway") == "/tmp/gateway/config.jsonc"
+
+
+def test_discover_config_checks_config_jsonc_inside_default_directory(
+    tmp_path, monkeypatch
+) -> None:
+    config_dir = tmp_path / "gateway"
+    config_dir.mkdir()
+    config_path = config_dir / "config.jsonc"
+    monkeypatch.setattr(gateway_config, "CONFIG_DIRS_TO_TRY", [str(config_dir)])
+
+    assert discover_config() is None
+    config_path.write_text("{}", encoding="utf-8")
+    assert discover_config() == str(config_path)
+
+
+def test_init_uses_the_single_default_config_directory(tmp_path, monkeypatch) -> None:
+    config_dir = tmp_path / "xdg"
+    config_path = config_dir / "config.jsonc"
+    monkeypatch.setattr("codex_rosetta.gateway.cli.DEFAULT_CONFIG_DIR", str(config_dir))
 
     _cmd_init(Namespace(config=None))
 
@@ -543,7 +563,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
 
     _cmd_add_model_group(
         Namespace(
-            config=str(config_path),
+            config=str(tmp_path),
             name="Test LLMs",
             provider="test",
             type="llm",
@@ -551,7 +571,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
     )
     _cmd_add_model(
         Namespace(
-            config=str(config_path),
+            config=str(tmp_path),
             name="gpt-test",
             group="Test LLMs",
         )
@@ -589,7 +609,7 @@ def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
 
     _cmd_add_model_group(
         Namespace(
-            config=str(config_path),
+            config=str(tmp_path),
             name="Test Rosetta",
             provider="test",
             type="llm",
@@ -623,7 +643,7 @@ def test_cli_add_tool_mapping_only_group_selects_pass_through_profile(tmp_path):
 
     _cmd_add_model_group(
         Namespace(
-            config=str(config_path),
+            config=str(tmp_path),
             name="Test Responses",
             provider="test",
             type="llm",

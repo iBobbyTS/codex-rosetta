@@ -34,11 +34,12 @@ from .transport import ProviderInfo
 logger = logging.getLogger("codex-rosetta-gateway")
 
 # ---------------------------------------------------------------------------
-# Config file search path
+# Config directory search path
 # ---------------------------------------------------------------------------
 
-DEFAULT_CONFIG_PATH = os.path.expanduser("~/.config/codex-rosetta-gateway/config.jsonc")
-PATHS_TO_TRY = [DEFAULT_CONFIG_PATH]
+CONFIG_FILENAME = "config.jsonc"
+DEFAULT_CONFIG_DIR = os.path.expanduser("~/.config/codex-rosetta-gateway")
+CONFIG_DIRS_TO_TRY = [DEFAULT_CONFIG_DIR]
 
 API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
     "responses_passthrough": "openai_responses",
@@ -440,16 +441,22 @@ def load_config_raw(path: str) -> ConfigDocument:
     )
 
 
-def discover_config(explicit_path: str | None = None) -> str | None:
+def config_path_for_dir(config_dir: str) -> str:
+    """Return the gateway config file path inside *config_dir*."""
+    return os.path.join(config_dir, CONFIG_FILENAME)
+
+
+def discover_config(explicit_dir: str | None = None) -> str | None:
     """Find the first existing config file.
 
-    If *explicit_path* is given, return it unconditionally (caller is
-    responsible for handling missing files).  Otherwise search
-    ``PATHS_TO_TRY`` in order and return the first hit, or ``None``.
+    If *explicit_dir* is given, return its ``config.jsonc`` path
+    unconditionally (the caller handles a missing file). Otherwise search
+    ``CONFIG_DIRS_TO_TRY`` in order and return the first hit, or ``None``.
     """
-    if explicit_path is not None:
-        return explicit_path
-    for path in PATHS_TO_TRY:
+    if explicit_dir is not None:
+        return config_path_for_dir(explicit_dir)
+    for config_dir in CONFIG_DIRS_TO_TRY:
+        path = config_path_for_dir(config_dir)
         if os.path.isfile(path):
             return path
     return None

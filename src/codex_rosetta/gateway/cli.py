@@ -16,10 +16,11 @@ from codex_rosetta import __version__
 
 from .banner import print_banner
 from .config import (
-    DEFAULT_CONFIG_PATH,
+    CONFIG_DIRS_TO_TRY,
+    DEFAULT_CONFIG_DIR,
     DEFAULT_REQUEST_BODY_LIMIT_MB,
-    PATHS_TO_TRY,
     GatewayConfig,
+    config_path_for_dir,
     default_tool_profile_for_provider,
     discover_config,
     load_config,
@@ -41,9 +42,10 @@ logger = get_logger()
 # ---------------------------------------------------------------------------
 
 
-def _open_in_editor(config_path: str | None = None) -> None:
+def _open_in_editor(config_dir: str | None = None) -> None:
     """Open a config file in the user's preferred editor."""
-    paths = [config_path] if config_path else list(PATHS_TO_TRY)
+    config_dirs = [config_dir] if config_dir else list(CONFIG_DIRS_TO_TRY)
+    paths = [config_path_for_dir(directory) for directory in config_dirs]
 
     editors: list[str] = []
     env_editor = os.getenv("EDITOR")
@@ -114,6 +116,11 @@ def _load_or_create_config(path: str) -> tuple[dict[str, Any], str]:
     return data, path
 
 
+def _config_path_for_write(config_dir: str | None) -> str:
+    """Resolve the config file path used by mutating subcommands."""
+    return discover_config(config_dir) or config_path_for_dir(DEFAULT_CONFIG_DIR)
+
+
 def _write_jsonc(path: str, data: dict[str, Any]) -> None:
     write_config(path, data)
 
@@ -125,7 +132,7 @@ def _write_jsonc(path: str, data: dict[str, Any]) -> None:
 
 def _cmd_init(args: argparse.Namespace) -> None:
     """Create a template config.jsonc at the XDG default location."""
-    config_path = args.config or DEFAULT_CONFIG_PATH
+    config_path = config_path_for_dir(args.config or DEFAULT_CONFIG_DIR)
     if os.path.isfile(config_path):
         print(f"Config already exists at {config_path}", file=sys.stderr)
         print("Use --edit / -e to modify it, or remove it first.", file=sys.stderr)
@@ -180,7 +187,7 @@ def _cmd_init(args: argparse.Namespace) -> None:
 
 
 def _cmd_add_provider(args: argparse.Namespace) -> None:
-    config_path = discover_config(args.config) or DEFAULT_CONFIG_PATH
+    config_path = _config_path_for_write(args.config)
     data, path = _load_or_create_config(config_path)
 
     name: str = args.name
@@ -216,7 +223,7 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
 
 
 def _cmd_add_model(args: argparse.Namespace) -> None:
-    config_path = discover_config(args.config) or DEFAULT_CONFIG_PATH
+    config_path = _config_path_for_write(args.config)
     data, path = _load_or_create_config(config_path)
 
     group_name: str = args.group
@@ -233,7 +240,7 @@ def _cmd_add_model(args: argparse.Namespace) -> None:
 
 def _cmd_add_model_group(args: argparse.Namespace) -> None:
     """Add an empty model group owned by one provider."""
-    config_path = discover_config(args.config) or DEFAULT_CONFIG_PATH
+    config_path = _config_path_for_write(args.config)
     data, path = _load_or_create_config(config_path)
     providers = data.get("providers", {})
     if args.provider not in providers:
@@ -280,7 +287,7 @@ def main() -> None:
         "--config",
         "-c",
         default=None,
-        help="Path to JSONC config file (auto-discovered if omitted)",
+        help="Path to directory containing config.jsonc (default: ~/.config/codex-rosetta-gateway)",
     )
     parser.add_argument(
         "--version",
@@ -387,10 +394,10 @@ def main() -> None:
         # Minimal fallback logging so the error is visible before setup_logging
         logging.basicConfig(level=logging.ERROR)
         logger.error(
-            "No config file found. Searched:\n  %s\n"
-            "Provide one with --config or create a config at one of the above paths.\n"
+            "No config file found. Searched directories:\n  %s\n"
+            "Provide a directory with --config or create config.jsonc in one of the above directories.\n"
             "Tip: use 'codex-rosetta-gateway init' to create a template config.",
-            "\n  ".join(PATHS_TO_TRY),
+            "\n  ".join(CONFIG_DIRS_TO_TRY),
         )
         sys.exit(1)
 
@@ -398,9 +405,9 @@ def main() -> None:
         logging.basicConfig(level=logging.ERROR)
         logger.error(
             "Config file not found: %s\n"
-            "Tip: use 'codex-rosetta-gateway init --config %s' to create one.",
+            "Tip: use 'codex-rosetta-gateway --config %s init' to create one.",
             config_path,
-            config_path,
+            args.config or DEFAULT_CONFIG_DIR,
         )
         sys.exit(1)
 

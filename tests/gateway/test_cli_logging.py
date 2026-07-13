@@ -46,7 +46,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
             "codex-rosetta-gateway",
             "--no-banner",
             "--config",
-            str(config_path),
+            str(tmp_path),
             *log_level_args,
         ],
     )

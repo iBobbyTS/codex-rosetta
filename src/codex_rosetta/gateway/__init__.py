@@ -3,10 +3,10 @@
 Usage::
 
     # CLI entry point (after pip install)
-    codex-rosetta-gateway --config config.jsonc
+    codex-rosetta-gateway --config /path/to/config-directory
 
     # Module invocation
-    python -m codex_rosetta.gateway --config config.jsonc
+    python -m codex_rosetta.gateway --config /path/to/config-directory
 
     # Programmatic usage
     from codex_rosetta.gateway import create_app, GatewayConfig, load_config
