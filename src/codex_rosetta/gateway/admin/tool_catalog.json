@@ -15,25 +15,25 @@
     },
     "inputs": {
       "function.request_user_input": {
-        "guidance": "Chat-model guidance: use this only for real user preferences or decisions that materially change the plan. Do not use it to ask whether to approve, proceed with, or implement a proposed plan; after emitting the final <proposed_plan> block, let the Codex UI handle approval and implementation. Keep option labels short natural phrases without A:/B:/C: prefixes."
+        "guidance": "Use this only for real user preferences or decisions that materially change the plan. Do not use it to ask whether to approve, proceed with, or implement a proposed plan; after emitting the final <proposed_plan> block, let the Codex UI handle approval and implementation. Keep option labels short natural phrases without A:/B:/C: prefixes."
       },
       "function.create_goal": {
-        "guidance": "Chat-model guidance: call this when the user explicitly asks to mark a goal complete or blocked but get_goal returns no active goal, or update_goal reports that the thread has no goal. Do not set token_budget unless the user explicitly provided a numeric token budget."
+        "guidance": "Call this when the user explicitly asks to mark a goal complete or blocked but get_goal returns no active goal, or update_goal reports that the thread has no goal. Do not set token_budget unless the user explicitly provided a numeric token budget."
       },
       "function.update_goal": {
-        "guidance": "Chat-model guidance: before updating a goal, use get_goal when goal state is uncertain. If no active goal exists or this tool reports that the thread has no goal, call create_goal first with a concise objective and no token_budget unless explicitly requested, then retry update_goal with the requested status."
+        "guidance": "Before updating a goal, use get_goal when goal state is uncertain. If no active goal exists or this tool reports that the thread has no goal, call create_goal first with a concise objective and no token_budget unless explicitly requested, then retry update_goal with the requested status."
       },
       "namespace.multi_agent_v2.list_agents": {
-        "guidance": "Chat-model guidance: path_prefix filters canonical task paths. Use the requested child task-name segment, and treat the returned status and result for that canonical path as authoritative."
+        "guidance": "path_prefix filters canonical task paths. Use the requested child task-name segment, and treat the returned status and result for that canonical path as authoritative."
       },
       "namespace.multi_agent_v2.send_message": {
-        "guidance": "Chat-model guidance: target must be the canonical task path returned by spawn_agent. Send the requested message exactly; this delivers to the existing child and does not start a replacement task."
+        "guidance": "target must be the canonical task path returned by spawn_agent. Send the requested message exactly; this delivers to the existing child and does not start a replacement task."
       },
       "namespace.multi_agent_v2.spawn_agent": {
-        "guidance": "Chat-model guidance: the message field is the complete child task. With fork_turns=\"none\", the child receives no surrounding user turns, so include every instruction the child must follow in message and do not expect it to reconstruct the task from workspace files."
+        "guidance": "The message field is the complete child task. With fork_turns=\"none\", the child receives no surrounding user turns, so include every instruction the child must follow in message and do not expect it to reconstruct the task from workspace files."
       },
       "namespace.multi_agent_v2.wait_agent": {
-        "guidance": "Chat-model guidance: this waits for a future mailbox update; it does not replay a completion notification already delivered in the current input. If that completion is already visible, treat it as authoritative instead of repeatedly waiting by reflex."
+        "guidance": "This waits for a future mailbox update; it does not replay a completion notification already delivered in the current input. If that completion is already visible, treat it as authoritative instead of repeatedly waiting by reflex."
       },
       "namespace.mcp_github": {
         "owner_guidance": "Do not guess. If the owner is not explicitly provided, inspect the local git remote first, for example by running git remote -v.",
