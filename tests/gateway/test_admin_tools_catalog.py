@@ -176,8 +176,8 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
         "exec",
     }
     assert {items[item_id]["name"] for item_id in groups["hosted"]} == {"web_search"}
-    assert {items[item_id]["name"] for item_id in groups["namespace"]} == set(
-        EXPECTED_NAMESPACE_CHILDREN
+    assert {items[item_id]["name"] for item_id in groups["namespace"]} == (
+        set(EXPECTED_NAMESPACE_CHILDREN) | {"mcp__codex_apps__github"}
     )
 
     actual_namespace_children = {
@@ -188,8 +188,8 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
 
     serialized = json.dumps(catalog)
     assert "tool_search" not in serialized
-    assert "codex_app" not in serialized
-    assert "mcp__" not in serialized
+    assert '"codex_app"' not in serialized
+    assert "mcp__codex_apps__github" in serialized
 
 
 def test_catalog_defaults_and_namespace_image_policy():
@@ -198,11 +198,12 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["metadata"]["schema_version"] == 2
     assert catalog["metadata"]["codex_cli_version"] == "0.144.0"
     assert catalog["metadata"]["profile_selection"] == "model_group"
-    assert catalog["builtin_profile"] == {
-        "id": "builtin",
-        "name": "Chat Default",
-        "tools": {"namespace.multi_agent_v1": "disabled"},
+    assert catalog["builtin_profile"]["id"] == "builtin"
+    assert catalog["builtin_profile"]["name"] == "Chat Default"
+    assert catalog["builtin_profile"]["tools"] == {
+        "namespace.multi_agent_v1": "disabled"
     }
+    assert catalog["builtin_profile"]["inputs"]["namespace.mcp_github"]
     assert [profile["id"] for profile in catalog["preset_profiles"]] == [
         "responses_pass_through",
         "responses_web_run_mapping",
@@ -251,9 +252,15 @@ def test_catalog_defaults_and_namespace_image_policy():
             "default": "",
             "visible_when": ["modified"],
         },
+        {
+            "id": "guidance",
+            "label_i18n": "tools.input.guidance",
+            "default": "",
+            "visible_when": ["modified"],
+        },
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
-    web_run_inputs = [dict(input_definition) for input_definition in search_inputs]
+    web_run_inputs = [dict(input_definition) for input_definition in search_inputs[:2]]
     web_run_inputs[1] = {
         **web_run_inputs[1],
         "label_i18n": "tools.input.web_run.token",
@@ -270,8 +277,13 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.request_user_input",
         "function.create_goal",
         "function.update_goal",
+        "namespace.multi_agent_v2.list_agents",
+        "namespace.multi_agent_v2.send_message",
+        "namespace.multi_agent_v2.spawn_agent",
+        "namespace.multi_agent_v2.wait_agent",
         "hosted.web_search",
         "namespace.web.run",
+        "namespace.mcp_github",
     }
     assert {
         item_id
@@ -280,28 +292,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         and policies[item["policy_id"]]["default"] == "modified"
     } == modified
 
-    descriptions = {
-        item_id: item.get("description_i18n") for item_id, item in items.items()
-    }
-    assert {
-        item_id for item_id, description in descriptions.items() if description
-    } == {
-        "function.request_user_input",
-        "function.create_goal",
-        "function.update_goal",
-    }
-    assert descriptions["function.request_user_input"] == (
-        "tools.description.request_user_input"
-    )
-    assert {
-        item_id: items[item_id].get("description_visible_when")
-        for item_id, description in descriptions.items()
-        if description
-    } == {
-        "function.request_user_input": ["modified"],
-        "function.create_goal": ["modified"],
-        "function.update_goal": ["modified"],
-    }
+    assert all("description_i18n" not in item for item in items.values())
 
     builtin = tool_profile_contract()["builtin"]
     assert builtin["namespace.multi_agent_v1"] == "disabled"
@@ -310,6 +301,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         for child_id in _namespaces["namespace.multi_agent_v1"]
     )
     assert builtin["namespace.multi_agent_v2"] == "expanded"
+    assert builtin["namespace.mcp_github"] == "modified"
     assert builtin["function.exec_command"] == "passthrough"
     assert builtin["function.write_stdin"] == "passthrough"
     assert builtin["function.shell_command"] == "disabled"

@@ -1343,7 +1343,7 @@ def test_gateway_deferred_tool_search_limits_namespace_children():
     assert "mcp__codex_apps__gmail-_search" not in names
 
 
-def test_gateway_patches_github_owner_repo_descriptions_only_for_chat_tools():
+def test_gateway_does_not_hard_code_github_owner_repo_descriptions():
     captured_bodies: list[dict[str, Any]] = []
     window_store = WindowToolSearchStore()
     upstream_body = {
@@ -1468,10 +1468,8 @@ def test_gateway_patches_github_owner_repo_descriptions_only_for_chat_tools():
         == "mcp__codex_apps__github-_get_pr_info"
     )
     properties = github_tool["function"]["parameters"]["properties"]
-    assert "Do not guess" in properties["owner"]["description"]
-    assert "git remote -v" in properties["owner"]["description"]
-    assert "Do not guess" in properties["repo"]["description"]
-    assert "git remote -v" in properties["repo"]["description"]
+    assert properties["owner"]["description"] == "Repository owner."
+    assert properties["repo"]["description"] == "Repository name."
 
 
 def test_gateway_deferred_tool_search_matches_nested_schema_metadata():

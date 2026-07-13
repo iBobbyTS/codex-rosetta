@@ -12,6 +12,33 @@
     "name": "Chat Default",
     "tools": {
       "namespace.multi_agent_v1": "disabled"
+    },
+    "inputs": {
+      "function.request_user_input": {
+        "guidance": "Chat-model guidance: use this only for real user preferences or decisions that materially change the plan. Do not use it to ask whether to approve, proceed with, or implement a proposed plan; after emitting the final <proposed_plan> block, let the Codex UI handle approval and implementation. Keep option labels short natural phrases without A:/B:/C: prefixes."
+      },
+      "function.create_goal": {
+        "guidance": "Chat-model guidance: call this when the user explicitly asks to mark a goal complete or blocked but get_goal returns no active goal, or update_goal reports that the thread has no goal. Do not set token_budget unless the user explicitly provided a numeric token budget."
+      },
+      "function.update_goal": {
+        "guidance": "Chat-model guidance: before updating a goal, use get_goal when goal state is uncertain. If no active goal exists or this tool reports that the thread has no goal, call create_goal first with a concise objective and no token_budget unless explicitly requested, then retry update_goal with the requested status."
+      },
+      "namespace.multi_agent_v2.list_agents": {
+        "guidance": "Chat-model guidance: path_prefix filters canonical task paths. Use the requested child task-name segment, and treat the returned status and result for that canonical path as authoritative."
+      },
+      "namespace.multi_agent_v2.send_message": {
+        "guidance": "Chat-model guidance: target must be the canonical task path returned by spawn_agent. Send the requested message exactly; this delivers to the existing child and does not start a replacement task."
+      },
+      "namespace.multi_agent_v2.spawn_agent": {
+        "guidance": "Chat-model guidance: the message field is the complete child task. With fork_turns=\"none\", the child receives no surrounding user turns, so include every instruction the child must follow in message and do not expect it to reconstruct the task from workspace files."
+      },
+      "namespace.multi_agent_v2.wait_agent": {
+        "guidance": "Chat-model guidance: this waits for a future mailbox update; it does not replay a completion notification already delivered in the current input. If that completion is already visible, treat it as authoritative instead of repeatedly waiting by reflex."
+      },
+      "namespace.mcp_github": {
+        "owner_guidance": "Do not guess. If the owner is not explicitly provided, inspect the local git remote first, for example by running git remote -v.",
+        "repo_guidance": "Do not guess. If the repository name is not explicitly provided, derive it from the user request or inspect the local git remote first, for example by running git remote -v."
+      }
     }
   },
   "preset_profiles": [
@@ -99,6 +126,21 @@
         "passthrough",
         "modified"
       ]
+    },
+    {
+      "id": "namespace_parameter_guidance",
+      "default": "modified",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ],
+      "namespace_supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ],
+      "namespace_default": "modified"
     },
     {
       "id": "web_search_bridge",
@@ -197,8 +239,15 @@
       "name": "request_user_input",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.request_user_input",
-      "description_visible_when": ["modified"]
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "function.request_permissions",
@@ -289,16 +338,30 @@
       "name": "create_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.create_goal",
-      "description_visible_when": ["modified"]
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "function.update_goal",
       "name": "update_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.update_goal",
-      "description_visible_when": ["modified"]
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "custom.apply_patch",
@@ -342,6 +405,20 @@
           "visible_when": [
             "modified"
           ]
+        },
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": [
+            "modified"
+          ]
+        }
+      ],
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
         }
       ],
       "aliases": [
@@ -364,6 +441,38 @@
       "default_namespace": "collaboration",
       "namespace_configurable": true,
       "default_expanded": true
+    },
+    {
+      "id": "namespace.mcp_github",
+      "name": "mcp__codex_apps__github",
+      "type": "namespace",
+      "policy_id": "namespace_parameter_guidance",
+      "profile_inputs": [
+        {
+          "id": "owner_guidance",
+          "label_i18n": "tools.input.github.owner_guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        },
+        {
+          "id": "repo_guidance",
+          "label_i18n": "tools.input.github.repo_guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [
+        {
+          "target": "parameter_description",
+          "parameter": "owner",
+          "input_id": "owner_guidance"
+        },
+        {
+          "target": "parameter_description",
+          "parameter": "repo",
+          "input_id": "repo_guidance"
+        }
+      ]
     },
     {
       "id": "namespace.clock",
@@ -454,28 +563,64 @@
       "name": "list_agents",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "targeted_chat_guidance",
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "namespace.multi_agent_v2.send_message",
       "name": "send_message",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "targeted_chat_guidance",
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "namespace.multi_agent_v2.spawn_agent",
       "name": "spawn_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "targeted_chat_guidance",
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "namespace.multi_agent_v2.wait_agent",
       "name": "wait_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "targeted_chat_guidance",
+      "profile_inputs": [
+        {
+          "id": "guidance",
+          "label_i18n": "tools.input.guidance",
+          "default": "",
+          "visible_when": ["modified"]
+        }
+      ],
+      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
     },
     {
       "id": "namespace.clock.curr_time",
@@ -660,6 +805,7 @@
         "item_ids": [
           "namespace.multi_agent_v1",
           "namespace.multi_agent_v2",
+          "namespace.mcp_github",
           "namespace.clock",
           "namespace.image_gen",
           "namespace.web",
