@@ -51,4 +51,4 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 8765
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["codex-rosetta-gateway", "--config", "/config/config.jsonc", "--host", "0.0.0.0"]
+CMD ["codex-rosetta-gateway", "--config", "/config", "--host", "0.0.0.0"]
