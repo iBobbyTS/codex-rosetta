@@ -55,7 +55,9 @@ Codex，具体通过维护 `<codex-home>/model_catalog.json` 以及
 `model_provider` 设为 `"codex_rosetta"`，并覆盖 Rosetta 管理的
 `[model_providers.codex_rosetta]` 表，使其成为 `name = "OpenAI"` 的 Responses
 Provider，指向 `http://127.0.0.1:<实际端口>/v1`。其他 Provider 表及其参数都会
-保留；实际端口也包括 CLI 的 `--port` 覆盖值。
+保留；实际端口也包括 CLI 的 `--port` 覆盖值。本地模式还会确保 `[desktop]` 表的
+`enabled-reasoning-efforts` 设置包含 `low`、`medium`、`high`、`xhigh`、`max` 和
+`ultra`；已有行包含全部六项时保持原样。
 
 第一次开启本地模式时，网关会先询问是否允许替换已有的 `model_catalog_json`
 配置。可以通过 CLI 显式开启并持久化该状态，交互环境同样支持：

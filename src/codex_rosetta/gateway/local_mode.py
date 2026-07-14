@@ -7,6 +7,7 @@ import json
 import os
 import re
 import secrets
+import tomllib
 from dataclasses import dataclass
 from importlib import resources
 from typing import Any
@@ -20,6 +21,7 @@ PRESET_RESOURCE = "codex_model_presets.json"
 CODEX_API_KEY_ID = "codex"
 CODEX_API_KEY_LABEL = "codex"
 CODEX_PROVIDER_ID = "codex_rosetta"
+ENABLED_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
 _MODEL_CATALOG_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:model_catalog_json|[\"']model_catalog_json[\"'])[ \t]*="
@@ -33,6 +35,10 @@ _MANAGED_MODEL_PROVIDER_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:model_provider|[\"']model_provider[\"'])[ \t]*=[ \t]*"
     r"(?:\"codex_rosetta\"|'codex_rosetta')[ \t]*(?:#.*)?(?:\r?\n|$)"
 )
+_ENABLED_REASONING_EFFORTS_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:enabled-reasoning-efforts|[\"']enabled-reasoning-efforts[\"'])"
+    r"[ \t]*=[^\r\n]*(?:\r?\n|$)"
+)
 _COMMENTED_MODEL_CATALOG_ASSIGNMENT_RE = re.compile(
     r"^(?P<indent>[ \t]*)#[ \t]*(?:model_catalog_json|[\"']model_catalog_json[\"'])"
     r"[ \t]*=[^\r\n]*(?:\r?\n|$)"
@@ -42,6 +48,10 @@ _COMMENTED_MODEL_PROVIDER_ASSIGNMENT_RE = re.compile(
     r"[ \t]*=[^\r\n]*(?:\r?\n|$)"
 )
 _TABLE_HEADER_RE = re.compile(r"^[ \t]*\[\[?.*?\]\]?[ \t]*(?:#.*)?(?:\r?\n|$)")
+_DESKTOP_TABLE_RE = re.compile(
+    r"^[ \t]*\[[ \t]*(?:desktop|[\"']desktop[\"'])[ \t]*\]"
+    r"[ \t]*(?:#.*)?(?:\r?\n|$)"
+)
 _CODEX_PROVIDER_TABLE_RE = re.compile(
     r"^[ \t]*\[\[?[ \t]*(?:model_providers|[\"']model_providers[\"'])"
     r"[ \t]*\.[ \t]*(?:codex_rosetta|[\"']codex_rosetta[\"'])"
@@ -159,6 +169,110 @@ def _root_model_provider_assignment_lines(text: str, *, managed_only: bool) -> s
             assignments.add(index)
         multiline_state = _multiline_state_after_line(line, multiline_state)
     return assignments
+
+
+def _reasoning_effort_lines(text: str) -> tuple[set[int], int | None, int | None]:
+    """Locate root/Desktop effort settings and the first Desktop table bounds."""
+    lines = text.splitlines(keepends=True)
+    headers = _active_table_headers(text)
+    root_end = headers[0] if headers else len(lines)
+    desktop_header = next(
+        (index for index in headers if _DESKTOP_TABLE_RE.match(lines[index])), None
+    )
+    desktop_end = (
+        next((index for index in headers if index > desktop_header), len(lines))
+        if desktop_header is not None
+        else None
+    )
+    assignments: set[int] = set()
+    multiline_state: str | None = None
+    for index, line in enumerate(lines):
+        managed_scope = index < root_end or (
+            desktop_header is not None
+            and desktop_end is not None
+            and desktop_header < index < desktop_end
+        )
+        if (
+            managed_scope
+            and multiline_state is None
+            and _ENABLED_REASONING_EFFORTS_ASSIGNMENT_RE.match(line)
+        ):
+            assignments.add(index)
+        multiline_state = _multiline_state_after_line(line, multiline_state)
+    return assignments, desktop_header, desktop_end
+
+
+def _complete_desktop_reasoning_efforts_line(
+    text: str,
+    lines: set[int],
+    desktop_header: int | None,
+    desktop_end: int | None,
+) -> int | None:
+    """Return one Desktop assignment containing all six efforts."""
+    if desktop_header is None or desktop_end is None:
+        return None
+    source_lines = text.splitlines(keepends=True)
+    expected = set(ENABLED_REASONING_EFFORTS)
+    for index in lines:
+        if not desktop_header < index < desktop_end:
+            continue
+        try:
+            value = tomllib.loads(source_lines[index]).get("enabled-reasoning-efforts")
+        except tomllib.TOMLDecodeError:
+            continue
+        if (
+            isinstance(value, list)
+            and len(value) == len(expected)
+            and all(isinstance(item, str) for item in value)
+            and set(value) == expected
+        ):
+            return index
+    return None
+
+
+def _edit_enabled_reasoning_efforts(text: str, *, enabled: bool) -> str:
+    """Maintain reasoning-effort visibility inside the Desktop table."""
+    lines = text.splitlines(keepends=True)
+    assignments, desktop_header, desktop_end = _reasoning_effort_lines(text)
+    complete_line = _complete_desktop_reasoning_efforts_line(
+        text, assignments, desktop_header, desktop_end
+    )
+    preserved = {complete_line} if enabled and complete_line is not None else set()
+    removed = assignments - preserved
+    if not enabled or complete_line is not None:
+        return "".join(line for index, line in enumerate(lines) if index not in removed)
+
+    newline = "\r\n" if "\r\n" in text else "\n"
+    setting = (
+        f"enabled-reasoning-efforts = {json.dumps(ENABLED_REASONING_EFFORTS)}{newline}"
+    )
+    if desktop_header is None or desktop_end is None:
+        cleaned = "".join(
+            line for index, line in enumerate(lines) if index not in removed
+        ).rstrip(" \t\r\n")
+        prefix = cleaned + newline * 2 if cleaned else ""
+        return prefix + f"[desktop]{newline}" + setting
+
+    insert_at = desktop_header + 1
+    for index in range(desktop_header + 1, desktop_end):
+        if index not in removed and lines[index].strip():
+            insert_at = index + 1
+    trailing_blanks = {
+        index
+        for index in range(insert_at, desktop_end)
+        if index not in removed and not lines[index].strip()
+    }
+    table_setting = setting + (newline if desktop_end < len(lines) else "")
+
+    rebuilt: list[str] = []
+    for index, line in enumerate(lines):
+        if index == insert_at:
+            rebuilt.append(table_setting)
+        if index not in removed and index not in trailing_blanks:
+            rebuilt.append(line)
+    if insert_at == len(lines):
+        rebuilt.append(table_setting)
+    return "".join(rebuilt)
 
 
 def _commented_root_assignment_lines(text: str) -> dict[str, int]:
@@ -452,6 +566,7 @@ def _edit_config_toml(
     api_key: str | None = None,
 ) -> str:
     """Replace Rosetta-managed catalog and provider settings in Codex TOML."""
+    text = _edit_enabled_reasoning_efforts(text, enabled=model_catalog_path is not None)
     assignments = _active_catalog_assignment_lines(text)
     assignments.update(
         _root_model_provider_assignment_lines(
@@ -478,7 +593,6 @@ def _edit_config_toml(
         raise ValueError("gateway port must be an integer between 1 and 65535")
     if not isinstance(api_key, str) or not api_key:
         raise ValueError("local mode requires a non-empty Codex gateway API key")
-
     newline = "\r\n" if "\r\n" in text else "\n"
     replacements = {
         "model_catalog_json": (
