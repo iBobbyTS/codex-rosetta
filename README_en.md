@@ -69,7 +69,9 @@ without rotating it. Codex `config.toml` is updated to select
 `[model_providers.codex_rosetta]` table with an OpenAI-named Responses provider
 pointing to `http://127.0.0.1:<effective-port>/v1`. Other provider tables and
 their parameters are preserved. The effective port includes a CLI `--port`
-override.
+override. Local mode also ensures the `[desktop]` table's
+`enabled-reasoning-efforts` setting exposes `low`, `medium`, `high`, `xhigh`,
+`max`, and `ultra`; an existing line containing all six values is left intact.
 
 The first time local mode is enabled, the gateway asks before replacing an
 existing `model_catalog_json` setting. To enable it persistently from the CLI,

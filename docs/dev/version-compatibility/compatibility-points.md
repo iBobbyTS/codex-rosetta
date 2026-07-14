@@ -156,9 +156,9 @@ model completes the newer search/open or subagent lifecycle through Rosetta,
 the corresponding field/tool should remain disabled or use the proven older
 surface.
 
-Rosetta local mode is the sole owner of `<codex-home>/model_catalog.json`. It
-copies the eight bound Codex 0.144.1 entries unchanged, then appends configured
-non-built-in LLM aliases in stable name order. Exact aliases found in
+Rosetta local mode is the sole owner of `<codex-home>/model_catalog.json`. With
+no configured models it copies the eight bound Codex 0.144.1 entries unchanged;
+otherwise it writes only configured LLM aliases in stable name order. Exact aliases found in
 `codex_model_presets.json` receive their declared Terra-derived preset,
 including prompt identity substitution; other aliases use the generic Terra
 copy with only `slug`, `display_name`, and `description` replaced. Embedding
@@ -167,7 +167,10 @@ assignment from Codex `config.toml` before writing one root absolute path, but
 preserves unrelated TOML text and never deletes a file referenced by an old
 assignment. On each confirmed startup or Admin synchronization it also ensures
 one gateway key with ID/label `codex`; an existing key is reused without
-rotation. It replaces root `model_provider` with `codex_rosetta` and replaces
+rotation. It replaces root `model_provider` with `codex_rosetta`, removes the
+buggy root-level reasoning setting written by older Rosetta builds, and updates
+`[desktop].enabled-reasoning-efforts` when it does not already contain all six
+values (`low`, `medium`, `high`, `xhigh`, `max`, and `ultra`). It replaces
 the managed `[model_providers.codex_rosetta]` table with an OpenAI-named
 Responses provider using the resolved bearer key and effective loopback port.
 Other Provider tables and their parameters remain unchanged. Disabling local

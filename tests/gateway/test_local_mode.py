@@ -253,6 +253,10 @@ def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) 
     assert updated.startswith(f'model_catalog_json = "{expected_catalog}"\n')
     assert updated.count("model_catalog_json") == 1
     assert 'model_provider = "codex_rosetta"' in updated
+    assert (
+        "enabled-reasoning-efforts = "
+        '["low", "medium", "high", "xhigh", "max", "ultra"]' in updated
+    )
     assert "[model_providers.codex_rosetta]" in updated
     assert 'name = "OpenAI"' in updated
     assert 'wire_api = "responses"' in updated
@@ -319,6 +323,97 @@ def test_sync_only_uncomments_assignment_that_already_exists(tmp_path: Path) -> 
         f'model_catalog_json = "{codex_home / "model_catalog.json"}"\n'
         'model_provider = "codex_rosetta"\n'
         'model = "gpt-5.6-sol"\n'
+    )
+    assert (
+        "[desktop]\nenabled-reasoning-efforts = "
+        '["low", "medium", "high", "xhigh", "max", "ultra"]\n' in updated
+    )
+
+
+def test_sync_preserves_complete_enabled_reasoning_efforts_line(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    existing = (
+        "[desktop]\nenabled-reasoning-efforts = "
+        '["ultra", "max", "xhigh", "high", "medium", "low"] # keep order\n'
+    )
+    config_toml.write_text(existing, encoding="utf-8")
+
+    _sync_transaction(codex_home).apply()
+
+    updated = config_toml.read_text(encoding="utf-8")
+    assert existing in updated
+    assert updated.count("enabled-reasoning-efforts =") == 1
+
+
+@pytest.mark.parametrize(
+    "existing",
+    (
+        "",
+        '[desktop]\nenabled-reasoning-efforts = ["low", "medium", "high"]\n',
+        "[desktop]\nenabled-reasoning-efforts = "
+        '["low", "medium", "high", "xhigh", "max", "bad"]\n',
+    ),
+)
+def test_sync_writes_all_enabled_reasoning_efforts_when_missing_or_incomplete(
+    tmp_path: Path, existing: str
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(existing, encoding="utf-8")
+
+    _sync_transaction(codex_home).apply()
+
+    updated = config_toml.read_text(encoding="utf-8")
+    expected = (
+        'enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]'
+    )
+    assert expected in updated
+    assert updated.count("enabled-reasoning-efforts =") == 1
+
+
+def test_sync_removes_buggy_root_duplicate_and_updates_desktop_setting(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(
+        "enabled-reasoning-efforts = "
+        '["low", "medium", "high", "xhigh", "max", "ultra"]\n'
+        'model = "gpt-5.6-sol"\n\n'
+        "[desktop]\n"
+        "preventSleepWhileRunning = true\n"
+        "keepRemoteControlAwakeWhilePluggedIn = false\n\n"
+        'enabled-reasoning-efforts = ["low", "medium", "high"]\n\n'
+        "[features]\n"
+        "multi_agent_v2 = true\n",
+        encoding="utf-8",
+    )
+
+    _sync_transaction(codex_home).apply()
+
+    updated = config_toml.read_text(encoding="utf-8")
+    parsed = tomllib.loads(updated)
+    assert "enabled-reasoning-efforts" not in parsed
+    assert parsed["desktop"]["enabled-reasoning-efforts"] == [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    ]
+    assert updated.count("enabled-reasoning-efforts =") == 1
+    assert (
+        "keepRemoteControlAwakeWhilePluggedIn = false\n"
+        "enabled-reasoning-efforts = "
+        '["low", "medium", "high", "xhigh", "max", "ultra"]\n\n'
+        "[features]" in updated
     )
 
 
@@ -425,6 +520,7 @@ def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     config_toml.write_text(
         f'model_catalog_json = "{external}"\n'
         'model_provider = "codex_rosetta"\n'
+        'enabled-reasoning-efforts = ["low", "medium", "high", "xhigh", "max", "ultra"]\n'
         'model = "gpt-5.6-sol"\n\n'
         "[model_providers.other]\n"
         'base_url = "https://keep.example/v1"\n\n'
@@ -439,6 +535,7 @@ def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     assert not managed.exists()
     assert external.read_text(encoding="utf-8") == "external"
     assert "model_catalog_json" not in config_toml.read_text(encoding="utf-8")
+    assert "enabled-reasoning-efforts" not in config_toml.read_text(encoding="utf-8")
     assert 'model_provider = "codex_rosetta"' not in config_toml.read_text(
         encoding="utf-8"
     )
