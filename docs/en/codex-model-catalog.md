@@ -25,6 +25,14 @@ The bundled catalog currently contains eight entries:
 `gpt-5.4-mini`, `gpt-5.2`, and `codex-auto-review`. Local custom catalog
 entries are intentionally excluded from this reference.
 
+Local mode also configures Codex to use Rosetta, not only the catalog. It
+selects the custom Provider ID `codex_rosetta`, while the generated provider's
+`name` is exactly `OpenAI`. This distinction is intentional: Codex resolves
+`model_provider` as an ID, but `provider.is_openai()` checks the selected
+provider's case-sensitive `name`. The managed provider uses Responses, the
+gateway's stable `codex` API key, and the effective local listening port.
+Existing non-Rosetta provider tables and their parameters remain untouched.
+
 Rosetta also packages Terra-derived presets for `deepseek-v4-pro`,
 `deepseek-v4-flash`, `glm-5.2`, `qwen3.7-plus`, `qwen3.7-max`,
 `mimo-v2.5-flash`, `mimo-v2.5-pro`, `minimax-m3`, and `kimi-k2.7-code`.

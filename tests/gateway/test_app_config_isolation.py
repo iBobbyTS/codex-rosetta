@@ -63,6 +63,16 @@ def _request(app: Any, body: dict[str, Any] | None = None) -> SimpleNamespace:
     )
 
 
+def test_create_app_tracks_effective_gateway_port_for_local_mode() -> None:
+    config = _config("port")
+
+    default_app = cast(Any, app_module.create_app(config))
+    overridden_app = cast(Any, app_module.create_app(config, gateway_port=54321))
+
+    assert default_app.gateway_port == config.port
+    assert overridden_app.gateway_port == 54321
+
+
 def test_request_handlers_keep_their_own_config_after_second_app_creation(
     monkeypatch,
 ):

@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import re
+import secrets
 from dataclasses import dataclass
 from importlib import resources
 from typing import Any
@@ -16,10 +17,27 @@ CATALOG_FILENAME = "model_catalog.json"
 CODEX_CONFIG_FILENAME = "config.toml"
 CATALOG_RESOURCE = "codex_models_0_144_1.json"
 PRESET_RESOURCE = "codex_model_presets.json"
+CODEX_API_KEY_ID = "codex"
+CODEX_API_KEY_LABEL = "codex"
+CODEX_PROVIDER_ID = "codex_rosetta"
 
 _MODEL_CATALOG_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:model_catalog_json|[\"']model_catalog_json[\"'])[ \t]*="
     r"[^\r\n]*(?:\r?\n|$)"
+)
+_MODEL_PROVIDER_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:model_provider|[\"']model_provider[\"'])[ \t]*="
+    r"[^\r\n]*(?:\r?\n|$)"
+)
+_MANAGED_MODEL_PROVIDER_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:model_provider|[\"']model_provider[\"'])[ \t]*=[ \t]*"
+    r"(?:\"codex_rosetta\"|'codex_rosetta')[ \t]*(?:#.*)?(?:\r?\n|$)"
+)
+_TABLE_HEADER_RE = re.compile(r"^[ \t]*\[\[?.*?\]\]?[ \t]*(?:#.*)?(?:\r?\n|$)")
+_CODEX_PROVIDER_TABLE_RE = re.compile(
+    r"^[ \t]*\[\[?[ \t]*(?:model_providers|[\"']model_providers[\"'])"
+    r"[ \t]*\.[ \t]*(?:codex_rosetta|[\"']codex_rosetta[\"'])"
+    r"(?=[ \t]*(?:\.|\]))"
 )
 
 
@@ -102,6 +120,50 @@ def _active_catalog_assignment_lines(text: str) -> set[int]:
             continue
         multiline_state = _multiline_state_after_line(line, multiline_state)
     return assignments
+
+
+def _active_table_headers(text: str) -> list[int]:
+    """Return active TOML table-header line indexes outside multiline strings."""
+    headers: list[int] = []
+    multiline_state: str | None = None
+    for index, line in enumerate(text.splitlines(keepends=True)):
+        if multiline_state is None and _TABLE_HEADER_RE.match(line):
+            headers.append(index)
+        multiline_state = _multiline_state_after_line(line, multiline_state)
+    return headers
+
+
+def _root_model_provider_assignment_lines(text: str, *, managed_only: bool) -> set[int]:
+    """Return root model_provider assignments, optionally only Rosetta's value."""
+    lines = text.splitlines(keepends=True)
+    headers = _active_table_headers(text)
+    root_end = headers[0] if headers else len(lines)
+    pattern = (
+        _MANAGED_MODEL_PROVIDER_ASSIGNMENT_RE
+        if managed_only
+        else _MODEL_PROVIDER_ASSIGNMENT_RE
+    )
+    assignments: set[int] = set()
+    multiline_state: str | None = None
+    for index in range(root_end):
+        line = lines[index]
+        if multiline_state is None and pattern.match(line):
+            assignments.add(index)
+        multiline_state = _multiline_state_after_line(line, multiline_state)
+    return assignments
+
+
+def _codex_provider_table_lines(text: str) -> set[int]:
+    """Return all codex_rosetta provider-table sections, including subtables."""
+    lines = text.splitlines(keepends=True)
+    headers = _active_table_headers(text)
+    removed: set[int] = set()
+    for position, start in enumerate(headers):
+        if not _CODEX_PROVIDER_TABLE_RE.match(lines[start]):
+            continue
+        end = headers[position + 1] if position + 1 < len(headers) else len(lines)
+        removed.update(range(start, end))
+    return removed
 
 
 def _json_resource(name: str) -> Any:
@@ -281,9 +343,87 @@ def config_toml_has_model_catalog(codex_home: str) -> bool:
         return False
 
 
-def _edit_config_toml(text: str, model_catalog_path: str | None) -> str:
-    """Remove all catalog assignments and optionally add one root assignment."""
+def _find_codex_api_key_entry(api_keys: Any) -> dict[str, Any] | None:
+    if not isinstance(api_keys, list):
+        return None
+    entries = [entry for entry in api_keys if isinstance(entry, dict)]
+    return next(
+        (entry for entry in entries if entry.get("id") == CODEX_API_KEY_ID),
+        next(
+            (entry for entry in entries if entry.get("label") == CODEX_API_KEY_LABEL),
+            None,
+        ),
+    )
+
+
+def ensure_codex_api_key(raw_config: dict[str, Any]) -> bool:
+    """Ensure local mode has one stable gateway key named ``codex``.
+
+    Returns:
+        Whether the raw gateway configuration was changed.
+    """
+    server = raw_config.setdefault("server", {})
+    if not isinstance(server, dict):
+        raise ValueError("config: server must be an object")
+    api_keys = server.get("api_keys")
+    changed = False
+    if api_keys is None:
+        api_keys = []
+        legacy_key = server.pop("api_key", None)
+        if legacy_key is not None:
+            api_keys.append(
+                {
+                    "id": "default",
+                    "label": "default",
+                    "key": legacy_key,
+                }
+            )
+        server["api_keys"] = api_keys
+        changed = True
+    if not isinstance(api_keys, list):
+        raise ValueError("config: server.api_keys must be a list")
+
+    entry = _find_codex_api_key_entry(api_keys)
+    if entry is not None:
+        key = entry.get("key")
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("config: the codex gateway API key is invalid")
+        return changed
+
+    api_keys.append(
+        {
+            "id": CODEX_API_KEY_ID,
+            "label": CODEX_API_KEY_LABEL,
+            "key": f"rsk-{secrets.token_hex(24)}",
+        }
+    )
+    return True
+
+
+def codex_api_key_value(api_keys: Any) -> str:
+    """Return the resolved key value for the local-mode Codex client."""
+    entry = _find_codex_api_key_entry(api_keys)
+    key = entry.get("key") if entry is not None else None
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("config: local mode requires a gateway API key named 'codex'")
+    return key
+
+
+def _edit_config_toml(
+    text: str,
+    model_catalog_path: str | None,
+    *,
+    gateway_port: int | None = None,
+    api_key: str | None = None,
+) -> str:
+    """Replace Rosetta-managed catalog and provider settings in Codex TOML."""
     assignments = _active_catalog_assignment_lines(text)
+    assignments.update(
+        _root_model_provider_assignment_lines(
+            text, managed_only=model_catalog_path is None
+        )
+    )
+    assignments.update(_codex_provider_table_lines(text))
     cleaned = "".join(
         line
         for index, line in enumerate(text.splitlines(keepends=True))
@@ -291,9 +431,33 @@ def _edit_config_toml(text: str, model_catalog_path: str | None) -> str:
     )
     if model_catalog_path is None:
         return cleaned
+    if (
+        isinstance(gateway_port, bool)
+        or not isinstance(gateway_port, int)
+        or not 1 <= gateway_port <= 65535
+    ):
+        raise ValueError("gateway port must be an integer between 1 and 65535")
+    if not isinstance(api_key, str) or not api_key:
+        raise ValueError("local mode requires a non-empty Codex gateway API key")
+
     newline = "\r\n" if "\r\n" in text else "\n"
-    assignment = f"model_catalog_json = {json.dumps(model_catalog_path)}{newline}"
-    return assignment + cleaned
+    root = (
+        f"model_catalog_json = {json.dumps(model_catalog_path)}{newline}"
+        f'model_provider = "{CODEX_PROVIDER_ID}"{newline}'
+    )
+    base = (root + cleaned).rstrip(" \t\r\n")
+    provider = newline.join(
+        (
+            f"[model_providers.{CODEX_PROVIDER_ID}]",
+            'name = "OpenAI"',
+            'wire_api = "responses"',
+            "requires_openai_auth = true",
+            f'base_url = "http://127.0.0.1:{gateway_port}/v1"',
+            f"experimental_bearer_token = {json.dumps(api_key)}",
+            "",
+        )
+    )
+    return base + newline * 2 + provider
 
 
 @dataclass(frozen=True)
@@ -328,16 +492,30 @@ class CodexLocalModeTransaction:
         codex_home: str,
         *,
         catalog: dict[str, Any] | None,
+        gateway_port: int | None = None,
+        api_key: str | None = None,
     ) -> None:
         self.codex_home = codex_home
         self.catalog = catalog
+        self.gateway_port = gateway_port
+        self.api_key = api_key
         self._snapshots: tuple[_FileSnapshot, _FileSnapshot] | None = None
 
     @classmethod
     def sync(
-        cls, codex_home: str, raw_config: dict[str, Any]
+        cls,
+        codex_home: str,
+        raw_config: dict[str, Any],
+        *,
+        gateway_port: int,
+        api_key: str,
     ) -> CodexLocalModeTransaction:
-        return cls(codex_home, catalog=build_model_catalog(raw_config))
+        return cls(
+            codex_home,
+            catalog=build_model_catalog(raw_config),
+            gateway_port=gateway_port,
+            api_key=api_key,
+        )
 
     @classmethod
     def clear(cls, codex_home: str) -> CodexLocalModeTransaction:
@@ -375,7 +553,12 @@ class CodexLocalModeTransaction:
                 if self._snapshots[1].content is not None
                 else ""
             )
-            updated = _edit_config_toml(current, os.path.abspath(catalog_file))
+            updated = _edit_config_toml(
+                current,
+                os.path.abspath(catalog_file),
+                gateway_port=self.gateway_port,
+                api_key=self.api_key,
+            )
             _atomic_write_bytes(config_file, updated.encode("utf-8"))
         except BaseException:
             self.rollback()

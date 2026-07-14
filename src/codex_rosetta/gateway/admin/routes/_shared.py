@@ -14,7 +14,11 @@ from ...config import (
     load_config,
     write_config,
 )
-from ...local_mode import CodexLocalModeTransaction
+from ...local_mode import (
+    CodexLocalModeTransaction,
+    codex_api_key_value,
+    ensure_codex_api_key,
+)
 
 _ENV_VAR_RE = re.compile(r"^\$\{.+\}$")
 
@@ -353,7 +357,13 @@ def _prepare_local_mode_transaction(
     if not codex_home:
         return None
     if new_config.local_mode and new_config.local_mode_confirmed:
-        return CodexLocalModeTransaction.sync(codex_home, data)
+        gateway_port = getattr(request.app, "gateway_port", new_config.port)
+        return CodexLocalModeTransaction.sync(
+            codex_home,
+            data,
+            gateway_port=gateway_port,
+            api_key=codex_api_key_value(new_config.api_keys),
+        )
     if not new_config.local_mode:
         return CodexLocalModeTransaction.clear(codex_home)
     return None
@@ -390,6 +400,13 @@ def _commit_gateway_config(
     candidate that failed validation or runtime activation.
     """
     try:
+        server = data.get("server")
+        if (
+            isinstance(server, dict)
+            and server.get("local_mode", True) is True
+            and server.get("local_mode_confirmed", False) is True
+        ):
+            ensure_codex_api_key(data)
         new_config = GatewayConfig.from_raw_with_env(data)
     except (KeyError, TypeError, ValueError) as exc:
         status_code = 409 if "duplicate" in str(exc).lower() else 400

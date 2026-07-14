@@ -16,6 +16,13 @@
 
 打包目录目前包含八个条目：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.2` 和 `codex-auto-review`。本文特意不包含本地自定义的目录条目。
 
+本地模式还会配置 Codex 使用 Rosetta，而不只是写入模型目录。它选择自定义 Provider
+ID `codex_rosetta`，但生成的 Provider `name` 会严格写成 `OpenAI`。这个区别是有意
+的：Codex 把 `model_provider` 当作 ID 解析，而 `provider.is_openai()` 检查的是已选
+Provider 区分大小写的 `name`。该托管 Provider 使用 Responses、稳定复用的
+`codex` 网关 API Key，以及本地网关的实际监听端口；其他非 Rosetta Provider 表及
+其参数保持不变。
+
 打包 JSON 一共出现 41 个不同的键。`ModelInfo` 还接受 `effective_context_window_percent`，但所有打包条目都省略它，因此使用默认值 `95`。所以本文覆盖 42 个可作为目录输入的字段。
 
 Rosetta 另外打包了基于 Terra 的 `deepseek-v4-pro`、`deepseek-v4-flash`、

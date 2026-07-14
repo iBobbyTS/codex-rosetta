@@ -78,10 +78,16 @@ def test_local_mode_flag_persists_for_later_startups(
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is True
     assert saved["server"]["local_mode_confirmed"] is True
+    codex_key = next(
+        entry for entry in saved["server"]["api_keys"] if entry["id"] == "codex"
+    )
+    assert codex_key["label"] == "codex"
+    assert codex_key["key"].startswith("rsk-")
     assert (codex_home / "model_catalog.json").is_file()
-    assert str(codex_home / "model_catalog.json") in (
-        codex_home / "config.toml"
-    ).read_text(encoding="utf-8")
+    config_toml = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert str(codex_home / "model_catalog.json") in config_toml
+    assert 'model_provider = "codex_rosetta"' in config_toml
+    assert f'experimental_bearer_token = "{codex_key["key"]}"' in config_toml
 
     monkeypatch.setattr(
         cli.sys,
@@ -98,6 +104,15 @@ def test_local_mode_flag_persists_for_later_startups(
     cli.main()
 
     assert started == [("127.0.0.1", 8765), ("127.0.0.1", 8765)]
+    saved_again = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        next(
+            entry
+            for entry in saved_again["server"]["api_keys"]
+            if entry["id"] == "codex"
+        )["key"]
+        == codex_key["key"]
+    )
 
 
 def test_confirm_flag_records_consent_without_enabling_local_mode(
@@ -131,6 +146,7 @@ def test_confirm_flag_records_consent_without_enabling_local_mode(
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is False
     assert saved["server"]["local_mode_confirmed"] is True
+    assert all(entry["id"] != "codex" for entry in saved["server"]["api_keys"])
     assert not codex_home.exists()
     assert started == [("127.0.0.1", 8765)]
 
@@ -226,6 +242,7 @@ def test_interactive_decline_disables_mode_without_modifying_codex_home(
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is False
     assert saved["server"]["local_mode_confirmed"] is False
+    assert all(entry["id"] != "codex" for entry in saved["server"]["api_keys"])
     assert config_toml.read_text(encoding="utf-8") == original_toml
     assert not (codex_home / "model_catalog.json").exists()
     assert started == [("127.0.0.1", 8765)]
@@ -237,8 +254,12 @@ def test_local_mode_clear_disables_and_removes_only_managed_artifacts(
     config_dir = tmp_path / "gateway"
     config_dir.mkdir()
     config_path = config_dir / "config.jsonc"
+    config = _gateway_config(local_mode=True, confirmed=True)
+    config["server"]["api_keys"].append(
+        {"id": "codex", "label": "codex", "key": "stable-codex-key"}
+    )
     config_path.write_text(
-        json.dumps(_gateway_config(local_mode=True, confirmed=True)),
+        json.dumps(config),
         encoding="utf-8",
     )
     codex_home = tmp_path / "codex"
@@ -268,6 +289,12 @@ def test_local_mode_clear_disables_and_removes_only_managed_artifacts(
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is False
+    assert (
+        next(entry for entry in saved["server"]["api_keys"] if entry["id"] == "codex")[
+            "key"
+        ]
+        == "stable-codex-key"
+    )
     assert not (codex_home / "model_catalog.json").exists()
     assert "model_catalog_json" not in (codex_home / "config.toml").read_text(
         encoding="utf-8"
@@ -306,3 +333,36 @@ def test_remote_host_prints_manual_configuration_warning(
         "Remote use of this gateway requires manually configuring "
         "config.toml and model_catalog_json."
     ) in capsys.readouterr().err
+
+
+def test_local_mode_codex_provider_uses_effective_cli_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_dir = tmp_path / "gateway"
+    config_dir.mkdir()
+    (config_dir / "config.jsonc").write_text(
+        json.dumps(_gateway_config(local_mode=True, confirmed=True)),
+        encoding="utf-8",
+    )
+    codex_home = tmp_path / "codex"
+    started = _stub_server(monkeypatch)
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "codex-rosetta-gateway",
+            "--no-banner",
+            "--config",
+            str(config_dir),
+            "--codex-home",
+            str(codex_home),
+            "--port",
+            "54321",
+        ],
+    )
+
+    cli.main()
+
+    assert started == [("127.0.0.1", 54321)]
+    config_toml = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert 'base_url = "http://127.0.0.1:54321/v1"' in config_toml

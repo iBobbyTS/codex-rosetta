@@ -49,6 +49,13 @@ Codex，具体通过维护 `<codex-home>/model_catalog.json` 以及
 网关配置和 Codex 模型目录会同步更新。模型发生变化后需要重启 Codex，Codex 才会
 重新加载目录。
 
+每次以已确认的本地模式启动时，网关还会确保 `server.api_keys` 中存在一个名为
+`codex` 的 Key；如果已经存在就复用原值，不进行轮换。Codex `config.toml` 会把
+`model_provider` 设为 `"codex_rosetta"`，并覆盖 Rosetta 管理的
+`[model_providers.codex_rosetta]` 表，使其成为 `name = "OpenAI"` 的 Responses
+Provider，指向 `http://127.0.0.1:<实际端口>/v1`。其他 Provider 表及其参数都会
+保留；实际端口也包括 CLI 的 `--port` 覆盖值。
+
 第一次开启本地模式时，网关会先询问是否允许替换已有的 `model_catalog_json`
 配置。可以通过 CLI 显式开启并持久化该状态，交互环境同样支持：
 
@@ -66,12 +73,14 @@ codex-rosetta-gateway --confirm-clear-existing-catalog
 需要同时开启本地模式和跳过确认，请与 `--local-mode` 一起使用。
 
 使用过 `--local-mode` 后，开启状态会写入网关配置，后续启动即使不再传入该参数也
-会保持开启。若要关闭本地模式、删除 Rosetta 管理的目录并从 Codex
-`config.toml` 中清除 `model_catalog_json`，运行：
+会保持开启。若要关闭本地模式，并从 Codex `config.toml` 中删除 Rosetta 管理的
+模型目录配置、当前 Provider 选择和 `codex_rosetta` Provider 表，运行：
 
 ```bash
 codex-rosetta-gateway local-mode clear
 ```
+
+生成的 `codex` 网关 Key 会保留，重新开启本地模式时仍可复用而无需轮换凭证。
 
 目标 Codex Home 依次由 `--codex-home`、`CODEX_HOME` 决定，缺省为 `~/.codex`。
 本地模式开启且网关监听地址不是 `127.0.0.1` 或 `localhost` 时，网关会提示：
