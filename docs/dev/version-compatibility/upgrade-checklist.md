@@ -11,7 +11,7 @@ The upgrade must be completed in the following order, and the latter step cannot
 3. Record the target Codex release and new source commit, then run the contract diff;
 4. Classify every item in `compatibility-points.md` as **high-confidence unchanged**, **possibly unchanged**, or **changed**;
 5. Define repair plans for changed items and manual-review/live-test plans for possibly unchanged items;
-6. Review the complete Codex model catalog contract and refresh `docs/en/codex-model-catalog.md` plus its Chinese counterpart when fields, defaults, bundled values, consumers, or third-party guidance changed; then review and refresh `src/codex_rosetta/gateway/admin/tool_catalog.json` against the target tool specifications and bundled extensions, including its CLI/source metadata binding;
+6. Review the complete Codex model catalog contract and refresh `docs/en/codex-model-catalog.md` plus its Chinese counterpart when fields, defaults, bundled values, consumers, or third-party guidance changed; recheck configured Provider ID/name resolution, `is_openai()` and explicit bearer-token precedence used by local mode; then review and refresh `src/codex_rosetta/gateway/admin/tool_catalog.json` against the target tool specifications and bundled extensions, including its CLI/source metadata binding;
 7. Complete repairs and run all automated checks, including compatibility-specific tests, lint, and the full non-integration test suite;
 8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-terra` to observe native Codex/GPT request shapes and low-cost `deepseek-v4-flash` by default for third-party conversion debugging; record substitutions and reasons;
 9. After every gate passes, update the contract baseline, upgrade report, documentation, and package version, and record the exact source commit.
@@ -305,6 +305,7 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 #### A. Basic session and real request
 
 - Start the real Codex CLI/Desktop and connect `deepseek-v4-flash` via Rosetta;
+- Start once with local mode and verify that Codex selects Provider ID `codex_rosetta`, classifies its exact `name = "OpenAI"` through `is_openai()`, authenticates with the stable generated `codex` gateway key, and reaches the effective CLI/configured port; restart and confirm the key is not rotated;
 - Complete a single round of text and multiple rounds of dialogue, and confirm that there are no repeated, truncated or unended turns;
 - Capture real HTTP headers and body `client_metadata`, confirm identity/turn metadata;
 - Verify window/thread changes of the same turn, compact, resume, fork, subagent;

@@ -59,6 +59,15 @@ them into Codex by maintaining `<codex-home>/model_catalog.json` and the
 in the WebUI are synchronized to both the gateway configuration and this Codex
 model catalog. Restart Codex after changing models so it reloads the catalog.
 
+At each confirmed local-mode startup, the gateway also ensures that
+`server.api_keys` contains a key named `codex` and reuses its existing value
+without rotating it. Codex `config.toml` is updated to select
+`model_provider = "codex_rosetta"` and to replace the managed
+`[model_providers.codex_rosetta]` table with an OpenAI-named Responses provider
+pointing to `http://127.0.0.1:<effective-port>/v1`. Other provider tables and
+their parameters are preserved. The effective port includes a CLI `--port`
+override.
+
 The first time local mode is enabled, the gateway asks before replacing an
 existing `model_catalog_json` setting. To enable it persistently from the CLI,
 including in an interactive environment, run:
@@ -79,12 +88,15 @@ are required.
 
 Once `--local-mode` has been used, the enabled state is stored in the gateway
 configuration and remains on for later starts without that option. To disable
-local mode, remove Rosetta's managed catalog, and clear `model_catalog_json`
-from Codex `config.toml`, run:
+local mode and remove Rosetta's managed catalog, catalog assignment, selected
+provider, and managed provider table from Codex `config.toml`, run:
 
 ```bash
 codex-rosetta-gateway local-mode clear
 ```
+
+The generated `codex` gateway key is retained so re-enabling local mode can
+reuse it without rotating credentials.
 
 The target Codex Home comes from `--codex-home`, then `CODEX_HOME`, and defaults
 to `~/.codex`. When local mode is enabled with a non-loopback gateway host, the

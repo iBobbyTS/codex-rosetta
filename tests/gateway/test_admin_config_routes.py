@@ -849,6 +849,7 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
     app = SimpleNamespace(
         config_path=str(config_path),
         codex_home=str(codex_home),
+        gateway_port=45678,
         gateway_config=initial_config,
         stream_trace_state=StreamTraceState(initial_config.stream_trace),
         auth_state=None,
@@ -871,9 +872,17 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
         model for model in catalog["models"] if model["slug"] == "third-party-model"
     )
     assert custom["display_name"] == custom["description"] == "third-party-model"
-    assert str(codex_home / "model_catalog.json") in (
-        codex_home / "config.toml"
-    ).read_text(encoding="utf-8")
+    config_toml = (codex_home / "config.toml").read_text(encoding="utf-8")
+    assert str(codex_home / "model_catalog.json") in config_toml
+    assert 'model_provider = "codex_rosetta"' in config_toml
+    assert 'base_url = "http://127.0.0.1:45678/v1"' in config_toml
+    saved_after_sync = json.loads(config_path.read_text(encoding="utf-8"))
+    codex_key = next(
+        entry
+        for entry in saved_after_sync["server"]["api_keys"]
+        if entry["id"] == "codex"
+    )
+    assert f'experimental_bearer_token = "{codex_key["key"]}"' in config_toml
 
     delete_request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
     delete_response = _run(delete_model_group(delete_request))
@@ -895,6 +904,9 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
     assert "model_catalog_json" not in (codex_home / "config.toml").read_text(
         encoding="utf-8"
     )
+    assert "model_providers.codex_rosetta" not in (
+        codex_home / "config.toml"
+    ).read_text(encoding="utf-8")
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is False
 
@@ -934,6 +946,7 @@ def test_enabling_local_mode_through_admin_requires_explicit_confirmation(tmp_pa
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is True
     assert saved["server"]["local_mode_confirmed"] is True
+    assert any(entry["id"] == "codex" for entry in saved["server"]["api_keys"])
     assert (codex_home / "model_catalog.json").is_file()
 
 
@@ -1166,6 +1179,9 @@ def test_admin_html_exposes_confirmed_local_mode_setting():
     assert "configData.model_catalog_configured === true" in html
     assert "body.local_mode_confirmed = true" in html
     assert "'label.localMode':'Local mode'" in html
+    assert "configure the codex_rosetta provider in config.toml" in html
+    assert "stable gateway API key named codex" in html
+    assert "\\u914d\\u7f6ecodex_rosetta Provider" in html
     assert "'confirm.localModeExisting':" in html
 
 

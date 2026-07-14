@@ -32,7 +32,9 @@ from .config import (
 from .logging import get_logger, setup_logging
 from .local_mode import (
     CodexLocalModeTransaction,
+    codex_api_key_value,
     config_toml_has_model_catalog,
+    ensure_codex_api_key,
 )
 from .providers import (
     get_default_api_key_env,
@@ -313,8 +315,9 @@ def _cmd_clear_local_mode(args: argparse.Namespace) -> None:
 
 def _confirm_local_mode(codex_home: str) -> bool:
     message = (
-        f"Local mode will write model_catalog.json under {codex_home} and set "
-        "model_catalog_json in config.toml."
+        f"Local mode will write model_catalog.json under {codex_home}, configure "
+        "the codex_rosetta provider in config.toml, and create a stable gateway "
+        "API key named codex."
     )
     if config_toml_has_model_catalog(codex_home):
         message += " Existing model_catalog_json settings will be cleared."
@@ -375,7 +378,21 @@ def _configure_local_mode_startup(
     if not local_mode_confirmed:
         return
 
-    transaction = CodexLocalModeTransaction.sync(codex_home, raw_config)
+    try:
+        if ensure_codex_api_key(raw_config):
+            config_changed = True
+        validated_config = GatewayConfig.from_raw_with_env(raw_config)
+        api_key = codex_api_key_value(validated_config.api_keys)
+    except (KeyError, TypeError, ValueError) as exc:
+        parser.error(f"invalid local mode config: {exc}")
+
+    gateway_port = args.port if args.port is not None else validated_config.port
+    transaction = CodexLocalModeTransaction.sync(
+        codex_home,
+        raw_config,
+        gateway_port=gateway_port,
+        api_key=api_key,
+    )
     try:
         if config_changed:
             write_config(config_path, raw_config, activate=transaction.apply)
@@ -601,7 +618,12 @@ def main() -> None:
             "logger (configured API tokens are redacted)"
         )
 
-    app = create_app(config, config_path=config_path, codex_home=codex_home)
+    app = create_app(
+        config,
+        config_path=config_path,
+        codex_home=codex_home,
+        gateway_port=port,
+    )
 
     from .app import run_gateway
 

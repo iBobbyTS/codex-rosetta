@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -11,8 +12,25 @@ from codex_rosetta.gateway.local_mode import (
     CodexLocalModeTransaction,
     build_model_catalog,
     catalog_path,
+    codex_api_key_value,
     config_toml_has_model_catalog,
+    ensure_codex_api_key,
 )
+
+
+def _sync_transaction(
+    codex_home: Path,
+    raw_config: dict | None = None,
+    *,
+    gateway_port: int = 8765,
+    api_key: str = "test-codex-key",
+) -> CodexLocalModeTransaction:
+    return CodexLocalModeTransaction.sync(
+        str(codex_home),
+        raw_config or {},
+        gateway_port=gateway_port,
+        api_key=api_key,
+    )
 
 
 def test_catalog_keeps_bundled_models_and_clones_terra_for_custom_llms() -> None:
@@ -196,13 +214,20 @@ def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) 
     config_toml = codex_home / "config.toml"
     config_toml.write_text(original, encoding="utf-8")
 
-    transaction = CodexLocalModeTransaction.sync(str(codex_home), {})
+    transaction = _sync_transaction(codex_home)
     transaction.apply()
 
     updated = config_toml.read_text(encoding="utf-8")
     expected_catalog = str(codex_home / "model_catalog.json")
     assert updated.startswith(f'model_catalog_json = "{expected_catalog}"\n')
     assert updated.count("model_catalog_json") == 1
+    assert 'model_provider = "codex_rosetta"' in updated
+    assert "[model_providers.codex_rosetta]" in updated
+    assert 'name = "OpenAI"' in updated
+    assert 'wire_api = "responses"' in updated
+    assert "requires_openai_auth = true" in updated
+    assert 'base_url = "http://127.0.0.1:8765/v1"' in updated
+    assert 'experimental_bearer_token = "test-codex-key"' in updated
     assert 'model = "gpt-5.6-sol"' in updated
     assert "# keep this comment" in updated
     assert "[profile.test]" in updated
@@ -218,6 +243,96 @@ def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) 
     assert not Path(catalog_path(str(codex_home))).exists()
 
 
+def test_sync_overwrites_selected_provider_but_preserves_other_provider_params(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(
+        'model_provider = "other"\n'
+        'model = "gpt-5.6-sol"\n\n'
+        "[model_providers.other]\n"
+        'name = "Other"\n'
+        'base_url = "https://other.example/v1"\n'
+        'custom_parameter = "keep"\n\n'
+        "[model_providers.codex_rosetta]\n"
+        'name = "Old"\n'
+        'base_url = "http://old.example/v1"\n'
+        'experimental_bearer_token = "old-key"\n\n'
+        "[model_providers.codex_rosetta.extra]\n"
+        'stale = "remove"\n',
+        encoding="utf-8",
+    )
+
+    transaction = _sync_transaction(
+        codex_home, gateway_port=43210, api_key="stable-codex-key"
+    )
+    transaction.apply()
+    updated = config_toml.read_text(encoding="utf-8")
+
+    assert updated.count('model_provider = "codex_rosetta"') == 1
+    assert updated.count("[model_providers.codex_rosetta]") == 1
+    assert 'base_url = "http://127.0.0.1:43210/v1"' in updated
+    assert 'experimental_bearer_token = "stable-codex-key"' in updated
+    assert "http://old.example/v1" not in updated
+    assert "[model_providers.codex_rosetta.extra]" not in updated
+    assert "stale" not in updated
+    assert "[model_providers.other]" in updated
+    assert 'base_url = "https://other.example/v1"' in updated
+    assert 'custom_parameter = "keep"' in updated
+    parsed = tomllib.loads(updated)
+    assert parsed["model_provider"] == "codex_rosetta"
+    assert parsed["model_providers"]["codex_rosetta"] == {
+        "name": "OpenAI",
+        "wire_api": "responses",
+        "requires_openai_auth": True,
+        "base_url": "http://127.0.0.1:43210/v1",
+        "experimental_bearer_token": "stable-codex-key",
+    }
+    assert parsed["model_providers"]["other"]["custom_parameter"] == "keep"
+
+    second = _sync_transaction(
+        codex_home, gateway_port=43210, api_key="stable-codex-key"
+    )
+    second.apply()
+    assert config_toml.read_text(encoding="utf-8") == updated
+
+
+def test_ensure_codex_api_key_creates_once_and_never_rotates() -> None:
+    raw = {
+        "server": {
+            "api_keys": [{"id": "existing", "label": "Existing", "key": "existing-key"}]
+        }
+    }
+
+    assert ensure_codex_api_key(raw) is True
+    first_key = codex_api_key_value(raw["server"]["api_keys"])
+    assert first_key.startswith("rsk-")
+    assert raw["server"]["api_keys"][-1] == {
+        "id": "codex",
+        "label": "codex",
+        "key": first_key,
+    }
+
+    assert ensure_codex_api_key(raw) is False
+    assert codex_api_key_value(raw["server"]["api_keys"]) == first_key
+
+
+def test_ensure_codex_api_key_reuses_existing_named_label() -> None:
+    raw = {
+        "server": {
+            "api_keys": [
+                {"id": "ui-created", "label": "codex", "key": "existing-codex-key"}
+            ]
+        }
+    }
+
+    assert ensure_codex_api_key(raw) is False
+    assert codex_api_key_value(raw["server"]["api_keys"]) == "existing-codex-key"
+    assert len(raw["server"]["api_keys"]) == 1
+
+
 def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     tmp_path: Path,
 ) -> None:
@@ -229,7 +344,13 @@ def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     external.write_text("external", encoding="utf-8")
     config_toml = codex_home / "config.toml"
     config_toml.write_text(
-        f'model_catalog_json = "{external}"\nmodel = "gpt-5.6-sol"\n',
+        f'model_catalog_json = "{external}"\n'
+        'model_provider = "codex_rosetta"\n'
+        'model = "gpt-5.6-sol"\n\n'
+        "[model_providers.other]\n"
+        'base_url = "https://keep.example/v1"\n\n'
+        "[model_providers.codex_rosetta]\n"
+        'base_url = "http://127.0.0.1:8765/v1"\n',
         encoding="utf-8",
     )
 
@@ -239,6 +360,14 @@ def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     assert not managed.exists()
     assert external.read_text(encoding="utf-8") == "external"
     assert "model_catalog_json" not in config_toml.read_text(encoding="utf-8")
+    assert 'model_provider = "codex_rosetta"' not in config_toml.read_text(
+        encoding="utf-8"
+    )
+    assert "[model_providers.codex_rosetta]" not in config_toml.read_text(
+        encoding="utf-8"
+    )
+    assert "[model_providers.other]" in config_toml.read_text(encoding="utf-8")
+    assert "https://keep.example/v1" in config_toml.read_text(encoding="utf-8")
     assert 'model = "gpt-5.6-sol"' in config_toml.read_text(encoding="utf-8")
 
     transaction.rollback()
@@ -246,14 +375,42 @@ def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     assert str(external) in config_toml.read_text(encoding="utf-8")
 
 
-def test_toml_editor_does_not_remove_catalog_text_inside_multiline_string(
+def test_clear_preserves_a_user_selected_non_rosetta_provider(tmp_path: Path) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(
+        'model_provider = "other"\n\n'
+        "[model_providers.other]\n"
+        'custom_parameter = "keep"\n\n'
+        "[model_providers.codex_rosetta]\n"
+        'name = "OpenAI"\n',
+        encoding="utf-8",
+    )
+
+    transaction = CodexLocalModeTransaction.clear(str(codex_home))
+    transaction.apply()
+    updated = config_toml.read_text(encoding="utf-8")
+
+    assert 'model_provider = "other"' in updated
+    assert "[model_providers.other]" in updated
+    assert 'custom_parameter = "keep"' in updated
+    assert "[model_providers.codex_rosetta]" not in updated
+
+
+def test_toml_editor_does_not_remove_managed_text_inside_multiline_string(
     tmp_path: Path,
 ) -> None:
     codex_home = tmp_path / "codex"
     codex_home.mkdir()
     config_toml = codex_home / "config.toml"
     config_toml.write_text(
-        'instructions = """\nmodel_catalog_json = "keep as text"\n"""\n'
+        'instructions = """\n'
+        'model_catalog_json = "keep as text"\n'
+        'model_provider = "codex_rosetta"\n'
+        "[model_providers.codex_rosetta]\n"
+        'base_url = "keep as text"\n'
+        '"""\n'
         'model_catalog_json = "/remove/this.json"\n',
         encoding="utf-8",
     )
@@ -263,6 +420,9 @@ def test_toml_editor_does_not_remove_catalog_text_inside_multiline_string(
 
     updated = config_toml.read_text(encoding="utf-8")
     assert 'model_catalog_json = "keep as text"' in updated
+    assert 'model_provider = "codex_rosetta"' in updated
+    assert "[model_providers.codex_rosetta]" in updated
+    assert 'base_url = "keep as text"' in updated
     assert "/remove/this.json" not in updated
 
 
@@ -303,7 +463,7 @@ def test_sync_rolls_back_both_files_when_toml_write_fails(
         real_atomic_write(path, content)
 
     monkeypatch.setattr(local_mode, "_atomic_write_bytes", fail_config_toml)
-    transaction = CodexLocalModeTransaction.sync(str(codex_home), {})
+    transaction = _sync_transaction(codex_home)
 
     with pytest.raises(OSError, match="simulated"):
         transaction.apply()

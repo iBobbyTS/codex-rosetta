@@ -973,6 +973,7 @@ def create_app(
     config_path: str | None = None,
     *,
     codex_home: str | None = None,
+    gateway_port: int | None = None,
 ) -> App:
     """Create the httpserver application."""
     from .transport import HttpTransport
@@ -993,6 +994,7 @@ def create_app(
     )
     setattr(app, "gateway_config", config)
     setattr(app, "codex_home", resolve_codex_home(codex_home))
+    setattr(app, "gateway_port", config.port if gateway_port is None else gateway_port)
     app.admin_cors_origins = tuple(config.admin_cors_origins)  # type: ignore
 
     # --- Routes ---

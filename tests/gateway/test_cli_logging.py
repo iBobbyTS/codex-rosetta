@@ -37,6 +37,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
         models={},
         log_bodies=False,
         local_mode=True,
+        api_keys=[{"id": "codex", "label": "codex", "key": "test-codex-key"}],
     )
     selected_levels: list[str] = []
     app_kwargs: list[dict[str, object]] = []
@@ -89,6 +90,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
 
     assert selected_levels == [expected_level]
     assert app_kwargs[0]["codex_home"] == str(codex_home)
+    assert app_kwargs[0]["gateway_port"] == 8765
     assert cli.os.environ["CODEX_HOME"] == str(codex_home)
 
 
