@@ -204,7 +204,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.multi_agent_v1": "disabled",
         "function.exec_command": "modified",
         "function.write_stdin": "modified",
-        "custom.apply_patch": "modified",
+        "custom.apply_patch": "disabled",
     }
     assert catalog["builtin_profile"]["inputs"]["namespace.mcp_github"]
     assert [profile["id"] for profile in catalog["preset_profiles"]] == [
@@ -321,7 +321,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert builtin["namespace.mcp_github"] == "modified"
     assert builtin["function.exec_command"] == "modified"
     assert builtin["function.write_stdin"] == "modified"
-    assert builtin["custom.apply_patch"] == "modified"
+    assert builtin["custom.apply_patch"] == "disabled"
     assert builtin["function.shell_command"] == "disabled"
     for item_id in (
         "function.exec_command",
@@ -347,6 +347,12 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.clock.sleep",
         "namespace.web.run",
     }
+    assert (
+        tool_profile_contract()["exec_projections"]["custom.apply_patch"][
+            "internal_when_disabled"
+        ]
+        is True
+    )
 
     web_search_policy = policies[items["hosted.web_search"]["policy_id"]]
     assert web_search_policy["route_defaults"] == [

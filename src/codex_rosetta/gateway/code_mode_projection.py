@@ -24,6 +24,7 @@ class ExecToolProjection:
     input_mode: str = "args"
     input_field: str = "input"
     output_mode: str = "text"
+    model_visible: bool = True
 
 
 @dataclass(frozen=True)
@@ -251,12 +252,23 @@ class _TypeScriptSchemaParser:
 
 
 def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]:
-    """Return Modified Profile entries that should be projected from exec."""
+    """Return model-visible and internal Profile-owned exec projections."""
     projections: dict[str, ExecToolProjection] = {}
     for item_id, definition in tool_profile_contract()["exec_projections"].items():
-        if route_tool_state(route, item_id) != "modified":
+        state = route_tool_state(route, item_id)
+        internal_when_disabled = definition.get("internal_when_disabled", False)
+        if state != "modified" and not (state == "disabled" and internal_when_disabled):
             continue
-        projection = ExecToolProjection(item_id=item_id, **definition)
+        projection_definition = {
+            key: value
+            for key, value in definition.items()
+            if key != "internal_when_disabled"
+        }
+        projection = ExecToolProjection(
+            item_id=item_id,
+            model_visible=state == "modified",
+            **projection_definition,
+        )
         projections[projection.chat_name] = projection
     return projections
 

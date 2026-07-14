@@ -338,6 +338,19 @@ def test_description_visibility_defaults_to_all_states_and_supports_override(
         tool_profiles_module.tool_profile_contract.cache_clear()
 
 
+def test_exec_projection_internal_when_disabled_must_be_boolean(monkeypatch):
+    catalog = copy.deepcopy(load_tool_catalog())
+    item = next(item for item in catalog["items"] if item["id"] == "custom.apply_patch")
+    item["exec_projection"]["internal_when_disabled"] = "true"
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="internal_when_disabled must be boolean"):
+            tool_profiles_module.tool_profile_contract()
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
+
+
 @pytest.mark.parametrize(
     "api_type", ["responses_rosetta", "chat", "anthropic", "google"]
 )

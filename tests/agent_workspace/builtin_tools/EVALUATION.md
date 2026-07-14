@@ -40,11 +40,11 @@ tool call.
 
 ### `03` / localized file workflow
 
-Require model-facing `Glob`, `Grep`, `Read`, `apply_patch`, `Edit`, and `Write`
-calls. Gateway Logs must prove that `Glob`, `Grep`, and `Read` became nested
-`exec_command` executions and that projected `apply_patch`, `Edit`, and `Write`
-reached native `apply_patch` semantics. The final workspace must satisfy these
-exact checks:
+Require model-facing `Glob`, `Grep`, `Read`, two `Edit` calls, and one `Write`
+call, with no model-facing `apply_patch`. Gateway Logs must prove that `Glob`,
+`Grep`, and `Read` became nested `exec_command` executions and that both `Edit`
+calls plus `Write` reached native `apply_patch` semantics. The final workspace
+must satisfy these exact checks:
 
 - `fixtures/alpha.txt` contains `status=edited` and no `status=original`;
 - `fixtures/beta.txt` contains `status=patched` and no `status=unchanged`;

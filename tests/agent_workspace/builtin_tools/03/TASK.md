@@ -7,24 +7,15 @@ order using the exact named tools:
    `output_mode` set to `content`. Require a match in `fixtures/alpha.txt`.
 3. Call `Read` on `fixtures/alpha.txt`. Require the complete line
    `status=original`.
-4. Call projected `apply_patch` with this exact patch:
-
-```text
-*** Begin Patch
-*** Update File: fixtures/beta.txt
-@@
--status=unchanged
-+status=patched
-*** End Patch
-```
-
+4. Call `Edit` on `fixtures/beta.txt`, replacing the exact complete line
+   `status=unchanged` with `status=patched`. Do not use `replace_all`.
 5. Call `Edit` on `fixtures/alpha.txt`, replacing the exact complete line
    `status=original` with `status=edited`. Do not use `replace_all`.
 6. Call `Write` to create `fixtures/created.txt` with exact content
    `CREATED_BY_WRITE` followed by one newline.
 
 Do not use shell commands, Python, or any other file tools as substitutes.
-Attempt all six named tools in order; if one fails,
+Attempt all six calls in order; if one fails,
 do not repair the workspace through a fallback.
 
 If all six calls succeed, reply with only `RESULT:LOCALIZED_FILES_OK`.

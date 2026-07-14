@@ -14,7 +14,7 @@
       "namespace.multi_agent_v1": "disabled",
       "function.exec_command": "modified",
       "function.write_stdin": "modified",
-      "custom.apply_patch": "modified"
+      "custom.apply_patch": "disabled"
     },
     "inputs": {
       "function.request_user_input": {
@@ -416,7 +416,8 @@
         "chat_name": "apply_patch",
         "nested_name": "apply_patch",
         "input_mode": "freeform",
-        "input_field": "patch"
+        "input_field": "patch",
+        "internal_when_disabled": true
       }
     },
     {

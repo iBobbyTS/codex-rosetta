@@ -60,8 +60,8 @@ The built-in Code Mode suite is
 It fixes the provider display name to `OpenAI` and the model catalog shape to
 `gpt-5.6-sol`, then exercises a yielded `exec` cell through top-level `wait`,
 two projected `update_plan` calls, one grouped localized file workflow
-(`Glob`, `Grep`, `Read`, projected `apply_patch`, `Edit`, and create-file
-`Write`), projected `view_image`, and one grouped
+(`Glob`, `Grep`, `Read`, two `Edit` calls, and create-file `Write`) where
+`apply_patch` remains model-hidden, projected `view_image`, and one grouped
 `get_goal`/`create_goal`/`update_goal` lifecycle. A separate visual-recognition
 task verifies that projected `view_image` returns real image content to a
 vision-capable upstream model rather than only proving that Codex can open the
