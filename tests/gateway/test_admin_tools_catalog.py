@@ -244,8 +244,6 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["builtin_profile"]["name"] == "Chat Default"
     assert catalog["builtin_profile"]["tools"] == {
         "namespace.multi_agent_v1": "disabled",
-        "function.exec_command": "modified",
-        "function.write_stdin": "modified",
         "custom.apply_patch": "disabled",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
@@ -326,9 +324,6 @@ def test_catalog_defaults_and_namespace_image_policy():
 
     modified = {
         "function.request_user_input",
-        "function.update_plan",
-        "function.view_image",
-        "function.get_goal",
         "function.create_goal",
         "function.update_goal",
         "namespace.multi_agent_v2.list_agents",
@@ -337,14 +332,6 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.multi_agent_v2.wait_agent",
         "hosted.web_search",
         "namespace.web.run",
-        "namespace.clock.curr_time",
-        "namespace.clock.sleep",
-        "namespace.memories.add_ad_hoc_note",
-        "namespace.memories.list",
-        "namespace.memories.read",
-        "namespace.memories.search",
-        "namespace.skills.list",
-        "namespace.skills.read",
         "custom.exec",
     }
     assert {
@@ -371,10 +358,28 @@ def test_catalog_defaults_and_namespace_image_policy():
         for child_id in _namespaces["namespace.multi_agent_v1"]
     )
     assert builtin["namespace.multi_agent_v2"] == "expanded"
-    assert builtin["function.exec_command"] == "modified"
-    assert builtin["function.write_stdin"] == "modified"
+    assert builtin["function.exec_command"] == "passthrough"
+    assert builtin["function.write_stdin"] == "passthrough"
     assert builtin["custom.apply_patch"] == "disabled"
     assert builtin["function.shell_command"] == "disabled"
+    for item_id in (
+        "function.exec_command",
+        "function.write_stdin",
+        "function.update_plan",
+        "function.view_image",
+        "function.get_goal",
+        "namespace.clock.curr_time",
+        "namespace.clock.sleep",
+        "namespace.memories.add_ad_hoc_note",
+        "namespace.memories.list",
+        "namespace.memories.read",
+        "namespace.memories.search",
+        "namespace.skills.list",
+        "namespace.skills.read",
+    ):
+        assert builtin[item_id] == "passthrough"
+        assert "description_i18n" not in items[item_id]
+        assert "description_visible_when" not in items[item_id]
     for item_id in (
         "function.exec_command",
         "function.write_stdin",

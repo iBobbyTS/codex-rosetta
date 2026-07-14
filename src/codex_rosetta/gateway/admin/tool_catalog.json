@@ -12,8 +12,6 @@
     "name": "Chat Default",
     "tools": {
       "namespace.multi_agent_v1": "disabled",
-      "function.exec_command": "modified",
-      "function.write_stdin": "modified",
       "custom.apply_patch": "disabled"
     },
     "inputs": {
@@ -73,7 +71,7 @@
     },
     {
       "id": "exec_projection",
-      "default": "modified",
+      "default": "passthrough",
       "supported": [
         "disabled",
         "passthrough",
@@ -160,10 +158,6 @@
       "name": "exec_command",
       "type": "function",
       "policy_id": "command_session_passthrough",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "exec_command",
         "nested_name": "exec_command"
@@ -174,10 +168,6 @@
       "name": "write_stdin",
       "type": "function",
       "policy_id": "command_session_passthrough",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "write_stdin",
         "nested_name": "write_stdin"
@@ -198,10 +188,6 @@
       "name": "update_plan",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "update_plan",
         "nested_name": "update_plan"
@@ -281,10 +267,6 @@
       "name": "view_image",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "view_image",
         "nested_name": "view_image",
@@ -332,10 +314,6 @@
       "name": "get_goal",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "get_goal",
         "nested_name": "get_goal"
@@ -686,10 +664,6 @@
       "name": "clock__curr_time",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "clock-curr_time",
         "nested_name": "clock__curr_time"
@@ -700,10 +674,6 @@
       "name": "clock__sleep",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "clock-sleep",
         "nested_name": "clock__sleep"
@@ -796,10 +766,6 @@
       "name": "memories__add_ad_hoc_note",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "memories-add_ad_hoc_note",
         "nested_name": "memories__add_ad_hoc_note"
@@ -810,10 +776,6 @@
       "name": "memories__list",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "memories-list",
         "nested_name": "memories__list"
@@ -824,10 +786,6 @@
       "name": "memories__read",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "memories-read",
         "nested_name": "memories__read"
@@ -838,10 +796,6 @@
       "name": "memories__search",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "memories-search",
         "nested_name": "memories__search"
@@ -852,10 +806,6 @@
       "name": "skills__list",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "skills-list",
         "nested_name": "skills__list"
@@ -866,10 +816,6 @@
       "name": "skills__read",
       "type": "function",
       "policy_id": "exec_projection",
-      "description_i18n": "tools.description.exec_projection",
-      "description_visible_when": [
-        "modified"
-      ],
       "exec_projection": {
         "chat_name": "skills-read",
         "nested_name": "skills__read"

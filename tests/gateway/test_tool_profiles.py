@@ -54,7 +54,6 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     for item_id in (
         "namespace.clock.curr_time",
         "namespace.clock.sleep",
-        "namespace.web.run",
         "namespace.memories.add_ad_hoc_note",
         "namespace.memories.list",
         "namespace.memories.read",
@@ -62,7 +61,8 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         "namespace.skills.list",
         "namespace.skills.read",
     ):
-        assert contract["builtin"][item_id] == "modified"
+        assert contract["builtin"][item_id] == "passthrough"
+    assert contract["builtin"]["namespace.web.run"] == "modified"
     assert contract["builtin"]["namespace.image_gen.imagegen"] == "disabled"
     assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
     assert "namespace.mcp_github" not in contract["builtin"]
@@ -747,4 +747,4 @@ def test_resolve_builtin_profile_returns_independent_copy():
 
     first["function.update_plan"] = "disabled"
 
-    assert second["function.update_plan"] == "modified"
+    assert second["function.update_plan"] == "passthrough"

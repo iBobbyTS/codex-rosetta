@@ -23,16 +23,16 @@ When Codex exposes `update_plan` only as a nested Code Mode tool, the bundled **
 
 Goal state is managed through `get_goal`, `create_goal`, and `update_goal`. Chat models may not infer the right sequence from the terse native tool descriptions.
 
-The bundled **Chat Default** Profile marks these Functions as Modified and appends guidance for:
+The bundled **Chat Default** Profile marks `create_goal` and `update_goal` as Modified and appends guidance for:
 
 - `create_goal`: call it when the user explicitly asks to mark a goal complete or blocked but no active goal exists, or when `update_goal` reports that the thread has no goal. Do not set `token_budget` unless the user explicitly provided a numeric token budget.
 - `update_goal`: when goal state is uncertain, call `get_goal` first. If there is no active goal, call `create_goal` with a concise objective and no token budget unless explicitly requested, then retry `update_goal`.
 
-All three Goal tools are marked Modified so they can be projected from Code Mode `exec`. `get_goal` has no additional guidance text; `create_goal` and `update_goal` retain the Profile-owned guidance above.
+`get_goal` is Pass through: Rosetta projects its current Code Mode declaration and translates the call back to `exec` without appending guidance. `create_goal` and `update_goal` remain Modified because they retain the Profile-owned guidance above.
 
 ## Code Mode Nested Tools
 
-Recent Codex Code Mode surfaces keep several runtime tools inside the custom `exec` description instead of exposing every tool as a top-level Function. For Responses-to-Chat routes, the Chat Default projection rules map the following nested declarations into ordinary Chat functions when those declarations are present and their Profile state is Modified:
+Recent Codex Code Mode surfaces keep several runtime tools inside the custom `exec` description instead of exposing every tool as a top-level Function. For Responses-to-Chat routes, the Chat Default projection rules map the following nested declarations into ordinary Chat functions when those declarations are present and their Profile state is Pass through or Modified:
 
 - `exec_command`, `write_stdin`, `update_plan`, and `view_image`
 - `web__run` (Codex runtime identity `web.run`), exposed to Chat as `web-run`
@@ -42,6 +42,10 @@ Recent Codex Code Mode surfaces keep several runtime tools inside the custom `ex
 - flat `memories__*` and `skills__*` entries, exposed with canonical `namespace-function` Chat names
 
 Rosetta reads each schema and description from the actual Codex `exec` declaration. Its reverse parser covers the TypeScript grammar emitted by Codex, including literals, unions, intersections, arrays, tuples, and object index signatures. Constraints that Codex itself omits while rendering JSON Schema to TypeScript cannot be reconstructed. Rosetta does not invent a Function when a declaration cannot be parsed. A same-named direct Function wins, and projection fails closed for that name.
+
+Once at least one model-visible nested Function has been projected successfully, Rosetta removes the parent `exec` tool from the outbound Chat tool list. The parent declaration remains available internally for projection and reverse translation. If no model-visible declaration can be parsed, Rosetta keeps the original `exec` tool instead of silently removing all command capability.
+
+For Exec Expansion cards, **Pass through** means representation-only adaptation: expose the current declaration as a normal Chat Function and translate its call back to `exec`, without appending any catalog text. Chat Default uses this state for `exec_command`, `write_stdin`, `update_plan`, `view_image`, `get_goal`, Clock, Memories, and Skills. **Modified** is retained where the Profile changes model-visible guidance or behavior: `create_goal` and `update_goal` append guidance, while `web.run` uses the selected Tavily-backed Rosetta search mapping.
 
 Chat Default keeps `image_gen__imagegen` Disabled until a copied Profile sets that Function to Modified and supplies the required image endpoint credentials.
 
@@ -100,6 +104,8 @@ The Tools page has four categories:
 - **Rosetta Injection**: the injected `Read`, `Glob`, `Grep`, `Edit`, and `Write` tools.
 
 Namespace states are shown as Expanded, Passthrough (ineffective for Chat API), and Disabled. Disabling a Namespace forces and locks all of its children to Disabled.
+
+Function state **Pass through** is displayed as a direct pass-through choice. For Exec Expansion entries it still performs the representation-only projection and reverse translation described above; it does not add a card description or mutate the model-facing tool description.
 
 A Function, Hosted, or Namespace catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text`, `password`, or `select` input type. A select declares ordered `{value, label}` options: the Tools page displays each label and persists its value. The Tools page renders the entries in catalog order beneath the tool status selector. The `web_search` and `web.run` cards each own their search Provider and Token; Tavily is currently the only provider. The former standalone Web Search settings tab has been removed.
 

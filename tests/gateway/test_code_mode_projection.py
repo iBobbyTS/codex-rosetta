@@ -186,6 +186,13 @@ def test_exec_description_projects_precise_normal_function_schemas():
         "required": ["patch"],
         "additionalProperties": False,
     }
+    assert definitions["exec_command"]["function"]["description"] == (
+        "Description for exec_command."
+    )
+    assert definitions["create_goal"]["function"]["description"].endswith(
+        "Do not set token_budget unless the user explicitly provided a numeric token "
+        "budget."
+    )
     guidance = route.tool_profile_inputs["function.create_goal"]["guidance"]
     assert definitions["create_goal"]["function"]["description"].endswith(guidance)
 
@@ -308,6 +315,7 @@ def test_exec_description_with_unknown_typescript_syntax_fails_closed():
 def test_request_projection_preserves_direct_tools_and_records_only_added_tools():
     projections = exec_tool_projections_for_route(_route())
     body = {
+        "tool_choice": {"type": "function", "function": {"name": "exec"}},
         "tools": [
             {
                 "type": "function",
@@ -329,7 +337,7 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
                 "type": "function",
                 "function": {"name": "collaboration-spawn_agent", "parameters": {}},
             },
-        ]
+        ],
     }
 
     adapted = localize_code_editing_chat_request(
@@ -346,8 +354,35 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
         name for name, projection in projections.items() if projection.model_visible
     }
     assert visible_projection_names.issubset(names)
+    assert "exec" not in names
     assert "apply_patch" not in names
+    assert adapted["tool_choice"] == "auto"
     assert set(adapted[EXEC_PROJECTIONS_KEY]) == set(projections)
+
+
+def test_request_projection_keeps_exec_when_no_visible_definition_can_be_parsed():
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": "No parseable nested declarations.",
+                    "parameters": {},
+                },
+            }
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    assert adapted == body
 
 
 def test_projected_call_translates_to_custom_exec_and_round_trips_mapping():
