@@ -13,6 +13,7 @@
     "tools": {
       "namespace.multi_agent_v1": "disabled",
       "namespace.image_gen.imagegen": "modified",
+      "hosted.web_search": "disabled",
       "custom.apply_patch": "disabled",
       "custom.exec": "disabled"
     },
@@ -446,6 +447,10 @@
       "description_i18n": "tools.description.web_search_mapping",
       "description_visible_when": [
         "modified"
+      ],
+      "note_i18n": "tools.note.web_search_replaced",
+      "note_visible_when": [
+        "disabled"
       ],
       "profile_inputs": [
         {

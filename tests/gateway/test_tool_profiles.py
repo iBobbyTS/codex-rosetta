@@ -64,6 +64,7 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         assert contract["builtin"][item_id] == "passthrough"
     assert contract["builtin"]["namespace.web.run"] == "modified"
     assert contract["builtin"]["namespace.image_gen.imagegen"] == "modified"
+    assert contract["builtin"]["hosted.web_search"] == "disabled"
     assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
     assert "namespace.mcp_github" not in contract["builtin"]
     assert contract["builtin"]["custom.exec"] == "disabled"
@@ -537,6 +538,7 @@ def test_chat_default_is_the_only_bundled_profile():
     assert set(contract["readonly"]) == {"builtin"}
     assert resolve_tool_profile("builtin", {}) == contract["builtin"]
     assert "hosted.image_generation" not in contract["builtin"]
+    assert contract["builtin"]["hosted.web_search"] == "disabled"
     assert contract["builtin"]["custom.apply_patch"] == "disabled"
     assert contract["builtin"]["namespace.web.run"] == "modified"
 
@@ -733,6 +735,19 @@ def test_modified_web_search_profile_matches_preview_alias():
     assert adapted["tools"][0]["description"] == (
         "Search current documentation.\n\nPrefer primary sources."
     )
+
+
+def test_chat_default_disables_hosted_web_search():
+    body = {
+        "tools": [
+            {"type": "web_search", "description": "Search current documentation."},
+            {"type": "function", "name": "wait", "parameters": {}},
+        ]
+    }
+
+    adapted = _apply_tool_adaptation(body, _route(tool_profile_contract()["builtin"]))
+
+    assert adapted["tools"] == [{"type": "function", "name": "wait", "parameters": {}}]
 
 
 def test_profile_limits_localized_native_and_injected_tools():
