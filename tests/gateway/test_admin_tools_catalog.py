@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.resources
 import json
 
 from codex_rosetta._vendor.httpserver import Request
@@ -77,6 +78,63 @@ EXPECTED_EXEC_TOOLS = {
     "web__run",
     "write_stdin",
 }
+
+
+def test_every_catalog_item_has_a_short_localized_summary():
+    catalog = load_tool_catalog()
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    translations = json.loads(
+        package_files.joinpath("admin_i18n.json").read_text("utf-8")
+    )
+
+    for item in catalog["items"]:
+        key = f"tools.summary.{item['id']}"
+        for language in ("en", "zh"):
+            summary = translations[language].get(key)
+            assert isinstance(summary, str) and summary.strip(), (language, item["id"])
+            assert "\n" not in summary
+            assert len(summary) <= 140, (language, item["id"], summary)
+
+
+def test_tool_detail_copy_is_localized_and_matches_profile_behavior():
+    catalog = load_tool_catalog()
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    translations = json.loads(
+        package_files.joinpath("admin_i18n.json").read_text("utf-8")
+    )
+
+    for item in catalog["items"]:
+        keys = [item.get("description_i18n"), item.get("note_i18n")]
+        for profile_input in item.get("profile_inputs", []):
+            keys.extend(
+                (
+                    profile_input.get("label_i18n"),
+                    profile_input.get("placeholder_i18n"),
+                )
+            )
+        for key in filter(None, keys):
+            for language in ("en", "zh"):
+                assert translations[language].get(key), (language, item["id"], key)
+
+    assert translations["zh"]["tools.summary.function.shell_command"] == (
+        "执行 Shell 命令。"
+    )
+    assert translations["zh"]["tools.description.apply_patch_internal"] == (
+        "对模型隐藏，改用Claude Code风格的Edit和Write，Rosetta负责翻译"
+    )
+    assert translations["zh"]["tools.description.web_search_mapping"] == (
+        "替换掉原本的`/alpha/search`搜索端点，使用配置好的搜索服务商进行搜索"
+    )
+    for item_id in (
+        "read",
+        "edit",
+        "write",
+        "glob",
+        "grep",
+    ):
+        assert translations["zh"][
+            f"tools.summary.injection.claude_code.{item_id}"
+        ].startswith("Claude Code风格工具，实现高效")
 
 
 def _catalog_maps():
@@ -287,8 +345,8 @@ def test_catalog_defaults_and_namespace_image_policy():
         },
         {
             "id": "token",
-            "label_i18n": "tools.input.web_search.token",
-            "placeholder_i18n": "tools.input.web_search.token_placeholder",
+            "label_i18n": "tools.input.web_run.token",
+            "placeholder_i18n": "tools.input.web_run.token_placeholder",
             "type": "password",
             "default": "",
             "visible_when": ["modified"],
@@ -303,12 +361,11 @@ def test_catalog_defaults_and_namespace_image_policy():
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
     web_run_inputs = [dict(input_definition) for input_definition in search_inputs[:2]]
-    web_run_inputs[1] = {
-        **web_run_inputs[1],
-        "label_i18n": "tools.input.web_run.token",
-        "placeholder_i18n": "tools.input.web_run.token_placeholder",
-    }
     assert items["namespace.web.run"]["profile_inputs"] == web_run_inputs
+    assert (
+        items["hosted.web_search"]["description_i18n"]
+        == (items["namespace.web.run"]["description_i18n"])
+    )
     assert items["custom.exec"]["profile_inputs"] == [
         {
             "id": "guidance",
@@ -341,15 +398,21 @@ def test_catalog_defaults_and_namespace_image_policy():
         and policies[item["policy_id"]]["default"] == "modified"
     } == modified
 
-    assert items["function.request_user_input"]["description_i18n"] == (
-        "tools.description.append_guidance"
-    )
-    assert items["function.request_user_input"]["description_visible_when"] == [
-        "modified"
+    guidance_textarea = [
+        {
+            "id": "guidance",
+            "label_i18n": "tools.input.appended_description_guidance",
+            "type": "textarea",
+            "default": "",
+            "visible_when": ["modified"],
+            "readonly": True,
+        }
     ]
-    assert (
-        items["function.request_user_input"]["profile_inputs"][0]["ui_hidden"] is True
-    )
+    request_user_input = items["function.request_user_input"]
+    assert "description_i18n" not in request_user_input
+    assert request_user_input["profile_inputs"] == guidance_textarea
+    assert request_user_input["note_i18n"] == "tools.note.request_user_input"
+    assert request_user_input["note_visible_when"] == ["modified"]
 
     builtin = tool_profile_contract()["builtin"]
     assert builtin["namespace.multi_agent_v1"] == "disabled"
@@ -371,19 +434,30 @@ def test_catalog_defaults_and_namespace_image_policy():
         {"custom.exec"}
     )
     assert builtin["function.shell_command"] == "disabled"
-    for item_id in ("function.create_goal", "function.update_goal"):
+    assert items["function.shell_command"]["description_i18n"] == (
+        "tools.description.shell_command_replaced"
+    )
+    goal_notes = {
+        "function.create_goal": "tools.note.create_goal",
+        "function.update_goal": "tools.note.update_goal",
+    }
+    for item_id, note_i18n in goal_notes.items():
         assert "description_i18n" not in items[item_id]
         assert "description_visible_when" not in items[item_id]
-        assert items[item_id]["profile_inputs"] == [
-            {
-                "id": "guidance",
-                "label_i18n": "tools.input.appended_description_guidance",
-                "type": "textarea",
-                "default": "",
-                "visible_when": ["modified"],
-                "readonly": True,
-            }
-        ]
+        assert items[item_id]["profile_inputs"] == guidance_textarea
+        assert items[item_id]["note_i18n"] == note_i18n
+        assert items[item_id]["note_visible_when"] == ["modified"]
+    collaboration_notes = {
+        "namespace.multi_agent_v2.list_agents": "tools.note.list_agents",
+        "namespace.multi_agent_v2.send_message": "tools.note.send_message",
+        "namespace.multi_agent_v2.spawn_agent": "tools.note.spawn_agent",
+        "namespace.multi_agent_v2.wait_agent": "tools.note.wait_agent",
+    }
+    for item_id, note_i18n in collaboration_notes.items():
+        assert "description_i18n" not in items[item_id]
+        assert items[item_id]["profile_inputs"] == guidance_textarea
+        assert items[item_id]["note_i18n"] == note_i18n
+        assert items[item_id]["note_visible_when"] == ["modified"]
     for item_id in (
         "function.exec_command",
         "function.write_stdin",
@@ -499,6 +573,9 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert 'type="checkbox"' not in page
     assert "tools.disabledHint" in page
     assert "item.description_i18n" in html
+    assert "item.note_i18n" in html
+    assert "item.note_visible_when" in html
+    assert "summary + description + inputs + note" in html
     assert "item.profile_inputs" in html
     assert "renderToolProfileInputs(item)" in html
     assert 'id="toolCatalogLayout"' in page

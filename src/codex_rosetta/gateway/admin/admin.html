@@ -1946,10 +1946,13 @@ function renderToolDetail() {
     panel.innerHTML = `<div class="tool-detail-empty">${esc(t('tools.detail.select'))}</div>`;
     return;
   }
+  const summary = `<div class="tool-description">${esc(t('tools.summary.' + item.id))}</div>`;
   const showDescription = item.description_i18n && isToolCardContentVisible(item.id, item.description_visible_when);
   const description = showDescription ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
   const inputs = renderToolProfileInputs(item);
-  const body = description + inputs || `<div class="tool-detail-empty">${esc(t('tools.detail.none'))}</div>`;
+  const showNote = item.note_i18n && isToolCardContentVisible(item.id, item.note_visible_when);
+  const note = showNote ? `<div class="tool-description tool-detail-note">${esc(t(item.note_i18n))}</div>` : '';
+  const body = summary + description + inputs + note;
   panel.innerHTML = `<div class="tool-detail-header"><div class="tool-detail-heading"><span class="tool-detail-kicker">${esc(t('tools.detail.title'))}</span><span class="tool-detail-name">${esc(item.name)}</span></div>${renderToolKindBadge(item)}</div><div class="tool-detail-body">${body}</div>`;
 }
 

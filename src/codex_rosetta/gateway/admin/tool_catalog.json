@@ -188,10 +188,7 @@
       "name": "shell_command",
       "type": "function",
       "policy_id": "legacy_shell_disabled",
-      "description_i18n": "tools.description.native_localization",
-      "description_visible_when": [
-        "modified"
-      ]
+      "description_i18n": "tools.description.shell_command_replaced"
     },
     {
       "id": "function.update_plan",
@@ -214,19 +211,20 @@
       "name": "request_user_input",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.append_guidance",
-      "description_visible_when": [
+      "note_i18n": "tools.note.request_user_input",
+      "note_visible_when": [
         "modified"
       ],
       "profile_inputs": [
         {
           "id": "guidance",
-          "label_i18n": "tools.input.guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
           "default": "",
           "visible_when": [
             "modified"
           ],
-          "ui_hidden": true
+          "readonly": true
         }
       ],
       "profile_mutations": [
@@ -334,6 +332,10 @@
       "name": "create_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "note_i18n": "tools.note.create_goal",
+      "note_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "create_goal",
         "nested_name": "create_goal"
@@ -362,6 +364,10 @@
       "name": "update_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "note_i18n": "tools.note.update_goal",
+      "note_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "update_goal",
         "nested_name": "update_goal"
@@ -436,7 +442,7 @@
       "name": "web_search",
       "type": "hosted",
       "policy_id": "web_search_bridge",
-      "description_i18n": "tools.description.web_search",
+      "description_i18n": "tools.description.web_search_mapping",
       "description_visible_when": [
         "modified"
       ],
@@ -458,8 +464,8 @@
         },
         {
           "id": "token",
-          "label_i18n": "tools.input.web_search.token",
-          "placeholder_i18n": "tools.input.web_search.token_placeholder",
+          "label_i18n": "tools.input.web_run.token",
+          "placeholder_i18n": "tools.input.web_run.token_placeholder",
           "type": "password",
           "default": "",
           "visible_when": [
@@ -558,19 +564,20 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.append_guidance",
-      "description_visible_when": [
+      "note_i18n": "tools.note.list_agents",
+      "note_visible_when": [
         "modified"
       ],
       "profile_inputs": [
         {
           "id": "guidance",
-          "label_i18n": "tools.input.guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
           "default": "",
           "visible_when": [
             "modified"
           ],
-          "ui_hidden": true
+          "readonly": true
         }
       ],
       "profile_mutations": [
@@ -586,19 +593,20 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.append_guidance",
-      "description_visible_when": [
+      "note_i18n": "tools.note.send_message",
+      "note_visible_when": [
         "modified"
       ],
       "profile_inputs": [
         {
           "id": "guidance",
-          "label_i18n": "tools.input.guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
           "default": "",
           "visible_when": [
             "modified"
           ],
-          "ui_hidden": true
+          "readonly": true
         }
       ],
       "profile_mutations": [
@@ -614,19 +622,20 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.append_guidance",
-      "description_visible_when": [
+      "note_i18n": "tools.note.spawn_agent",
+      "note_visible_when": [
         "modified"
       ],
       "profile_inputs": [
         {
           "id": "guidance",
-          "label_i18n": "tools.input.guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
           "default": "",
           "visible_when": [
             "modified"
           ],
-          "ui_hidden": true
+          "readonly": true
         }
       ],
       "profile_mutations": [
@@ -642,19 +651,20 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
-      "description_i18n": "tools.description.append_guidance",
-      "description_visible_when": [
+      "note_i18n": "tools.note.wait_agent",
+      "note_visible_when": [
         "modified"
       ],
       "profile_inputs": [
         {
           "id": "guidance",
-          "label_i18n": "tools.input.guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
           "default": "",
           "visible_when": [
             "modified"
           ],
-          "ui_hidden": true
+          "readonly": true
         }
       ],
       "profile_mutations": [
@@ -730,7 +740,7 @@
       "name": "web__run",
       "type": "function",
       "policy_id": "web_run_mapping",
-      "description_i18n": "tools.description.web_run",
+      "description_i18n": "tools.description.web_search_mapping",
       "description_visible_when": [
         "modified"
       ],
