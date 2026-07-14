@@ -279,12 +279,23 @@ def _normalize_profile_mutation(
     return normalized
 
 
+def _exec_projection_internal_when_disabled(raw: dict[str, Any], item_id: str) -> bool:
+    """Validate the internal-only projection flag for one catalog item."""
+    value = raw.get("internal_when_disabled", False)
+    if not isinstance(value, bool):
+        raise ValueError(
+            f"catalog item {item_id!r} exec_projection "
+            "internal_when_disabled must be boolean"
+        )
+    return value
+
+
 def _exec_projection_contract(
     catalog: dict[str, Any],
     supported: dict[str, tuple[str, ...]],
-) -> dict[str, dict[str, str]]:
+) -> dict[str, dict[str, Any]]:
     """Validate Profile-owned Code Mode exec projection declarations."""
-    projections: dict[str, dict[str, str]] = {}
+    projections: dict[str, dict[str, Any]] = {}
     chat_names: set[str] = set()
     for item in catalog["items"]:
         item_id = item["id"]
@@ -301,6 +312,7 @@ def _exec_projection_contract(
             "input_mode",
             "input_field",
             "output_mode",
+            "internal_when_disabled",
         }
         if unsupported:
             raise ValueError(
@@ -340,6 +352,7 @@ def _exec_projection_contract(
                 f"catalog item {item_id!r} exec_projection output_mode must be "
                 "'text' or 'image'"
             )
+        internal_when_disabled = _exec_projection_internal_when_disabled(raw, item_id)
         chat_names.add(chat_name)
         projections[item_id] = {
             "chat_name": chat_name,
@@ -347,6 +360,7 @@ def _exec_projection_contract(
             "input_mode": input_mode,
             "input_field": input_field,
             "output_mode": output_mode,
+            "internal_when_disabled": internal_when_disabled,
         }
     return projections
 

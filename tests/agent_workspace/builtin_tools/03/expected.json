@@ -7,8 +7,8 @@
     "Glob": 1,
     "Grep": 1,
     "Read": 1,
-    "apply_patch": 1,
-    "Edit": 1,
+    "apply_patch": 0,
+    "Edit": 2,
     "Write": 1
   },
   "expected_native_pattern": {

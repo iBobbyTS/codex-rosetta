@@ -25,11 +25,11 @@ evidence.
 - `01`: start a yielded Code Mode `exec` cell and resume it with the top-level
   `wait` Function.
 - `02`: call projected `update_plan` twice and verify both native plan updates.
-- `03`: exercise projected `apply_patch` and the injected `Glob`, `Grep`,
-  `Read`, `Edit`, and `Write` Functions in one file-workflow scenario. `Write`
-  is the Chat Default tool used for the requested create-file operation.
-  Read-only aliases must rebuild nested `exec_command` calls; projected
-  `apply_patch`, `Edit`, and `Write` must all execute through Codex
+- `03`: exercise the injected `Glob`, `Grep`, `Read`, `Edit`, and `Write`
+  Functions in one file-workflow scenario without exposing `apply_patch` to
+  the model. `Write` is the Chat Default tool used for the requested
+  create-file operation. Read-only aliases must rebuild nested `exec_command`
+  calls; both `Edit` calls and `Write` must execute through Codex
   `apply_patch` semantics.
 - `04`: call projected `view_image` on a deterministic local PNG fixture and
   return its image output through Code Mode.

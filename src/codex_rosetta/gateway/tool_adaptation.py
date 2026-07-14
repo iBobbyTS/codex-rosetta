@@ -414,7 +414,11 @@ def localize_code_editing_chat_request(
             adapted["tools"] = (
                 preserved_tools
                 + localized_tools
-                + [projected_tools[name] for name in active_projections]
+                + [
+                    projected_tools[name]
+                    for name in active_projections
+                    if name in projected_tools
+                ]
             )
             if _tool_choice_name(adapted.get("tool_choice")) in native_tool_names:
                 adapted["tool_choice"] = "auto"
@@ -469,7 +473,12 @@ def _project_exec_chat_tools(
     active = {
         name: projections[name] for name in definitions if name not in existing_names
     }
-    return definitions, active
+    visible_definitions = {
+        name: definition
+        for name, definition in definitions.items()
+        if name in active and projections[name].model_visible
+    }
+    return visible_definitions, active
 
 
 def restore_localized_history_from_mappings(

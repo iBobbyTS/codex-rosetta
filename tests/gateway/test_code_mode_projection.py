@@ -104,7 +104,7 @@ def _exec_description() -> str:
     return "Run JavaScript.\n\n" + "\n\n".join(sections)
 
 
-def test_chat_default_declares_all_requested_exec_projections():
+def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
     projections = exec_tool_projections_for_route(_route())
 
     assert set(projections) == {
@@ -120,6 +120,12 @@ def test_chat_default_declares_all_requested_exec_projections():
         "web-run",
         "write_stdin",
     }
+    assert projections["apply_patch"].model_visible is False
+    assert all(
+        projection.model_visible
+        for name, projection in projections.items()
+        if name != "apply_patch"
+    )
 
 
 def test_exec_description_projects_precise_normal_function_schemas():
@@ -307,7 +313,11 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
     names = [tool["function"]["name"] for tool in adapted["tools"]]
 
     assert {"wait", "request_user_input", "collaboration-spawn_agent"}.issubset(names)
-    assert set(projections).issubset(names)
+    visible_projection_names = {
+        name for name, projection in projections.items() if projection.model_visible
+    }
+    assert visible_projection_names.issubset(names)
+    assert "apply_patch" not in names
     assert set(adapted[EXEC_PROJECTIONS_KEY]) == set(projections)
 
 
@@ -646,7 +656,12 @@ def test_gateway_projects_direct_tools_and_persists_exec_round_trip_with_ttl(tmp
     assert {"wait", "request_user_input", "collaboration-spawn_agent"}.issubset(
         first_names
     )
-    assert set(exec_tool_projections_for_route(route)).issubset(first_names)
+    projections = exec_tool_projections_for_route(route)
+    assert {
+        name for name, projection in projections.items() if projection.model_visible
+    }.issubset(first_names)
+    assert {"Edit", "Write"}.issubset(first_names)
+    assert "apply_patch" not in first_names
 
     rows = persistence.query_tool_call_mappings(
         principal_id="client",
