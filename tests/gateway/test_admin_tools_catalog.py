@@ -523,6 +523,18 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "toolProfileDraft[item.namespace_id] === 'disabled'" in html
     assert "tool-state-expanded" in html
     assert "tool-state-injected" in html
+    assert "function collapseDisabledToolNamespaces()" in html
+    assert "collapseDisabledToolNamespaces();" in html
+    assert "toolProfileDraft[item.id] !== 'disabled'" in html
+    assert (
+        "const isDisabled = toolProfileDraft[namespaceItem.id] === 'disabled';" in html
+    )
+    assert (
+        "const isExpanded = !isDisabled && expandedToolNamespaces.has(namespaceItem.id);"
+        in html
+    )
+    assert "${isDisabled ? ' disabled' : ''}" in html
+    assert "if (toolProfileDraft[namespaceId] === 'disabled')" in html
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
     assert "input.type === 'textarea'" in html
@@ -541,7 +553,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert '<select class="tool-profile-input"' in html
     assert "inputs: toolProfileInputDraft" in html
     assert "toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace'" in html
-    assert "if (item.type === 'namespace') expandedToolNamespaces.add(item.id);" in html
+    assert (
+        "if (item.type === 'namespace' && toolProfileDraft[item.id] !== 'disabled')"
+        in html
+    )
     assert "item.default_expanded" not in html
     assert "api.get('/admin/api/tools/profiles')" in html
     assert 'href="/admin/web-search"' not in html
