@@ -14,6 +14,13 @@ codex-rosetta-gateway --host 127.0.0.1
 `server.api_keys` 记录。配置、锁和备份文件均以仅当前用户可读写的权限保存。
 向客户端分发前，请先把生成的凭证保存到密码管理器中。
 
+首次以配置文件启动 Gateway 时，还会在 `config.jsonc` 同目录创建仅当前用户可读写的
+`admin-session.key`。这个独立随机 secret 只用于派生浏览器 Admin token：普通 Gateway
+重启会保留登录状态，修改 Admin 密码或删除该 secret 则会使现有浏览器会话失效。
+Admin 模型测试使用的内部 Bearer token 仍然只存在于内存中，并在每次进程启动时轮换。
+未提供配置路径的程序化 `create_app()` 调用会有意使用临时 Admin session secret，因此不
+承诺在不同 app 实例之间保留登录状态。
+
 所有 `/v1` 请求都使用网关访问密钥，而不是上游 Provider 密钥。认证先于路由执行，
 因此未知、已移除和动态注册的 `/v1` 路径也会 fail closed。浏览器 `OPTIONS` 预检仍可
 公开访问，但之后的实际请求仍必须通过认证：

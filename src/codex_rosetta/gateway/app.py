@@ -18,6 +18,7 @@ from codex_rosetta._vendor.httpserver import (
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.error_dump import dump_error
 
+from .admin_session import load_or_create_admin_session_secret
 from .auth import (
     AuthState,
     api_key_label_var,
@@ -1005,11 +1006,13 @@ def create_app(
     import secrets
 
     internal_token = f"rsk-internal-{secrets.token_hex(16)}"
+    admin_session_secret = load_or_create_admin_session_secret(config_path)
     auth_state = AuthState(
         config.api_key_principals,
         config.api_key_labels,
         internal_token,
         admin_password=config.admin_password,
+        admin_session_secret=admin_session_secret,
     )
     upstream_error_log_state = UpstreamErrorLogState(
         {*config.token_values, internal_token}

@@ -122,8 +122,17 @@ class AuthState:
         labels: dict[str, str],
         internal_token: str | None,
         admin_password: str | None = None,
+        *,
+        admin_session_secret: bytes | None = None,
     ) -> None:
         self.internal_token = internal_token
+        self._admin_session_secret = (
+            admin_session_secret
+            if admin_session_secret is not None
+            else internal_token.encode()
+            if internal_token is not None
+            else None
+        )
         self.principals: dict[str, str] = {}
         self.labels: dict[str, str] = {}
         self.admin_password: str | None = None
@@ -138,11 +147,11 @@ class AuthState:
     ) -> PreparedAuthConfig:
         """Build replacement credentials without mutating live auth state."""
         admin_token = None
-        if admin_password and self.internal_token:
+        if admin_password and self._admin_session_secret:
             import hashlib
 
             admin_token = hmac.new(
-                self.internal_token.encode(),
+                self._admin_session_secret,
                 admin_password.encode(),
                 hashlib.sha256,
             ).hexdigest()

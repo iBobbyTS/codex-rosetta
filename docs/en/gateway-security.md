@@ -16,6 +16,15 @@ codex-rosetta-gateway --host 127.0.0.1
 are written with owner-only permissions. Store the generated credentials in a
 password manager before distributing them to clients.
 
+The first configured Gateway startup also creates `admin-session.key` beside
+`config.jsonc` with owner-only permissions. This independent random secret is
+used only to derive the browser Admin token: a normal Gateway restart preserves
+the login, while changing the Admin password or deleting the secret invalidates
+existing browser sessions. The internal bearer token used by Admin model tests
+remains ephemeral and is rotated on every process start. Programmatic
+`create_app()` calls without a config path intentionally use an ephemeral Admin
+session secret and therefore do not promise login persistence across instances.
+
 Every `/v1` request uses the gateway access key, not an upstream provider key.
 Authentication runs before routing, so unknown, removed, and dynamically
 registered `/v1` paths fail closed as well. Browser `OPTIONS` preflight remains
