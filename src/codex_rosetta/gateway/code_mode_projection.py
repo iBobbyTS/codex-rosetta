@@ -256,8 +256,9 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
     projections: dict[str, ExecToolProjection] = {}
     for item_id, definition in tool_profile_contract()["exec_projections"].items():
         state = route_tool_state(route, item_id)
+        model_visible = state in {"passthrough", "modified"}
         internal_when_disabled = definition.get("internal_when_disabled", False)
-        if state != "modified" and not (state == "disabled" and internal_when_disabled):
+        if not model_visible and not (state == "disabled" and internal_when_disabled):
             continue
         projection_definition = {
             key: value
@@ -266,7 +267,7 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
         }
         projection = ExecToolProjection(
             item_id=item_id,
-            model_visible=state == "modified",
+            model_visible=model_visible,
             **projection_definition,
         )
         projections[projection.chat_name] = projection

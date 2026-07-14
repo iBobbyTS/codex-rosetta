@@ -398,6 +398,9 @@ def localize_code_editing_chat_request(
             requested_projections,
             profile_route,
         )
+        model_tools, removed_projected_containers = _hide_successfully_projected_exec(
+            preserved_tools, projected_tools
+        )
 
         if (
             removed_native
@@ -412,7 +415,7 @@ def localize_code_editing_chat_request(
                 and _chat_tool_name(tool) not in existing_names
             ]
             adapted["tools"] = (
-                preserved_tools
+                model_tools
                 + localized_tools
                 + [
                     projected_tools[name]
@@ -420,7 +423,8 @@ def localize_code_editing_chat_request(
                     if name in projected_tools
                 ]
             )
-            if _tool_choice_name(adapted.get("tool_choice")) in native_tool_names:
+            selected_tool = _tool_choice_name(adapted.get("tool_choice"))
+            if selected_tool in native_tool_names | removed_projected_containers:
                 adapted["tool_choice"] = "auto"
             adapted[LOCALIZATION_CAPABILITIES_KEY] = native_capabilities.to_metadata()
             if active_projections:
@@ -442,6 +446,19 @@ def localize_code_editing_chat_request(
         adapted[READ_OUTPUT_CACHE_KEY] = read_cache
 
     return adapted
+
+
+def _hide_successfully_projected_exec(
+    preserved_tools: list[Any],
+    projected_tools: dict[str, dict[str, Any]],
+) -> tuple[list[Any], frozenset[str]]:
+    """Hide the parent exec only after at least one visible projection succeeds."""
+    if not projected_tools:
+        return preserved_tools, frozenset()
+    return (
+        [tool for tool in preserved_tools if _chat_tool_name(tool) != "exec"],
+        frozenset({"exec"}),
+    )
 
 
 def _project_exec_chat_tools(
