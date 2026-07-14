@@ -11,7 +11,10 @@
     "id": "builtin",
     "name": "Chat Default",
     "tools": {
-      "namespace.multi_agent_v1": "disabled"
+      "namespace.multi_agent_v1": "disabled",
+      "function.exec_command": "modified",
+      "function.write_stdin": "modified",
+      "custom.apply_patch": "modified"
     },
     "inputs": {
       "function.request_user_input": {
@@ -106,6 +109,15 @@
     {
       "id": "command_session_passthrough",
       "default": "passthrough",
+      "supported": [
+        "disabled",
+        "passthrough",
+        "modified"
+      ]
+    },
+    {
+      "id": "exec_projection",
+      "default": "modified",
       "supported": [
         "disabled",
         "passthrough",
@@ -211,13 +223,21 @@
       "id": "function.exec_command",
       "name": "exec_command",
       "type": "function",
-      "policy_id": "command_session_passthrough"
+      "policy_id": "command_session_passthrough",
+      "exec_projection": {
+        "chat_name": "exec_command",
+        "nested_name": "exec_command"
+      }
     },
     {
       "id": "function.write_stdin",
       "name": "write_stdin",
       "type": "function",
-      "policy_id": "command_session_passthrough"
+      "policy_id": "command_session_passthrough",
+      "exec_projection": {
+        "chat_name": "write_stdin",
+        "nested_name": "write_stdin"
+      }
     },
     {
       "id": "function.shell_command",
@@ -229,7 +249,11 @@
       "id": "function.update_plan",
       "name": "update_plan",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "exec_projection": {
+        "chat_name": "update_plan",
+        "nested_name": "update_plan"
+      }
     },
     {
       "id": "function.wait_for_environment",
@@ -292,7 +316,12 @@
       "id": "function.view_image",
       "name": "view_image",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "exec_projection": {
+        "chat_name": "view_image",
+        "nested_name": "view_image",
+        "output_mode": "image"
+      }
     },
     {
       "id": "function.list_mcp_resources",
@@ -334,13 +363,21 @@
       "id": "function.get_goal",
       "name": "get_goal",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "exec_projection": {
+        "chat_name": "get_goal",
+        "nested_name": "get_goal"
+      }
     },
     {
       "id": "function.create_goal",
       "name": "create_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "exec_projection": {
+        "chat_name": "create_goal",
+        "nested_name": "create_goal"
+      },
       "profile_inputs": [
         {
           "id": "guidance",
@@ -356,6 +393,10 @@
       "name": "update_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "exec_projection": {
+        "chat_name": "update_goal",
+        "nested_name": "update_goal"
+      },
       "profile_inputs": [
         {
           "id": "guidance",
@@ -370,7 +411,13 @@
       "id": "custom.apply_patch",
       "name": "apply_patch",
       "type": "custom",
-      "policy_id": "native_apply_patch"
+      "policy_id": "native_apply_patch",
+      "exec_projection": {
+        "chat_name": "apply_patch",
+        "nested_name": "apply_patch",
+        "input_mode": "freeform",
+        "input_field": "patch"
+      }
     },
     {
       "id": "custom.exec",
@@ -639,14 +686,22 @@
       "name": "curr_time",
       "type": "function",
       "namespace_id": "namespace.clock",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "exec_projection": {
+        "chat_name": "clock-curr_time",
+        "nested_name": "clock__curr_time"
+      }
     },
     {
       "id": "namespace.clock.sleep",
       "name": "sleep",
       "type": "function",
       "namespace_id": "namespace.clock",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "exec_projection": {
+        "chat_name": "clock-sleep",
+        "nested_name": "clock__sleep"
+      }
     },
     {
       "id": "namespace.image_gen.imagegen",
@@ -687,6 +742,10 @@
       "type": "function",
       "namespace_id": "namespace.web",
       "policy_id": "web_run_mapping",
+      "exec_projection": {
+        "chat_name": "web-run",
+        "nested_name": "web__run"
+      },
       "profile_inputs": [
         {
           "id": "provider",

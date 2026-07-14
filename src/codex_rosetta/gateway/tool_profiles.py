@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from functools import lru_cache
 from typing import Any, cast
 
@@ -228,54 +229,126 @@ def _profile_mutation_contract(
             raise ValueError(
                 f"catalog item {item_id!r} profile_mutations requires Modified support"
             )
-        normalized: list[dict[str, str]] = []
-        for raw_mutation in raw_mutations:
-            if not isinstance(raw_mutation, dict):
-                raise ValueError(
-                    f"catalog item {item_id!r} profile mutation must be an object"
-                )
-            unsupported = set(raw_mutation) - {"target", "input_id", "parameter"}
-            if unsupported:
-                raise ValueError(
-                    f"catalog item {item_id!r} profile mutation has unsupported "
-                    f"fields: {sorted(unsupported)}"
-                )
-            target = raw_mutation.get("target")
-            input_id = raw_mutation.get("input_id")
-            parameter = raw_mutation.get("parameter")
-            if target not in {"description", "parameter_description"}:
-                raise ValueError(
-                    f"catalog item {item_id!r} profile mutation has unsupported target"
-                )
-            if not isinstance(input_id, str) or input_id not in input_definitions.get(
-                item_id, {}
-            ):
-                raise ValueError(
-                    f"catalog item {item_id!r} profile mutation references unknown input"
-                )
-            if target == "parameter_description":
-                if not isinstance(parameter, str) or not parameter:
-                    raise ValueError(
-                        f"catalog item {item_id!r} parameter mutation needs parameter"
-                    )
-            elif parameter is not None:
-                raise ValueError(
-                    f"catalog item {item_id!r} description mutation cannot set parameter"
-                )
-            normalized.append(
-                {
-                    "target": target,
-                    "input_id": input_id,
-                    **(
-                        {"parameter": parameter}
-                        if target == "parameter_description"
-                        else {}
-                    ),
-                }
+        normalized = [
+            _normalize_profile_mutation(
+                item_id, raw_mutation, input_definitions.get(item_id, {})
             )
+            for raw_mutation in raw_mutations
+        ]
         if normalized:
             mutations[item_id] = tuple(normalized)
     return mutations
+
+
+def _normalize_profile_mutation(
+    item_id: str,
+    raw_mutation: Any,
+    input_definitions: dict[str, Any],
+) -> dict[str, str]:
+    """Validate one Profile-owned model-description mutation."""
+    if not isinstance(raw_mutation, dict):
+        raise ValueError(f"catalog item {item_id!r} profile mutation must be an object")
+    unsupported = set(raw_mutation) - {"target", "input_id", "parameter"}
+    if unsupported:
+        raise ValueError(
+            f"catalog item {item_id!r} profile mutation has unsupported "
+            f"fields: {sorted(unsupported)}"
+        )
+    target = raw_mutation.get("target")
+    input_id = raw_mutation.get("input_id")
+    parameter = raw_mutation.get("parameter")
+    if target not in {"description", "parameter_description"}:
+        raise ValueError(
+            f"catalog item {item_id!r} profile mutation has unsupported target"
+        )
+    if not isinstance(input_id, str) or input_id not in input_definitions:
+        raise ValueError(
+            f"catalog item {item_id!r} profile mutation references unknown input"
+        )
+    normalized = {"target": target, "input_id": input_id}
+    if target == "parameter_description":
+        if not isinstance(parameter, str) or not parameter:
+            raise ValueError(
+                f"catalog item {item_id!r} parameter mutation needs parameter"
+            )
+        normalized["parameter"] = parameter
+    elif parameter is not None:
+        raise ValueError(
+            f"catalog item {item_id!r} description mutation cannot set parameter"
+        )
+    return normalized
+
+
+def _exec_projection_contract(
+    catalog: dict[str, Any],
+    supported: dict[str, tuple[str, ...]],
+) -> dict[str, dict[str, str]]:
+    """Validate Profile-owned Code Mode exec projection declarations."""
+    projections: dict[str, dict[str, str]] = {}
+    chat_names: set[str] = set()
+    for item in catalog["items"]:
+        item_id = item["id"]
+        raw = item.get("exec_projection")
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection must be an object"
+            )
+        unsupported = set(raw) - {
+            "chat_name",
+            "nested_name",
+            "input_mode",
+            "input_field",
+            "output_mode",
+        }
+        if unsupported:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection has unsupported fields: "
+                f"{sorted(unsupported)}"
+            )
+        if "modified" not in supported[item_id]:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection requires Modified support"
+            )
+        chat_name = raw.get("chat_name")
+        nested_name = raw.get("nested_name")
+        if not isinstance(chat_name, str) or not chat_name:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection chat_name must be non-empty"
+            )
+        if chat_name in chat_names:
+            raise ValueError(f"duplicate exec projection Chat name {chat_name!r}")
+        if not isinstance(nested_name, str) or not nested_name:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection nested_name must be non-empty"
+            )
+        input_mode = raw.get("input_mode", "args")
+        if input_mode not in {"args", "freeform"}:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection input_mode must be "
+                "'args' or 'freeform'"
+            )
+        input_field = raw.get("input_field", "input")
+        if not isinstance(input_field, str) or not input_field:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection input_field must be non-empty"
+            )
+        output_mode = raw.get("output_mode", "text")
+        if output_mode not in {"text", "image"}:
+            raise ValueError(
+                f"catalog item {item_id!r} exec_projection output_mode must be "
+                "'text' or 'image'"
+            )
+        chat_names.add(chat_name)
+        projections[item_id] = {
+            "chat_name": chat_name,
+            "nested_name": nested_name,
+            "input_mode": input_mode,
+            "input_field": input_field,
+            "output_mode": output_mode,
+        }
+    return projections
 
 
 def _normalize_profile_input_values(
@@ -387,14 +460,12 @@ def _apply_bundled_tool_overrides(
     return _disable_namespace_children(merged, namespace_children)
 
 
-@lru_cache(maxsize=1)
-def tool_profile_contract() -> dict[str, Any]:
-    """Return supported states and the immutable bundled profiles."""
-    catalog = load_tool_catalog()
-    policies = {policy["id"]: policy for policy in catalog["policies"]}
+def _catalog_base_tool_states(
+    catalog: dict[str, Any], policies: dict[str, dict[str, Any]]
+) -> tuple[dict[str, tuple[str, ...]], dict[str, str]]:
+    """Build supported states and defaults from catalog policies."""
     supported: dict[str, tuple[str, ...]] = {}
     builtin: dict[str, str] = {}
-
     for item in catalog["items"]:
         item_id = item["id"]
         item_type = item["type"]
@@ -404,27 +475,90 @@ def tool_profile_contract() -> dict[str, Any]:
             continue
 
         policy = policies[item["policy_id"]]
-        if item_type == "namespace":
-            supported[item_id] = tuple(
-                policy.get("namespace_supported", ("disabled", "expanded"))
-            )
-            namespace_default = policy.get("namespace_default")
-            if namespace_default is not None:
-                if namespace_default not in supported[item_id]:
-                    raise ValueError(
-                        f"namespace default {namespace_default!r} is unsupported "
-                        f"for {item_id!r}"
-                    )
-                builtin[item_id] = namespace_default
-            else:
-                builtin[item_id] = (
-                    "disabled" if policy["default"] == "disabled" else "expanded"
-                )
+        if item_type != "namespace":
+            supported[item_id] = tuple(policy["supported"])
+            builtin[item_id] = policy["default"]
             continue
 
-        states = tuple(policy["supported"])
-        supported[item_id] = states
-        builtin[item_id] = policy["default"]
+        supported[item_id] = tuple(
+            policy.get("namespace_supported", ("disabled", "expanded"))
+        )
+        namespace_default = policy.get("namespace_default")
+        if (
+            namespace_default is not None
+            and namespace_default not in supported[item_id]
+        ):
+            raise ValueError(
+                f"namespace default {namespace_default!r} is unsupported "
+                f"for {item_id!r}"
+            )
+        builtin[item_id] = namespace_default or (
+            "disabled" if policy["default"] == "disabled" else "expanded"
+        )
+    return supported, builtin
+
+
+def _validate_description_visibility_contract(
+    catalog: dict[str, Any], supported: dict[str, tuple[str, ...]]
+) -> None:
+    """Validate catalog description visibility declarations."""
+    for item in catalog["items"]:
+        description_visible_when = item.get("description_visible_when")
+        if description_visible_when is None:
+            continue
+        if not item.get("description_i18n"):
+            raise ValueError(
+                f"catalog item {item['id']!r} description_visible_when requires "
+                "description_i18n"
+            )
+        _normalize_visible_when(
+            item["id"],
+            description_visible_when,
+            supported[item["id"]],
+            field="description_visible_when",
+        )
+
+
+def _build_preset_profile(
+    preset: dict[str, Any],
+    catalog: dict[str, Any],
+    supported: dict[str, tuple[str, ...]],
+    input_definitions: dict[str, dict[str, Any]],
+    namespace_children: dict[str, tuple[str, ...]],
+) -> dict[str, Any]:
+    """Build and validate one immutable preset Profile."""
+    defaults = preset.get("defaults", {})
+    overrides = preset.get("tools", {})
+    tools: dict[str, str] = {}
+    for item in catalog["items"]:
+        item_id = item["id"]
+        state = overrides.get(item_id, defaults.get(item["type"]))
+        if state not in supported[item_id]:
+            raise ValueError(
+                f"bundled profile {preset.get('id')!r} has unsupported state "
+                f"{state!r} for {item_id!r}"
+            )
+        tools[item_id] = state
+    return {
+        "id": preset["id"],
+        "name": preset["name"],
+        "tools": _disable_namespace_children(tools, namespace_children),
+        "inputs": {
+            item_id: {
+                input_id: definition["default"]
+                for input_id, definition in item_inputs.items()
+            }
+            for item_id, item_inputs in input_definitions.items()
+        },
+    }
+
+
+@lru_cache(maxsize=1)
+def tool_profile_contract() -> dict[str, Any]:
+    """Return supported states and the immutable bundled profiles."""
+    catalog = load_tool_catalog()
+    policies = {policy["id"]: policy for policy in catalog["policies"]}
+    supported, builtin = _catalog_base_tool_states(catalog, policies)
 
     namespace_children = _namespace_children_contract(catalog, supported)
 
@@ -442,26 +576,13 @@ def tool_profile_contract() -> dict[str, Any]:
     profile_mutations = _profile_mutation_contract(
         catalog, input_definitions, supported
     )
+    exec_projections = _exec_projection_contract(catalog, supported)
     builtin_inputs = _normalize_profile_input_values(
         builtin_profile.pop("inputs", {}),
         input_definitions,
         field="builtin_profile",
     )
-    for item in catalog["items"]:
-        description_visible_when = item.get("description_visible_when")
-        if description_visible_when is None:
-            continue
-        if not item.get("description_i18n"):
-            raise ValueError(
-                f"catalog item {item['id']!r} description_visible_when requires "
-                "description_i18n"
-            )
-        _normalize_visible_when(
-            item["id"],
-            description_visible_when,
-            supported[item["id"]],
-            field="description_visible_when",
-        )
+    _validate_description_visibility_contract(catalog, supported)
 
     profiles = [
         {
@@ -471,32 +592,14 @@ def tool_profile_contract() -> dict[str, Any]:
         }
     ]
     for preset in catalog.get("preset_profiles", []):
-        defaults = preset.get("defaults", {})
-        overrides = preset.get("tools", {})
-        tools: dict[str, str] = {}
-        for item in catalog["items"]:
-            item_id = item["id"]
-            state = overrides.get(item_id, defaults.get(item["type"]))
-            if state not in supported[item_id]:
-                raise ValueError(
-                    f"bundled profile {preset.get('id')!r} has unsupported state "
-                    f"{state!r} for {item_id}"
-                )
-            tools[item_id] = state
-        tools = _disable_namespace_children(tools, namespace_children)
         profiles.append(
-            {
-                "id": preset["id"],
-                "name": preset["name"],
-                "tools": tools,
-                "inputs": {
-                    item_id: {
-                        input_id: definition["default"]
-                        for input_id, definition in item_inputs.items()
-                    }
-                    for item_id, item_inputs in input_definitions.items()
-                },
-            }
+            _build_preset_profile(
+                preset,
+                catalog,
+                supported,
+                input_definitions,
+                namespace_children,
+            )
         )
 
     return {
@@ -505,6 +608,7 @@ def tool_profile_contract() -> dict[str, Any]:
         "builtin": builtin,
         "input_definitions": input_definitions,
         "profile_mutations": profile_mutations,
+        "exec_projections": exec_projections,
         "namespace_children": namespace_children,
         "readonly": {profile["id"]: profile for profile in profiles},
     }
@@ -750,3 +854,53 @@ def route_tool_state(route: Any, item_id: str, default: str = "passthrough") -> 
     if not profile:
         return default
     return profile.get(item_id, default)
+
+
+def apply_profile_tool_mutations(
+    tool: Any,
+    item_id: str,
+    route: Any,
+) -> Any:
+    """Apply catalog-declared mutations to one flat tool definition."""
+    if not isinstance(tool, dict) or route_tool_state(route, item_id) != "modified":
+        return tool
+    mutations = tool_profile_contract()["profile_mutations"].get(item_id, ())
+    values = getattr(route, "tool_profile_inputs", {}).get(item_id, {})
+    if not mutations or not isinstance(values, dict):
+        return tool
+    adapted = copy.deepcopy(tool)
+    changed = False
+    for mutation in mutations:
+        value = values.get(mutation["input_id"])
+        if not isinstance(value, str) or not (append := value.strip()):
+            continue
+        if mutation["target"] == "description":
+            description = _append_profile_description(
+                adapted.get("description"), append
+            )
+            if description != adapted.get("description"):
+                adapted["description"] = description
+                changed = True
+            continue
+        parameters = adapted.get("parameters")
+        if not isinstance(parameters, dict):
+            continue
+        properties = parameters.get("properties")
+        if not isinstance(properties, dict):
+            continue
+        parameter = properties.get(mutation["parameter"])
+        if not isinstance(parameter, dict):
+            continue
+        description = _append_profile_description(parameter.get("description"), append)
+        if description != parameter.get("description"):
+            parameter["description"] = description
+            changed = True
+    return adapted if changed else tool
+
+
+def _append_profile_description(value: Any, append: str) -> str:
+    """Append one Profile-owned model instruction without duplication."""
+    description = value if isinstance(value, str) else ""
+    if append in description:
+        return description
+    return f"{description}\n\n{append}" if description else append
