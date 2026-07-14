@@ -488,6 +488,7 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-namespace-head { display:grid;grid-template-columns:auto minmax(160px,1fr) auto minmax(260px,1.4fr);gap:10px;align-items:center;padding:9px 12px;border:1px solid transparent;cursor:pointer; }
 .tool-namespace-toggle { width:24px;height:24px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);cursor:pointer;line-height:1; }
 .tool-namespace-toggle:hover { border-color:var(--accent); }
+.tool-namespace-toggle:disabled { opacity:.55;cursor:not-allowed; }
 .tool-namespace-details { display:grid;gap:8px;padding:0 12px 10px 46px; }
 .tool-namespace-children { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:10px;padding:12px;border-top:1px solid var(--border);background:var(--bg); }
 .tool-namespace-children[hidden] { display:none; }
@@ -1643,9 +1644,22 @@ function setToolCatalogFilter(filter) {
 }
 
 function toggleToolNamespace(namespaceId) {
+  if (toolProfileDraft[namespaceId] === 'disabled') {
+    expandedToolNamespaces.delete(namespaceId);
+    renderToolCatalog();
+    return;
+  }
   if (expandedToolNamespaces.has(namespaceId)) expandedToolNamespaces.delete(namespaceId);
   else expandedToolNamespaces.add(namespaceId);
   renderToolCatalog();
+}
+
+function collapseDisabledToolNamespaces() {
+  for (const item of toolCatalogData?.items || []) {
+    if (item.type === 'namespace' && toolProfileDraft[item.id] === 'disabled') {
+      expandedToolNamespaces.delete(item.id);
+    }
+  }
 }
 
 function cloneToolProfileInputs(inputs) {
@@ -1676,7 +1690,9 @@ async function loadToolCatalog() {
     toolProfileInputDraft = cloneToolProfileInputs(selected.inputs);
     toolProfileDirty = false;
     for (const item of toolCatalogData.items || []) {
-      if (item.type === 'namespace') expandedToolNamespaces.add(item.id);
+      if (item.type === 'namespace' && toolProfileDraft[item.id] !== 'disabled') {
+        expandedToolNamespaces.add(item.id);
+      }
     }
     renderToolCatalog();
   } catch (error) {
@@ -1944,10 +1960,11 @@ function renderToolItem(item, policies, nested=false) {
 
 function renderToolNamespace(namespaceItem, childIds, index) {
   const children = childIds.map(id => index.items.get(id)).filter(Boolean);
-  const isExpanded = expandedToolNamespaces.has(namespaceItem.id);
+  const isDisabled = toolProfileDraft[namespaceItem.id] === 'disabled';
+  const isExpanded = !isDisabled && expandedToolNamespaces.has(namespaceItem.id);
   const selected = namespaceItem.id === selectedToolDetailId ? ' selected' : '';
   const childrenHtml = children.map(item => renderToolItem(item, index.policies, true)).join('');
-  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head${toolStateClass(namespaceItem)}${selected}" data-tool-id="${escAttr(namespaceItem.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(namespaceItem.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(namespaceItem.id)})"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="event.stopPropagation(); toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
+  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head${toolStateClass(namespaceItem)}${selected}" data-tool-id="${escAttr(namespaceItem.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(namespaceItem.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(namespaceItem.id)})"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="event.stopPropagation(); toggleToolNamespace(${handlerArg(namespaceItem.id)})"${isDisabled ? ' disabled' : ''}>${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
 }
 
 function renderToolGroup(groupId, itemIds, index) {
@@ -2004,6 +2021,7 @@ function renderToolCatalog() {
   }
 
   renderToolProfileControls();
+  collapseDisabledToolNamespaces();
 
   const metadata = toolCatalogData.metadata || {};
   meta.textContent = t('tools.catalogMeta', {
