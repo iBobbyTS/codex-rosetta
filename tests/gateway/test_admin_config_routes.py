@@ -1101,6 +1101,7 @@ def test_admin_html_renders_tools_as_compact_cards():
     )
     assert ".tool-card-grid { grid-template-columns:repeat(3,minmax(0,1fr))" in html
     assert "renderToolStateSelect(item)" in render_item
+    assert "toolStateClass(item)" in render_item
     assert "renderToolProfileInputs(item)" not in render_item
     assert "item.description_i18n" not in render_item
     assert "renderToolKindBadge(item)" not in render_item
@@ -1109,6 +1110,16 @@ def test_admin_html_renders_tools_as_compact_cards():
     assert '<div class="tool-list">${namespaces}</div>' in html
     assert 'id="toolDetailPanel"' in html
     assert "function renderToolDetail()" in html
+    assert ".tool-item.selected, .tool-namespace-head.selected { background:" in html
+    assert ".tool-item.tool-state-passthrough" in html
+    assert "border-color:var(--green)" in html
+    assert ".tool-item.tool-state-modified" in html
+    assert "border-color:var(--orange)" in html
+    assert ".tool-item.tool-state-disabled" in html
+    assert "border-color:var(--red)" in html
+    assert (
+        ".tool-item.selected, .tool-namespace-head.selected { border-color:" not in html
+    )
     assert "${esc(t('tools.default'))}:" not in render_item
 
 
