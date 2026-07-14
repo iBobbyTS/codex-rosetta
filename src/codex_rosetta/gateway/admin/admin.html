@@ -281,7 +281,6 @@ canvas { width: 100%; height: 160px; }
 .badge-cap { background: rgba(139,144,165,0.15); color: var(--text-dim); font-size: 10px; padding: 1px 6px; margin-right: 3px; }
 .badge-cap-vision { background: rgba(245,158,11,0.12); color: var(--orange); }
 .badge-cap-tools { background: rgba(59,130,246,0.12); color: var(--blue); }
-.badge-cap-embed { background: rgba(16,185,129,0.12); color: var(--green); }
 .badge-cap-reasoning { background: rgba(168,85,247,0.12); color: var(--purple); }
 
 /* Checkbox group */
@@ -937,13 +936,6 @@ body { padding-bottom: 26px; }
       <label data-i18n="label.provider">Provider</label>
       <select id="modelGroupProvider" onchange="onModelGroupProviderChange()"></select>
     </div>
-    <div class="form-group">
-      <label data-i18n="label.modelType">Model Type</label>
-      <div class="fetch-type-radios">
-        <label><input type="radio" name="modelGroupType" value="llm" checked onchange="onModelGroupTypeChange()"> <span data-i18n="label.llm">LLM</span></label>
-        <label><input type="radio" name="modelGroupType" value="embedding" onchange="onModelGroupTypeChange()"> <span data-i18n="label.embedding">Embedding</span></label>
-      </div>
-    </div>
     <div class="form-group" id="modelGroupToolProfileGroup">
       <label for="modelGroupToolProfile" data-i18n="tools.profile">Profile</label>
       <select id="modelGroupToolProfile"></select>
@@ -984,13 +976,6 @@ body { padding-bottom: 26px; }
       <div class="prefix-group">
         <label data-i18n="label.modelPrefix">Prefix:</label>
         <input id="fetchPrefix" placeholder="e.g. myprefix/" oninput="renderFetchedModels()">
-      </div>
-      <div class="fetch-type-group">
-        <label data-i18n="label.modelType">Model Type</label>
-        <div class="fetch-type-radios">
-          <label><input type="radio" name="fetchModelType" value="llm" checked onchange="onFetchTypeChange()"> <span data-i18n="label.llm">LLM</span></label>
-          <label><input type="radio" name="fetchModelType" value="embedding" onchange="onFetchTypeChange()"> <span data-i18n="label.embedding">Embedding</span></label>
-        </div>
       </div>
       <div class="fetch-caps-row" id="fetchCapsRow">
         <label data-i18n="label.capabilities">Capabilities</label>
@@ -1215,7 +1200,7 @@ const I18N = {
     'filter.allModels':'All Models', 'filter.allProviders':'All Providers',
     'filter.allStatus':'All Status', 'filter.ok':'OK (2xx/3xx)', 'filter.error':'Error (4xx/5xx)',
     'test.text':'Simple Text', 'test.stream':'Stream',
-    'test.tools':'Function Call', 'test.vision':'Image Understanding', 'test.embedding':'Embedding', 'test.reasoning':'Reasoning',
+    'test.tools':'Function Call', 'test.vision':'Image Understanding', 'test.reasoning':'Reasoning',
     'empty.providers':'No providers configured.', 'empty.models':'No models configured.',
     'empty.modelGroups':'No model groups configured.', 'empty.standaloneModels':'No standalone models configured.',
     'empty.logs':'No requests logged yet', 'empty.data':'No data yet',
@@ -1294,9 +1279,7 @@ const I18N = {
     'label.modelPrefix':'Prefix:',
     'label.modelGroupName':'Model Group Name',
     'label.modelMappings':'Model Mappings',
-    'label.modelType':'Model Type',
     'label.llm':'LLM',
-    'label.embedding':'Embedding',
     'fetch.loading':'Fetching models...',
     'fetch.count':'{checked} / {total} selected',
     'fetch.noModels':'No models found from this provider.',
@@ -1410,7 +1393,7 @@ const I18N = {
     'filter.allModels':'\u5168\u90e8\u6a21\u578b', 'filter.allProviders':'\u5168\u90e8\u670d\u52a1\u65b9',
     'filter.allStatus':'\u5168\u90e8\u72b6\u6001', 'filter.ok':'\u6b63\u5e38 (2xx/3xx)', 'filter.error':'\u9519\u8bef (4xx/5xx)',
     'test.text':'\u7b80\u5355\u6587\u672c', 'test.stream':'\u6d41\u5f0f',
-    'test.tools':'\u51fd\u6570\u8c03\u7528', 'test.vision':'\u56fe\u50cf\u7406\u89e3', 'test.embedding':'Embedding', 'test.reasoning':'\u63a8\u7406',
+    'test.tools':'\u51fd\u6570\u8c03\u7528', 'test.vision':'\u56fe\u50cf\u7406\u89e3', 'test.reasoning':'\u63a8\u7406',
     'empty.providers':'\u6682\u65e0\u670d\u52a1\u65b9\u914d\u7f6e\u3002', 'empty.models':'\u6682\u65e0\u6a21\u578b\u914d\u7f6e\u3002',
     'empty.modelGroups':'\u6682\u65e0\u6a21\u578b\u7ec4\u3002', 'empty.standaloneModels':'\u6682\u65e0\u72ec\u7acb\u6a21\u578b\u914d\u7f6e\u3002',
     'empty.logs':'\u6682\u65e0\u8bf7\u6c42\u8bb0\u5f55', 'empty.data':'\u6682\u65e0\u6570\u636e',
@@ -1489,9 +1472,7 @@ const I18N = {
     'label.modelPrefix':'\u524d\u7f00\uff1a',
     'label.modelGroupName':'\u6a21\u578b\u7ec4\u540d\u79f0',
     'label.modelMappings':'\u6a21\u578b\u6620\u5c04',
-    'label.modelType':'\u6a21\u578b\u7c7b\u578b',
     'label.llm':'LLM',
-    'label.embedding':'Embedding',
     'fetch.loading':'\u6b63\u5728\u83b7\u53d6\u6a21\u578b...',
     'fetch.count':'{checked} / {total} \u5df2\u9009',
     'fetch.noModels':'\u672a\u4ece\u8be5\u670d\u52a1\u65b9\u627e\u5230\u6a21\u578b\u3002',
@@ -2542,8 +2523,6 @@ function openModelGroupModal(groupName) {
   document.getElementById('modelGroupName').dataset.originalName = groupName || '';
   const provider = group ? group.provider : Object.keys((configData && configData.providers) || {})[0] || '';
   _populateProviderSelect('modelGroupProvider', provider);
-  const groupType = group ? group.type : 'llm';
-  document.querySelector(`input[name="modelGroupType"][value="${groupType}"]`).checked = true;
   const profileSelect = document.getElementById('modelGroupToolProfile');
   const presets = (configData && configData.tool_profile_presets) || [{id: 'builtin', name: 'Built-in'}];
   const profileOptions = [
@@ -2562,7 +2541,7 @@ function openModelGroupModal(groupName) {
   } else {
     addModelGroupRow();
   }
-  onModelGroupTypeChange();
+  onModelGroupProviderChange();
   document.getElementById('modelGroupModal').classList.add('open');
 }
 
@@ -2580,15 +2559,7 @@ function onModelGroupProviderChange() {
       ? 'responses_pass_through'
       : 'builtin';
   }
-  onModelGroupTypeChange();
-}
-
-function onModelGroupTypeChange() {
-  const groupType = document.querySelector('input[name="modelGroupType"]:checked')?.value || 'llm';
-  document.querySelectorAll('#modelGroupRows .group-cap-wrap').forEach(el => {
-    el.style.display = groupType === 'llm' ? '' : 'none';
-  });
-  document.getElementById('modelGroupToolProfileGroup').style.display = groupType === 'llm' && _modelGroupProviderUsesToolProfiles() ? '' : 'none';
+  document.getElementById('modelGroupToolProfileGroup').style.display = _modelGroupProviderUsesToolProfiles() ? '' : 'none';
 }
 
 function addModelGroupRow(modelName, info) {
@@ -2615,7 +2586,6 @@ function addModelGroupRow(modelName, info) {
 async function saveModelGroup() {
   const name = document.getElementById('modelGroupName').value.trim();
   const provider = document.getElementById('modelGroupProvider').value;
-  const groupType = document.querySelector('input[name="modelGroupType"]:checked')?.value || 'llm';
   const rows = [...document.querySelectorAll('#modelGroupRows .model-group-row')];
   const models = {};
   for (const row of rows) {
@@ -2626,10 +2596,10 @@ async function saveModelGroup() {
       return;
     }
     const caps = [...row.querySelectorAll('.group-cap:checked')].map(cb => cb.value);
-    if (groupType === 'llm' && caps.length === 0) caps.push('text');
+    if (caps.length === 0) caps.push('text');
     const upstream = row.querySelector('.group-upstream-model').value.trim();
     const entry = {};
-    if (groupType === 'llm') entry.capabilities = caps;
+    entry.capabilities = caps;
     if (upstream) entry.upstream_model = upstream;
     models[modelName] = entry;
   }
@@ -2637,8 +2607,8 @@ async function saveModelGroup() {
     showToast(t('error.modelGroupRequired'), 'error');
     return;
   }
-  const body = {provider, type: groupType, models};
-  if (groupType === 'llm' && _modelGroupProviderUsesToolProfiles()) {
+  const body = {provider, type: 'llm', models};
+  if (_modelGroupProviderUsesToolProfiles()) {
     const providerConfig = configData?.providers?.[provider];
     const defaultProfile = providerConfig?.api_type === 'responses_passthrough' ? 'responses_pass_through' : 'builtin';
     body.tool_profile = document.getElementById('modelGroupToolProfile').value || defaultProfile;
@@ -2916,17 +2886,13 @@ function _modelUpstream(info) {
 
 function _modelCapBadges(caps) {
   return caps.map(c => {
-    const cls = c === 'vision' ? 'badge-cap-vision' : c === 'tools' ? 'badge-cap-tools' : c === 'embedding' ? 'badge-cap-embed' : c === 'reasoning' ? 'badge-cap-reasoning' : 'badge-cap';
+    const cls = c === 'vision' ? 'badge-cap-vision' : c === 'tools' ? 'badge-cap-tools' : c === 'reasoning' ? 'badge-cap-reasoning' : 'badge-cap';
     return `<span class="badge ${cls}">${esc(c)}</span>`;
   }).join('');
 }
 
 function _modelTestControls(name, caps) {
   const hasVision = caps.includes('vision');
-  const isEmbedding = caps.includes('embedding');
-  if (isEmbedding) {
-    return `<button class="btn btn-sm btn-test" style="border-radius:var(--radius);color:var(--orange);font-weight:600" onclick="runTest(${handlerArg(name)},'embedding')">${t('btn.test')}</button>`;
-  }
   return `<div class="test-group">
     <button class="btn btn-sm btn-test" onclick="runTest(${handlerArg(name)},'text')">${t('btn.test')}</button>
     <button class="btn btn-sm btn-caret" onclick="toggleTestMenu(this)">&#9662;</button>
@@ -3313,8 +3279,7 @@ function openFetchModelsModal() {
   document.getElementById('fetchPrefix').value = '';
   document.getElementById('fetchModelSearch').value = '';
   document.getElementById('fetchAddBtn').disabled = true;
-  // Reset type/capability selectors
-  document.querySelector('input[name="fetchModelType"][value="llm"]').checked = true;
+  // Reset capability selectors
   document.getElementById('fetchCapText').checked = true;
   document.getElementById('fetchCapVision').checked = false;
   document.getElementById('fetchCapsRow').style.display = '';
@@ -3336,22 +3301,10 @@ function onFetchModelGroupChange() {
   const selected = document.getElementById('fetchModelGroup').value;
   const isNew = selected === '__new__';
   document.getElementById('fetchNewGroupName').style.display = isNew ? '' : 'none';
-  const group = isNew ? null : ((configData && configData.model_groups) || {})[selected];
-  const groupType = group ? group.type : 'llm';
-  document.querySelector(`input[name="fetchModelType"][value="${groupType}"]`).checked = true;
-  document.querySelectorAll('input[name="fetchModelType"]').forEach(input => { input.disabled = !!group; });
-  onFetchTypeChange();
   if (_fetchedModels.length) renderFetchedModels();
 }
 
-function onFetchTypeChange() {
-  const isLLM = document.querySelector('input[name="fetchModelType"]:checked').value === 'llm';
-  document.getElementById('fetchCapsRow').style.display = isLLM ? '' : 'none';
-}
-
 function _getFetchCapabilities() {
-  const type = document.querySelector('input[name="fetchModelType"]:checked').value;
-  if (type === 'embedding') return ['embedding'];
   const caps = [];
   if (document.getElementById('fetchCapText').checked) caps.push('text');
   if (document.getElementById('fetchCapVision').checked) caps.push('vision');
@@ -3462,19 +3415,18 @@ async function bulkAddFetchedModels() {
     const groupName = isNew ? document.getElementById('fetchNewGroupName').value.trim() : selectedGroup;
     if (!groupName) throw new Error('Model group name is required');
     const currentGroup = isNew ? null : configData.model_groups[groupName];
-    const groupType = currentGroup ? currentGroup.type : document.querySelector('input[name="fetchModelType"]:checked').value;
     const models = {...((currentGroup && currentGroup.models) || {})};
     for (const modelId of toAdd) {
       const displayName = prefix ? prefix + modelId : modelId;
       const entry = {};
       if (prefix) entry.upstream_model = modelId;
-      if (groupType === 'llm') entry.capabilities = _getFetchCapabilities();
+      entry.capabilities = _getFetchCapabilities();
       models[displayName] = entry;
     }
     toRemove.forEach(name => { delete models[name]; });
     const res = await api.put(`/admin/api/config/model-groups/${encodeURIComponent(groupName)}`, {
       provider: _fetchProvider,
-      type: groupType,
+      type: 'llm',
       models,
     });
     if (!res.ok) throw new Error(res.error || 'Failed to update model group');
@@ -4147,10 +4099,6 @@ function _usageCount(usage, primaryKey, fallbackKey) {
 
 function _appendTestUsageMeta(meta, type, usage) {
   if (!usage || typeof usage !== 'object' || Array.isArray(usage)) return;
-  if (type === 'embedding') {
-    _appendTestMeta(meta, 'Tokens', `${_safeUsageCount(usage.prompt_tokens)} in`);
-    return;
-  }
   const inputTokens = _usageCount(usage, 'input_tokens', 'prompt_tokens');
   const outputTokens = _usageCount(usage, 'output_tokens', 'completion_tokens');
   _appendTestMeta(meta, 'Tokens', `${inputTokens} in / ${outputTokens} out`);
@@ -4196,8 +4144,6 @@ function buildTestPayload(model, type) {
       };
     case 'reasoning':
       return {...base, reasoning:{effort:'low'}, input:[{type:'message', role:'user', content:[{type:'input_text', text:'What is 15 * 37? Show your reasoning briefly.'}]}]};
-    case 'embedding':
-      return {model, input: 'Hello, world!'};
   }
 }
 
@@ -4320,11 +4266,11 @@ async function runTest(model, type) {
   const t0 = performance.now();
   _abortPendingTest();  // cancel any previous test
 
-  if (type === 'embedding' || (type !== 'stream')) {
-    // --- Async task path (embedding + all non-streaming tests) ---
+  if (type !== 'stream') {
+    // --- Async task path for non-streaming tests ---
     // Browser never holds a long connection; the gateway's httpx pool
     // handles the upstream call.
-    const endpoint = type === 'embedding' ? '/v1/embeddings' : '/v1/responses';
+    const endpoint = '/v1/responses';
     output.innerHTML = `<span class="test-spinner"></span>${t('test.sending')}`;
     // Show Cancel button and live elapsed timer
     const cancelBtn = document.getElementById('testCancelBtn');
@@ -4396,22 +4342,16 @@ async function runTest(model, type) {
             _appendTestMeta(meta, 'Time', `${elapsed}s`);
             _appendTestMeta(meta, 'Status', '200 OK', 'green');
 
-            if (type === 'embedding') {
-              _appendTestUsageMeta(meta, type, body?.usage);
-              const dim = body?.data?.[0]?.embedding?.length;
-              output.textContent = dim ? `Embedding OK — ${dim} dimensions` : t('test.emptyResponse');
+            // Responses result
+            _appendTestUsageMeta(meta, type, body?.usage);
+            const toolCall = extractResponsesToolCall(body);
+            if (type === 'tools' && toolCall) {
+              output.textContent = `Tool call: ${toolCall.name || '?'}(${toolCall.arguments || '{}'})`;
+              const content = extractResponsesText(body);
+              if (content) output.textContent += '\n\nContent: ' + content;
             } else {
-              // Responses result
-              _appendTestUsageMeta(meta, type, body?.usage);
-              const toolCall = extractResponsesToolCall(body);
-              if (type === 'tools' && toolCall) {
-                output.textContent = `Tool call: ${toolCall.name || '?'}(${toolCall.arguments || '{}'})`;
-                const content = extractResponsesText(body);
-                if (content) output.textContent += '\n\nContent: ' + content;
-              } else {
-                const content = extractResponsesText(body);
-                output.textContent = (content != null && content !== '') ? content : t('test.emptyResponse');
-              }
+              const content = extractResponsesText(body);
+              output.textContent = (content != null && content !== '') ? content : t('test.emptyResponse');
             }
             resolve();
           } catch(pollErr) {

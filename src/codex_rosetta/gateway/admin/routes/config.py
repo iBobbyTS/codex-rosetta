@@ -112,13 +112,12 @@ def _normalize_model_entry(
     value: Any,
     *,
     group_provider: str | None = None,
-    group_type: str = "llm",
 ) -> dict[str, Any]:
     """Return a model config entry in admin-UI dict form."""
     if group_provider is not None:
         entry: dict[str, Any] = {
             "provider": group_provider,
-            "capabilities": ["embedding"] if group_type == "embedding" else ["text"],
+            "capabilities": ["text"],
         }
         if isinstance(value, str):
             if value:
@@ -126,8 +125,7 @@ def _normalize_model_entry(
             return entry
         if not isinstance(value, dict):
             return entry
-        if group_type == "llm":
-            entry["capabilities"] = value.get("capabilities", ["text"])
+        entry["capabilities"] = value.get("capabilities", ["text"])
         if value.get("upstream_model"):
             entry["upstream_model"] = value["upstream_model"]
     elif isinstance(value, str):
@@ -179,7 +177,6 @@ def _normalize_model_groups_for_admin(
                 entry = _normalize_model_entry(
                     model_value,
                     group_provider=provider,
-                    group_type=group_type,
                 )
                 entry.pop("provider", None)
                 models[model_name] = entry
@@ -199,7 +196,7 @@ def _normalize_model_groups_for_admin(
     return groups
 
 
-def _clean_group_model_entry(value: Any, *, group_type: str) -> dict[str, Any]:
+def _clean_group_model_entry(value: Any) -> dict[str, Any]:
     """Normalize one model entry inside a model group request."""
     if isinstance(value, str):
         return {"upstream_model": value} if value else {}
@@ -207,19 +204,18 @@ def _clean_group_model_entry(value: Any, *, group_type: str) -> dict[str, Any]:
         raise ValueError("model entries must be objects or strings")
 
     entry: dict[str, Any] = {}
-    if group_type == "llm":
-        capabilities_value = value.get("capabilities")
-        capabilities = (
-            [str(capability) for capability in capabilities_value]
-            if isinstance(capabilities_value, list) and capabilities_value
-            else ["text"]
+    capabilities_value = value.get("capabilities")
+    capabilities = (
+        [str(capability) for capability in capabilities_value]
+        if isinstance(capabilities_value, list) and capabilities_value
+        else ["text"]
+    )
+    invalid = set(capabilities) - {"text", "vision"}
+    if invalid:
+        raise ValueError(
+            f"LLM model capabilities must be text/vision, got {sorted(invalid)}"
         )
-        invalid = set(capabilities) - {"text", "vision"}
-        if invalid:
-            raise ValueError(
-                f"LLM model capabilities must be text/vision, got {sorted(invalid)}"
-            )
-        entry["capabilities"] = list(dict.fromkeys(capabilities))
+    entry["capabilities"] = list(dict.fromkeys(capabilities))
 
     upstream_model = str(value.get("upstream_model") or "").strip()
     if upstream_model:
@@ -269,18 +265,14 @@ def _handle_model_group_rename(
     return None
 
 
-def _clean_group_models(
-    models_body: dict[str, Any], *, group_type: str
-) -> dict[str, Any]:
+def _clean_group_models(models_body: dict[str, Any]) -> dict[str, Any]:
     """Normalize all model entries from a model group request."""
     cleaned_models: dict[str, Any] = {}
     for model_name, model_value in models_body.items():
         clean_name = str(model_name).strip()
         if not clean_name:
             continue
-        cleaned_models[clean_name] = _clean_group_model_entry(
-            model_value, group_type=group_type
-        )
+        cleaned_models[clean_name] = _clean_group_model_entry(model_value)
     return cleaned_models
 
 
@@ -552,10 +544,8 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": "'provider' is required"}, status_code=400)
 
     group_type = body.get("type")
-    if group_type not in ("llm", "embedding"):
-        return JSONResponse(
-            {"error": "'type' must be 'llm' or 'embedding'"}, status_code=400
-        )
+    if group_type != "llm":
+        return JSONResponse({"error": "'type' must be 'llm'"}, status_code=400)
 
     models_body = body.get("models", {})
     if not isinstance(models_body, dict):
@@ -585,7 +575,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return rename_error
 
     try:
-        cleaned_models = _clean_group_models(models_body, group_type=group_type)
+        cleaned_models = _clean_group_models(models_body)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
@@ -599,7 +589,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
 
     provider_config = (data.get("providers", {}) or {}).get(provider)
     tool_profile: str | None = None
-    if group_type == "llm" and provider_supports_tool_profiles(provider_config):
+    if provider_supports_tool_profiles(provider_config):
         tool_profiles = normalize_tool_profiles(data.get("tool_profiles"))
         try:
             tool_profile = validate_tool_profile_reference(

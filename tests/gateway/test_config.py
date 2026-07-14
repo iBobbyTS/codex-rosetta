@@ -525,7 +525,7 @@ class TestModelGroups:
         assert route.upstream_model == "gpt-upstream"
         assert route.model_capabilities == ["text", "vision"]
 
-    def test_embedding_group_sets_embedding_capability_for_every_model(self):
+    def test_embedding_group_is_rejected(self):
         raw = _minimal_raw()
         raw["model_groups"] = {
             "Embeddings": {
@@ -534,12 +534,10 @@ class TestModelGroups:
                 "models": {"embed-public": "embed-upstream"},
             }
         }
-        cfg = GatewayConfig(raw)
-        route, _provider = cfg.resolve("openai_chat", "embed-public")
-        assert route.upstream_model == "embed-upstream"
-        assert route.model_capabilities == ["embedding"]
+        with pytest.raises(ValueError, match="type must be 'llm'"):
+            GatewayConfig(raw)
 
-    @pytest.mark.parametrize("group_type", [None, "chat", ""])
+    @pytest.mark.parametrize("group_type", [None, "chat", "", "embedding"])
     def test_group_requires_supported_type(self, group_type):
         raw = _minimal_raw()
         raw["model_groups"]["test-llm"]["type"] = group_type
@@ -603,7 +601,6 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
             config=str(tmp_path),
             name="Test LLMs",
             provider="test",
-            type="llm",
         )
     )
     _cmd_add_model(
@@ -649,7 +646,6 @@ def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
             config=str(tmp_path),
             name="Test Rosetta",
             provider="test",
-            type="llm",
         )
     )
 
@@ -683,7 +679,6 @@ def test_cli_add_tool_mapping_only_group_selects_pass_through_profile(tmp_path):
             config=str(tmp_path),
             name="Test Responses",
             provider="test",
-            type="llm",
         )
     )
 

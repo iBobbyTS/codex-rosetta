@@ -28,7 +28,6 @@ from .config import GatewayConfig, resolve_codex_home
 from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
 from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
-from .embeddings import handle_embeddings as _handle_embeddings
 from .headers import (
     build_upstream_extra_headers,
     generate_request_id,
@@ -779,11 +778,6 @@ async def handle_openai_chat(request: Any) -> Response | StreamingResponse:
     return await _proxy_handler(request, source_provider="openai_chat")
 
 
-async def handle_embeddings(request: Any) -> Response:
-    config: GatewayConfig = request.app.gateway_config
-    return await _handle_embeddings(request, config)
-
-
 async def handle_codex_search(request: Any) -> Response:
     config: GatewayConfig = request.app.gateway_config
     return await _handle_codex_auxiliary(request, config, "alpha/search")
@@ -1001,7 +995,6 @@ def create_app(
     app.route("/v1/alpha/search", methods=["POST"])(handle_codex_search)
     app.route("/v1/images/generations", methods=["POST"])(handle_image_generation)
     app.route("/v1/images/edits", methods=["POST"])(handle_image_edit)
-    app.route("/v1/embeddings", methods=["POST"])(handle_embeddings)
     app.route("/v1/responses", methods=["POST"])(handle_openai_responses)
     app.route("/v1/models", methods=["GET"])(handle_list_models)
     app.route("/health", methods=["GET"])(handle_health)

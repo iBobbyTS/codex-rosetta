@@ -724,7 +724,6 @@ class GatewayConfig:
         cls,
         *,
         group_name: str,
-        group_type: str,
         provider_name: str,
         model_name: str,
         model_value: Any,
@@ -749,10 +748,6 @@ class GatewayConfig:
                 f"config: model '{model_name}' in model group "
                 f"'{group_name}' has unsupported fields: {sorted(unsupported)}"
             )
-        if group_type == "embedding":
-            entry["capabilities"] = ["embedding"]
-            return entry
-
         capabilities = entry.get("capabilities", ["text"])
         if not isinstance(capabilities, list) or not capabilities:
             capabilities = ["text"]
@@ -789,10 +784,9 @@ class GatewayConfig:
                     f"config: model group '{group_name}' requires a provider"
                 )
             group_type = group_value.get("type")
-            if group_type not in ("llm", "embedding"):
+            if group_type != "llm":
                 raise ValueError(
-                    f"config: model group '{group_name}' type must be "
-                    "'llm' or 'embedding'"
+                    f"config: model group '{group_name}' type must be 'llm'"
                 )
             group_models = group_value.get("models", {})
             if not isinstance(group_models, dict):
@@ -807,7 +801,6 @@ class GatewayConfig:
                     )
                 expanded[model_name] = cls._expand_group_model(
                     group_name=group_name,
-                    group_type=group_type,
                     provider_name=provider_name,
                     model_name=model_name,
                     model_value=model_value,

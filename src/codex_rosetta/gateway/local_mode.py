@@ -430,7 +430,7 @@ def _model_presets(terra: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 
 def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
-    """Build a Codex catalog from configured LLMs or the bundled defaults."""
+    """Build a Codex catalog from configured models or the bundled defaults."""
     bundled = _catalog_resource()
     base_models = copy.deepcopy(bundled["models"])
     by_slug = {
@@ -455,8 +455,6 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
                 continue
             valid_names = {name for name in models if isinstance(name, str) and name}
             has_configured_models = has_configured_models or bool(valid_names)
-            if group.get("type") != "llm":
-                continue
             configured_names.update(valid_names)
 
     if not has_configured_models:

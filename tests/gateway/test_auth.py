@@ -53,7 +53,7 @@ class TestNoApiKey:
         hook = create_auth_hook(state)
 
         assert _run(hook(_make_request("/health"))) is None
-        for path in ["/v1/responses", "/v1/models", "/v1/embeddings"]:
+        for path in ["/v1/responses", "/v1/models"]:
             resp = _run(hook(_make_request(path)))
             assert resp is not None
             assert resp.status_code == 401
@@ -132,13 +132,6 @@ class TestWithApiKey:
         )
         assert _run(hook(req)) is None
 
-    def test_embeddings_valid(self, hook: Any):
-        req = _make_request(
-            "/v1/embeddings",
-            headers={"authorization": f"Bearer {self.KEY}"},
-        )
-        assert _run(hook(req)) is None
-
     # --- The /v1 namespace fails closed, including removed endpoints ---
     @pytest.mark.parametrize(
         "path,headers,query_params",
@@ -146,6 +139,7 @@ class TestWithApiKey:
             ("/v1", {}, None),
             ("/v1/chat/completions", {}, None),
             ("/v1/messages", {"x-api-key": KEY}, None),
+            ("/v1/embeddings", {}, None),
         ],
     )
     def test_removed_v1_paths_require_api_key_before_routing(

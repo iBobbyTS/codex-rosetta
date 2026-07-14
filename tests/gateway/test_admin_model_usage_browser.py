@@ -99,7 +99,6 @@ const result = await page.evaluate(async () => {
     NaN, Infinity, -1, Number.MAX_SAFE_INTEGER + 1,
   ];
   const paths = [
-    ['embedding', usage => ({prompt_tokens: usage})],
     ['responses', usage => ({input_tokens: usage, output_tokens: usage})],
     ['openai_chat', usage => ({prompt_tokens: usage, completion_tokens: usage})],
     ['anthropic', usage => ({input_tokens: usage, output_tokens: usage})],
@@ -110,13 +109,13 @@ const result = await page.evaluate(async () => {
     for (const [type, makeUsage] of paths) {
       for (const invalid of invalidValues) {
         _resetTestMeta(meta, `model-${type}`);
-        _appendTestUsageMeta(meta, type === 'embedding' ? 'embedding' : 'text', makeUsage(invalid));
+        _appendTestUsageMeta(meta, 'text', makeUsage(invalid));
         await new Promise(resolve => setTimeout(resolve, 0));
         if (meta.querySelector('img,svg,script')) {
           throw new Error(`${type}: provider markup created an element`);
         }
         const tokenLine = [...meta.querySelectorAll('.meta-item')].at(-1)?.textContent || '';
-        const expected = type === 'embedding' ? 'Tokens: - in' : 'Tokens: - in / - out';
+        const expected = 'Tokens: - in / - out';
         if (tokenLine !== expected) {
           throw new Error(`${type}: invalid usage rendered as ${JSON.stringify(tokenLine)}`);
         }
@@ -124,7 +123,6 @@ const result = await page.evaluate(async () => {
     }
 
     const safeCases = [
-      ['embedding', 'embedding', {prompt_tokens: 0}, 'Tokens: 0 in'],
       ['responses', 'text', {input_tokens: 12, output_tokens: 13}, 'Tokens: 12 in / 13 out'],
       ['openai_chat', 'text', {prompt_tokens: 14, completion_tokens: 15}, 'Tokens: 14 in / 15 out'],
       ['anthropic', 'text', {input_tokens: 16, output_tokens: 17}, 'Tokens: 16 in / 17 out'],

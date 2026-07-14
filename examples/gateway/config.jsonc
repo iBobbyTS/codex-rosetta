@@ -26,8 +26,8 @@
   // profile is bundled with the gateway and is not duplicated in this file.
   "tool_profiles": {},
 
-  // Model groups are the only routing definitions. Group type controls
-  // LLM vs embedding behavior; LLM models may declare text/vision only.
+  // Model groups are the only routing definitions. Models may declare
+  // text/vision capabilities only.
   "model_groups": {
     "OpenAI Chat": {
       "provider": "openai_chat",

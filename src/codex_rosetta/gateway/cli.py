@@ -266,21 +266,20 @@ def _cmd_add_model_group(args: argparse.Namespace) -> None:
         sys.exit(1)
     groups[args.name] = {
         "provider": args.provider,
-        "type": args.type,
+        "type": "llm",
         **(
             {
                 "tool_profile": default_tool_profile_for_provider(
                     providers[args.provider]
                 )
             }
-            if args.type == "llm"
-            and provider_supports_tool_profiles(providers[args.provider])
+            if provider_supports_tool_profiles(providers[args.provider])
             else {}
         ),
         "models": {},
     }
     _write_jsonc(path, data)
-    print(f"Added {args.type} model group '{args.name}' to {path}")
+    print(f"Added model group '{args.name}' to {path}")
 
 
 def _cmd_clear_local_mode(args: argparse.Namespace) -> None:
@@ -544,9 +543,6 @@ def main() -> None:
     group_parser = add_sub.add_parser("model-group", help="Add a model group")
     group_parser.add_argument("name", help="Model group name")
     group_parser.add_argument("--provider", required=True, help="Target provider name")
-    group_parser.add_argument(
-        "--type", choices=("llm", "embedding"), default="llm", help="Group type"
-    )
 
     model_parser = add_sub.add_parser("model", help="Add a model to a group")
     model_parser.add_argument("name", help="Model name (e.g. gpt-4o)")

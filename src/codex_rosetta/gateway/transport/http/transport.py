@@ -605,7 +605,7 @@ class HttpTransport:
     ) -> UpstreamResponse:
         """Send a raw passthrough request — no URL template or stream flags.
 
-        Used for non-conversion endpoints (embeddings, reranking, etc.).
+        Used for non-conversion endpoints (model listing, reranking, etc.).
         """
         headers = {
             "Content-Type": "application/json",

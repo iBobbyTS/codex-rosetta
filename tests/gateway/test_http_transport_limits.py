@@ -324,7 +324,7 @@ def test_unknown_or_chunked_body_is_bounded_incrementally(
         asyncio.run(
             transport.send_passthrough(
                 _provider(),
-                "https://upstream.example/v1/embeddings",
+                "https://upstream.example/v1/rerank",
                 {"model": "test"},
             )
         )
