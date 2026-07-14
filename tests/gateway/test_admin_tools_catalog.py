@@ -119,6 +119,9 @@ def test_tool_detail_copy_is_localized_and_matches_profile_behavior():
     assert translations["zh"]["tools.summary.function.shell_command"] == (
         "执行 Shell 命令。"
     )
+    assert translations["zh"]["tools.note.web_search_replaced"] == (
+        "已由`web__run`替代"
+    )
     assert translations["zh"]["tools.description.apply_patch_internal"] == (
         "对模型隐藏，改用Claude Code风格的Edit和Write，Rosetta负责翻译"
     )
@@ -303,6 +306,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["builtin_profile"]["tools"] == {
         "namespace.multi_agent_v1": "disabled",
         "namespace.image_gen.imagegen": "modified",
+        "hosted.web_search": "disabled",
         "custom.apply_patch": "disabled",
         "custom.exec": "disabled",
     }
@@ -424,6 +428,9 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert builtin["namespace.multi_agent_v2"] == "expanded"
     assert builtin["function.exec_command"] == "passthrough"
     assert builtin["function.write_stdin"] == "passthrough"
+    assert builtin["hosted.web_search"] == "disabled"
+    assert items["hosted.web_search"]["note_i18n"] == ("tools.note.web_search_replaced")
+    assert items["hosted.web_search"]["note_visible_when"] == ["disabled"]
     assert builtin["custom.apply_patch"] == "disabled"
     assert builtin["custom.exec"] == "disabled"
     assert items["custom.exec"]["internal_container_when_disabled"] is True
