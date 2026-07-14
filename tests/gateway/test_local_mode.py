@@ -153,7 +153,7 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
         ),
         "minimax-m3": (
             "MiniMax M3",
-            "MiniMax M3, best for working not coding",
+            "MiniMax M3",
             "MiniMax M3",
             1_000_000,
             ["text", "image"],

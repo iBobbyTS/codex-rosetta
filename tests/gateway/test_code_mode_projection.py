@@ -100,6 +100,29 @@ def _exec_description() -> str:
         ),
         _section("clock__curr_time", "args", "{}"),
         _section("clock__sleep", "args", "{ seconds: number; }"),
+        _section(
+            "image_gen__imagegen",
+            "args",
+            "{ prompt: string; num_last_images_to_include?: number | null; }",
+        ),
+        _section(
+            "memories__add_ad_hoc_note",
+            "args",
+            "{ title: string; content: string; }",
+        ),
+        _section("memories__list", "args", "{ path?: string; }"),
+        _section(
+            "memories__read",
+            "args",
+            "{ path: string; line_start?: number; line_end?: number; }",
+        ),
+        _section("memories__search", "args", "{ query: string; }"),
+        _section("skills__list", "args", "{ authority: { kind: string; }; }"),
+        _section(
+            "skills__read",
+            "args",
+            "{ authority: { kind: string; }; package: string; resource: string; }",
+        ),
     ]
     return "Run JavaScript.\n\n" + "\n\n".join(sections)
 
@@ -114,6 +137,12 @@ def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
         "create_goal",
         "exec_command",
         "get_goal",
+        "memories-add_ad_hoc_note",
+        "memories-list",
+        "memories-read",
+        "memories-search",
+        "skills-list",
+        "skills-read",
         "update_goal",
         "update_plan",
         "view_image",
@@ -416,6 +445,17 @@ def test_view_image_projection_uses_image_output_helper():
     assert build_exec_script(projection, {"path": "/tmp/test.png"}) == (
         'const result = await tools.view_image({"path":"/tmp/test.png"});\n'
         "image(result);\n"
+    )
+
+
+def test_image_generation_projection_uses_generated_image_output_helper():
+    route = _route()
+    route.tool_profile["namespace.image_gen.imagegen"] = "modified"
+    projection = exec_tool_projections_for_route(route)["image_gen-imagegen"]
+
+    assert build_exec_script(projection, {"prompt": "Draw a fox"}) == (
+        'const result = await tools.image_gen__imagegen({"prompt":"Draw a fox"});\n'
+        "generatedImage(result);\n"
     )
 
 

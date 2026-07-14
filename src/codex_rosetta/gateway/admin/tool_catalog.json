@@ -1,9 +1,9 @@
 {
   "metadata": {
-    "schema_version": 2,
-    "catalog_version": "codex-0.144.0",
-    "codex_cli_version": "0.144.0",
-    "codex_source_commit": "2e8c3756f95789c215d9ea9a5ade6ec377934b3f",
+    "schema_version": 3,
+    "catalog_version": "codex-0.144.1",
+    "codex_cli_version": "0.144.1",
+    "codex_source_commit": "44918ea10c0f99151c6710411b4322c2f5c96bea",
     "static_catalog": true,
     "profile_selection": "model_group"
   },
@@ -40,41 +40,10 @@
       },
       "namespace.multi_agent_v2.wait_agent": {
         "guidance": "This waits for a future mailbox update; it does not replay a completion notification already delivered in the current input. If that completion is already visible, treat it as authoritative instead of repeatedly waiting by reflex."
-      },
-      "namespace.mcp_github": {
-        "owner_guidance": "Do not guess. If the owner is not explicitly provided, inspect the local git remote first, for example by running git remote -v.",
-        "repo_guidance": "Do not guess. If the repository name is not explicitly provided, derive it from the user request or inspect the local git remote first, for example by running git remote -v."
       }
     }
   },
-  "preset_profiles": [
-    {
-      "id": "responses_pass_through",
-      "name": "Responses pass through",
-      "defaults": {
-        "function": "passthrough",
-        "custom": "passthrough",
-        "hosted": "passthrough",
-        "namespace": "passthrough",
-        "custom_injection": "disabled"
-      },
-      "tools": {}
-    },
-    {
-      "id": "responses_web_run_mapping",
-      "name": "Responses web.run mapping",
-      "defaults": {
-        "function": "passthrough",
-        "custom": "passthrough",
-        "hosted": "passthrough",
-        "namespace": "passthrough",
-        "custom_injection": "disabled"
-      },
-      "tools": {
-        "namespace.web.run": "modified"
-      }
-    }
-  ],
+  "preset_profiles": [],
   "policies": [
     {
       "id": "passthrough",
@@ -82,19 +51,6 @@
       "supported": [
         "disabled",
         "passthrough"
-      ]
-    },
-    {
-      "id": "namespace_passthrough",
-      "default": "passthrough",
-      "supported": [
-        "disabled",
-        "passthrough"
-      ],
-      "namespace_supported": [
-        "disabled",
-        "passthrough",
-        "expanded"
       ]
     },
     {
@@ -143,21 +99,6 @@
       ]
     },
     {
-      "id": "namespace_parameter_guidance",
-      "default": "modified",
-      "supported": [
-        "disabled",
-        "passthrough",
-        "modified"
-      ],
-      "namespace_supported": [
-        "disabled",
-        "passthrough",
-        "modified"
-      ],
-      "namespace_default": "modified"
-    },
-    {
       "id": "web_search_bridge",
       "default": "modified",
       "supported": [
@@ -197,11 +138,6 @@
         "disabled",
         "passthrough",
         "modified"
-      ],
-      "namespace_supported": [
-        "disabled",
-        "passthrough",
-        "expanded"
       ]
     },
     {
@@ -212,9 +148,9 @@
         "passthrough"
       ],
       "namespace_supported": [
-        "disabled",
+        "expanded",
         "passthrough",
-        "expanded"
+        "disabled"
       ]
     }
   ],
@@ -224,6 +160,10 @@
       "name": "exec_command",
       "type": "function",
       "policy_id": "command_session_passthrough",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "exec_command",
         "nested_name": "exec_command"
@@ -234,6 +174,10 @@
       "name": "write_stdin",
       "type": "function",
       "policy_id": "command_session_passthrough",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "write_stdin",
         "nested_name": "write_stdin"
@@ -243,13 +187,21 @@
       "id": "function.shell_command",
       "name": "shell_command",
       "type": "function",
-      "policy_id": "legacy_shell_disabled"
+      "policy_id": "legacy_shell_disabled",
+      "description_i18n": "tools.description.native_localization",
+      "description_visible_when": [
+        "modified"
+      ]
     },
     {
       "id": "function.update_plan",
       "name": "update_plan",
       "type": "function",
       "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "update_plan",
         "nested_name": "update_plan"
@@ -266,15 +218,27 @@
       "name": "request_user_input",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "function.request_permissions",
@@ -317,6 +281,10 @@
       "name": "view_image",
       "type": "function",
       "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "view_image",
         "nested_name": "view_image",
@@ -364,6 +332,10 @@
       "name": "get_goal",
       "type": "function",
       "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "get_goal",
         "nested_name": "get_goal"
@@ -374,6 +346,10 @@
       "name": "create_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.exec_projection_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "create_goal",
         "nested_name": "create_goal"
@@ -383,16 +359,28 @@
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "function.update_goal",
       "name": "update_goal",
       "type": "function",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.exec_projection_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "update_goal",
         "nested_name": "update_goal"
@@ -402,16 +390,29 @@
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "custom.apply_patch",
       "name": "apply_patch",
       "type": "custom",
       "policy_id": "native_apply_patch",
+      "description_i18n": "tools.description.apply_patch_internal",
+      "description_visible_when": [
+        "disabled",
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "apply_patch",
         "nested_name": "apply_patch",
@@ -425,21 +426,37 @@
       "name": "exec",
       "type": "custom",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "hosted.web_search",
       "name": "web_search",
       "type": "hosted",
       "policy_id": "web_search_bridge",
+      "description_i18n": "tools.description.web_search",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "provider",
@@ -472,7 +489,8 @@
           "default": "",
           "visible_when": [
             "modified"
-          ]
+          ],
+          "ui_hidden": true
         }
       ],
       "profile_mutations": [
@@ -501,73 +519,6 @@
       "default_namespace": "collaboration",
       "namespace_configurable": true,
       "default_expanded": true
-    },
-    {
-      "id": "namespace.mcp_github",
-      "name": "mcp__codex_apps__github",
-      "type": "namespace",
-      "policy_id": "namespace_parameter_guidance",
-      "profile_inputs": [
-        {
-          "id": "owner_guidance",
-          "label_i18n": "tools.input.github.owner_guidance",
-          "default": "",
-          "visible_when": ["modified"]
-        },
-        {
-          "id": "repo_guidance",
-          "label_i18n": "tools.input.github.repo_guidance",
-          "default": "",
-          "visible_when": ["modified"]
-        }
-      ],
-      "profile_mutations": [
-        {
-          "target": "parameter_description",
-          "parameter": "owner",
-          "input_id": "owner_guidance"
-        },
-        {
-          "target": "parameter_description",
-          "parameter": "repo",
-          "input_id": "repo_guidance"
-        }
-      ]
-    },
-    {
-      "id": "namespace.clock",
-      "name": "clock",
-      "type": "namespace",
-      "policy_id": "namespace_passthrough",
-      "default_expanded": false
-    },
-    {
-      "id": "namespace.image_gen",
-      "name": "image_gen",
-      "type": "namespace",
-      "policy_id": "image_generation",
-      "default_expanded": false
-    },
-    {
-      "id": "namespace.web",
-      "name": "web",
-      "type": "namespace",
-      "policy_id": "namespace_passthrough",
-      "default_expanded": false
-    },
-    {
-      "id": "namespace.memories",
-      "name": "memories",
-      "type": "namespace",
-      "policy_id": "namespace_passthrough",
-      "default_expanded": false
-    },
-    {
-      "id": "namespace.skills",
-      "name": "skills",
-      "type": "namespace",
-      "policy_id": "namespace_passthrough",
-      "default_expanded": false
     },
     {
       "id": "namespace.multi_agent_v1.close_agent",
@@ -624,15 +575,27 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "namespace.multi_agent_v2.send_message",
@@ -640,15 +603,27 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "namespace.multi_agent_v2.spawn_agent",
@@ -656,15 +631,27 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "namespace.multi_agent_v2.wait_agent",
@@ -672,22 +659,37 @@
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
       "policy_id": "targeted_chat_guidance",
+      "description_i18n": "tools.description.append_guidance",
+      "description_visible_when": [
+        "modified"
+      ],
       "profile_inputs": [
         {
           "id": "guidance",
           "label_i18n": "tools.input.guidance",
           "default": "",
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ],
+          "ui_hidden": true
         }
       ],
-      "profile_mutations": [{"target": "description", "input_id": "guidance"}]
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "guidance"
+        }
+      ]
     },
     {
       "id": "namespace.clock.curr_time",
-      "name": "curr_time",
+      "name": "clock__curr_time",
       "type": "function",
-      "namespace_id": "namespace.clock",
       "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "clock-curr_time",
         "nested_name": "clock__curr_time"
@@ -695,10 +697,13 @@
     },
     {
       "id": "namespace.clock.sleep",
-      "name": "sleep",
+      "name": "clock__sleep",
       "type": "function",
-      "namespace_id": "namespace.clock",
       "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "clock-sleep",
         "nested_name": "clock__sleep"
@@ -706,10 +711,18 @@
     },
     {
       "id": "namespace.image_gen.imagegen",
-      "name": "imagegen",
+      "name": "image_gen__imagegen",
       "type": "function",
-      "namespace_id": "namespace.image_gen",
       "policy_id": "image_generation",
+      "description_i18n": "tools.description.image_generation",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "image_gen-imagegen",
+        "nested_name": "image_gen__imagegen",
+        "output_mode": "generated_image"
+      },
       "profile_inputs": [
         {
           "id": "base_url",
@@ -739,10 +752,13 @@
     },
     {
       "id": "namespace.web.run",
-      "name": "run",
+      "name": "web__run",
       "type": "function",
-      "namespace_id": "namespace.web",
       "policy_id": "web_run_mapping",
+      "description_i18n": "tools.description.web_run",
+      "description_visible_when": [
+        "modified"
+      ],
       "exec_projection": {
         "chat_name": "web-run",
         "nested_name": "web__run"
@@ -777,45 +793,87 @@
     },
     {
       "id": "namespace.memories.add_ad_hoc_note",
-      "name": "add_ad_hoc_note",
+      "name": "memories__add_ad_hoc_note",
       "type": "function",
-      "namespace_id": "namespace.memories",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "memories-add_ad_hoc_note",
+        "nested_name": "memories__add_ad_hoc_note"
+      }
     },
     {
       "id": "namespace.memories.list",
-      "name": "list",
+      "name": "memories__list",
       "type": "function",
-      "namespace_id": "namespace.memories",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "memories-list",
+        "nested_name": "memories__list"
+      }
     },
     {
       "id": "namespace.memories.read",
-      "name": "read",
+      "name": "memories__read",
       "type": "function",
-      "namespace_id": "namespace.memories",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "memories-read",
+        "nested_name": "memories__read"
+      }
     },
     {
       "id": "namespace.memories.search",
-      "name": "search",
+      "name": "memories__search",
       "type": "function",
-      "namespace_id": "namespace.memories",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "memories-search",
+        "nested_name": "memories__search"
+      }
     },
     {
       "id": "namespace.skills.list",
-      "name": "list",
+      "name": "skills__list",
       "type": "function",
-      "namespace_id": "namespace.skills",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "skills-list",
+        "nested_name": "skills__list"
+      }
     },
     {
       "id": "namespace.skills.read",
-      "name": "read",
+      "name": "skills__read",
       "type": "function",
-      "namespace_id": "namespace.skills",
-      "policy_id": "passthrough"
+      "policy_id": "exec_projection",
+      "description_i18n": "tools.description.exec_projection",
+      "description_visible_when": [
+        "modified"
+      ],
+      "exec_projection": {
+        "chat_name": "skills-read",
+        "nested_name": "skills__read"
+      }
     },
     {
       "id": "injection.claude_code.read",
@@ -846,56 +904,65 @@
   "placements": {
     "groups": [
       {
-        "id": "function",
+        "id": "exec_expansion",
         "item_ids": [
           "function.exec_command",
           "function.write_stdin",
-          "function.shell_command",
           "function.update_plan",
-          "function.wait_for_environment",
+          "function.view_image",
+          "function.get_goal",
+          "function.create_goal",
+          "function.update_goal",
+          "custom.apply_patch",
+          "namespace.clock.curr_time",
+          "namespace.clock.sleep",
+          "namespace.image_gen.imagegen",
+          "namespace.web.run",
+          "namespace.memories.add_ad_hoc_note",
+          "namespace.memories.list",
+          "namespace.memories.read",
+          "namespace.memories.search",
+          "namespace.skills.list",
+          "namespace.skills.read"
+        ]
+      },
+      {
+        "id": "function",
+        "item_ids": [
+          "custom.exec",
+          "function.wait",
           "function.request_user_input",
+          "hosted.web_search",
+          "function.shell_command",
+          "function.wait_for_environment",
           "function.request_permissions",
           "function.new_context",
           "function.get_context_remaining",
           "function.list_available_plugins_to_install",
           "function.request_plugin_install",
           "function.test_sync_tool",
-          "function.view_image",
           "function.list_mcp_resources",
           "function.list_mcp_resource_templates",
           "function.read_mcp_resource",
           "function.spawn_agents_on_csv",
-          "function.report_agent_job_result",
-          "function.wait",
-          "function.get_goal",
-          "function.create_goal",
-          "function.update_goal"
+          "function.report_agent_job_result"
         ]
       },
       {
         "id": "namespace",
         "item_ids": [
           "namespace.multi_agent_v1",
-          "namespace.multi_agent_v2",
-          "namespace.mcp_github",
-          "namespace.clock",
-          "namespace.image_gen",
-          "namespace.web",
-          "namespace.memories",
-          "namespace.skills"
+          "namespace.multi_agent_v2"
         ]
       },
       {
-        "id": "hosted",
+        "id": "rosetta_injection",
         "item_ids": [
-          "hosted.web_search"
-        ]
-      },
-      {
-        "id": "custom",
-        "item_ids": [
-          "custom.apply_patch",
-          "custom.exec"
+          "injection.claude_code.read",
+          "injection.claude_code.glob",
+          "injection.claude_code.grep",
+          "injection.claude_code.edit",
+          "injection.claude_code.write"
         ]
       }
     ],
@@ -920,51 +987,16 @@
           "namespace.multi_agent_v2.spawn_agent",
           "namespace.multi_agent_v2.wait_agent"
         ]
-      },
-      {
-        "namespace_id": "namespace.clock",
-        "child_ids": [
-          "namespace.clock.curr_time",
-          "namespace.clock.sleep"
-        ]
-      },
-      {
-        "namespace_id": "namespace.image_gen",
-        "child_ids": [
-          "namespace.image_gen.imagegen"
-        ]
-      },
-      {
-        "namespace_id": "namespace.web",
-        "child_ids": [
-          "namespace.web.run"
-        ]
-      },
-      {
-        "namespace_id": "namespace.memories",
-        "child_ids": [
-          "namespace.memories.add_ad_hoc_note",
-          "namespace.memories.list",
-          "namespace.memories.read",
-          "namespace.memories.search"
-        ]
-      },
-      {
-        "namespace_id": "namespace.skills",
-        "child_ids": [
-          "namespace.skills.list",
-          "namespace.skills.read"
-        ]
       }
     ]
   },
   "custom_injection": {
     "item_ids": [
       "injection.claude_code.read",
-      "injection.claude_code.edit",
-      "injection.claude_code.write",
       "injection.claude_code.glob",
-      "injection.claude_code.grep"
+      "injection.claude_code.grep",
+      "injection.claude_code.edit",
+      "injection.claude_code.write"
     ]
   }
 }

@@ -9,7 +9,6 @@ from typing import Any, cast
 from .admin.tool_catalog import load_tool_catalog
 
 BUILTIN_TOOL_PROFILE = "builtin"
-RESPONSES_PASS_THROUGH_TOOL_PROFILE = "responses_pass_through"
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
 
@@ -108,6 +107,7 @@ def _normalize_profile_input_definition(
         "placeholder_i18n",
         "options",
         "visible_when",
+        "ui_hidden",
     }
     if unsupported:
         raise ValueError(
@@ -175,6 +175,14 @@ def _normalize_profile_input_definition(
     )
     if visible_when is not None:
         value = dict(value, visible_when=visible_when)
+    ui_hidden = value.get("ui_hidden", False)
+    if not isinstance(ui_hidden, bool):
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} "
+            "ui_hidden must be boolean"
+        )
+    if ui_hidden:
+        value = dict(value, ui_hidden=True)
     return input_id, dict(value, default=default, type=input_type)
 
 
@@ -225,9 +233,13 @@ def _profile_mutation_contract(
             raise ValueError(
                 f"catalog item {item_id!r} profile_mutations must be a list"
             )
-        if raw_mutations and "modified" not in supported[item_id]:
+        mutation_states = {"modified"}
+        if item["type"] == "namespace":
+            mutation_states.add("expanded")
+        if raw_mutations and not mutation_states.intersection(supported[item_id]):
             raise ValueError(
-                f"catalog item {item_id!r} profile_mutations requires Modified support"
+                f"catalog item {item_id!r} profile_mutations requires Modified "
+                "or Expanded support"
             )
         normalized = [
             _normalize_profile_mutation(
@@ -347,10 +359,10 @@ def _exec_projection_contract(
                 f"catalog item {item_id!r} exec_projection input_field must be non-empty"
             )
         output_mode = raw.get("output_mode", "text")
-        if output_mode not in {"text", "image"}:
+        if output_mode not in {"text", "image", "generated_image"}:
             raise ValueError(
                 f"catalog item {item_id!r} exec_projection output_mode must be "
-                "'text' or 'image'"
+                "'text', 'image', or 'generated_image'"
             )
         internal_when_disabled = _exec_projection_internal_when_disabled(raw, item_id)
         chat_names.add(chat_name)
@@ -876,7 +888,10 @@ def apply_profile_tool_mutations(
     route: Any,
 ) -> Any:
     """Apply catalog-declared mutations to one flat tool definition."""
-    if not isinstance(tool, dict) or route_tool_state(route, item_id) != "modified":
+    if not isinstance(tool, dict) or route_tool_state(route, item_id) not in {
+        "modified",
+        "expanded",
+    }:
         return tool
     mutations = tool_profile_contract()["profile_mutations"].get(item_id, ())
     values = getattr(route, "tool_profile_inputs", {}).get(item_id, {})

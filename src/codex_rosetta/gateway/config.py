@@ -22,7 +22,6 @@ from .providers import build_provider_info
 from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
-    RESPONSES_PASS_THROUGH_TOOL_PROFILE,
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
@@ -197,8 +196,6 @@ def provider_supports_tool_profiles(cfg: Any) -> bool:
 
 def default_tool_profile_for_provider(cfg: Any) -> str:
     """Return the bundled default Profile for one provider handling mode."""
-    if isinstance(cfg, dict) and cfg.get("api_type") == "responses_passthrough":
-        return RESPONSES_PASS_THROUGH_TOOL_PROFILE
     return BUILTIN_TOOL_PROFILE
 
 

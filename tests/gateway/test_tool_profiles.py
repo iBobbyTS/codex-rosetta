@@ -47,14 +47,25 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     contract = tool_profile_contract()
 
     assert set(contract["builtin"]) == set(contract["supported"])
-    assert contract["supported"]["namespace.clock"] == (
-        "disabled",
-        "passthrough",
-        "expanded",
-    )
-    assert contract["builtin"]["namespace.clock"] == "expanded"
+    assert set(contract["namespace_children"]) == {
+        "namespace.multi_agent_v1",
+        "namespace.multi_agent_v2",
+    }
+    for item_id in (
+        "namespace.clock.curr_time",
+        "namespace.clock.sleep",
+        "namespace.web.run",
+        "namespace.memories.add_ad_hoc_note",
+        "namespace.memories.list",
+        "namespace.memories.read",
+        "namespace.memories.search",
+        "namespace.skills.list",
+        "namespace.skills.read",
+    ):
+        assert contract["builtin"][item_id] == "modified"
+    assert contract["builtin"]["namespace.image_gen.imagegen"] == "disabled"
     assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
-    assert contract["builtin"]["namespace.mcp_github"] == "modified"
+    assert "namespace.mcp_github" not in contract["builtin"]
     assert contract["builtin"]["custom.exec"] == "modified"
     assert contract["builtin"]["namespace.multi_agent_v2.spawn_agent"] == "modified"
     assert contract["supported"]["namespace.multi_agent_v2.spawn_agent"] == (
@@ -69,18 +80,10 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         ]["guidance"]
     )
     assert (
-        tool_profile_contract()["readonly"]["responses_pass_through"]["inputs"][
-            "namespace.multi_agent_v2.spawn_agent"
-        ]["guidance"]
-        == ""
-    )
-    assert (
         "Pass raw JavaScript source"
         in contract["readonly"]["builtin"]["inputs"]["custom.exec"]["guidance"]
     )
-    assert contract["readonly"]["responses_pass_through"]["inputs"]["custom.exec"] == {
-        "guidance": ""
-    }
+    assert set(contract["readonly"]) == {"builtin"}
     assert all(
         contract["builtin"][child_id] == "disabled"
         for child_id in contract["namespace_children"]["namespace.multi_agent_v1"]
@@ -203,11 +206,8 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
         tool_profiles_module.tool_profile_contract.cache_clear()
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["builtin", "responses_pass_through", "responses_web_run_mapping"],
-)
-def test_bundled_profile_input_overrides_are_normalized_without_tool_states(name):
+def test_bundled_profile_input_overrides_are_normalized_without_tool_states():
+    name = "builtin"
     overrides = normalize_tool_profile_input_overrides(
         {
             name: {
@@ -237,7 +237,7 @@ def test_bundled_profile_input_overrides_reject_user_profiles():
 
 
 def test_bundled_profile_input_override_changes_fields_but_not_tool_states():
-    name = "responses_web_run_mapping"
+    name = "builtin"
     tools_before = resolve_tool_profile(name, {})
     overrides = normalize_tool_profile_input_overrides(
         {
@@ -323,7 +323,8 @@ def test_description_visibility_defaults_to_all_states_and_supports_override(
     item = next(
         item for item in catalog["items"] if item["id"] == "function.exec_command"
     )
-    assert "description_visible_when" not in item
+    item.pop("description_i18n", None)
+    item.pop("description_visible_when", None)
     item["description_i18n"] = "tools.description.exec_command"
     item["description_visible_when"] = ["modified"]
     monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
@@ -506,24 +507,14 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
     assert "tools" not in adapted
 
 
-def test_responses_presets_are_read_only_and_only_mapping_profile_modifies_web_run():
-    pass_through = resolve_tool_profile("responses_pass_through", {})
-    web_run_mapping = resolve_tool_profile("responses_web_run_mapping", {})
-    items = tool_profile_contract()["readonly"]["responses_pass_through"]["tools"]
+def test_chat_default_is_the_only_bundled_profile():
+    contract = tool_profile_contract()
 
-    assert pass_through == items
-    assert "hosted.image_generation" not in pass_through
-    assert "hosted.image_generation" not in web_run_mapping
-    assert all(
-        state == ("disabled" if item_id.startswith("injection.") else "passthrough")
-        for item_id, state in pass_through.items()
-    )
-    assert {
-        item_id
-        for item_id, state in web_run_mapping.items()
-        if state != pass_through[item_id]
-    } == {"namespace.web.run"}
-    assert web_run_mapping["namespace.web.run"] == "modified"
+    assert set(contract["readonly"]) == {"builtin"}
+    assert resolve_tool_profile("builtin", {}) == contract["builtin"]
+    assert "hosted.image_generation" not in contract["builtin"]
+    assert contract["builtin"]["custom.apply_patch"] == "disabled"
+    assert contract["builtin"]["namespace.web.run"] == "modified"
 
 
 def test_profile_filters_top_level_lite_and_namespace_children():
@@ -531,7 +522,7 @@ def test_profile_filters_top_level_lite_and_namespace_children():
         **{
             "function.update_plan": "disabled",
             "function.request_user_input": "disabled",
-            "namespace.clock.sleep": "disabled",
+            "namespace.multi_agent_v2.wait_agent": "disabled",
         }
     )
     body = {
@@ -539,10 +530,10 @@ def test_profile_filters_top_level_lite_and_namespace_children():
             {"type": "function", "name": "update_plan", "parameters": {}},
             {
                 "type": "namespace",
-                "name": "clock",
+                "name": "collaboration",
                 "tools": [
-                    {"type": "function", "name": "curr_time", "parameters": {}},
-                    {"type": "function", "name": "sleep", "parameters": {}},
+                    {"type": "function", "name": "spawn_agent", "parameters": {}},
+                    {"type": "function", "name": "wait_agent", "parameters": {}},
                 ],
             },
         ],
@@ -565,7 +556,7 @@ def test_profile_filters_top_level_lite_and_namespace_children():
 
     assert adapted is not body
     assert [tool["type"] for tool in adapted["tools"]] == ["namespace"]
-    assert [tool["name"] for tool in adapted["tools"][0]["tools"]] == ["curr_time"]
+    assert [tool["name"] for tool in adapted["tools"][0]["tools"]] == ["spawn_agent"]
     assert adapted["input"] == []
     assert "tool_choice" not in adapted
 
@@ -644,49 +635,6 @@ def test_modified_custom_exec_profile_appends_raw_javascript_guidance():
 
     assert adapted["input"][0]["tools"][0]["description"] == (
         "Run JavaScript.\n\nPass raw JavaScript source only."
-    )
-
-
-def test_modified_github_namespace_profile_appends_parameter_guidance():
-    route = _route(
-        _profile(**{"namespace.mcp_github": "modified"}),
-        {
-            "namespace.mcp_github": {
-                "owner_guidance": "Inspect git remote before choosing the owner.",
-                "repo_guidance": "Inspect git remote before choosing the repository.",
-            }
-        },
-    )
-    body = {
-        "tools": [
-            {
-                "type": "namespace",
-                "name": "mcp__codex_apps__github",
-                "tools": [
-                    {
-                        "type": "function",
-                        "name": "create_issue",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "owner": {"type": "string"},
-                                "repo": {"type": "string"},
-                            },
-                        },
-                    }
-                ],
-            }
-        ]
-    }
-
-    adapted = _apply_tool_adaptation(body, route)
-    properties = adapted["tools"][0]["tools"][0]["parameters"]["properties"]
-
-    assert properties["owner"]["description"] == (
-        "Inspect git remote before choosing the owner."
-    )
-    assert properties["repo"]["description"] == (
-        "Inspect git remote before choosing the repository."
     )
 
 

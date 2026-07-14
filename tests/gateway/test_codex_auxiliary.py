@@ -55,28 +55,38 @@ def _make_config(
     if upstream_model is not None:
         model["upstream_model"] = upstream_model
     tool_profiles: dict[str, Any] = {}
+    explicit_web_mapping = tool_profile == "test-web-run-mapping"
     local_search = tavily_api_key is not None and (
-        tool_profile == "responses_web_run_mapping"
-        or api_type != "responses_passthrough"
+        explicit_web_mapping or api_type != "responses_passthrough"
     )
-    if image_state is not None or local_search:
-        base_profile_name = tool_profile or (
-            "responses_pass_through"
-            if api_type == "responses_passthrough"
-            else "builtin"
-        )
-        base_profile = tool_profile_contract()["readonly"][base_profile_name]
+    explicit_pass_through = tool_profile == "test-pass-through" or (
+        tool_profile is None and api_type == "responses_passthrough"
+    )
+    if (
+        image_state is not None
+        or local_search
+        or explicit_pass_through
+        or explicit_web_mapping
+    ):
+        base_profile = tool_profile_contract()["readonly"]["builtin"]
         tools = dict(base_profile["tools"])
         inputs = {
             item_id: dict(values) for item_id, values in base_profile["inputs"].items()
         }
-        if local_search:
+        if explicit_pass_through:
+            tools = {
+                item_id: (
+                    "disabled" if item_id.startswith("injection.") else "passthrough"
+                )
+                for item_id in tools
+            }
+        if local_search or explicit_web_mapping:
+            tools["namespace.web.run"] = "modified"
             inputs["namespace.web.run"] = {
                 "provider": "tavily",
-                "token": tavily_api_key,
+                "token": tavily_api_key or "",
             }
         if image_state is not None:
-            tools["namespace.image_gen"] = "expanded"
             tools["namespace.image_gen.imagegen"] = image_state
             inputs["namespace.image_gen.imagegen"] = {
                 "base_url": image_base_url,
@@ -285,7 +295,7 @@ def test_web_run_mapping_profile_intercepts_tool_mapping_only_search() -> None:
     config = _make_config(
         tavily_api_key="tvly-test",
         upstream_model="real-model",
-        tool_profile="responses_web_run_mapping",
+        tool_profile="test-web-run-mapping",
     )
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
@@ -308,7 +318,7 @@ def test_web_run_mapping_profile_intercepts_tool_mapping_only_search() -> None:
 
 
 def test_web_run_mapping_requires_profile_token_for_search_query() -> None:
-    config = _make_config(tool_profile="responses_web_run_mapping")
+    config = _make_config(tool_profile="test-web-run-mapping")
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
     )
@@ -321,8 +331,8 @@ def test_web_run_mapping_requires_profile_token_for_search_query() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_responses_pass_through_profile_keeps_search_native_with_tavily() -> None:
-    config = _make_config(tavily_api_key="tvly-test")
+def test_custom_pass_through_profile_keeps_search_native_with_tavily() -> None:
+    config = _make_config(tavily_api_key="tvly-test", tool_profile="test-pass-through")
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
     )
@@ -343,7 +353,7 @@ def test_responses_pass_through_profile_keeps_search_native_with_tavily() -> Non
 def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:
     trace_path = tmp_path / "search-trace.jsonl"
     config = _make_config(
-        tavily_api_key="tvly-test", tool_profile="responses_web_run_mapping"
+        tavily_api_key="tvly-test", tool_profile="test-web-run-mapping"
     )
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
@@ -395,7 +405,7 @@ def test_non_passthrough_search_uses_local_tavily_bridge() -> None:
 
 def test_local_search_open_returns_static_page_content() -> None:
     config = _make_config(
-        tavily_api_key="tvly-test", tool_profile="responses_web_run_mapping"
+        tavily_api_key="tvly-test", tool_profile="test-web-run-mapping"
     )
     request = _make_request(
         _search_body({"open": [{"ref_id": "https://docs.python.org/3/"}]})
@@ -420,7 +430,7 @@ def test_local_search_open_returns_static_page_content() -> None:
 
 def test_stored_reference_open_uses_the_app_owned_search_store() -> None:
     config = _make_config(
-        tavily_api_key="tvly-test", tool_profile="responses_web_run_mapping"
+        tavily_api_key="tvly-test", tool_profile="test-web-run-mapping"
     )
     search_request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})

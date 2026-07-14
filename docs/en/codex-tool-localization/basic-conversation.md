@@ -30,7 +30,7 @@ This is important because Codex relies on fields that are not part of a minimal 
 - Native Responses tool item structure.
 - Provider-specific request fields such as `include`.
 
-Tool Profiles are selectable for this mode. The bundled **Responses pass through** Profile leaves native tools unchanged and disables Rosetta-only injections. The bundled **Responses web.run mapping** Profile differs only by setting `web.run` to Modified: Codex still exposes and calls `tools.web__run`, while `/v1/alpha/search` is handled by Rosetta's reliable Tavily/Python subset. Other Responses fields and upstream response bytes remain on the direct path.
+Tool Profiles are selectable for this mode. **Chat Default** is currently the only bundled Profile and is also the default for Tool Mapping only. It marks `web.run` as Modified, so Codex still exposes and calls `tools.web__run` while `/v1/alpha/search` is handled by Rosetta's reliable Tavily/Python subset. To keep every native tool on the upstream path, copy Chat Default and set the relevant tools and Namespaces to Passthrough. Other Responses fields and upstream response bytes remain on the direct path.
 
 Codex's standalone Search and Images clients use three additional JSON endpoints:
 
@@ -71,10 +71,11 @@ sports, recency, blocked-domain, location, or non-live access semantics return
 HTTP `501` with `code: "not_implemented"` before any partial operation runs.
 Every `501` message from these auxiliary endpoints also ends with
 `Consider "Browser Use" skill` so Codex can choose the browser fallback.
-With the **Responses pass through** Profile, `/alpha/search` remains native
-upstream pass-through even when a Tavily Token is configured. With **Responses web.run
-mapping**, supported commands use the local executor; search queries require a
-Tavily Token on the `web.run` card, while direct-URL `open` and time-only requests use Python.
+When a selected Profile sets `web.run` to Passthrough, `/alpha/search` remains
+native upstream pass-through even when a Tavily Token is configured. When it
+sets `web.run` to Modified, supported commands use the local executor; search
+queries require a Tavily Token on the `web.run` card, while direct-URL `open`
+and time-only requests use Python.
 
 ## Responses To Chat Conversion
 

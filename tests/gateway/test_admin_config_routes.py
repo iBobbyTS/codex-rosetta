@@ -29,6 +29,18 @@ from codex_rosetta.observability.metrics import MetricsCollector
 from codex_rosetta.observability.request_log import RequestLogEntry
 
 
+def _load_admin_i18n() -> dict[str, dict[str, str]]:
+    path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin_i18n.json"
+    )
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
@@ -776,14 +788,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["provider"] == "openai"
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
-    assert body["tool_profile_presets"] == [
-        {"id": "builtin", "name": "Chat Default"},
-        {"id": "responses_pass_through", "name": "Responses pass through"},
-        {
-            "id": "responses_web_run_mapping",
-            "name": "Responses web.run mapping",
-        },
-    ]
+    assert body["tool_profile_presets"] == [{"id": "builtin", "name": "Chat Default"}]
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "grouped-upstream"
     )
@@ -1094,7 +1099,8 @@ def test_admin_html_renders_tools_as_compact_cards():
     assert "renderToolStateSelect(item)" in render_item
     assert "renderToolKindBadge(item)" not in render_item
     assert "renderToolPolicy(item, policy)" not in render_item
-    assert '<div class="tool-list tool-card-grid">${body}</div>' in html
+    assert '<div class="tool-list tool-card-grid">${cards}</div>' in html
+    assert '<div class="tool-list">${namespaces}</div>' in html
     assert "${esc(t('tools.default'))}:" not in render_item
 
 
@@ -1135,9 +1141,13 @@ def test_admin_html_splits_responses_internal_handling_options():
         / "admin.html"
     )
     html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
 
-    assert "OpenAI Responses (Tool Mapping only)" in html
-    assert "OpenAI Responses (Rosetta)" in html
+    assert (
+        i18n["en"]["protocol.responsesPassthrough"]
+        == "OpenAI Responses (Tool Mapping only)"
+    )
+    assert i18n["en"]["protocol.responsesRosetta"] == "OpenAI Responses (Rosetta)"
     assert "{value: 'responses_passthrough'" in html
     assert "{value: 'responses_rosetta'" in html
     assert 'id="provProtocolHint"' in html
@@ -1158,7 +1168,8 @@ def test_admin_html_shows_model_group_profile_for_all_llm_protocols():
 
     assert 'id="modelGroupProvider" onchange="onModelGroupProviderChange()"' in html
     assert "return !!provider;" in html
-    assert "responses_pass_through" in html
+    assert "responses_pass_through" not in html
+    assert "group?.tool_profile || 'builtin'" in html
     assert "_modelGroupProviderUsesToolProfiles() ? '' : 'none'" in html
     assert "if (_modelGroupProviderUsesToolProfiles())" in html
 
@@ -1191,6 +1202,7 @@ def test_admin_html_exposes_confirmed_local_mode_setting():
         / "admin.html"
     )
     html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
 
     assert 'id="localModeEnabled"' in html
     assert "configData.server.local_mode !== false" in html
@@ -1198,11 +1210,14 @@ def test_admin_html_exposes_confirmed_local_mode_setting():
     assert "configData.codex_home" in html
     assert "configData.model_catalog_configured === true" in html
     assert "body.local_mode_confirmed = true" in html
-    assert "'label.localMode':'Local mode'" in html
-    assert "configure the codex_rosetta provider in config.toml" in html
-    assert "stable gateway API key named codex" in html
-    assert "\\u914d\\u7f6ecodex_rosetta Provider" in html
-    assert "'confirm.localModeExisting':" in html
+    assert i18n["en"]["label.localMode"] == "Local mode"
+    assert (
+        "configure the codex_rosetta provider in config.toml"
+        in i18n["en"]["confirm.localMode"]
+    )
+    assert "stable gateway API key named codex" in i18n["en"]["confirm.localMode"]
+    assert "配置codex_rosetta Provider" in i18n["zh"]["confirm.localMode"]
+    assert i18n["en"]["confirm.localModeExisting"]
 
 
 def test_admin_html_assumes_all_llm_models_support_tools():
@@ -1236,6 +1251,7 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
         / "admin.html"
     )
     html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
 
     assert 'id="provProvider"' in html
     assert 'id="provProviderVariant"' in html
@@ -1245,16 +1261,16 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
     assert "PROTOCOL_DIVIDER_VALUE" in html
     assert "divider.disabled = true" in html
     assert "opt.dataset.unsupported = 'true'" in html
-    assert "'provider.kimi':'Kimi'" in html
-    assert "'provider.minimax':'MiniMax'" in html
-    assert "'providerVariant.official':'Official'" in html
-    assert "'providerVariant.china':'China'" in html
-    assert "'providerVariant.international':'International'" in html
-    assert "'providerVariant.custom':'Custom'" in html
-    assert "'provider.qwen':'Qwen'" in html
-    assert "'provider.qwen':'\\u901a\\u4e49\\u5343\\u95ee'" in html
-    assert "'provider.zhipu':'Zhipu (GLM)'" in html
-    assert "'provider.zhipu':'\\u667a\\u8c31 GLM'" in html
+    assert i18n["en"]["provider.kimi"] == "Kimi"
+    assert i18n["en"]["provider.minimax"] == "MiniMax"
+    assert i18n["en"]["providerVariant.official"] == "Official"
+    assert i18n["en"]["providerVariant.china"] == "China"
+    assert i18n["en"]["providerVariant.international"] == "International"
+    assert i18n["en"]["providerVariant.custom"] == "Custom"
+    assert i18n["en"]["provider.qwen"] == "Qwen"
+    assert i18n["zh"]["provider.qwen"] == "通义千问"
+    assert i18n["en"]["provider.zhipu"] == "Zhipu (GLM)"
+    assert i18n["zh"]["provider.zhipu"] == "智谱 GLM"
     assert "protocol.unsupportedSuffix" in html
     assert (
         "const body = {provider, api_type: apiType, base_url: baseUrl, proxy}" in html
@@ -1293,6 +1309,7 @@ def test_admin_html_exposes_model_group_controls():
         / "admin.html"
     )
     html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
 
     assert 'onclick="openModelGroupModal()"' in html
     assert 'id="modelGroupList"' in html
@@ -1316,8 +1333,8 @@ def test_admin_html_exposes_model_group_controls():
     assert "type: 'llm'" in html
     assert 'id="modelReasoningGroup"' not in html
     assert 'id="modelToolAdaptationGroup"' not in html
-    assert "'btn.addModelGroup':'+ Add Model Group'" in html
-    assert "'btn.addModelGroup':'+ \\u6dfb\\u52a0\\u6a21\\u578b\\u7ec4'" in html
+    assert i18n["en"]["btn.addModelGroup"] == "+ Add Model Group"
+    assert i18n["zh"]["btn.addModelGroup"] == "+ 添加模型组"
 
 
 def test_admin_html_uses_page_routes():
