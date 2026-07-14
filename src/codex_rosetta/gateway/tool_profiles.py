@@ -356,9 +356,9 @@ def _exec_projection_contract(
                 f"catalog item {item_id!r} exec_projection has unsupported fields: "
                 f"{sorted(unsupported)}"
             )
-        if "modified" not in supported[item_id]:
+        if "passthrough" not in supported[item_id]:
             raise ValueError(
-                f"catalog item {item_id!r} exec_projection requires Modified support"
+                f"catalog item {item_id!r} exec_projection requires Pass through support"
             )
         chat_name = raw.get("chat_name")
         nested_name = raw.get("nested_name")

@@ -94,6 +94,44 @@ def _exec_description() -> str:
             "{ session_id: number; chars?: string; yield_time_ms?: number; }",
         ),
         _section(
+            "wait_for_environment",
+            "args",
+            "{ timeout_ms?: number; }",
+        ),
+        _section(
+            "request_permissions",
+            "args",
+            "{ permissions: Array<string>; }",
+        ),
+        _section("get_context_remaining", "args", "{}"),
+        _section("list_available_plugins_to_install", "args", "{}"),
+        _section(
+            "request_plugin_install",
+            "args",
+            "{ plugin_id: string; suggest_reason: string; }",
+        ),
+        _section("list_mcp_resources", "args", "{ cursor?: string; }"),
+        _section(
+            "list_mcp_resource_templates",
+            "args",
+            "{ cursor?: string; server?: string; }",
+        ),
+        _section(
+            "read_mcp_resource",
+            "args",
+            "{ server: string; uri: string; }",
+        ),
+        _section(
+            "spawn_agents_on_csv",
+            "args",
+            "{ csv_path: string; task: string; }",
+        ),
+        _section(
+            "report_agent_job_result",
+            "args",
+            "{ result: string; }",
+        ),
+        _section(
             "web__run",
             "args",
             "{ search_query?: Array<{ q: string; domains?: Array<string>; }>; "
@@ -137,17 +175,27 @@ def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
         "clock-sleep",
         "create_goal",
         "exec_command",
+        "get_context_remaining",
         "get_goal",
         "image_gen-imagegen",
+        "list_available_plugins_to_install",
+        "list_mcp_resource_templates",
+        "list_mcp_resources",
         "memories-add_ad_hoc_note",
         "memories-list",
         "memories-read",
         "memories-search",
+        "read_mcp_resource",
+        "report_agent_job_result",
+        "request_permissions",
+        "request_plugin_install",
         "skills-list",
         "skills-read",
+        "spawn_agents_on_csv",
         "update_goal",
         "update_plan",
         "view_image",
+        "wait_for_environment",
         "web-run",
         "write_stdin",
     }
@@ -197,6 +245,31 @@ def test_exec_description_projects_precise_normal_function_schemas():
     )
     guidance = route.tool_profile_inputs["function.create_goal"]["guidance"]
     assert definitions["create_goal"]["function"]["description"].endswith(guidance)
+
+
+def test_conditional_exec_projection_only_exposes_live_codex_declarations():
+    projections = exec_tool_projections_for_route(_route())
+    definitions = project_exec_tool_definitions(
+        "Run JavaScript.\n\n"
+        + _section(
+            "read_mcp_resource",
+            "args",
+            "{ server: string; uri: string; }",
+        ),
+        projections,
+        profile_route=_route(),
+    )
+
+    assert set(definitions) == {"read_mcp_resource"}
+    assert definitions["read_mcp_resource"]["function"]["parameters"] == {
+        "type": "object",
+        "properties": {
+            "server": {"type": "string"},
+            "uri": {"type": "string"},
+        },
+        "required": ["server", "uri"],
+        "additionalProperties": False,
+    }
 
 
 def test_exec_description_projects_full_codex_rendered_typescript_grammar():

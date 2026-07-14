@@ -40,6 +40,10 @@ Recent Codex Code Mode surfaces keep several runtime tools inside the custom `ex
 - `web__run` (Codex runtime identity `web.run`), exposed to Chat as `web-run`
 - `image_gen__imagegen` (runtime identity `image_gen.imagegen`), exposed as `image_gen-imagegen`
 - `get_goal`, `create_goal`, and `update_goal`
+- conditionally assembled utility tools: `wait_for_environment`, `request_permissions`, and `get_context_remaining`
+- conditionally assembled plugin tools: `list_available_plugins_to_install` and `request_plugin_install`
+- conditionally assembled MCP resource tools: `list_mcp_resources`, `list_mcp_resource_templates`, and `read_mcp_resource`
+- conditionally assembled Agent Job tools: `spawn_agents_on_csv` and `report_agent_job_result`
 - `clock__curr_time` and `clock__sleep`, exposed as `clock-curr_time` and `clock-sleep`
 - flat `memories__*` and `skills__*` entries, exposed with canonical `namespace-function` Chat names
 
@@ -55,7 +59,7 @@ Calls to projected Functions are rebuilt as deterministic JavaScript calls on th
 
 Chat Default disables the `apply_patch` exec projection. Instead, Rosetta injects the three read tools `Read`, `Glob`, and `Grep`, plus the two write tools `Edit` and `Write`. `Edit` and `Write` may use Codex's nested `apply_patch` implementation internally without exposing `apply_patch` to the upstream model.
 
-The top-level `wait` and `request_user_input` Functions are not projected through `exec`. They remain direct Functions in both directions.
+The top-level `wait`, `request_user_input`, and `new_context` Functions are not projected through `exec`. They remain direct Functions in both directions. Codex marks `new_context` as direct-model-only, so Code Mode Only does not move it under `exec`.
 
 ## Subagents And Namespace Tools
 
@@ -81,7 +85,19 @@ For Responses-to-Responses routes, namespace tools stay in their native Response
 
 ## Plugin And Deferred Tools
 
-Plugin and deferred tool discovery use the same general tool conversion path. Rosetta does not currently add a dedicated localization rule for every plugin tool.
+Plugin, deferred, MCP-resource, context-budget, permission, and Agent Job tools are assembled conditionally by Codex. In normal tool mode they are top-level Functions; in Code Mode Only, every item below except `new_context` is nested in `exec` when its condition is satisfied.
+
+| Tools | Codex 0.144.4 exposure condition |
+|---|---|
+| `wait_for_environment` | The under-development `deferred_executor` Feature is enabled. |
+| `request_permissions` | An execution environment exists and the under-development `request_permissions_tool` Feature is enabled. |
+| `new_context`, `get_context_remaining` | The under-development `token_budget` Feature is enabled. |
+| Plugin list/install tools | `apps`, `plugins`, and `tool_suggest` are enabled and non-empty install candidates exist; the list tool additionally requires list-tool presentation. |
+| MCP resource tools | Direct MCP tools are available for the current turn. |
+| `spawn_agents_on_csv` | The under-development `enable_fanout` Feature and collaboration are enabled. |
+| `report_agent_job_result` | The preceding Agent Job conditions hold and the current session is an `agent_job:*` worker. |
+
+Rosetta registers representation-only exec projections for these names, but derives their schema and description from the current Codex `exec` declaration. A missing declaration is not an invitation to synthesize a tool: projection fails closed, so Rosetta follows Codex's per-request Feature and runtime decisions without duplicating them.
 
 The important behavior is that tool calls must survive the round trip:
 
@@ -89,6 +105,8 @@ The important behavior is that tool calls must survive the round trip:
 - Tool calls are converted back into Responses events for Codex.
 - Namespace metadata is restored when the tool came from a Responses namespace.
 - Message `phase` metadata is preserved so work-process output remains foldable in Codex.
+
+`test_sync_tool` remains in the internal catalog contract for persisted Profile compatibility, is Disabled in Chat Default, and is deliberately hidden from the Tools page. It is a model-catalog-triggered Codex test hook rather than a Rosetta-supported user tool.
 
 ## Tool Profile Scope
 
@@ -108,6 +126,8 @@ The Tools page has four categories:
 Namespace states are shown as Expanded, Passthrough (ineffective for Chat API), and Disabled. Disabling a Namespace forces and locks all of its children to Disabled.
 
 Function state **Pass through** is displayed as a direct pass-through choice. For Exec Expansion entries it still performs the representation-only projection and reverse translation described above; it does not add a card description or mutate the model-facing tool description.
+
+For conditionally assembled Codex tools, the detail panel separately shows their normal-mode placement, Code Mode Only placement, development status, and source-side availability conditions. These labels explain Codex's assembly rules; they are not a claim that the Gateway can predict the exact tool set of a future request. The live `exec` declaration remains authoritative.
 
 A Function, Hosted, or Namespace catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text`, `password`, `select`, or `textarea` input type. A select declares ordered `{value, label}` options: the Tools page displays each label and persists its value. A textarea may be catalog-owned and read-only so the current Profile value can be inspected and copied without being edited. The Tools page renders the entries in catalog order beneath the tool status selector. The `web_search` and `web.run` cards each own their search Provider and Token; Tavily is currently the only provider. The former standalone Web Search settings tab has been removed.
 

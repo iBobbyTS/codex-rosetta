@@ -474,6 +474,11 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-detail-body { display:grid;gap:10px;min-width:0; }
 .tool-detail-empty { color:var(--text-dim);font-size:11px;line-height:1.5; }
 .tool-detail-panel .tool-description, .tool-detail-panel .tool-profile-inputs { grid-column:auto; }
+.tool-codex-placement { display:grid;gap:7px;padding:9px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg); }
+.tool-codex-placement-row { display:grid;grid-template-columns:minmax(90px,auto) minmax(0,1fr);gap:10px;font-size:11px;line-height:1.4; }
+.tool-codex-placement-label { color:var(--text-dim);font-weight:600; }
+.tool-codex-placement-value { min-width:0;overflow-wrap:anywhere; }
+.tool-availability-list { display:grid;gap:4px;margin:0;padding-left:17px;color:var(--text-dim);font-size:11px;line-height:1.45; }
 .tool-badges { display:flex;align-items:center;gap:5px;flex-wrap:wrap;justify-content:flex-end; }
 .tool-badge { display:inline-flex;align-items:center;border:1px solid var(--border);border-radius:999px;padding:2px 7px;font-size:10px;line-height:1.4;color:var(--text-dim);background:var(--bg);white-space:nowrap; }
 .tool-badge.kind { color:var(--accent);border-color:color-mix(in srgb,var(--accent) 45%,var(--border)); }
@@ -1921,6 +1926,26 @@ function renderToolProfileInputs(item) {
   return groups ? `<div class="tool-profile-inputs">${groups}</div>` : '';
 }
 
+function renderToolCodexPlacement(item) {
+  const placement = item.codex_placement;
+  if (!placement) return '';
+  const rows = [];
+  if (placement.normal_mode_i18n) {
+    rows.push(`<div class="tool-codex-placement-row"><span class="tool-codex-placement-label">${esc(t('tools.detail.normalMode'))}</span><span class="tool-codex-placement-value">${esc(t(placement.normal_mode_i18n))}</span></div>`);
+  }
+  if (placement.code_mode_i18n) {
+    rows.push(`<div class="tool-codex-placement-row"><span class="tool-codex-placement-label">${esc(t('tools.detail.codeModeOnly'))}</span><span class="tool-codex-placement-value">${esc(t(placement.code_mode_i18n))}</span></div>`);
+  }
+  if (placement.stability_i18n) {
+    rows.push(`<div class="tool-codex-placement-row"><span class="tool-codex-placement-label">${esc(t('tools.detail.availability'))}</span><span class="tool-codex-placement-value">${esc(t(placement.stability_i18n))}</span></div>`);
+  }
+  const conditions = Array.isArray(placement.conditions_i18n)
+    ? placement.conditions_i18n.map(key => `<li>${esc(t(key))}</li>`).join('')
+    : '';
+  if (conditions) rows.push(`<ul class="tool-availability-list">${conditions}</ul>`);
+  return `<div class="tool-codex-placement">${rows.join('')}</div>`;
+}
+
 function toolDetailKeyHandler(event, itemId) {
   if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
   event.preventDefault();
@@ -1942,17 +1967,19 @@ function renderToolDetail() {
     element.classList.toggle('selected', selected);
     element.setAttribute('aria-pressed', selected ? 'true' : 'false');
   });
-  if (!item) {
+  if (!item || item.ui_hidden) {
     panel.innerHTML = `<div class="tool-detail-empty">${esc(t('tools.detail.select'))}</div>`;
     return;
   }
   const summary = `<div class="tool-description">${esc(t('tools.summary.' + item.id))}</div>`;
   const showDescription = item.description_i18n && isToolCardContentVisible(item.id, item.description_visible_when);
   const description = showDescription ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
+  const placement = renderToolCodexPlacement(item);
+  const projection = item.exec_projection ? `<div class="tool-description">${esc(t('tools.detail.dynamicProjection'))}</div>` : '';
   const inputs = renderToolProfileInputs(item);
   const showNote = item.note_i18n && isToolCardContentVisible(item.id, item.note_visible_when);
   const note = showNote ? `<div class="tool-description tool-detail-note">${esc(t(item.note_i18n))}</div>` : '';
-  const body = summary + description + inputs + note;
+  const body = summary + description + placement + projection + inputs + note;
   panel.innerHTML = `<div class="tool-detail-header"><div class="tool-detail-heading"><span class="tool-detail-kicker">${esc(t('tools.detail.title'))}</span><span class="tool-detail-name">${esc(item.name)}</span></div>${renderToolKindBadge(item)}</div><div class="tool-detail-body">${body}</div>`;
 }
 
@@ -1971,7 +1998,7 @@ function renderToolNamespace(namespaceItem, childIds, index) {
 }
 
 function renderToolGroup(groupId, itemIds, index) {
-  const items = itemIds.map(id => index.items.get(id)).filter(Boolean);
+  const items = itemIds.map(id => index.items.get(id)).filter(item => item && !item.ui_hidden);
   if (items.length === 0) return '';
   const cards = items.filter(item => item.type !== 'namespace').map(item => renderToolItem(item, index.policies)).join('');
   const namespaces = items.filter(item => item.type === 'namespace').map(item => {
@@ -1989,7 +2016,7 @@ function renderNamespaceGroup(index) {
   const rendered = namespaceGroup.item_ids.map(id => {
     const namespaceItem = index.items.get(id);
     const placement = index.namespaces.get(id);
-    if (!namespaceItem || !placement) return '';
+    if (!namespaceItem || namespaceItem.ui_hidden || !placement) return '';
     return renderToolNamespace(namespaceItem, placement.child_ids, index);
   }).filter(Boolean);
   if (rendered.length === 0) return '';

@@ -64,19 +64,42 @@ EXPECTED_EXEC_TOOLS = {
     "clock__sleep",
     "create_goal",
     "exec_command",
+    "get_context_remaining",
     "get_goal",
     "image_gen__imagegen",
+    "list_available_plugins_to_install",
+    "list_mcp_resource_templates",
+    "list_mcp_resources",
     "memories__add_ad_hoc_note",
     "memories__list",
     "memories__read",
     "memories__search",
+    "read_mcp_resource",
+    "report_agent_job_result",
+    "request_permissions",
+    "request_plugin_install",
     "skills__list",
     "skills__read",
+    "spawn_agents_on_csv",
     "update_goal",
     "update_plan",
     "view_image",
+    "wait_for_environment",
     "web__run",
     "write_stdin",
+}
+
+CONDITIONAL_EXEC_ITEM_IDS = {
+    "function.get_context_remaining",
+    "function.list_available_plugins_to_install",
+    "function.list_mcp_resource_templates",
+    "function.list_mcp_resources",
+    "function.read_mcp_resource",
+    "function.report_agent_job_result",
+    "function.request_permissions",
+    "function.request_plugin_install",
+    "function.spawn_agents_on_csv",
+    "function.wait_for_environment",
 }
 
 
@@ -105,6 +128,15 @@ def test_tool_detail_copy_is_localized_and_matches_profile_behavior():
 
     for item in catalog["items"]:
         keys = [item.get("description_i18n"), item.get("note_i18n")]
+        placement = item.get("codex_placement", {})
+        keys.extend(
+            (
+                placement.get("normal_mode_i18n"),
+                placement.get("code_mode_i18n"),
+                placement.get("stability_i18n"),
+            )
+        )
+        keys.extend(placement.get("conditions_i18n", []))
         for profile_input in item.get("profile_inputs", []):
             keys.extend(
                 (
@@ -222,7 +254,9 @@ def test_catalog_has_unique_resolvable_ids_and_policies():
         child_id for child_ids in namespaces.values() for child_id in child_ids
     )
     referenced.update(catalog["custom_injection"]["item_ids"])
-    assert referenced == items.keys()
+    hidden = {item_id for item_id, item in items.items() if item.get("ui_hidden")}
+    assert referenced.isdisjoint(hidden)
+    assert referenced | hidden == items.keys()
 
     for item in catalog["items"]:
         if item["type"] == "custom_injection":
@@ -245,7 +279,12 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
         EXPECTED_EXEC_TOOLS
     )
     assert {items[item_id]["name"] for item_id in groups["function"]} == (
-        (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS) | {"exec", "web_search"}
+        (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS - {"test_sync_tool"})
+        | {"exec", "web_search"}
+    )
+    assert items["function.test_sync_tool"]["ui_hidden"] is True
+    assert all(
+        "function.test_sync_tool" not in item_ids for item_ids in groups.values()
     )
     assert {items[item_id]["name"] for item_id in groups["namespace"]} == {
         "multi_agent_v1",
@@ -293,10 +332,39 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
     assert "github" not in serialized.lower()
 
 
+def test_conditional_codex_placements_match_0_144_4_tool_assembly():
+    _catalog, items, _policies, groups, _namespaces = _catalog_maps()
+
+    assert CONDITIONAL_EXEC_ITEM_IDS <= set(groups["exec_expansion"])
+    for item_id in CONDITIONAL_EXEC_ITEM_IDS:
+        placement = items[item_id]["codex_placement"]
+        assert placement["normal_mode_i18n"] == "tools.placement.top_level_function"
+        assert placement["code_mode_i18n"] == "tools.placement.exec_nested"
+        assert placement["conditions_i18n"]
+        assert (
+            items[item_id]["exec_projection"]["nested_name"] == items[item_id]["name"]
+        )
+
+    assert items["function.new_context"]["codex_placement"] == {
+        "normal_mode_i18n": "tools.placement.direct_model_only_function",
+        "code_mode_i18n": "tools.placement.top_level_function",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": ["tools.condition.feature_token_budget"],
+    }
+    assert "exec_projection" not in items["function.new_context"]
+    assert items["function.report_agent_job_result"]["codex_placement"][
+        "conditions_i18n"
+    ] == [
+        "tools.condition.feature_enable_fanout",
+        "tools.condition.collaboration_enabled",
+        "tools.condition.agent_job_worker",
+    ]
+
+
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 3
+    assert catalog["metadata"]["schema_version"] == 4
     assert catalog["metadata"]["catalog_version"] == "codex-0.144.4"
     assert catalog["metadata"]["codex_cli_version"] == "0.144.4"
     assert catalog["metadata"]["codex_source_commit"] == CODEX_0_144_4_SOURCE_COMMIT
@@ -309,6 +377,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "hosted.web_search": "disabled",
         "custom.apply_patch": "disabled",
         "custom.exec": "disabled",
+        "function.test_sync_tool": "disabled",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
     assert catalog["preset_profiles"] == []
@@ -428,6 +497,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert builtin["namespace.multi_agent_v2"] == "expanded"
     assert builtin["function.exec_command"] == "passthrough"
     assert builtin["function.write_stdin"] == "passthrough"
+    assert builtin["function.test_sync_tool"] == "disabled"
     assert builtin["hosted.web_search"] == "disabled"
     assert items["hosted.web_search"]["note_i18n"] == ("tools.note.web_search_replaced")
     assert items["hosted.web_search"]["note_visible_when"] == ["disabled"]
@@ -470,7 +540,17 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.exec_command",
         "function.write_stdin",
         "function.update_plan",
+        "function.wait_for_environment",
+        "function.request_permissions",
+        "function.get_context_remaining",
+        "function.list_available_plugins_to_install",
+        "function.request_plugin_install",
         "function.view_image",
+        "function.list_mcp_resources",
+        "function.list_mcp_resource_templates",
+        "function.read_mcp_resource",
+        "function.spawn_agents_on_csv",
+        "function.report_agent_job_result",
         "function.get_goal",
         "namespace.clock.curr_time",
         "namespace.clock.sleep",
@@ -499,10 +579,20 @@ def test_catalog_defaults_and_namespace_image_policy():
         "custom.apply_patch",
         "function.create_goal",
         "function.exec_command",
+        "function.get_context_remaining",
         "function.get_goal",
+        "function.list_available_plugins_to_install",
+        "function.list_mcp_resource_templates",
+        "function.list_mcp_resources",
+        "function.read_mcp_resource",
+        "function.report_agent_job_result",
+        "function.request_permissions",
+        "function.request_plugin_install",
+        "function.spawn_agents_on_csv",
         "function.update_goal",
         "function.update_plan",
         "function.view_image",
+        "function.wait_for_environment",
         "function.write_stdin",
         "namespace.clock.curr_time",
         "namespace.clock.sleep",
@@ -583,7 +673,11 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "item.description_i18n" in html
     assert "item.note_i18n" in html
     assert "item.note_visible_when" in html
-    assert "summary + description + inputs + note" in html
+    assert "summary + description + placement + projection + inputs + note" in html
+    assert "function renderToolCodexPlacement(item)" in html
+    assert "item.codex_placement" in html
+    assert "item.exec_projection" in html
+    assert "!item.ui_hidden" in html
     assert "item.profile_inputs" in html
     assert "renderToolProfileInputs(item)" in html
     assert 'id="toolCatalogLayout"' in page

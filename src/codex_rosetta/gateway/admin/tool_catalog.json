@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "schema_version": 3,
+    "schema_version": 4,
     "catalog_version": "codex-0.144.4",
     "codex_cli_version": "0.144.4",
     "codex_source_commit": "8c68d4c87dc54d38861f5114e920c3de2efa5876",
@@ -15,7 +15,8 @@
       "namespace.image_gen.imagegen": "modified",
       "hosted.web_search": "disabled",
       "custom.apply_patch": "disabled",
-      "custom.exec": "disabled"
+      "custom.exec": "disabled",
+      "function.test_sync_tool": "disabled"
     },
     "inputs": {
       "function.request_user_input": {
@@ -206,7 +207,19 @@
       "id": "function.wait_for_environment",
       "name": "wait_for_environment",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "wait_for_environment",
+        "nested_name": "wait_for_environment"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.feature_deferred_executor"
+        ]
+      }
     },
     {
       "id": "function.request_user_input",
@@ -240,37 +253,95 @@
       "id": "function.request_permissions",
       "name": "request_permissions",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "request_permissions",
+        "nested_name": "request_permissions"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.execution_environment",
+          "tools.condition.feature_request_permissions_tool"
+        ]
+      }
     },
     {
       "id": "function.new_context",
       "name": "new_context",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.direct_model_only_function",
+        "code_mode_i18n": "tools.placement.top_level_function",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.feature_token_budget"
+        ]
+      }
     },
     {
       "id": "function.get_context_remaining",
       "name": "get_context_remaining",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "get_context_remaining",
+        "nested_name": "get_context_remaining"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.feature_token_budget"
+        ]
+      }
     },
     {
       "id": "function.list_available_plugins_to_install",
       "name": "list_available_plugins_to_install",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "list_available_plugins_to_install",
+        "nested_name": "list_available_plugins_to_install"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "conditions_i18n": [
+          "tools.condition.plugin_discovery_features",
+          "tools.condition.plugin_candidates_list_presentation"
+        ]
+      }
     },
     {
       "id": "function.request_plugin_install",
       "name": "request_plugin_install",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "request_plugin_install",
+        "nested_name": "request_plugin_install"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "conditions_i18n": [
+          "tools.condition.plugin_discovery_features",
+          "tools.condition.plugin_install_candidates"
+        ]
+      }
     },
     {
       "id": "function.test_sync_tool",
       "name": "test_sync_tool",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "ui_hidden": true
     },
     {
       "id": "function.view_image",
@@ -287,31 +358,91 @@
       "id": "function.list_mcp_resources",
       "name": "list_mcp_resources",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "list_mcp_resources",
+        "nested_name": "list_mcp_resources"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "conditions_i18n": [
+          "tools.condition.direct_mcp_tools"
+        ]
+      }
     },
     {
       "id": "function.list_mcp_resource_templates",
       "name": "list_mcp_resource_templates",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "list_mcp_resource_templates",
+        "nested_name": "list_mcp_resource_templates"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "conditions_i18n": [
+          "tools.condition.direct_mcp_tools"
+        ]
+      }
     },
     {
       "id": "function.read_mcp_resource",
       "name": "read_mcp_resource",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "read_mcp_resource",
+        "nested_name": "read_mcp_resource"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "conditions_i18n": [
+          "tools.condition.direct_mcp_tools"
+        ]
+      }
     },
     {
       "id": "function.spawn_agents_on_csv",
       "name": "spawn_agents_on_csv",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "spawn_agents_on_csv",
+        "nested_name": "spawn_agents_on_csv"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.feature_enable_fanout",
+          "tools.condition.collaboration_enabled"
+        ]
+      }
     },
     {
       "id": "function.report_agent_job_result",
       "name": "report_agent_job_result",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "exec_projection": {
+        "chat_name": "report_agent_job_result",
+        "nested_name": "report_agent_job_result"
+      },
+      "codex_placement": {
+        "normal_mode_i18n": "tools.placement.top_level_function",
+        "code_mode_i18n": "tools.placement.exec_nested",
+        "stability_i18n": "tools.stability.under_development",
+        "conditions_i18n": [
+          "tools.condition.feature_enable_fanout",
+          "tools.condition.collaboration_enabled",
+          "tools.condition.agent_job_worker"
+        ]
+      }
     },
     {
       "id": "function.wait",
@@ -876,7 +1007,17 @@
           "function.exec_command",
           "function.write_stdin",
           "function.update_plan",
+          "function.wait_for_environment",
+          "function.request_permissions",
+          "function.get_context_remaining",
+          "function.list_available_plugins_to_install",
+          "function.request_plugin_install",
           "function.view_image",
+          "function.list_mcp_resources",
+          "function.list_mcp_resource_templates",
+          "function.read_mcp_resource",
+          "function.spawn_agents_on_csv",
+          "function.report_agent_job_result",
           "function.get_goal",
           "function.create_goal",
           "function.update_goal",
@@ -901,18 +1042,7 @@
           "function.request_user_input",
           "hosted.web_search",
           "function.shell_command",
-          "function.wait_for_environment",
-          "function.request_permissions",
-          "function.new_context",
-          "function.get_context_remaining",
-          "function.list_available_plugins_to_install",
-          "function.request_plugin_install",
-          "function.test_sync_tool",
-          "function.list_mcp_resources",
-          "function.list_mcp_resource_templates",
-          "function.read_mcp_resource",
-          "function.spawn_agents_on_csv",
-          "function.report_agent_job_result"
+          "function.new_context"
         ]
       },
       {
