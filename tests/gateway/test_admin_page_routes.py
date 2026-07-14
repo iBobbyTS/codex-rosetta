@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import html as html_module
+import importlib.resources
 import json
 import re
 
@@ -13,6 +14,9 @@ from codex_rosetta._vendor.httpserver import Request
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.admin.static import load_admin_html
 from codex_rosetta.gateway.config import GatewayConfig
+
+
+I18N_PLACEHOLDER = "__CODEX_ROSETTA_ADMIN_I18N_JSON__"
 
 
 def _make_app():
@@ -86,6 +90,25 @@ def test_admin_page_routes_serve_admin_html(path: str):
     assert response.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
     assert response.headers["X-Frame-Options"] == "DENY"
     assert b'class="admin-nav"' in response.body
+
+
+def test_admin_i18n_dictionary_is_loaded_from_bundled_json() -> None:
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    raw_html = package_files.joinpath("admin.html").read_text("utf-8")
+    translations = json.loads(
+        package_files.joinpath("admin_i18n.json").read_text("utf-8")
+    )
+    rendered_html = load_admin_html()
+
+    assert raw_html.count(I18N_PLACEHOLDER) == 1
+    assert "'nav.providers':'Providers'" not in raw_html
+    assert set(translations) == {"en", "zh"}
+    assert translations["en"].keys() == translations["zh"].keys()
+    assert I18N_PLACEHOLDER not in rendered_html
+    serialized = rendered_html.split("const I18N = ", 1)[1].split(
+        ";\n\nlet currentLang", 1
+    )[0]
+    assert json.loads(serialized) == translations
 
 
 def test_admin_login_token_has_no_browser_inactivity_expiry() -> None:

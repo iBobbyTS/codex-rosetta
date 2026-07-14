@@ -313,9 +313,14 @@ def build_exec_script(
     else:
         nested_input = arguments
     literal = _javascript_json_literal(nested_input)
+    output_helper = {
+        "text": "text",
+        "image": "image",
+        "generated_image": "generatedImage",
+    }[projection.output_mode]
     return (
         f"const result = await tools.{projection.nested_name}({literal});\n"
-        f"{projection.output_mode}(result);\n"
+        f"{output_helper}(result);\n"
     )
 
 

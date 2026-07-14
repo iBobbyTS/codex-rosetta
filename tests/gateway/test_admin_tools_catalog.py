@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from pathlib import Path
 
 from codex_rosetta._vendor.httpserver import Request
 from codex_rosetta.gateway.admin.static import load_admin_html
@@ -13,10 +12,7 @@ from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-CONTRACT_PATH = (
-    REPO_ROOT / "docs" / "dev" / "version-compatibility" / "codex-source-contract.json"
-)
+CODEX_0_144_1_SOURCE_COMMIT = "44918ea10c0f99151c6710411b4322c2f5c96bea"
 
 EXPECTED_FUNCTIONS = {
     "create_goal",
@@ -59,11 +55,27 @@ EXPECTED_NAMESPACE_CHILDREN = {
         "spawn_agent",
         "wait_agent",
     },
-    "clock": {"curr_time", "sleep"},
-    "image_gen": {"imagegen"},
-    "web": {"run"},
-    "memories": {"add_ad_hoc_note", "list", "read", "search"},
-    "skills": {"list", "read"},
+}
+
+EXPECTED_EXEC_TOOLS = {
+    "apply_patch",
+    "clock__curr_time",
+    "clock__sleep",
+    "create_goal",
+    "exec_command",
+    "get_goal",
+    "image_gen__imagegen",
+    "memories__add_ad_hoc_note",
+    "memories__list",
+    "memories__read",
+    "memories__search",
+    "skills__list",
+    "skills__read",
+    "update_goal",
+    "update_plan",
+    "view_image",
+    "web__run",
+    "write_stdin",
 }
 
 
@@ -149,7 +161,7 @@ def test_catalog_has_unique_resolvable_ids_and_policies():
         child_id for child_ids in namespaces.values() for child_id in child_ids
     )
     referenced.update(catalog["custom_injection"]["item_ids"])
-    assert referenced <= items.keys()
+    assert referenced == items.keys()
 
     for item in catalog["items"]:
         if item["type"] == "custom_injection":
@@ -168,17 +180,44 @@ def test_catalog_has_unique_resolvable_ids_and_policies():
 def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
     catalog, items, _policies, groups, namespaces = _catalog_maps()
 
+    assert {items[item_id]["name"] for item_id in groups["exec_expansion"]} == (
+        EXPECTED_EXEC_TOOLS
+    )
     assert {items[item_id]["name"] for item_id in groups["function"]} == (
-        EXPECTED_FUNCTIONS
+        (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS) | {"exec", "web_search"}
     )
-    assert {items[item_id]["name"] for item_id in groups["custom"]} == {
-        "apply_patch",
-        "exec",
+    assert {items[item_id]["name"] for item_id in groups["namespace"]} == {
+        "multi_agent_v1",
+        "collaboration",
     }
-    assert {items[item_id]["name"] for item_id in groups["hosted"]} == {"web_search"}
-    assert {items[item_id]["name"] for item_id in groups["namespace"]} == (
-        set(EXPECTED_NAMESPACE_CHILDREN) | {"mcp__codex_apps__github"}
+    assert all(
+        items[item_id]["type"] != "namespace" for item_id in groups["exec_expansion"]
     )
+    assert all(
+        "namespace_id" not in items[item_id] for item_id in groups["exec_expansion"]
+    )
+    for removed_parent in (
+        "namespace.clock",
+        "namespace.image_gen",
+        "namespace.web",
+        "namespace.memories",
+        "namespace.skills",
+        "namespace.mcp_github",
+    ):
+        assert removed_parent not in items
+    assert [items[item_id]["name"] for item_id in groups["rosetta_injection"]] == [
+        "Read",
+        "Glob",
+        "Grep",
+        "Edit",
+        "Write",
+    ]
+    assert set(groups) == {
+        "exec_expansion",
+        "function",
+        "namespace",
+        "rosetta_injection",
+    }
 
     actual_namespace_children = {
         items[namespace_id]["name"]: {items[child_id]["name"] for child_id in child_ids}
@@ -189,14 +228,17 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
     serialized = json.dumps(catalog)
     assert "tool_search" not in serialized
     assert '"codex_app"' not in serialized
-    assert "mcp__codex_apps__github" in serialized
+    assert "mcp__codex_apps__github" not in serialized
+    assert "github" not in serialized.lower()
 
 
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 2
-    assert catalog["metadata"]["codex_cli_version"] == "0.144.0"
+    assert catalog["metadata"]["schema_version"] == 3
+    assert catalog["metadata"]["catalog_version"] == "codex-0.144.1"
+    assert catalog["metadata"]["codex_cli_version"] == "0.144.1"
+    assert catalog["metadata"]["codex_source_commit"] == CODEX_0_144_1_SOURCE_COMMIT
     assert catalog["metadata"]["profile_selection"] == "model_group"
     assert catalog["builtin_profile"]["id"] == "builtin"
     assert catalog["builtin_profile"]["name"] == "Chat Default"
@@ -206,11 +248,8 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.write_stdin": "modified",
         "custom.apply_patch": "disabled",
     }
-    assert catalog["builtin_profile"]["inputs"]["namespace.mcp_github"]
-    assert [profile["id"] for profile in catalog["preset_profiles"]] == [
-        "responses_pass_through",
-        "responses_web_run_mapping",
-    ]
+    assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
+    assert catalog["preset_profiles"] == []
 
     assert policies[items["custom.apply_patch"]["policy_id"]]["default"] == ("disabled")
     assert "hosted.image_generation" not in items
@@ -260,6 +299,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "label_i18n": "tools.input.guidance",
             "default": "",
             "visible_when": ["modified"],
+            "ui_hidden": True,
         },
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
@@ -276,13 +316,13 @@ def test_catalog_defaults_and_namespace_image_policy():
             "label_i18n": "tools.input.guidance",
             "default": "",
             "visible_when": ["modified"],
+            "ui_hidden": True,
         }
     ]
 
-    for namespace_id in ("namespace.multi_agent_v1", "namespace.multi_agent_v2"):
+    for namespace_id in _namespaces:
         namespace = items[namespace_id]
         assert namespace["default_expanded"] is True
-        assert policies[namespace["policy_id"]]["default"] == "expanded"
 
     modified = {
         "function.request_user_input",
@@ -299,7 +339,12 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.web.run",
         "namespace.clock.curr_time",
         "namespace.clock.sleep",
-        "namespace.mcp_github",
+        "namespace.memories.add_ad_hoc_note",
+        "namespace.memories.list",
+        "namespace.memories.read",
+        "namespace.memories.search",
+        "namespace.skills.list",
+        "namespace.skills.read",
         "custom.exec",
     }
     assert {
@@ -309,7 +354,15 @@ def test_catalog_defaults_and_namespace_image_policy():
         and policies[item["policy_id"]]["default"] == "modified"
     } == modified
 
-    assert all("description_i18n" not in item for item in items.values())
+    assert items["function.request_user_input"]["description_i18n"] == (
+        "tools.description.append_guidance"
+    )
+    assert items["function.request_user_input"]["description_visible_when"] == [
+        "modified"
+    ]
+    assert (
+        items["function.request_user_input"]["profile_inputs"][0]["ui_hidden"] is True
+    )
 
     builtin = tool_profile_contract()["builtin"]
     assert builtin["namespace.multi_agent_v1"] == "disabled"
@@ -318,7 +371,6 @@ def test_catalog_defaults_and_namespace_image_policy():
         for child_id in _namespaces["namespace.multi_agent_v1"]
     )
     assert builtin["namespace.multi_agent_v2"] == "expanded"
-    assert builtin["namespace.mcp_github"] == "modified"
     assert builtin["function.exec_command"] == "modified"
     assert builtin["function.write_stdin"] == "modified"
     assert builtin["custom.apply_patch"] == "disabled"
@@ -345,6 +397,13 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.write_stdin",
         "namespace.clock.curr_time",
         "namespace.clock.sleep",
+        "namespace.image_gen.imagegen",
+        "namespace.memories.add_ad_hoc_note",
+        "namespace.memories.list",
+        "namespace.memories.read",
+        "namespace.memories.search",
+        "namespace.skills.list",
+        "namespace.skills.read",
         "namespace.web.run",
     }
     assert (
@@ -371,19 +430,11 @@ def test_catalog_defaults_and_namespace_image_policy():
         items[item_id]["name"] for item_id in catalog["custom_injection"]["item_ids"]
     ] == [
         "Read",
-        "Edit",
-        "Write",
         "Glob",
         "Grep",
+        "Edit",
+        "Write",
     ]
-
-
-def test_catalog_source_commit_matches_compatibility_contract():
-    contract = json.loads(CONTRACT_PATH.read_text("utf-8"))
-    assert (
-        load_tool_catalog()["metadata"]["codex_source_commit"]
-        == contract["codex_source_commit"]
-    )
 
 
 def test_catalog_api_is_read_only_and_returns_bundled_resource():
@@ -407,11 +458,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "api.get('/admin/api/tools/catalog')" in html
     for filter_name in (
         "all",
+        "exec_expansion",
         "function",
         "namespace",
-        "hosted",
-        "custom",
-        "custom_injection",
+        "rosetta_injection",
     ):
         assert f'data-tool-filter="{filter_name}"' in page
 
@@ -440,7 +490,11 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "input.type === 'select'" in html
     assert "option.value === value" in html
     assert "input.visible_when" in html
+    assert "!input.ui_hidden" in html
     assert "item.description_visible_when" in html
+    assert "renderToolNamespace(item, placement.child_ids, index)" in html
+    assert "toolPolicyLabel(item, state)" in html
+    assert "description + renderToolProfileInputs(namespaceItem)" in html
     assert "isToolCardContentVisible" in html
     assert "renderToolCatalog();" in html
     assert "${esc(option.label)}" in html
@@ -490,10 +544,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     )
     assert response.status_code == 200
     profiles = json.loads(getattr(response, "body"))["profiles"]
-    assert [(profile["id"], profile["readonly"]) for profile in profiles[:3]] == [
-        ("builtin", True),
-        ("responses_pass_through", True),
-        ("responses_web_run_mapping", True),
+    assert [(profile["id"], profile["readonly"]) for profile in profiles] == [
+        ("builtin", True)
     ]
 
     response = asyncio.run(
@@ -501,24 +553,22 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
             _api_request(
                 app,
                 "PUT",
-                "/admin/api/tools/profiles/responses_pass_through",
+                "/admin/api/tools/profiles/builtin",
                 {"tools": tools},
             )
         )
     )
     assert response.status_code == 400
 
-    pass_through_tools = dict(
-        tool_profile_contract()["readonly"]["responses_pass_through"]["tools"]
-    )
+    builtin_tools = dict(tool_profile_contract()["readonly"]["builtin"]["tools"])
     response = asyncio.run(
         app._dispatch(
             _api_request(
                 app,
                 "PUT",
-                "/admin/api/tools/profiles/responses_pass_through",
+                "/admin/api/tools/profiles/builtin",
                 {
-                    "tools": pass_through_tools,
+                    "tools": builtin_tools,
                     "inputs": {
                         "hosted.web_search": {
                             "provider": "tavily",
@@ -534,20 +584,15 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     response = asyncio.run(
         app._dispatch(_api_request(app, "GET", "/admin/api/tools/profiles"))
     )
-    pass_through = next(
+    builtin = next(
         profile
         for profile in json.loads(getattr(response, "body"))["profiles"]
-        if profile["id"] == "responses_pass_through"
+        if profile["id"] == "builtin"
     )
-    assert pass_through["inputs"]["hosted.web_search"]["token"] == (
-        "bundled-profile-token"
-    )
+    assert builtin["inputs"]["hosted.web_search"]["token"] == ("bundled-profile-token")
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert (
-        saved["tool_profile_input_overrides"]["responses_pass_through"]
-        == (pass_through["inputs"])
-    )
-    assert "responses_pass_through" not in saved["tool_profiles"]
+    assert saved["tool_profile_input_overrides"]["builtin"] == builtin["inputs"]
+    assert "builtin" not in saved["tool_profiles"]
 
     response = asyncio.run(
         app._dispatch(

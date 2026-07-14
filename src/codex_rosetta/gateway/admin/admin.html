@@ -470,6 +470,7 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-namespace-head { display:grid;grid-template-columns:auto minmax(160px,1fr) auto minmax(260px,1.4fr);gap:10px;align-items:center;padding:9px 12px; }
 .tool-namespace-toggle { width:24px;height:24px;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--text);cursor:pointer;line-height:1; }
 .tool-namespace-toggle:hover { border-color:var(--accent); }
+.tool-namespace-details { display:grid;gap:8px;padding:0 12px 10px 46px; }
 .tool-namespace-children { display:grid;grid-template-columns:repeat(4,minmax(0,1fr));align-items:start;gap:10px;padding:12px;border-top:1px solid var(--border);background:var(--bg); }
 .tool-namespace-children[hidden] { display:none; }
 .tool-catalog-status { padding:28px;text-align:center;color:var(--text-dim);font-size:13px; }
@@ -711,11 +712,10 @@ body { padding-bottom: 26px; }
       </div>
       <div class="tools-toolbar" role="toolbar" data-i18n-aria-label="tools.filterLabel" aria-label="Filter tool types">
         <button type="button" class="tool-filter-btn active" data-tool-filter="all" onclick="setToolCatalogFilter('all')" data-i18n="tools.filter.all">All</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="exec_expansion" onclick="setToolCatalogFilter('exec_expansion')" data-i18n="tools.filter.exec_expansion">Exec Expansion</button>
         <button type="button" class="tool-filter-btn" data-tool-filter="function" onclick="setToolCatalogFilter('function')" data-i18n="tools.filter.function">Function</button>
         <button type="button" class="tool-filter-btn" data-tool-filter="namespace" onclick="setToolCatalogFilter('namespace')" data-i18n="tools.filter.namespace">Namespace</button>
-        <button type="button" class="tool-filter-btn" data-tool-filter="hosted" onclick="setToolCatalogFilter('hosted')" data-i18n="tools.filter.hosted">Hosted</button>
-        <button type="button" class="tool-filter-btn" data-tool-filter="custom" onclick="setToolCatalogFilter('custom')" data-i18n="tools.filter.custom">Custom</button>
-        <button type="button" class="tool-filter-btn" data-tool-filter="custom_injection" onclick="setToolCatalogFilter('custom_injection')" data-i18n="tools.filter.injection">Custom Tools (injected by Codex Rosetta)</button>
+        <button type="button" class="tool-filter-btn" data-tool-filter="rosetta_injection" onclick="setToolCatalogFilter('rosetta_injection')" data-i18n="tools.filter.rosetta_injection">Rosetta Injection</button>
       </div>
       <div class="tool-catalog-status" id="toolCatalogStatus" data-i18n="tools.loading">Loading tool catalog...</div>
       <div class="tool-catalog-groups" id="toolCatalogGroups" hidden></div>
@@ -1109,391 +1109,7 @@ function setTheme(name) {
 // Theme is applied after state variables are declared (see below).
 
 // ===================== i18n =====================
-const I18N = {
-  en: {
-    'nav.providers':'Providers', 'nav.models':'Models', 'nav.keys':'API Keys', 'nav.tools':'Tools',
-    'nav.dashboard':'Dashboard', 'nav.logs':'Request Log', 'nav.gatewayLogs':'Gateway Logs',
-    'section.server':'Server Settings', 'section.providers':'Providers', 'section.models':'Model Routing',
-    'section.tools':'Tool Catalog',
-    'section.gatewayLogs':'Gateway Logs',
-    'tools.notice':'This static catalog includes feature-, model-, provider-, and environment-gated tools. It does not describe the tools available to the current request.',
-    'tools.disabledHint':'Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.',
-    'tools.filterLabel':'Filter tool types',
-    'tools.filter.all':'All', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
-    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Custom Tools (injected by Codex Rosetta)',
-    'tools.group.function':'Functions', 'tools.group.namespace':'Namespaces', 'tools.group.hosted':'Hosted Tools',
-    'tools.group.custom':'Custom Tools (from Codex)', 'tools.group.custom_injection':'Custom Tools (injected by Codex Rosetta)',
-    'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
-    'tools.type.custom':'Custom', 'tools.type.custom_injection':'Injection',
-    'tools.policy.disabled':'Disabled', 'tools.policy.passthrough':'Passthrough',
-    'tools.policy.modified':'Modified', 'tools.policy.expanded':'Expanded', 'tools.policy.injected':'Injected',
-    'tools.profile':'Profile', 'tools.cloneProfile':'Create Copy', 'tools.saveProfile':'Save Profile',
-    'tools.resetProfile':'Reset', 'tools.deleteProfile':'Delete Profile', 'tools.profileName':'Profile Name',
-    'tools.createCopy':'Create Copy', 'tools.unsaved':'Unsaved changes',
-    'tools.profileSaved':"Tool profile '{name}' saved", 'tools.profileDeleted':"Tool profile '{name}' deleted",
-    'tools.profileNameRequired':'Enter a unique profile name.', 'tools.builtinReadonly':'The Built-in profile is read-only.',
-    'tools.discardConfirm':'Discard unsaved profile changes?',
-    'tools.default':'Default', 'tools.supported':'Supports', 'tools.defaultInjected':'Injected by default',
-    'tools.route.responses_to_responses':'Responses → Responses', 'tools.route.responses_to_chat':'Responses → Chat',
-    'tools.condition.tavily_unavailable':'when Tavily is unavailable',
-    'tools.routeDefault':'{route}: {policy}', 'tools.routeFallback':' ({condition}: {policy})',
-    'tools.loading':'Loading tool catalog...', 'tools.empty':'No tools match this filter.',
-    'tools.error':'Unable to load the tool catalog: {error}',
-    'tools.catalogMeta':'Codex {version} · source {commit}',
-    'tools.input.guidance':'Additional Tool Guidance',
-    'tools.input.github.owner_guidance':'Owner Guidance',
-    'tools.input.github.repo_guidance':'Repository Guidance',
-    'tools.input.image_gen.base_url':'OpenAI Images Base URL',
-    'tools.input.image_gen.base_url_placeholder':'https://api.openai.com/v1',
-    'tools.input.image_gen.token':'OpenAI API Token',
-    'tools.input.image_gen.token_placeholder':'Required when status is Modified',
-    'tools.input.web_search.provider':'Search Provider',
-    'tools.input.web_search.token':'Tavily API Token',
-    'tools.input.web_search.token_placeholder':'Required when status is Modified',
-    'tools.input.web_run.token':'API Token',
-    'tools.input.web_run.token_placeholder':'Search will not work properly if left blank.',
-    'label.globalProxy':'Global Proxy URL',
-    'label.globalProxy.hint':'Applies to all providers unless overridden per-provider.',
-    'label.requestBodyLimit':'Maximum Request Body',
-    'label.requestBodyLimitHint':'Limits each inbound request before it is buffered. Unlimited may allow one client to exhaust gateway memory.',
-    'label.unlimited':'Unlimited',
-    'label.localMode':'Local mode',
-    'label.localModeHint':'Automatically maintains the Codex model catalog and local gateway provider.',
-    'confirm.localMode':'Local mode will write model_catalog.json under {codex_home}, configure the codex_rosetta provider in config.toml, and create a stable gateway API key named codex.{existing} Continue?',
-    'confirm.localModeExisting':' The existing model_catalog_json setting will be cleared.',
-    'label.streamTraceEnabled':'Enable stream trace JSONL',
-    'label.streamTraceHint':'Records upstream chunks, IR events, and downstream SSE events for matching streaming requests.',
-    'label.streamTracePath':'Trace File Path',
-    'label.streamTracePathHint':'Leave empty to use ~/.config/codex-rosetta-gateway/log.jsonl.',
-    'label.streamTraceFilter':'Filter',
-    'label.streamTraceFilterHint':'Comma-separated substrings matched against model, provider name, source provider, and target provider. Leave empty to trace all streaming requests.',
-    'label.streamTraceMaxChars':'Max String Characters',
-    'btn.save':'Save', 'modal.settings':'Settings', 'label.theme':'Theme', 'label.language':'Language', 'theme.light':'Light', 'theme.dark':'Dark', 'btn.cancel':'Cancel', 'btn.close':'Close',
-    'btn.addProvider':'+ Add Provider', 'btn.addModel':'+ Add Model',
-    'btn.edit':'Edit', 'btn.delete':'Delete', 'btn.rotate':'Rotate', 'btn.resetFilters':'Reset Filters',
-    'btn.prev':'Prev', 'btn.next':'Next', 'btn.test':'Test',
-    'label.providerName':'Provider Name', 'label.providerType':'Provider Type',
-    'label.providerVendor':'Provider', 'label.providerProtocol':'Protocol',
-    'label.selectOne':'— select —',
-    'label.baseUrl':'Base URL',
-    'label.apiKey':'API Key (or ${ENV_VAR} placeholder)', 'label.keyUnchangedHint':'Leave blank to keep current key',
-    'label.proxyUrl':'Proxy URL (optional, overrides global)',
-    'label.modelName':'Model Name', 'label.provider':'Provider', 'label.upstreamModel':'Upstream Model', 'label.capabilities':'Capabilities',
-    'label.reasoningConfig':'Reasoning Config', 'label.reasoningMapping':'Reasoning Mapping', 'label.inherited':'inherited',
-    'label.toolAdaptionCodex':'Tool Adaption for Codex', 'label.localizeCodeEditingTools':'Localize code editing tools', 'label.useApplyPatchForCodeEdits':'Use apply_patch instead of python for code edits', 'label.removeImageGeneration':'Remove `image_generation`', 'label.toolDescriptionOptimization':'Enable tool description optimization', 'label.phaseDetection':'Enable phase detection to collapse work before final answer', 'label.toolCallCacheTtl':'Tool call mapping cache TTL (hours)',
-    'modal.addProvider':'Add Provider', 'modal.editProvider':'Edit Provider',
-    'modal.addModel':'Add Model', 'modal.editModel':'Edit Model',
-    'col.model':'Model', 'col.provider':'Provider', 'col.time':'Time',
-    'col.sourceTarget':'Source \u2192 Target', 'col.mode':'Mode',
-    'col.status':'Status', 'col.duration':'Duration', 'col.requests':'Requests',
-    'stat.totalRequests':'Total Requests', 'stat.errorRate':'Error Rate',
-    'stat.activeStreams':'Active Streams', 'stat.uptime':'Uptime',
-    'chart.throughput':'Throughput (req/s)', 'chart.latency':'Latency (ms)',
-    'section.breakdown':'Per-Provider Breakdown',
-    'metrics.rebuild':'Rebuild Counters', 'toast.metricsRebuilt':'Counters rebuilt from {n} log entries',
-    'section.profiling':'Profiling',
-    'profiling.enable':'Enable', 'profiling.disable':'Disable', 'profiling.clear':'Clear',
-    'profiling.requests':'Requests:', 'profiling.flamegraph':'Flamegraph',
-    'profiling.empty':'No profiling results. Enable profiling and send requests.',
-    'profiling.remaining':'{n} remaining',
-    'profiling.downloadAll':'Download All', 'profiling.hint':'Results are in-memory only and will be lost on restart. Download important results.',
-    'filter.allModels':'All Models', 'filter.allProviders':'All Providers',
-    'filter.allStatus':'All Status', 'filter.ok':'OK (2xx/3xx)', 'filter.error':'Error (4xx/5xx)',
-    'test.text':'Simple Text', 'test.stream':'Stream',
-    'test.tools':'Function Call', 'test.vision':'Image Understanding', 'test.reasoning':'Reasoning',
-    'empty.providers':'No providers configured.', 'empty.models':'No models configured.',
-    'empty.modelGroups':'No model groups configured.', 'empty.standaloneModels':'No standalone models configured.',
-    'empty.logs':'No requests logged yet', 'empty.data':'No data yet',
-    'toast.serverSaved':'Server settings saved',
-    'toast.streamTraceSaved':'Gateway log settings saved',
-    'toast.providerSaved':"Provider '{name}' saved",
-    'toast.providerDeleted':"Provider '{name}' deleted",
-    'provider.enabled':'Enabled', 'provider.disabled':'Disabled',
-    'provider.anthropic':'Anthropic', 'provider.custom':'Custom', 'provider.deepseek':'DeepSeek', 'provider.google':'Google',
-    'provider.kimi':'Kimi', 'provider.minimax':'MiniMax',
-    'provider.minimaxChina':'MiniMax (China)', 'provider.minimaxInternational':'MiniMax (International)',
-    'provider.moonshotChina':'Moonshot (Kimi, China)', 'provider.moonshotInternational':'Moonshot (Kimi, International)',
-    'provider.openai':'OpenAI', 'provider.openrouter':'Open Router', 'provider.opencodeGo':'Opencode Go',
-    'provider.qwen':'Qwen', 'provider.zhipu':'Zhipu (GLM)',
-    'providerVariant.official':'Official', 'providerVariant.china':'China', 'providerVariant.international':'International', 'providerVariant.custom':'Custom',
-    'protocol.responsesPassthrough':'OpenAI Responses (Tool Mapping only)', 'protocol.responsesRosetta':'OpenAI Responses (Rosetta)',
-    'protocol.responsesPassthroughHint':'Best for official OpenAI or GPT proxy services. Only the selected Tool Profile mappings are applied; other Responses content passes through.',
-    'protocol.responsesRosettaHint':'Best for other model providers that support the Responses API, such as Qwen.',
-    'protocol.chat':'OpenAI Chat Completions',
-    'protocol.anthropic':'Anthropic', 'protocol.google':'Google',
-    'protocol.unsupportedSuffix':'May not compatible',
-    'toast.modelSaved':"Model '{name}' saved",
-    'toast.modelDeleted':"Model '{name}' deleted",
-    'toast.modelGroupSaved':"Model group '{name}' saved",
-    'toast.modelGroupDeleted':"Model group '{name}' deleted",
-    'confirm.deleteProvider':"Delete provider '{name}'?",
-    'confirm.deleteProviderTitle':'Delete Provider',
-    'confirm.typeToConfirm':"To confirm, type {name} below",
-    'confirm.cascadeWarning':'{count} model(s) will also be deleted:',
-    'confirm.deleteModel':"Delete model '{name}'?",
-    'error.fieldsRequired':'Name, Base URL, and API Key are required',
-    'error.modelRequired':'All fields are required',
-    'error.modelGroupRequired':'Model group name, provider, and at least one model mapping are required',
-    'page.info':'Page {current} / {total} ({count} total)',
-    'test.connecting':'Connecting...', 'test.cancel':'Cancel', 'test.sending':'Sending request...', 'test.rawRequest':'Raw Request', 'test.rawResponse':'Raw Response', 'test.testImage':'Test Image',
-    'test.emptyResponse':'(empty response)',
-    'hint.docker':'In Docker, "localhost" refers to the container itself. Use "host.docker.internal" (macOS/Windows) or "172.17.0.1" (Linux) to reach the host machine.',
-    'diag.host':'Host IP', 'diag.ip':'IP Location', 'diag.google':'Google', 'diag.runDiag':'Network Diagnostics',
-    'diag.testing':'testing...', 'diag.unknown':'unknown', 'diag.direct':'direct, no proxy',
-    'label.searchModels':'Search models...',
-    'label.searchProviders':'Search providers...',
-    'label.keyCount':'{count} keys (rotation)',
-    'label.addKey':'Add key',
-    'label.gridView':'Grid view', 'label.listView':'List view',
-    'model.count':'{shown} / {total} models',
-    'provider.count':'{shown} / {total} providers',
-    'provider.countTotal':'{total} providers',
-    'empty.searchResults':'No matching results.',
-    'section.apiKeys':'API Keys',
-    'btn.generateKey':'+ Generate Key', 'btn.generate':'Generate', 'btn.copy':'Copy', 'btn.clone':'Clone',
-    'col.label':'Label', 'col.key':'Key', 'col.created':'Created',
-    'col.apiKey':'API Key', 'col.clientIp':'Client IP',
-    'modal.generateKey':'Generate API Key',
-    'modal.keyCreated':'Key Created',
-    'label.keyLabel':'Label (optional)',
-    'label.keyManual':'Manual key (leave empty to auto-generate)',
-    'keys.description':'Manage gateway API keys used to authenticate requests to /v1/* endpoints.',
-    'keys.copyWarning':'Copy this key now. It will not be shown again in full.',
-    'keys.noKeys':'No API keys configured. Endpoints are open without authentication.',
-    'toast.keySaved':'API key created', 'toast.keyRotated':'API key \'{label}\' rotated',
-    'toast.keyDeleted':'API key deleted',
-    'toast.keyLabelUpdated':'Label updated',
-    'toast.keyCopied':'Key copied to clipboard',
-    'toast.copied':'Copied to clipboard',
-    'confirm.deleteKey':"Delete API key '{label}'?",
-    'filter.allKeys':'All Keys',
-    'btn.fetchModels':'\u2B07 Fetch from Provider',
-    'btn.addModelGroup':'+ Add Model Group',
-    'btn.addMapping':'+ Add Mapping',
-    'btn.selectAll':'Select All', 'btn.deselectAll':'Deselect All',
-    'btn.addSelected':'Add Selected',
-    'modal.fetchModels':'Fetch Models from Provider',
-    'modal.addModelGroup':'Add Model Group',
-    'modal.editModelGroup':'Edit Model Group',
-    'label.selectProvider':'Select Provider',
-    'label.modelPrefix':'Prefix:',
-    'label.modelGroupName':'Model Group Name',
-    'label.modelMappings':'Model Mappings',
-    'label.llm':'LLM',
-    'fetch.loading':'Fetching models...',
-    'fetch.count':'{checked} / {total} selected',
-    'fetch.noModels':'No models found from this provider.',
-    'toast.modelsAdded':'{count} model(s) added',
-    'toast.modelsRemoved':'{count} model(s) removed',
-    'toast.modelsAllExist':'All selected models already exist',
-    'btn.applyChanges':'Apply Changes',
-    'login.subtitle':'Admin panel is password-protected',
-    'login.btn':'Login',
-    'login.error':'Invalid password',
-    'btn.logout':'Logout',
-    'label.systemTime':'System Time',
-    'footer.db':'DB', 'footer.ok':'ok', 'footer.err':'err', 'footer.req':'Req',
-    'footer.tip.req':'Total requests since server start (lifetime counter, never reset by log clearing)',
-    'footer.tip.ok':'Logged success entries / retention cap (status < 400)',
-    'footer.tip.err':'Logged error entries / retention cap (status \u2265 400)',
-    'footer.tip.db':'SQLite database file size',
-    'footer.tip.wal':'SQLite write-ahead log size',
-    'confirm.sure':'Sure?',
-    'confirm.yes':'Yes',
-  },
-  zh: {
-    'btn.logout':'\u9000\u51fa\u767b\u5f55',
-    'nav.providers':'\u670d\u52a1\u65b9', 'nav.models':'\u6a21\u578b', 'nav.keys':'API \u5bc6\u94a5', 'nav.tools':'\u5de5\u5177',
-    'nav.dashboard':'\u76d1\u63a7\u9762\u677f', 'nav.logs':'\u8bf7\u6c42\u65e5\u5fd7', 'nav.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
-    'section.server':'\u670d\u52a1\u5668\u8bbe\u7f6e', 'section.providers':'\u670d\u52a1\u65b9', 'section.models':'\u6a21\u578b\u8def\u7531',
-    'section.tools':'\u5de5\u5177\u76ee\u5f55',
-    'section.gatewayLogs':'\u7f51\u5173\u65e5\u5fd7',
-    'tools.notice':'\u6b64\u9759\u6001\u76ee\u5f55\u5305\u542b\u53d7\u529f\u80fd\u3001\u6a21\u578b\u3001\u670d\u52a1\u65b9\u6216\u73af\u5883\u6761\u4ef6\u63a7\u5236\u7684\u5de5\u5177\uff0c\u4e0d\u4ee3\u8868\u5f53\u524d\u8bf7\u6c42\u5b9e\u9645\u53ef\u7528\u7684\u5de5\u5177\u3002',
-    'tools.disabledHint':'\u201c\u7981\u7528\u201d\u4ec5\u8868\u793a\u4e0d\u5411\u4e0a\u6e38\u6a21\u578b\u76f4\u63a5\u66b4\u9732\uff1b\u5185\u90e8\u8f6c\u6362\u4ecd\u53ef\u5c06\u8c03\u7528\u6620\u5c04\u5230\u8be5\u5de5\u5177\u3002',
-    'tools.filterLabel':'\u8fc7\u6ee4\u5de5\u5177\u7c7b\u578b',
-    'tools.filter.all':'\u5168\u90e8', 'tools.filter.function':'Function', 'tools.filter.namespace':'Namespace',
-    'tools.filter.hosted':'Hosted', 'tools.filter.custom':'Custom', 'tools.filter.injection':'Codex Rosetta \u6ce8\u5165\u7684 Custom \u5de5\u5177',
-    'tools.group.function':'Function \u5de5\u5177', 'tools.group.namespace':'Namespace \u5de5\u5177', 'tools.group.hosted':'Hosted \u5de5\u5177',
-    'tools.group.custom':'\u6765\u81ea Codex \u7684 Custom \u5de5\u5177', 'tools.group.custom_injection':'Codex Rosetta \u6ce8\u5165\u7684 Custom \u5de5\u5177',
-    'tools.type.function':'Function', 'tools.type.namespace':'Namespace', 'tools.type.hosted':'Hosted',
-    'tools.type.custom':'Custom', 'tools.type.custom_injection':'\u6ce8\u5165',
-    'tools.policy.disabled':'\u7981\u7528', 'tools.policy.passthrough':'\u76f4\u4f20',
-    'tools.policy.modified':'\u4fee\u6539', 'tools.policy.expanded':'\u5c55\u5f00', 'tools.policy.injected':'\u6ce8\u5165',
-    'tools.profile':'Profile', 'tools.cloneProfile':'\u521b\u5efa\u526f\u672c', 'tools.saveProfile':'\u4fdd\u5b58 Profile',
-    'tools.resetProfile':'\u91cd\u7f6e', 'tools.deleteProfile':'\u5220\u9664 Profile', 'tools.profileName':'Profile \u540d\u79f0',
-    'tools.createCopy':'\u521b\u5efa\u526f\u672c', 'tools.unsaved':'\u6709\u672a\u4fdd\u5b58\u7684\u4fee\u6539',
-    'tools.profileSaved':"Tool Profile '{name}' \u5df2\u4fdd\u5b58", 'tools.profileDeleted':"Tool Profile '{name}' \u5df2\u5220\u9664",
-    'tools.profileNameRequired':'\u8bf7\u8f93\u5165\u552f\u4e00\u7684 Profile \u540d\u79f0\u3002', 'tools.builtinReadonly':'Built-in Profile \u4e3a\u53ea\u8bfb\u3002',
-    'tools.discardConfirm':'\u653e\u5f03\u5f53\u524d\u672a\u4fdd\u5b58\u7684 Profile \u4fee\u6539\uff1f',
-    'tools.default':'\u9ed8\u8ba4', 'tools.supported':'\u652f\u6301', 'tools.defaultInjected':'\u9ed8\u8ba4\u6ce8\u5165',
-    'tools.route.responses_to_responses':'Responses \u2192 Responses', 'tools.route.responses_to_chat':'Responses \u2192 Chat',
-    'tools.condition.tavily_unavailable':'Tavily \u4e0d\u53ef\u7528\u65f6',
-    'tools.routeDefault':'{route}\uff1a{policy}', 'tools.routeFallback':'\uff08{condition}\uff1a{policy}\uff09',
-    'tools.loading':'\u6b63\u5728\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\u2026', 'tools.empty':'\u6ca1\u6709\u5339\u914d\u5f53\u524d\u8fc7\u6ee4\u6761\u4ef6\u7684\u5de5\u5177\u3002',
-    'tools.error':'\u65e0\u6cd5\u52a0\u8f7d\u5de5\u5177\u76ee\u5f55\uff1a{error}',
-    'tools.catalogMeta':'Codex {version} \u00b7 \u6e90\u7801 {commit}',
-    'tools.input.guidance':'\u989d\u5916\u5de5\u5177\u4f7f\u7528\u6307\u5bfc',
-    'tools.input.github.owner_guidance':'Owner \u4f7f\u7528\u6307\u5bfc',
-    'tools.input.github.repo_guidance':'\u4ed3\u5e93\u4f7f\u7528\u6307\u5bfc',
-    'tools.input.image_gen.base_url':'OpenAI Images Base URL',
-    'tools.input.image_gen.base_url_placeholder':'https://api.openai.com/v1',
-    'tools.input.image_gen.token':'OpenAI API Token',
-    'tools.input.image_gen.token_placeholder':'\u72b6\u6001\u4e3a Modified \u65f6\u5fc5\u586b',
-    'tools.input.web_search.provider':'\u641c\u7d22\u63d0\u4f9b\u5546',
-    'tools.input.web_search.token':'Tavily API Token',
-    'tools.input.web_search.token_placeholder':'\u72b6\u6001\u4e3a Modified \u65f6\u5fc5\u586b',
-    'tools.input.web_run.token':'API Token',
-    'tools.input.web_run.token_placeholder':'\u4e0d\u586b\u5199\u65f6\u65e0\u6cd5\u6b63\u5e38\u8fdb\u884c\u641c\u7d22\u3002',
-    'label.globalProxy':'\u5168\u5c40\u4ee3\u7406 URL',
-    'label.globalProxy.hint':'\u9002\u7528\u4e8e\u6240\u6709\u670d\u52a1\u65b9\uff0c\u9664\u975e\u5355\u72ec\u8bbe\u7f6e\u4e86\u4ee3\u7406\u3002',
-    'label.requestBodyLimit':'\u6700\u5927\u8bf7\u6c42\u4f53',
-    'label.requestBodyLimitHint':'\u5728\u7f13\u51b2\u524d\u9650\u5236\u6bcf\u4e2a\u5165\u7ad9\u8bf7\u6c42\u3002\u4e0d\u9650\u5236\u53ef\u80fd\u4f7f\u5355\u4e2a\u5ba2\u6237\u7aef\u8017\u5c3d\u7f51\u5173\u5185\u5b58\u3002',
-    'label.unlimited':'\u4e0d\u9650\u5236',
-    'label.localMode':'\u672c\u5730\u6a21\u5f0f',
-    'label.localModeHint':'\u81ea\u52a8\u7ef4\u62a4 Codex \u6a21\u578b\u76ee\u5f55\u548c\u672c\u5730\u7f51\u5173 Provider\u3002',
-    'confirm.localMode':'\u672c\u5730\u6a21\u5f0f\u4f1a\u5728{codex_home}\u4e0b\u5199\u5165model_catalog.json\uff0c\u5728config.toml\u91cc\u914d\u7f6ecodex_rosetta Provider\uff0c\u5e76\u521b\u5efa\u4e00\u4e2a\u540d\u4e3acodex\u4e14\u4e0d\u4f1a\u81ea\u52a8\u8f6e\u6362\u7684\u7f51\u5173API Key\u3002{existing}\u662f\u5426\u7ee7\u7eed\u3002',
-    'confirm.localModeExisting':'\u5df2\u6709\u7684\u4f1a\u88ab\u6e05\u9664\u3002',
-    'label.streamTraceEnabled':'\u542f\u7528\u6d41\u5f0f trace JSONL',
-    'label.streamTraceHint':'\u8bb0\u5f55\u5339\u914d\u7684\u6d41\u5f0f\u8bf7\u6c42\u7684\u4e0a\u6e38 chunk\u3001IR event \u548c\u4e0b\u6e38 SSE event\u3002',
-    'label.streamTracePath':'Trace \u6587\u4ef6\u8def\u5f84',
-    'label.streamTracePathHint':'\u7559\u7a7a\u5219\u4f7f\u7528 ~/.config/codex-rosetta-gateway/log.jsonl\u3002',
-    'label.streamTraceFilter':'\u8fc7\u6ee4\u5668',
-    'label.streamTraceFilterHint':'\u9017\u53f7\u5206\u9694\u7684\u5b50\u4e32\uff0c\u7528\u4e8e\u5339\u914d model\u3001provider name\u3001source provider \u548c target provider\u3002\u7559\u7a7a\u5219\u8bb0\u5f55\u6240\u6709\u6d41\u5f0f\u8bf7\u6c42\u3002',
-    'label.streamTraceMaxChars':'\u5b57\u7b26\u4e32\u6700\u5927\u957f\u5ea6',
-    'modal.settings':'\u8bbe\u7f6e', 'label.theme':'\u4e3b\u9898', 'label.language':'\u8bed\u8a00', 'theme.light':'\u6d45\u8272', 'theme.dark':'\u6df1\u8272',
-    'btn.save':'\u4fdd\u5b58', 'btn.cancel':'\u53d6\u6d88', 'btn.close':'\u5173\u95ed',
-    'btn.addProvider':'+ \u6dfb\u52a0\u670d\u52a1\u65b9', 'btn.addModel':'+ \u6dfb\u52a0\u6a21\u578b',
-    'btn.edit':'\u7f16\u8f91', 'btn.delete':'\u5220\u9664', 'btn.rotate':'\u8f6e\u6362', 'btn.resetFilters':'\u91cd\u7f6e\u8fc7\u6ee4\u5668',
-    'btn.prev':'\u4e0a\u4e00\u9875', 'btn.next':'\u4e0b\u4e00\u9875', 'btn.test':'\u6d4b\u8bd5',
-    'label.providerName':'\u670d\u52a1\u65b9\u540d\u79f0', 'label.providerType':'\u670d\u52a1\u65b9\u7c7b\u578b',
-    'label.providerVendor':'\u4f9b\u5e94\u5546', 'label.providerProtocol':'\u534f\u8bae',
-    'label.selectOne':'\u2014 \u8bf7\u9009\u62e9 \u2014',
-    'label.baseUrl':'Base URL',
-    'label.apiKey':'API Key\uff08\u6216 ${ENV_VAR} \u5360\u4f4d\u7b26\uff09', 'label.keyUnchangedHint':'\u7559\u7a7a\u4ee5\u4fdd\u7559\u5f53\u524d\u5bc6\u94a5',
-    'label.proxyUrl':'\u4ee3\u7406 URL\uff08\u53ef\u9009\uff0c\u8986\u76d6\u5168\u5c40\u8bbe\u7f6e\uff09',
-    'label.modelName':'\u6a21\u578b\u540d\u79f0', 'label.provider':'\u670d\u52a1\u65b9', 'label.upstreamModel':'\u4e0a\u6e38\u6a21\u578b', 'label.capabilities':'\u80fd\u529b',
-    'label.reasoningConfig':'\u63a8\u7406\u914d\u7f6e', 'label.reasoningMapping':'\u63a8\u7406\u6620\u5c04', 'label.inherited':'\u7ee7\u627f',
-    'label.toolAdaptionCodex':'Tool Adaption for Codex', 'label.localizeCodeEditingTools':'\u672c\u5730\u5316\u4ee3\u7801\u7f16\u8f91\u5de5\u5177', 'label.useApplyPatchForCodeEdits':'\u4ee3\u7801\u7f16\u8f91\u4f7f\u7528 apply_patch \u800c\u4e0d\u662f python', 'label.removeImageGeneration':'\u79fb\u9664 `image_generation`', 'label.toolDescriptionOptimization':'\u542f\u7528\u5de5\u5177\u63cf\u8ff0\u4f18\u5316', 'label.phaseDetection':'\u542f\u7528 phase detection \u4ee5\u6298\u53e0 final answer \u524d\u7684\u5de5\u4f5c\u8fc7\u7a0b', 'label.toolCallCacheTtl':'Tool call mapping cache TTL\uff08\u5c0f\u65f6\uff09',
-    'modal.addProvider':'\u6dfb\u52a0\u670d\u52a1\u65b9', 'modal.editProvider':'\u7f16\u8f91\u670d\u52a1\u65b9',
-    'modal.addModel':'\u6dfb\u52a0\u6a21\u578b', 'modal.editModel':'\u7f16\u8f91\u6a21\u578b',
-    'col.model':'\u6a21\u578b', 'col.provider':'\u670d\u52a1\u65b9', 'col.time':'\u65f6\u95f4',
-    'col.sourceTarget':'\u6765\u6e90 \u2192 \u76ee\u6807', 'col.mode':'\u6a21\u5f0f',
-    'col.status':'\u72b6\u6001', 'col.duration':'\u8017\u65f6', 'col.requests':'\u8bf7\u6c42\u6570',
-    'stat.totalRequests':'\u603b\u8bf7\u6c42\u6570', 'stat.errorRate':'\u9519\u8bef\u7387',
-    'stat.activeStreams':'\u6d3b\u8dc3\u6d41', 'stat.uptime':'\u8fd0\u884c\u65f6\u95f4',
-    'chart.throughput':'\u541e\u5410\u91cf (req/s)', 'chart.latency':'\u5ef6\u8fdf (ms)',
-    'section.breakdown':'\u670d\u52a1\u65b9\u7edf\u8ba1',
-    'metrics.rebuild':'\u91cd\u5efa\u8ba1\u6570\u5668', 'toast.metricsRebuilt':'\u5df2\u4ece {n} \u6761\u65e5\u5fd7\u91cd\u5efa\u8ba1\u6570\u5668',
-    'section.profiling':'\u6027\u80fd\u5206\u6790',
-    'profiling.enable':'\u542f\u7528', 'profiling.disable':'\u505c\u6b62', 'profiling.clear':'\u6e05\u7a7a',
-    'profiling.requests':'\u8bf7\u6c42\u6570\uff1a', 'profiling.flamegraph':'\u706b\u7130\u56fe',
-    'profiling.empty':'\u6682\u65e0\u5206\u6790\u7ed3\u679c\u3002\u542f\u7528\u540e\u53d1\u9001\u8bf7\u6c42\u5373\u53ef\u91c7\u96c6\u3002',
-    'profiling.remaining':'\u5269\u4f59 {n} \u4e2a',
-    'profiling.downloadAll':'\u5168\u90e8\u4e0b\u8f7d', 'profiling.hint':'\u7ed3\u679c\u4ec5\u5b58\u4e8e\u5185\u5b58\uff0c\u91cd\u542f\u540e\u4e22\u5931\u3002\u8bf7\u53ca\u65f6\u4e0b\u8f7d\u91cd\u8981\u7ed3\u679c\u3002',
-    'filter.allModels':'\u5168\u90e8\u6a21\u578b', 'filter.allProviders':'\u5168\u90e8\u670d\u52a1\u65b9',
-    'filter.allStatus':'\u5168\u90e8\u72b6\u6001', 'filter.ok':'\u6b63\u5e38 (2xx/3xx)', 'filter.error':'\u9519\u8bef (4xx/5xx)',
-    'test.text':'\u7b80\u5355\u6587\u672c', 'test.stream':'\u6d41\u5f0f',
-    'test.tools':'\u51fd\u6570\u8c03\u7528', 'test.vision':'\u56fe\u50cf\u7406\u89e3', 'test.reasoning':'\u63a8\u7406',
-    'empty.providers':'\u6682\u65e0\u670d\u52a1\u65b9\u914d\u7f6e\u3002', 'empty.models':'\u6682\u65e0\u6a21\u578b\u914d\u7f6e\u3002',
-    'empty.modelGroups':'\u6682\u65e0\u6a21\u578b\u7ec4\u3002', 'empty.standaloneModels':'\u6682\u65e0\u72ec\u7acb\u6a21\u578b\u914d\u7f6e\u3002',
-    'empty.logs':'\u6682\u65e0\u8bf7\u6c42\u8bb0\u5f55', 'empty.data':'\u6682\u65e0\u6570\u636e',
-    'toast.serverSaved':'\u670d\u52a1\u5668\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
-    'toast.streamTraceSaved':'\u7f51\u5173\u65e5\u5fd7\u8bbe\u7f6e\u5df2\u4fdd\u5b58',
-    'toast.providerSaved':"\u670d\u52a1\u65b9 '{name}' \u5df2\u4fdd\u5b58",
-    'toast.providerDeleted':"\u670d\u52a1\u65b9 '{name}' \u5df2\u5220\u9664",
-    'provider.enabled':'\u5df2\u542f\u7528', 'provider.disabled':'\u5df2\u7981\u7528',
-    'provider.anthropic':'Anthropic', 'provider.custom':'Custom', 'provider.deepseek':'DeepSeek', 'provider.google':'Google',
-    'provider.kimi':'Kimi', 'provider.minimax':'MiniMax',
-    'provider.minimaxChina':'MiniMax\uff08\u4e2d\u56fd\uff09', 'provider.minimaxInternational':'MiniMax\uff08\u56fd\u9645\uff09',
-    'provider.moonshotChina':'Moonshot\uff08Kimi\uff0c\u4e2d\u56fd\uff09', 'provider.moonshotInternational':'Moonshot\uff08Kimi\uff0c\u56fd\u9645\uff09',
-    'provider.openai':'OpenAI', 'provider.openrouter':'Open Router', 'provider.opencodeGo':'Opencode Go',
-    'provider.qwen':'\u901a\u4e49\u5343\u95ee', 'provider.zhipu':'\u667a\u8c31 GLM',
-    'providerVariant.official':'\u5b98\u65b9', 'providerVariant.china':'\u4e2d\u56fd\u7ad9', 'providerVariant.international':'\u56fd\u9645\u7ad9', 'providerVariant.custom':'\u81ea\u5b9a\u4e49',
-    'protocol.responsesPassthrough':'OpenAI Responses (Tool Mapping only)', 'protocol.responsesRosetta':'OpenAI Responses (Rosetta)',
-    'protocol.responsesPassthroughHint':'适合 OpenAI 官方或 GPT 中转站。仅应用所选 Tool Profile 的工具映射，其他 Responses 内容直通。',
-    'protocol.responsesRosettaHint':'适合其他支持 Responses 协议的模型提供商，如千问。',
-    'protocol.chat':'OpenAI Chat Completions',
-    'protocol.anthropic':'Anthropic', 'protocol.google':'Google',
-    'protocol.unsupportedSuffix':'May not compatible',
-    'toast.modelSaved':"\u6a21\u578b '{name}' \u5df2\u4fdd\u5b58",
-    'toast.modelDeleted':"\u6a21\u578b '{name}' \u5df2\u5220\u9664",
-    'toast.modelGroupSaved':"\u6a21\u578b\u7ec4 '{name}' \u5df2\u4fdd\u5b58",
-    'toast.modelGroupDeleted':"\u6a21\u578b\u7ec4 '{name}' \u5df2\u5220\u9664",
-    'confirm.deleteProvider':"\u786e\u5b9a\u5220\u9664\u670d\u52a1\u65b9 '{name}'\uff1f",
-    'confirm.deleteProviderTitle':'\u5220\u9664\u670d\u52a1\u65b9',
-    'confirm.typeToConfirm':"\u8bf7\u8f93\u5165 {name} \u4ee5\u786e\u8ba4\u5220\u9664",
-    'confirm.cascadeWarning':'\u4ee5\u4e0b {count} \u4e2a\u6a21\u578b\u4e5f\u5c06\u88ab\u5220\u9664\uff1a',
-    'confirm.deleteModel':"\u786e\u5b9a\u5220\u9664\u6a21\u578b '{name}'\uff1f",
-    'error.fieldsRequired':'\u540d\u79f0\u3001Base URL \u548c API Key \u4e3a\u5fc5\u586b\u9879',
-    'error.modelRequired':'\u6240\u6709\u5b57\u6bb5\u4e3a\u5fc5\u586b\u9879',
-    'error.modelGroupRequired':'\u6a21\u578b\u7ec4\u540d\u79f0\u3001\u670d\u52a1\u65b9\u548c\u81f3\u5c11\u4e00\u4e2a\u6a21\u578b\u6620\u5c04\u4e3a\u5fc5\u586b\u9879',
-    'page.info':'\u7b2c {current} / {total} \u9875\uff08\u5171 {count} \u6761\uff09',
-    'test.connecting':'\u8fde\u63a5\u4e2d...', 'test.cancel':'\u53d6\u6d88', 'test.sending':'\u53d1\u9001\u8bf7\u6c42\u4e2d...', 'test.rawRequest':'\u539f\u59cb\u8bf7\u6c42', 'test.rawResponse':'\u539f\u59cb\u54cd\u5e94', 'test.testImage':'\u6d4b\u8bd5\u56fe\u7247',
-    'test.emptyResponse':'\uff08\u7a7a\u54cd\u5e94\uff09',
-    'hint.docker':'\u5728 Docker \u4e2d\uff0c"localhost" \u6307\u7684\u662f\u5bb9\u5668\u81ea\u8eab\u3002\u8981\u8bbf\u95ee\u5bbf\u4e3b\u673a\uff0c\u8bf7\u4f7f\u7528 "host.docker.internal"\uff08macOS/Windows\uff09\u6216 "172.17.0.1"\uff08Linux\uff09\u3002',
-    'diag.host':'\u4e3b\u673a IP', 'diag.ip':'IP \u5f52\u5c5e', 'diag.google':'Google', 'diag.runDiag':'\u7f51\u7edc\u8bca\u65ad',
-    'diag.testing':'\u68c0\u6d4b\u4e2d...', 'diag.unknown':'\u672a\u77e5', 'diag.direct':'\u76f4\u8fde\uff0c\u672a\u4f7f\u7528\u4ee3\u7406',
-    'label.searchModels':'\u641c\u7d22\u6a21\u578b...',
-    'label.searchProviders':'\u641c\u7d22\u670d\u52a1\u65b9...',
-    'label.keyCount':'{count} \u4e2a\u5bc6\u94a5\uff08\u8f6e\u8f6c\uff09',
-    'label.addKey':'\u6dfb\u52a0\u5bc6\u94a5',
-    'label.gridView':'\u7f51\u683c\u89c6\u56fe', 'label.listView':'\u5217\u8868\u89c6\u56fe',
-    'model.count':'{shown} / {total} \u4e2a\u6a21\u578b',
-    'provider.count':'{shown} / {total} \u4e2a\u670d\u52a1\u65b9',
-    'provider.countTotal':'{total} \u4e2a\u670d\u52a1\u65b9',
-    'empty.searchResults':'\u65e0\u5339\u914d\u7ed3\u679c\u3002',
-    'section.apiKeys':'API \u5bc6\u94a5',
-    'btn.generateKey':'+ \u751f\u6210\u5bc6\u94a5', 'btn.generate':'\u751f\u6210', 'btn.copy':'\u590d\u5236', 'btn.clone':'\u514b\u9686',
-    'col.label':'\u6807\u7b7e', 'col.key':'\u5bc6\u94a5', 'col.created':'\u521b\u5efa\u65f6\u95f4',
-    'col.apiKey':'API \u5bc6\u94a5', 'col.clientIp':'\u5ba2\u6237\u7aef IP',
-    'modal.generateKey':'\u751f\u6210 API \u5bc6\u94a5',
-    'modal.keyCreated':'\u5bc6\u94a5\u5df2\u521b\u5efa',
-    'label.keyLabel':'\u6807\u7b7e\uff08\u53ef\u9009\uff09',
-    'label.keyManual':'\u624b\u52a8\u8f93\u5165\u5bc6\u94a5\uff08\u7559\u7a7a\u5219\u81ea\u52a8\u751f\u6210\uff09',
-    'keys.description':'\u7ba1\u7406\u7f51\u5173 API \u5bc6\u94a5\uff0c\u7528\u4e8e\u8ba4\u8bc1 /v1/* \u7aef\u70b9\u7684\u8bf7\u6c42\u3002',
-    'keys.copyWarning':'\u8bf7\u7acb\u5373\u590d\u5236\u6b64\u5bc6\u94a5\u3002\u5b8c\u6574\u5bc6\u94a5\u4ec5\u663e\u793a\u4e00\u6b21\u3002',
-    'keys.noKeys':'\u672a\u914d\u7f6e API \u5bc6\u94a5\u3002\u7aef\u70b9\u5f00\u653e\u65e0\u9700\u8ba4\u8bc1\u3002',
-    'toast.keySaved':'API \u5bc6\u94a5\u5df2\u521b\u5efa', 'toast.keyRotated':'API \u5bc6\u94a5 \'{label}\' \u5df2\u8f6e\u6362',
-    'toast.keyDeleted':'API \u5bc6\u94a5\u5df2\u5220\u9664',
-    'toast.keyLabelUpdated':'\u6807\u7b7e\u5df2\u66f4\u65b0',
-    'toast.keyCopied':'\u5bc6\u94a5\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f',
-    'toast.copied':'\u5df2\u590d\u5236\u5230\u526a\u8d34\u677f',
-    'confirm.deleteKey':"\u786e\u5b9a\u5220\u9664 API \u5bc6\u94a5 '{label}'\uff1f",
-    'filter.allKeys':'\u5168\u90e8\u5bc6\u94a5',
-    'btn.fetchModels':'\u2B07 \u4ece\u670d\u52a1\u65b9\u83b7\u53d6',
-    'btn.addModelGroup':'+ \u6dfb\u52a0\u6a21\u578b\u7ec4',
-    'btn.addMapping':'+ \u6dfb\u52a0\u6620\u5c04',
-    'btn.selectAll':'\u5168\u9009', 'btn.deselectAll':'\u5168\u4e0d\u9009',
-    'btn.addSelected':'\u6dfb\u52a0\u5df2\u9009',
-    'modal.fetchModels':'\u4ece\u670d\u52a1\u65b9\u83b7\u53d6\u6a21\u578b',
-    'modal.addModelGroup':'\u6dfb\u52a0\u6a21\u578b\u7ec4',
-    'modal.editModelGroup':'\u7f16\u8f91\u6a21\u578b\u7ec4',
-    'label.selectProvider':'\u9009\u62e9\u670d\u52a1\u65b9',
-    'label.modelPrefix':'\u524d\u7f00\uff1a',
-    'label.modelGroupName':'\u6a21\u578b\u7ec4\u540d\u79f0',
-    'label.modelMappings':'\u6a21\u578b\u6620\u5c04',
-    'label.llm':'LLM',
-    'fetch.loading':'\u6b63\u5728\u83b7\u53d6\u6a21\u578b...',
-    'fetch.count':'{checked} / {total} \u5df2\u9009',
-    'fetch.noModels':'\u672a\u4ece\u8be5\u670d\u52a1\u65b9\u627e\u5230\u6a21\u578b\u3002',
-    'toast.modelsAdded':'\u5df2\u6dfb\u52a0 {count} \u4e2a\u6a21\u578b',
-    'toast.modelsRemoved':'\u5df2\u79fb\u9664 {count} \u4e2a\u6a21\u578b',
-    'toast.modelsAllExist':'\u6240\u6709\u5df2\u9009\u6a21\u578b\u5747\u5df2\u5b58\u5728',
-    'btn.applyChanges':'\u5e94\u7528\u66f4\u6539',
-    'login.subtitle':'Admin \u9762\u677f\u5df2\u542f\u7528\u5bc6\u7801\u4fdd\u62a4',
-    'login.btn':'\u767b\u5f55',
-    'login.error':'\u5bc6\u7801\u9519\u8bef',
-    'label.systemTime':'\u7cfb\u7edf\u65f6\u95f4',
-    'footer.db':'DB', 'footer.ok':'\u6b63\u5e38', 'footer.err':'\u9519\u8bef', 'footer.req':'\u8bf7\u6c42',
-    'footer.tip.req':'\u670d\u52a1\u542f\u52a8\u4ee5\u6765\u7684\u603b\u8bf7\u6c42\u6570\uff08\u7d2f\u8ba1\u8ba1\u6570\u5668\uff0c\u6e05\u9664\u65e5\u5fd7\u4e0d\u4f1a\u91cd\u7f6e\uff09',
-    'footer.tip.ok':'\u5df2\u8bb0\u5f55\u7684\u6210\u529f\u6761\u76ee / \u4fdd\u7559\u4e0a\u9650\uff08\u72b6\u6001\u7801 < 400\uff09',
-    'footer.tip.err':'\u5df2\u8bb0\u5f55\u7684\u9519\u8bef\u6761\u76ee / \u4fdd\u7559\u4e0a\u9650\uff08\u72b6\u6001\u7801 \u2265 400\uff09',
-    'footer.tip.db':'SQLite \u6570\u636e\u5e93\u6587\u4ef6\u5927\u5c0f',
-    'footer.tip.wal':'SQLite \u9884\u5199\u65e5\u5fd7\u6587\u4ef6\u5927\u5c0f',
-    'confirm.sure':'\u786e\u5b9a\uff1f',
-    'confirm.yes':'\u662f',
-  },
-};
+const I18N = __CODEX_ROSETTA_ADMIN_I18N_JSON__;
 
 let currentLang = localStorage.getItem('codex-rosetta-lang') || 'en';
 
@@ -2168,6 +1784,13 @@ function toolPolicyModes(item, policy) {
   return policy.supported || [];
 }
 
+function toolPolicyLabel(item, state) {
+  if (item.type === 'namespace' && state === 'passthrough') {
+    return t('tools.policy.namespace_passthrough');
+  }
+  return t('tools.policy.' + state);
+}
+
 function renderToolKindBadge(item) {
   return `<span class="tool-badge kind">${esc(t('tools.type.' + item.type))}</span>`;
 }
@@ -2198,9 +1821,9 @@ function renderToolPolicy(item, policy) {
   if (!policy) return '<div class="tool-policy"></div>';
   const defaultMode = policy.default;
   const supported = toolPolicyModes(item, policy);
-  const supportedBadges = supported.map(mode => `<span class="tool-badge">${esc(t('tools.policy.' + mode))}</span>`).join('');
+  const supportedBadges = supported.map(mode => `<span class="tool-badge">${esc(toolPolicyLabel(item, mode))}</span>`).join('');
   const routeDefaults = renderToolRouteDefaults(policy);
-  return `<div class="tool-policy"><span class="tool-policy-label">${esc(t('tools.supported'))}</span>${supportedBadges}<span class="tool-badge default ${esc(defaultMode)}">${esc(t('tools.default'))}: ${esc(t('tools.policy.' + defaultMode))}</span>${routeDefaults}</div>`;
+  return `<div class="tool-policy"><span class="tool-policy-label">${esc(t('tools.supported'))}</span>${supportedBadges}<span class="tool-badge default ${esc(defaultMode)}">${esc(t('tools.default'))}: ${esc(toolPolicyLabel(item, defaultMode))}</span>${routeDefaults}</div>`;
 }
 
 function renderToolStateSelect(item) {
@@ -2209,7 +1832,7 @@ function renderToolStateSelect(item) {
   const selected = namespaceDisabled ? 'disabled' : toolProfileDraft[item.id];
   const disabled = currentToolProfile()?.readonly || namespaceDisabled ? ' disabled' : '';
   const options = states.map(state =>
-    `<option value="${escAttr(state)}"${state === selected ? ' selected' : ''}>${esc(t('tools.policy.' + state))}</option>`
+    `<option value="${escAttr(state)}"${state === selected ? ' selected' : ''}>${esc(toolPolicyLabel(item, state))}</option>`
   ).join('');
   return `<select class="tool-state-select" aria-label="${escAttr(item.name)}" onchange="updateToolProfileState(${handlerArg(item.id)}, this.value)"${disabled}>${options}</select>`;
 }
@@ -2222,7 +1845,7 @@ function renderToolProfileInputs(item) {
   if (!['function', 'custom', 'hosted', 'namespace'].includes(item.type) || !Array.isArray(item.profile_inputs) || item.profile_inputs.length === 0) return '';
   const values = toolProfileInputDraft[item.id] || {};
   const groups = item.profile_inputs.filter(input =>
-    isToolCardContentVisible(item.id, input.visible_when)
+    !input.ui_hidden && isToolCardContentVisible(item.id, input.visible_when)
   ).map(input => {
     const value = values[input.id] ?? input.default ?? '';
     if (input.type === 'select') {
@@ -2248,15 +1871,24 @@ function renderToolItem(item, policies, nested=false) {
 function renderToolNamespace(namespaceItem, childIds, index) {
   const children = childIds.map(id => index.items.get(id)).filter(Boolean);
   const isExpanded = expandedToolNamespaces.has(namespaceItem.id);
+  const showDescription = namespaceItem.description_i18n && isToolCardContentVisible(namespaceItem.id, namespaceItem.description_visible_when);
+  const description = showDescription ? `<div class="tool-description">${esc(t(namespaceItem.description_i18n))}</div>` : '';
+  const details = description + renderToolProfileInputs(namespaceItem);
   const childrenHtml = children.map(item => renderToolItem(item, index.policies, true)).join('');
-  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
+  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div>${details ? `<div class="tool-namespace-details">${details}</div>` : ''}<div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
 }
 
 function renderToolGroup(groupId, itemIds, index) {
   const items = itemIds.map(id => index.items.get(id)).filter(Boolean);
   if (items.length === 0) return '';
-  const body = items.map(item => renderToolItem(item, index.policies)).join('');
-  return `<section class="tool-group" data-tool-group="${escAttr(groupId)}"><div class="tool-group-title"><span>${esc(t('tools.group.' + groupId))}</span><span class="tool-group-count">${items.length}</span></div><div class="tool-list tool-card-grid">${body}</div></section>`;
+  const cards = items.filter(item => item.type !== 'namespace').map(item => renderToolItem(item, index.policies)).join('');
+  const namespaces = items.filter(item => item.type === 'namespace').map(item => {
+    const placement = index.namespaces.get(item.id);
+    return placement ? renderToolNamespace(item, placement.child_ids, index) : '';
+  }).filter(Boolean).join('');
+  const cardsHtml = cards ? `<div class="tool-list tool-card-grid">${cards}</div>` : '';
+  const namespacesHtml = namespaces ? `<div class="tool-list">${namespaces}</div>` : '';
+  return `<section class="tool-group" data-tool-group="${escAttr(groupId)}"><div class="tool-group-title"><span>${esc(t('tools.group.' + groupId))}</span><span class="tool-group-count">${items.length}</span></div>${cardsHtml}${namespacesHtml}</section>`;
 }
 
 function renderNamespaceGroup(index) {
@@ -2309,20 +1941,17 @@ function renderToolCatalog() {
   const sections = [];
   const include = id => toolCatalogFilter === 'all' || toolCatalogFilter === id;
 
-  if (include('function')) {
-    const group = index.groups.get('function');
-    if (group) sections.push(renderToolGroup('function', group.item_ids, index));
-  }
-  if (toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace') {
-    sections.push(renderNamespaceGroup(index));
-  }
-  for (const groupId of ['hosted', 'custom']) {
+  for (const groupId of ['exec_expansion', 'function']) {
     if (!include(groupId)) continue;
     const group = index.groups.get(groupId);
     if (group) sections.push(renderToolGroup(groupId, group.item_ids, index));
   }
-  if (include('custom_injection')) {
-    sections.push(renderToolGroup('custom_injection', toolCatalogData.custom_injection?.item_ids || [], index));
+  if (toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace') {
+    sections.push(renderNamespaceGroup(index));
+  }
+  if (include('rosetta_injection')) {
+    const group = index.groups.get('rosetta_injection');
+    if (group) sections.push(renderToolGroup('rosetta_injection', group.item_ids, index));
   }
 
   const html = sections.filter(Boolean).join('');
@@ -2530,9 +2159,7 @@ function openModelGroupModal(groupName) {
     ...Object.keys((configData && configData.tool_profiles) || {}).sort().map(name => ({id: name, name})),
   ];
   profileSelect.innerHTML = profileOptions.map(profile => `<option value="${escAttr(profile.id)}">${esc(profile.name)}</option>`).join('');
-  const providerConfig = configData?.providers?.[provider];
-  const defaultProfile = providerConfig?.api_type === 'responses_passthrough' ? 'responses_pass_through' : 'builtin';
-  profileSelect.value = group?.tool_profile || defaultProfile;
+  profileSelect.value = group?.tool_profile || 'builtin';
   document.getElementById('modelGroupRows').innerHTML = '';
   const models = group ? (group.models || {}) : {};
   const entries = Object.entries(models);
@@ -2553,11 +2180,7 @@ function _modelGroupProviderUsesToolProfiles() {
 
 function onModelGroupProviderChange() {
   if (!_editingModelGroupName) {
-    const providerName = document.getElementById('modelGroupProvider').value;
-    const provider = configData?.providers?.[providerName];
-    document.getElementById('modelGroupToolProfile').value = provider?.api_type === 'responses_passthrough'
-      ? 'responses_pass_through'
-      : 'builtin';
+    document.getElementById('modelGroupToolProfile').value = 'builtin';
   }
   document.getElementById('modelGroupToolProfileGroup').style.display = _modelGroupProviderUsesToolProfiles() ? '' : 'none';
 }
@@ -2609,9 +2232,7 @@ async function saveModelGroup() {
   }
   const body = {provider, type: 'llm', models};
   if (_modelGroupProviderUsesToolProfiles()) {
-    const providerConfig = configData?.providers?.[provider];
-    const defaultProfile = providerConfig?.api_type === 'responses_passthrough' ? 'responses_pass_through' : 'builtin';
-    body.tool_profile = document.getElementById('modelGroupToolProfile').value || defaultProfile;
+    body.tool_profile = document.getElementById('modelGroupToolProfile').value || 'builtin';
   }
   const originalName = document.getElementById('modelGroupName').dataset.originalName;
   if (originalName && originalName !== name) {
