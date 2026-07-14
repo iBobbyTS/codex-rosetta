@@ -41,6 +41,7 @@ diagnostics, use **Gateway Logs** in the WebUI.
 - [Basic conversation](codex-tool-localization/basic-conversation.md)
 - [Code editing](codex-tool-localization/code-edit.md)
 - [Other tools](codex-tool-localization/other-tools.md)
+- [Real-agent tool test results](tools/real-agent-test-results.md)
 
 For architecture notes, source contracts, and maintenance procedures, see the
 [developer documentation](../dev/README.md).
