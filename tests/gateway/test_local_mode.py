@@ -33,7 +33,9 @@ def _sync_transaction(
     )
 
 
-def test_catalog_uses_only_configured_llms_and_clones_terra_for_custom_names() -> None:
+def test_catalog_uses_only_configured_models_and_clones_terra_for_custom_names() -> (
+    None
+):
     raw = {
         "model_groups": {
             "llm": {
@@ -44,10 +46,6 @@ def test_catalog_uses_only_configured_llms_and_clones_terra_for_custom_names() -
                     "alpha-model": {},
                 },
             },
-            "embedding": {
-                "type": "embedding",
-                "models": {"embedding-only": {}},
-            },
         }
     }
 
@@ -56,7 +54,6 @@ def test_catalog_uses_only_configured_llms_and_clones_terra_for_custom_names() -
     slugs = [model["slug"] for model in models]
 
     assert slugs == ["alpha-model", "gpt-5.6-sol", "zeta-model"]
-    assert "embedding-only" not in slugs
 
     bundled = build_model_catalog({})["models"]
     assert [model["slug"] for model in bundled] == [
@@ -94,19 +91,6 @@ def test_catalog_preserves_official_bundled_entries_for_configured_slugs() -> No
 
     assert [model["slug"] for model in configured] == ["gpt-5.5", "gpt-5.6-terra"]
     assert configured == [defaults["gpt-5.5"], defaults["gpt-5.6-terra"]]
-
-
-def test_catalog_does_not_fall_back_to_defaults_for_embedding_only_config() -> None:
-    raw = {
-        "model_groups": {
-            "embedding": {
-                "type": "embedding",
-                "models": {"text-embedding": {}},
-            }
-        }
-    }
-
-    assert build_model_catalog(raw) == {"models": []}
 
 
 def test_catalog_materializes_named_third_party_presets_from_terra() -> None:

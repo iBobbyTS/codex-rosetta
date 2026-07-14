@@ -283,7 +283,7 @@ def test_admin_cors_preflight_and_actual_request_require_correct_boundaries(tmp_
             persistence.close()
 
 
-@pytest.mark.parametrize("path", ["/v1/responses", "/v1/embeddings", "/v1/models"])
+@pytest.mark.parametrize("path", ["/v1/responses", "/v1/models"])
 def test_protected_v1_preflight_reaches_public_cors_route(path: str):
     app = app_module.create_app(GatewayConfig(_gateway_config()))
 

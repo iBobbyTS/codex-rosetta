@@ -79,6 +79,18 @@ def test_responses_endpoint_remains_agent_facing_generation_route():
     assert b"Invalid JSON body" in response.body
 
 
+def test_embeddings_endpoint_is_not_registered():
+    app = _make_app()
+
+    response = asyncio.run(app._dispatch(_request(app, "/v1/embeddings")))
+
+    assert not any(
+        "POST" in route.methods and route.pattern.match("/v1/embeddings")
+        for route in app._routes
+    )
+    assert response.status_code == 405
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -99,7 +111,6 @@ def test_codex_auxiliary_endpoints_are_post_only(path: str):
     "path",
     [
         "/v1/responses",
-        "/v1/embeddings",
         "/v1/alpha/search",
         "/v1/images/generations",
         "/v1/images/edits",
@@ -121,7 +132,6 @@ def test_public_post_endpoints_reject_non_object_json(path: str, value: object):
     "path",
     [
         "/v1/responses",
-        "/v1/embeddings",
         "/v1/alpha/search",
         "/v1/images/generations",
         "/v1/images/edits",
@@ -151,7 +161,6 @@ def test_public_post_endpoints_reject_invalid_model_types(path: str, model: obje
     "path",
     [
         "/v1/responses",
-        "/v1/embeddings",
         "/v1/alpha/search",
         "/v1/images/generations",
         "/v1/images/edits",
@@ -173,7 +182,6 @@ def test_public_post_endpoints_keep_missing_model_error(path: str):
     "path",
     [
         "/v1/responses",
-        "/v1/embeddings",
         "/v1/alpha/search",
         "/v1/images/generations",
         "/v1/images/edits",

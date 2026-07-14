@@ -838,6 +838,26 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.tool_profile
 
 
+def test_put_model_group_rejects_embedding_type(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(_config_data())
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(config_path=str(config_path), gateway_config=initial_config)
+    request = SimpleNamespace(app=app, path_params={"name": "Embeddings"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "embedding",
+        "models": {"text-embedding": {}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert json.loads(response.body) == {"error": "'type' must be 'llm'"}
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
     config = _config_data()
     config["server"].update({"local_mode": True, "local_mode_confirmed": True})
@@ -1139,8 +1159,8 @@ def test_admin_html_shows_model_group_profile_for_all_llm_protocols():
     assert 'id="modelGroupProvider" onchange="onModelGroupProviderChange()"' in html
     assert "return !!provider;" in html
     assert "responses_pass_through" in html
-    assert "groupType === 'llm' && _modelGroupProviderUsesToolProfiles()" in html
-    assert "if (groupType === 'llm' && _modelGroupProviderUsesToolProfiles())" in html
+    assert "_modelGroupProviderUsesToolProfiles() ? '' : 'none'" in html
+    assert "if (_modelGroupProviderUsesToolProfiles())" in html
 
 
 def test_admin_html_exposes_request_body_limit_options():
@@ -1282,7 +1302,7 @@ def test_admin_html_exposes_model_group_controls():
     assert "max-height: 90vh; overflow-y: auto;" in html
     assert "function openModelGroupModal(groupName)" in html
     assert "function toggleModelGroup(groupName)" in html
-    assert "function onModelGroupTypeChange()" in html
+    assert "function onModelGroupTypeChange()" not in html
     assert "function saveModelGroup()" in html
     assert "/admin/api/config/model-groups/" in html
     assert "/admin/api/config/models" not in html
@@ -1290,10 +1310,10 @@ def test_admin_html_exposes_model_group_controls():
     assert "_collapsedModelGroups" in html
     assert "model-group-card${collapsed ? ' collapsed' : ''}" in html
     assert 'class="model-group-body"' in html
-    assert 'name="modelGroupType"' in html
+    assert 'name="modelGroupType"' not in html
     assert 'class="checkbox-group group-cap-wrap"' in html
-    assert 'class="group-cap" value="embedding"' not in html
-    assert "groupType === 'llm'" in html
+    assert 'name="fetchModelType"' not in html
+    assert "type: 'llm'" in html
     assert 'id="modelReasoningGroup"' not in html
     assert 'id="modelToolAdaptationGroup"' not in html
     assert "'btn.addModelGroup':'+ Add Model Group'" in html

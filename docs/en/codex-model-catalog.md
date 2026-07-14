@@ -27,10 +27,9 @@ entries are intentionally excluded from this reference.
 
 Local mode writes all eight bundled entries only when the gateway has no
 configured models. If at least one model is configured, the generated catalog
-contains only the configured LLM names; embedding models are never included, so
-an embedding-only configuration produces an empty Codex catalog. A configured
-name matching one of the eight bundled slugs reuses that entry byte-for-byte at
-the parsed JSON value level.
+contains only the configured model names. A configured name matching one of the
+eight bundled slugs reuses that entry byte-for-byte at the parsed JSON value
+level.
 
 Local mode also configures Codex to use Rosetta, not only the catalog. It
 selects the custom Provider ID `codex_rosetta`, while the generated provider's

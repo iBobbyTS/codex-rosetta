@@ -126,14 +126,6 @@ def test_request_handlers_keep_their_own_config_after_second_app_creation(
         "models/model-a"
     ]
 
-    async def _fake_embeddings(request: Any, config: GatewayConfig):
-        captured["embeddings_config"] = config
-        return JSONResponse({"ok": True})
-
-    monkeypatch.setattr(app_module, "_handle_embeddings", _fake_embeddings)
-    asyncio.run(app_module.handle_embeddings(_request(app_a)))
-    assert captured["embeddings_config"] is config_a
-
     async def _fake_streaming(*args: Any, **kwargs: Any):
         captured["stream_body_log_state"] = kwargs["body_log_state"]
         return JSONResponse({"ok": True}), {}

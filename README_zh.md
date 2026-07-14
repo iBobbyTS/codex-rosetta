@@ -47,8 +47,8 @@ codex-rosetta-gateway --host 127.0.0.1 -v
 Codex，具体通过维护 `<codex-home>/model_catalog.json` 以及
 `<codex-home>/config.toml` 中的 `model_catalog_json` 实现。在 WebUI 中修改模型时，
 网关配置和 Codex 模型目录会同步更新。未配置任何模型时，目录包含打包的 8 个 Codex
-模型；只要配置了至少一个模型，目录就只包含已配置的 LLM 模型，因为 Embedding 模型
-不属于 Codex 模型目录。模型发生变化后需要重启 Codex，Codex 才会重新加载目录。
+模型；只要配置了至少一个模型，目录就只包含已配置的模型。模型发生变化后需要重启
+Codex，Codex 才会重新加载目录。
 
 每次以已确认的本地模式启动时，网关还会确保 `server.api_keys` 中存在一个名为
 `codex` 的 Key；如果已经存在就复用原值，不进行轮换。Codex `config.toml` 会把

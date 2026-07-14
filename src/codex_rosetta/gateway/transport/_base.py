@@ -193,7 +193,7 @@ class UpstreamTransport(Protocol):
         """Send a raw passthrough request (no format-specific URL or flags).
 
         Used for endpoints that don't go through IR conversion (e.g.
-        embeddings, reranking) — the URL is caller-provided, auth
+        model listing and reranking) — the URL is caller-provided, auth
         headers come from *provider_info*, and the body is forwarded
         as-is.
         """

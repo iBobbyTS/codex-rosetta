@@ -59,7 +59,7 @@ them into Codex by maintaining `<codex-home>/model_catalog.json` and the
 in the WebUI are synchronized to both the gateway configuration and this Codex
 model catalog. When no models are configured, the catalog contains the eight
 bundled Codex models; once any models are configured, it contains only the
-configured LLM models because embedding models are not Codex catalog entries.
+configured models.
 Restart Codex after changing models so it reloads the catalog.
 
 At each confirmed local-mode startup, the gateway also ensures that
