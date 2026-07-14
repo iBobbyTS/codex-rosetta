@@ -197,7 +197,8 @@ The following behavior can be automatically verified using the fixed Codex reque
 - The order of `response.created`, item added/delta/done, completed/failed/incomplete;
 - message `commentary`/`final_answer` is consistent in added, done and completed;
 - Text followed by phase inference of function/custom/MCP/shell/computer/tool_search/web_search call;
-- custom/freeform `apply_patch` and code-mode `exec` definition, grammar, delta splicing, call/output and fallback command; among them, `exec`’s Chat downgrade return must be restored to `custom_tool_call`, and non-compliant JSON function parameter guessing must not be rewritten into JavaScript;
+- custom/freeform `apply_patch` and code-mode `exec` definition, grammar, delta splicing, call/output and fallback command; among them, `exec`'s Chat downgrade return must be restored to `custom_tool_call`, and non-compliant JSON function parameter guessing must not be rewritten into JavaScript;
+- Chat Default Code Mode projection parses the live Codex declarations for `exec_command`, `write_stdin`, `update_plan`, `apply_patch`, `view_image`, `web.run`, Goal, and Clock tools; covers the Codex renderer's literal, union, intersection, array, tuple, object-index-signature, and normalized-heading forms; rejects unknown TypeScript tokens; emits ordinary Chat Functions only for valid declarations; rebuilds deterministic custom `exec` calls in streaming and non-streaming paths; preserves same-named direct Functions; keeps `wait`, `request_user_input`, and `collaboration` direct; restores collaboration namespaces; and replays projected history from the encrypted mapping cache within TTL;
 - native/localized tool history mapping with exact encrypted SQLite payloads,
   authenticated same-process/restart replay, missing/wrong key and tamper
   fail-closed behavior, plaintext/encrypted-v1 migration, row/session/principal/

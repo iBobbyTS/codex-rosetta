@@ -298,7 +298,7 @@ def test_function_profile_select_definition_validation(
 ):
     catalog = copy.deepcopy(load_tool_catalog())
     function_item = next(
-        item for item in catalog["items"] if item["id"] == "function.update_plan"
+        item for item in catalog["items"] if item["id"] == "function.wait"
     )
     function_item["profile_inputs"] = [
         {
@@ -747,7 +747,9 @@ def test_profile_limits_localized_native_and_injected_tools():
     adapted = _apply_converted_request_tool_adaptation(body, _route(profile))
     names = [tool["function"]["name"] for tool in adapted["tools"]]
 
-    assert "exec_command" not in names
+    # Modified exec projections preserve an already-direct normal function;
+    # projection is only added when Codex supplied the custom exec surface.
+    assert "exec_command" in names
     assert "shell_command" in names
     assert "Read" in names
     assert "Edit" not in names
@@ -784,4 +786,4 @@ def test_resolve_builtin_profile_returns_independent_copy():
 
     first["function.update_plan"] = "disabled"
 
-    assert second["function.update_plan"] == "passthrough"
+    assert second["function.update_plan"] == "modified"

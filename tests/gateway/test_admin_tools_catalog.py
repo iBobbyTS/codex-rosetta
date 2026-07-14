@@ -201,7 +201,10 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["builtin_profile"]["id"] == "builtin"
     assert catalog["builtin_profile"]["name"] == "Chat Default"
     assert catalog["builtin_profile"]["tools"] == {
-        "namespace.multi_agent_v1": "disabled"
+        "namespace.multi_agent_v1": "disabled",
+        "function.exec_command": "modified",
+        "function.write_stdin": "modified",
+        "custom.apply_patch": "modified",
     }
     assert catalog["builtin_profile"]["inputs"]["namespace.mcp_github"]
     assert [profile["id"] for profile in catalog["preset_profiles"]] == [
@@ -283,6 +286,9 @@ def test_catalog_defaults_and_namespace_image_policy():
 
     modified = {
         "function.request_user_input",
+        "function.update_plan",
+        "function.view_image",
+        "function.get_goal",
         "function.create_goal",
         "function.update_goal",
         "namespace.multi_agent_v2.list_agents",
@@ -291,6 +297,8 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.multi_agent_v2.wait_agent",
         "hosted.web_search",
         "namespace.web.run",
+        "namespace.clock.curr_time",
+        "namespace.clock.sleep",
         "namespace.mcp_github",
         "custom.exec",
     }
@@ -311,8 +319,9 @@ def test_catalog_defaults_and_namespace_image_policy():
     )
     assert builtin["namespace.multi_agent_v2"] == "expanded"
     assert builtin["namespace.mcp_github"] == "modified"
-    assert builtin["function.exec_command"] == "passthrough"
-    assert builtin["function.write_stdin"] == "passthrough"
+    assert builtin["function.exec_command"] == "modified"
+    assert builtin["function.write_stdin"] == "modified"
+    assert builtin["custom.apply_patch"] == "modified"
     assert builtin["function.shell_command"] == "disabled"
     for item_id in (
         "function.exec_command",
@@ -324,6 +333,20 @@ def test_catalog_defaults_and_namespace_image_policy():
             "passthrough",
             "modified",
         ]
+
+    assert set(tool_profile_contract()["exec_projections"]) == {
+        "custom.apply_patch",
+        "function.create_goal",
+        "function.exec_command",
+        "function.get_goal",
+        "function.update_goal",
+        "function.update_plan",
+        "function.view_image",
+        "function.write_stdin",
+        "namespace.clock.curr_time",
+        "namespace.clock.sleep",
+        "namespace.web.run",
+    }
 
     web_search_policy = policies[items["hosted.web_search"]["policy_id"]]
     assert web_search_policy["route_defaults"] == [

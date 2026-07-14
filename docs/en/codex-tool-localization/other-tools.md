@@ -17,9 +17,7 @@ This is a prompt-level/tool-description adaptation. It does not change the tool 
 
 ## TODO / update_plan
 
-The `update_plan` tool is currently passed through the normal conversion path without a dedicated localization rule.
-
-It is exposed to Chat providers as a regular function tool after Responses-to-Chat conversion, and its calls are converted back through the normal tool-call pipeline. No special prompt suffix, namespace restoration, or schema rewrite is currently applied specifically for `update_plan`.
+When Codex exposes `update_plan` only as a nested Code Mode tool, the bundled **Chat Default** Profile projects it into an ordinary Chat function. Rosetta derives the current parameter schema and description from Codex's `exec` declaration instead of maintaining a duplicate schema. A model call is rebuilt as a deterministic custom `exec` script for Codex. If Codex already exposes a direct `update_plan` Function, that direct definition is preserved.
 
 ## Goal Tools
 
@@ -30,11 +28,26 @@ The bundled **Chat Default** Profile marks these Functions as Modified and suppl
 - `create_goal`: call it when the user explicitly asks to mark a goal complete or blocked but no active goal exists, or when `update_goal` reports that the thread has no goal. Do not set `token_budget` unless the user explicitly provided a numeric token budget.
 - `update_goal`: when goal state is uncertain, call `get_goal` first. If there is no active goal, call `create_goal` with a concise objective and no token budget unless explicitly requested, then retry `update_goal`.
 
-`get_goal` itself is not modified.
+All three Goal tools are marked Modified so they can be projected from Code Mode `exec`. `get_goal` has no additional guidance text; `create_goal` and `update_goal` retain the Profile-owned guidance above.
+
+## Code Mode Nested Tools
+
+Recent Codex Code Mode surfaces keep several runtime tools inside the custom `exec` description instead of exposing every tool as a top-level Function. For Responses-to-Chat routes, **Chat Default** projects the following nested declarations into ordinary Chat functions when those declarations are present:
+
+- `exec_command`, `write_stdin`, `update_plan`, `apply_patch`, and `view_image`
+- `web.run`, exposed to Chat as `web-run`
+- `get_goal`, `create_goal`, and `update_goal`
+- `clock.curr_time` and `clock.sleep`, exposed as `clock-curr_time` and `clock-sleep`
+
+Rosetta reads each schema and description from the actual Codex `exec` declaration. Its reverse parser covers the TypeScript grammar emitted by Codex, including literals, unions, intersections, arrays, tuples, and object index signatures. Constraints that Codex itself omits while rendering JSON Schema to TypeScript cannot be reconstructed. Rosetta does not invent a Function when a declaration cannot be parsed. A same-named direct Function wins, and projection fails closed for that name.
+
+Calls to projected Functions are rebuilt as deterministic JavaScript calls on the nested `tools` object and returned to Codex as `custom_tool_call` calls to `exec`. The exact Chat-to-Codex call mapping is stored in the existing encrypted tool-history cache, so a subsequent request within its 24-hour TTL restores the original Chat Function and arguments before it is sent upstream. `view_image` forwards its result through the `image(...)` exec helper; the other projected tools use `text(...)`.
+
+The top-level `wait` and `request_user_input` Functions are not projected through `exec`. They remain direct Functions in both directions.
 
 ## Subagents And Namespace Tools
 
-Codex exposes subagent capabilities through Responses namespace tools such as `multi_agent_v1`. Chat Completions does not have the same nested namespace tool shape.
+Codex exposes subagent capabilities through Responses namespace tools such as `collaboration` and legacy `multi_agent_v1`. Chat Completions does not have the same nested namespace tool shape.
 
 For Responses-to-Chat routes, Rosetta flattens namespace child tools into ordinary Chat function tools. For example:
 
@@ -79,6 +92,6 @@ An input may declare `visible_when` with a list of tool states, for example `["m
 
 All Namespace rows start expanded on the Tools page. This display default is independent of each Namespace Profile state, and users can still collapse rows locally.
 
-The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
+The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Collaboration children are flattened for Chat and restored to native Responses namespace calls; they are not translated through Code Mode `exec`. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
 
 User-entered values are saved with a user Profile under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current values into the new Profile; switching or resetting a Profile restores its saved values. Every bundled Profile also allows these fields to be edited and explicitly saved; those values are stored in `tool_profile_input_overrides.<profile-id>` without changing the bundled JSON. A bundled Profile's tool delivery states remain read-only. Inputs have no effect unless their runtime feature consumes them; currently Modified Functions consume `guidance`, and `image_gen.imagegen` consumes its Base URL and Token.

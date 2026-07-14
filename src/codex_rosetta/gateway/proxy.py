@@ -40,6 +40,7 @@ from codex_rosetta.routing import ResolvedRoute, is_openai_responses_passthrough
 from codex_rosetta.observability.error_dump import dump_error
 
 from .codex_search_references import CodexSearchReferenceStore
+from .code_mode_projection import ExecToolProjection, exec_tool_projections_for_route
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -62,6 +63,7 @@ from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
     DEFAULT_TOOL_CALL_CACHE_TTL_HOURS,
+    EXEC_PROJECTIONS_KEY,
     LOCALIZATION_CAPABILITIES_KEY,
     READ_OUTPUT_CACHE_KEY,
     LocalizedToolMapping,
@@ -75,7 +77,11 @@ from .tool_adaptation import (
     should_localize_code_tools,
     translate_localized_ir_response,
 )
-from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
+from .tool_profiles import (
+    apply_profile_tool_mutations,
+    route_tool_state,
+    tool_catalog_lookups,
+)
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
@@ -573,11 +579,11 @@ def _filter_profile_namespace_children(
         else:
             adapted_child = child
             if child_id is not None:
-                adapted_child = _apply_profile_tool_mutations(
+                adapted_child = apply_profile_tool_mutations(
                     adapted_child, child_id, route
                 )
             kept.append(
-                _apply_profile_tool_mutations(adapted_child, namespace_item_id, route)
+                apply_profile_tool_mutations(adapted_child, namespace_item_id, route)
             )
     if not kept:
         return None, removed
@@ -603,57 +609,7 @@ def _filter_profile_tool(
         if adapted is None and isinstance(name, str):
             removed.add(name)
         return adapted, removed
-    return _apply_profile_tool_mutations(tool, item_id, route), set()
-
-
-def _append_profile_description(value: Any, append: str) -> str:
-    """Append one Profile-owned model instruction without duplication."""
-    description = value if isinstance(value, str) else ""
-    if append in description:
-        return description
-    return f"{description}\n\n{append}" if description else append
-
-
-def _apply_profile_tool_mutations(
-    tool: Any,
-    item_id: str,
-    route: ResolvedRoute,
-) -> Any:
-    """Apply catalog-declared model-description mutations for a Modified item."""
-    if not isinstance(tool, dict) or route_tool_state(route, item_id) != "modified":
-        return tool
-    mutations = tool_profile_contract()["profile_mutations"].get(item_id, ())
-    values = route.tool_profile_inputs.get(item_id, {})
-    if not mutations or not isinstance(values, dict):
-        return tool
-    adapted = copy.deepcopy(tool)
-    changed = False
-    for mutation in mutations:
-        value = values.get(mutation["input_id"])
-        if not isinstance(value, str) or not (append := value.strip()):
-            continue
-        if mutation["target"] == "description":
-            description = _append_profile_description(
-                adapted.get("description"), append
-            )
-            if description != adapted.get("description"):
-                adapted["description"] = description
-                changed = True
-            continue
-        parameters = adapted.get("parameters")
-        if not isinstance(parameters, dict):
-            continue
-        properties = parameters.get("properties")
-        if not isinstance(properties, dict):
-            continue
-        parameter = properties.get(mutation["parameter"])
-        if not isinstance(parameter, dict):
-            continue
-        description = _append_profile_description(parameter.get("description"), append)
-        if description != parameter.get("description"):
-            parameter["description"] = description
-            changed = True
-    return adapted if changed else tool
+    return apply_profile_tool_mutations(tool, item_id, route), set()
 
 
 def _filter_profile_tools(
@@ -756,6 +712,8 @@ def _apply_converted_request_tool_adaptation(
             capabilities=capabilities,
             native_tool_names=localized_native_tool_names(route),
             injected_tool_names=injected_local_tool_names(route),
+            exec_projections=exec_tool_projections_for_route(route),
+            profile_route=route,
         )
     return body
 
@@ -780,6 +738,7 @@ def _source_tool_capabilities_after_profile(
         has_exec_command=capabilities.has_exec_command,
         has_shell_command=capabilities.has_shell_command,
         has_custom_apply_patch=True,
+        has_custom_exec=capabilities.has_custom_exec,
     )
 
 
@@ -796,6 +755,20 @@ def _pop_read_output_cache(body: dict[str, Any]) -> ReadOutputCache | None:
     """Remove and return internal Read output cache metadata from a request."""
     value = body.pop(READ_OUTPUT_CACHE_KEY, None)
     return value if isinstance(value, ReadOutputCache) else None
+
+
+def _pop_exec_tool_projections(
+    body: dict[str, Any],
+) -> dict[str, ExecToolProjection]:
+    """Remove and return request-local exec projection metadata."""
+    value = body.pop(EXEC_PROJECTIONS_KEY, None)
+    if not isinstance(value, dict):
+        return {}
+    return {
+        name: projection
+        for name, projection in value.items()
+        if isinstance(name, str) and isinstance(projection, ExecToolProjection)
+    }
 
 
 def _load_persistent_tool_mappings(
@@ -907,6 +880,7 @@ def _translate_and_persist_localized_response_tools(
     state_scope: GatewayStateScope,
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
+    exec_projections: dict[str, ExecToolProjection] | None = None,
 ) -> None:
     if not should_localize_code_tools(route):
         return
@@ -927,6 +901,7 @@ def _translate_and_persist_localized_response_tools(
         capabilities=capabilities,
         read_cache=read_cache,
         use_apply_patch=True,
+        exec_projections=exec_projections,
     )
 
 
@@ -2512,6 +2487,7 @@ async def handle_non_streaming(
     )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
+    exec_projections = _pop_exec_tool_projections(target_body)
 
     profile.update(pipeline.profile)
 
@@ -2588,6 +2564,7 @@ async def handle_non_streaming(
             state_scope=scope,
             capabilities=tool_capabilities,
             read_cache=read_cache,
+            exec_projections=exec_projections,
         )
         store.cache_from_response(ir_response)
 
@@ -3377,6 +3354,7 @@ async def handle_streaming(
     )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
+    exec_projections = _pop_exec_tool_projections(target_body)
 
     profile.update(pipeline.profile)
 
@@ -3503,6 +3481,7 @@ async def handle_streaming(
             capabilities=tool_capabilities,
             read_cache=read_cache,
             use_apply_patch=True,
+            exec_projections=exec_projections,
         )
     else:
         stream_transformer = None

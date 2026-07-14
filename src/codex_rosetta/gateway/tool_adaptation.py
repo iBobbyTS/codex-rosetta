@@ -16,8 +16,14 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
+from .code_mode_projection import (
+    ExecToolProjection,
+    build_exec_script,
+    exec_tool_projections_for_route,
+    project_exec_tool_definitions,
+)
 from .state_scope import GatewayStateScope
-from .tool_profiles import route_tool_state, tool_catalog_lookups
+from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
 
 
 DEFAULT_TOOL_CALL_CACHE_TTL_HOURS = 24.0
@@ -31,6 +37,7 @@ NATIVE_CODE_TOOL_NAMES = frozenset(
 )
 LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
 READ_OUTPUT_CACHE_KEY = "_codex_read_output_cache"
+EXEC_PROJECTIONS_KEY = "_codex_exec_tool_projections"
 
 
 @dataclass(frozen=True)
@@ -140,6 +147,7 @@ class NativeToolCapabilities:
     has_exec_command: bool = False
     has_shell_command: bool = False
     has_custom_apply_patch: bool = True
+    has_custom_exec: bool = False
 
     @classmethod
     def from_chat_tools(cls, tools: Any) -> NativeToolCapabilities:
@@ -150,6 +158,7 @@ class NativeToolCapabilities:
         has_exec_command = False
         has_shell_command = False
         has_custom_apply_patch = False
+        has_custom_exec = False
         for tool in tools:
             name = _chat_tool_name(tool)
             if name == "exec_command":
@@ -158,11 +167,14 @@ class NativeToolCapabilities:
                 has_shell_command = True
             elif name == "apply_patch" and _chat_tool_type(tool) == "custom":
                 has_custom_apply_patch = True
+            elif name == "exec" and _chat_tool_type(tool) == "custom":
+                has_custom_exec = True
 
         return cls(
             has_exec_command=has_exec_command,
             has_shell_command=has_shell_command,
             has_custom_apply_patch=has_custom_apply_patch,
+            has_custom_exec=has_custom_exec,
         )
 
     def to_metadata(self) -> dict[str, bool]:
@@ -171,6 +183,7 @@ class NativeToolCapabilities:
             "has_exec_command": self.has_exec_command,
             "has_shell_command": self.has_shell_command,
             "has_custom_apply_patch": self.has_custom_apply_patch,
+            "has_custom_exec": self.has_custom_exec,
         }
 
     @classmethod
@@ -182,6 +195,7 @@ class NativeToolCapabilities:
             has_exec_command=bool(value.get("has_exec_command")),
             has_shell_command=bool(value.get("has_shell_command")),
             has_custom_apply_patch=bool(value.get("has_custom_apply_patch", True)),
+            has_custom_exec=bool(value.get("has_custom_exec")),
         )
 
 
@@ -282,7 +296,11 @@ def should_localize_code_tools(route: Any) -> bool:
             ("function", "shell_command"),
         )
     )
-    return native_modified or bool(injected_local_tool_names(route))
+    return (
+        native_modified
+        or bool(injected_local_tool_names(route))
+        or bool(exec_tool_projections_for_route(route))
+    )
 
 
 def localized_native_tool_names(route: Any) -> frozenset[str]:
@@ -290,14 +308,16 @@ def localized_native_tool_names(route: Any) -> frozenset[str]:
     if not getattr(route, "tool_profile", None):
         return NATIVE_CODE_TOOL_NAMES
     lookup = tool_catalog_lookups()["by_type_name"]
+    exec_projection_ids = set(tool_profile_contract()["exec_projections"])
     return frozenset(
         name
-        for tool_type, name in (
-            ("custom", "apply_patch"),
-            ("function", "exec_command"),
-            ("function", "write_stdin"),
-            ("function", "shell_command"),
+        for item_id, tool_type, name in (
+            ("custom.apply_patch", "custom", "apply_patch"),
+            ("function.exec_command", "function", "exec_command"),
+            ("function.write_stdin", "function", "write_stdin"),
+            ("function.shell_command", "function", "shell_command"),
         )
+        if item_id not in exec_projection_ids
         if route_tool_state(route, lookup[(tool_type, name)]) == "modified"
     )
 
@@ -348,6 +368,8 @@ def localize_code_editing_chat_request(
     capabilities: NativeToolCapabilities | None = None,
     native_tool_names: frozenset[str] = NATIVE_CODE_TOOL_NAMES,
     injected_tool_names: frozenset[str] = LOCALIZED_CODE_TOOL_NAMES,
+    exec_projections: dict[str, ExecToolProjection] | None = None,
+    profile_route: Any | None = None,
 ) -> dict[str, Any]:
     """Replace Codex-native edit tools with Claude-Code-like Chat tools."""
     adapted = dict(body)
@@ -355,6 +377,7 @@ def localize_code_editing_chat_request(
     removed_native = False
     native_capabilities = capabilities or NativeToolCapabilities.from_chat_tools(tools)
     read_cache = ReadOutputCache()
+    requested_projections = exec_projections or {}
 
     if isinstance(tools, list):
         preserved_tools: list[Any] = []
@@ -368,9 +391,18 @@ def localize_code_editing_chat_request(
                 existing_names.add(name)
             preserved_tools.append(tool)
 
+        projected_tools, active_projections = _project_exec_chat_tools(
+            preserved_tools,
+            existing_names,
+            native_capabilities,
+            requested_projections,
+            profile_route,
+        )
+
         if (
             removed_native
             or injected_tool_names
+            or active_projections
             or LOCALIZED_CODE_TOOL_NAMES.intersection(existing_names)
         ):
             localized_tools = [
@@ -379,10 +411,16 @@ def localize_code_editing_chat_request(
                 if _chat_tool_name(tool) in injected_tool_names
                 and _chat_tool_name(tool) not in existing_names
             ]
-            adapted["tools"] = preserved_tools + localized_tools
+            adapted["tools"] = (
+                preserved_tools
+                + localized_tools
+                + [projected_tools[name] for name in active_projections]
+            )
             if _tool_choice_name(adapted.get("tool_choice")) in native_tool_names:
                 adapted["tool_choice"] = "auto"
             adapted[LOCALIZATION_CAPABILITIES_KEY] = native_capabilities.to_metadata()
+            if active_projections:
+                adapted[EXEC_PROJECTIONS_KEY] = active_projections
 
     messages = adapted.get("messages")
     if isinstance(messages, list) and (store is not None or mappings):
@@ -400,6 +438,38 @@ def localize_code_editing_chat_request(
         adapted[READ_OUTPUT_CACHE_KEY] = read_cache
 
     return adapted
+
+
+def _project_exec_chat_tools(
+    preserved_tools: list[Any],
+    existing_names: set[str],
+    capabilities: NativeToolCapabilities,
+    projections: dict[str, ExecToolProjection],
+    profile_route: Any | None,
+) -> tuple[dict[str, dict[str, Any]], dict[str, ExecToolProjection]]:
+    """Project parseable nested exec tools that do not conflict with direct tools."""
+    if not capabilities.has_custom_exec or not projections:
+        return {}, {}
+    exec_tool = next(
+        (tool for tool in preserved_tools if _chat_tool_name(tool) == "exec"), None
+    )
+    if not isinstance(exec_tool, dict):
+        return {}, {}
+    function = exec_tool.get("function")
+    if not isinstance(function, dict):
+        return {}, {}
+    description = function.get("description")
+    if not isinstance(description, str):
+        return {}, {}
+    definitions = project_exec_tool_definitions(
+        description,
+        projections,
+        profile_route=profile_route,
+    )
+    active = {
+        name: projections[name] for name in definitions if name not in existing_names
+    }
+    return definitions, active
 
 
 def restore_localized_history_from_mappings(
@@ -436,6 +506,7 @@ def translate_localized_ir_response(
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
     use_apply_patch: bool = DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
+    exec_projections: dict[str, ExecToolProjection] | None = None,
 ) -> dict[str, Any]:
     """Translate localized IR tool calls in-place inside an IR response."""
     for choice in ir_response.get("choices", []):
@@ -455,6 +526,7 @@ def translate_localized_ir_response(
                 capabilities=capabilities,
                 read_cache=read_cache,
                 use_apply_patch=use_apply_patch,
+                exec_projections=exec_projections,
             )
             if translated is None:
                 continue
@@ -481,10 +553,15 @@ def translate_localized_tool_call_part(
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
     use_apply_patch: bool = DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
+    exec_projections: dict[str, ExecToolProjection] | None = None,
 ) -> TranslatedToolCall | None:
     """Translate one localized IR tool_call part to a Codex-native tool call."""
     localized_name = part.get("tool_name", "")
-    if localized_name not in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES:
+    projection = (exec_projections or {}).get(localized_name)
+    if (
+        localized_name not in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES
+        and projection is None
+    ):
         return None
 
     call_id = part.get("tool_call_id", "")
@@ -498,14 +575,23 @@ def translate_localized_tool_call_part(
         )
 
     try:
-        native_name, native_input, native_type = _localized_call_to_native(
-            localized_name,
-            localized_input,
-            capabilities=capabilities or NativeToolCapabilities(),
-            read_cache=read_cache,
-            use_apply_patch=use_apply_patch,
-        )
+        if projection is not None:
+            native_name = "exec"
+            native_input = {"input": build_exec_script(projection, localized_input)}
+            native_type = "custom"
+        else:
+            native_name, native_input, native_type = _localized_call_to_native(
+                localized_name,
+                localized_input,
+                capabilities=capabilities or NativeToolCapabilities(),
+                read_cache=read_cache,
+                use_apply_patch=use_apply_patch,
+            )
     except ValueError as exc:
+        if projection is not None:
+            return _exec_error_translation(
+                call_id, localized_name, localized_input, str(exc)
+            )
         return _error_translation(call_id, localized_name, localized_input, str(exc))
 
     native_part = {
@@ -544,21 +630,23 @@ class LocalizedToolCallStreamTransformer:
         capabilities: NativeToolCapabilities | None = None,
         read_cache: ReadOutputCache | None = None,
         use_apply_patch: bool = DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS,
+        exec_projections: dict[str, ExecToolProjection] | None = None,
     ) -> None:
         self._store = store
         self._on_mapping = on_mapping
         self._capabilities = capabilities or NativeToolCapabilities()
         self._use_apply_patch = use_apply_patch
         self._read_cache = read_cache
+        self._exec_projections = exec_projections or {}
         self._pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
 
     def transform(self, event: dict[str, Any]) -> list[dict[str, Any]]:
         """Transform one IR stream event into zero or more IR events."""
         event_type = event.get("type")
 
-        if (
-            event_type == "tool_call_start"
-            and event.get("tool_name") in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES
+        if event_type == "tool_call_start" and (
+            event.get("tool_name") in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES
+            or event.get("tool_name") in self._exec_projections
         ):
             call_id = event.get("tool_call_id", "")
             if call_id:
@@ -602,6 +690,7 @@ class LocalizedToolCallStreamTransformer:
                 capabilities=self._capabilities,
                 read_cache=self._read_cache,
                 use_apply_patch=self._use_apply_patch,
+                exec_projections=self._exec_projections,
             )
             if translated is None:
                 events.append(start)
@@ -1346,7 +1435,7 @@ def localized_mapping_from_tool_calls(
         localized_input=localized_input,
         native_name=native_name,
         native_input=native_input,
-        native_type="custom" if native_name == "apply_patch" else "function",
+        native_type="custom" if native_name in {"apply_patch", "exec"} else "function",
     )
 
 
@@ -1482,6 +1571,34 @@ def _error_translation(
             native_name="exec_command",
             native_input=native_input,
             native_type="function",
+        ),
+    )
+
+
+def _exec_error_translation(
+    call_id: str,
+    localized_name: str,
+    localized_input: dict[str, Any],
+    message: str,
+) -> TranslatedToolCall:
+    """Return a valid exec call that reports a projection error to Codex."""
+    script = "text(" + json.dumps(f"Tool adaptation error: {message}") + ");\n"
+    native_input = {"input": script}
+    return TranslatedToolCall(
+        part={
+            "type": "tool_call",
+            "tool_call_id": call_id,
+            "tool_name": "exec",
+            "tool_input": native_input,
+            "tool_type": "custom",
+        },
+        mapping=LocalizedToolMapping(
+            call_id=call_id,
+            localized_name=localized_name,
+            localized_input=localized_input,
+            native_name="exec",
+            native_input=native_input,
+            native_type="custom",
         ),
     )
 
