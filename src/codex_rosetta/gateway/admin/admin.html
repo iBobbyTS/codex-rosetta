@@ -447,8 +447,12 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-list { display:grid; }
 .tool-card-grid { grid-template-columns:repeat(3,minmax(0,1fr));align-items:start;gap:10px;padding:12px; }
 .tool-item { display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px 10px;min-width:0;padding:10px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg);cursor:pointer; }
-.tool-item:hover, .tool-namespace-head:hover { border-color:color-mix(in srgb,var(--accent) 55%,var(--border)); }
-.tool-item.selected, .tool-namespace-head.selected { border-color:var(--accent);box-shadow:0 0 0 1px color-mix(in srgb,var(--accent) 45%,transparent); }
+.tool-item:hover, .tool-namespace-head:hover { background:color-mix(in srgb,var(--accent) 6%,var(--bg)); }
+.tool-item.selected, .tool-namespace-head.selected { background:color-mix(in srgb,var(--accent) 15%,var(--bg)); }
+.tool-item.tool-state-passthrough, .tool-namespace-head.tool-state-passthrough { border-color:var(--green); }
+.tool-item.tool-state-modified, .tool-item.tool-state-expanded, .tool-item.tool-state-injected,
+.tool-namespace-head.tool-state-modified, .tool-namespace-head.tool-state-expanded, .tool-namespace-head.tool-state-injected { border-color:var(--orange); }
+.tool-item.tool-state-disabled, .tool-namespace-head.tool-state-disabled { border-color:var(--red); }
 .tool-item:focus-visible, .tool-namespace-head:focus-visible { outline:2px solid var(--accent);outline-offset:2px; }
 .tool-state-select { max-width:130px;min-width:105px;padding:4px 6px;background:var(--bg-card);border:1px solid var(--border);border-radius:999px;color:var(--text);font-size:10px; }
 .tool-state-select:disabled { opacity:.75;cursor:not-allowed; }
@@ -1852,12 +1856,23 @@ function renderToolPolicy(item, policy) {
 function renderToolStateSelect(item) {
   const states = toolProfilesData?.supported_states?.[item.id] || [];
   const namespaceDisabled = item.namespace_id && toolProfileDraft[item.namespace_id] === 'disabled';
-  const selected = namespaceDisabled ? 'disabled' : toolProfileDraft[item.id];
+  const selected = toolEffectiveState(item);
   const disabled = currentToolProfile()?.readonly || namespaceDisabled ? ' disabled' : '';
   const options = states.map(state =>
     `<option value="${escAttr(state)}"${state === selected ? ' selected' : ''}>${esc(toolPolicyLabel(item, state))}</option>`
   ).join('');
   return `<select class="tool-state-select" aria-label="${escAttr(item.name)}" onchange="updateToolProfileState(${handlerArg(item.id)}, this.value)"${disabled}>${options}</select>`;
+}
+
+function toolEffectiveState(item) {
+  return item.namespace_id && toolProfileDraft[item.namespace_id] === 'disabled'
+    ? 'disabled'
+    : toolProfileDraft[item.id];
+}
+
+function toolStateClass(item) {
+  const state = toolEffectiveState(item);
+  return state ? ` tool-state-${state}` : '';
 }
 
 function isToolCardContentVisible(itemId, visibleWhen) {
@@ -1924,7 +1939,7 @@ function renderToolDetail() {
 
 function renderToolItem(item, policies, nested=false) {
   const selected = item.id === selectedToolDetailId ? ' selected' : '';
-  return `<div class="tool-item${nested ? ' nested' : ''}${selected}" data-tool-id="${escAttr(item.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(item.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(item.id)})"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}</div>`;
+  return `<div class="tool-item${nested ? ' nested' : ''}${toolStateClass(item)}${selected}" data-tool-id="${escAttr(item.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(item.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(item.id)})"><div class="tool-name">${esc(item.name)}</div>${renderToolStateSelect(item)}</div>`;
 }
 
 function renderToolNamespace(namespaceItem, childIds, index) {
@@ -1932,7 +1947,7 @@ function renderToolNamespace(namespaceItem, childIds, index) {
   const isExpanded = expandedToolNamespaces.has(namespaceItem.id);
   const selected = namespaceItem.id === selectedToolDetailId ? ' selected' : '';
   const childrenHtml = children.map(item => renderToolItem(item, index.policies, true)).join('');
-  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head${selected}" data-tool-id="${escAttr(namespaceItem.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(namespaceItem.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(namespaceItem.id)})"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="event.stopPropagation(); toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
+  return `<div class="tool-namespace" data-namespace-id="${escAttr(namespaceItem.id)}"><div class="tool-namespace-head${toolStateClass(namespaceItem)}${selected}" data-tool-id="${escAttr(namespaceItem.id)}" role="button" tabindex="0" aria-pressed="${selected ? 'true' : 'false'}" onclick="selectToolDetail(${handlerArg(namespaceItem.id)})" onkeydown="toolDetailKeyHandler(event, ${handlerArg(namespaceItem.id)})"><button type="button" class="tool-namespace-toggle" aria-expanded="${isExpanded ? 'true' : 'false'}" aria-controls="tool-children-${escAttr(namespaceItem.id)}" onclick="event.stopPropagation(); toggleToolNamespace(${handlerArg(namespaceItem.id)})">${isExpanded ? '&#9662;' : '&#9656;'}</button><div class="tool-name">${esc(namespaceItem.name)}</div><div class="tool-badges">${renderToolKindBadge(namespaceItem)}</div><div class="tool-policy">${renderToolStateSelect(namespaceItem)}</div></div><div class="tool-namespace-children" id="tool-children-${escAttr(namespaceItem.id)}"${isExpanded ? '' : ' hidden'}>${childrenHtml}</div></div>`;
 }
 
 function renderToolGroup(groupId, itemIds, index) {

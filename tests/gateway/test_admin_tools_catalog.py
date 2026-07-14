@@ -517,6 +517,12 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
         in html
     )
     assert "currentToolProfile()?.readonly || namespaceDisabled" in html
+    assert "function toolEffectiveState(item)" in html
+    assert "function toolStateClass(item)" in html
+    assert "toolStateClass(namespaceItem)" in html
+    assert "toolProfileDraft[item.namespace_id] === 'disabled'" in html
+    assert "tool-state-expanded" in html
+    assert "tool-state-injected" in html
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
     assert "input.type === 'textarea'" in html
