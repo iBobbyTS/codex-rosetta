@@ -12,6 +12,10 @@ from .tool_profiles import (
     route_tool_state,
     tool_profile_contract,
 )
+from .web_run_capabilities import (
+    WEB_RUN_PROFILE_ITEM_ID,
+    project_modified_web_run_function,
+)
 
 
 @dataclass(frozen=True)
@@ -291,6 +295,17 @@ def project_exec_tool_definitions(
         if parsed is not None:
             if profile_route is not None:
                 parsed = dict(parsed)
+                if (
+                    projection.item_id == WEB_RUN_PROFILE_ITEM_ID
+                    and route_tool_state(profile_route, projection.item_id)
+                    == "modified"
+                ):
+                    projected_function = project_modified_web_run_function(
+                        parsed["function"]
+                    )
+                    if projected_function is None:
+                        continue
+                    parsed["function"] = projected_function
                 parsed["function"] = apply_profile_tool_mutations(
                     parsed["function"], projection.item_id, profile_route
                 )

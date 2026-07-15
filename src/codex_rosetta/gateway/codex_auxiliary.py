@@ -33,11 +33,8 @@ from .proxy import error_response_for_source, extract_model
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_profiles import route_tool_state
 from .transport import UpstreamConnectionError, UpstreamTransport
-from .web_search import (
-    WEB_RUN_PROFILE_ITEM_ID,
-    TavilySearchClient,
-    profile_search_config,
-)
+from .web_run_capabilities import WEB_RUN_PROFILE_ITEM_ID
+from .web_search import TavilySearchClient, profile_search_config
 
 _BROWSER_USE_HINT = 'Consider "Browser Use" skill'
 

@@ -14,7 +14,6 @@ from .transport.http.transport import request_bounded_response
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 WEB_SEARCH_TOOL_NAMES = {"web_search", "web_search_preview"}
 WEB_SEARCH_PROFILE_ITEM_ID = "hosted.web_search"
-WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
 
 
 def profile_search_config(route: Any, item_id: str) -> dict[str, str]:

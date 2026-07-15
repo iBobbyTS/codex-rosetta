@@ -30,19 +30,12 @@ from .web_search import (
     WebSearchSettings,
     format_tavily_result_for_model,
 )
-
-SUPPORTED_COMMANDS = frozenset({"search_query", "open", "time", "response_length"})
-KNOWN_UNSUPPORTED_COMMANDS = frozenset(
-    {
-        "image_query",
-        "click",
-        "find",
-        "screenshot",
-        "finance",
-        "weather",
-        "sports",
-    }
+from .web_run_capabilities import (
+    WEB_RUN_KNOWN_COMMANDS,
+    WEB_RUN_SUPPORTED_COMMANDS,
+    WEB_RUN_SUPPORTED_COMMAND_FIELDS,
 )
+
 _SUPPORTED_SETTINGS = frozenset(
     {
         "search_context_size",
@@ -350,9 +343,9 @@ def _unsupported_command_features(commands: dict[str, Any]) -> set[str]:
     unsupported = {
         f"commands.{key}"
         for key, value in commands.items()
-        if key not in SUPPORTED_COMMANDS and _has_value(value)
+        if key not in WEB_RUN_SUPPORTED_COMMANDS and _has_value(value)
     }
-    for key in KNOWN_UNSUPPORTED_COMMANDS:
+    for key in WEB_RUN_KNOWN_COMMANDS - WEB_RUN_SUPPORTED_COMMANDS:
         if _has_value(commands.get(key)):
             unsupported.add(f"commands.{key}")
 
@@ -363,44 +356,30 @@ def _unsupported_command_features(commands: dict[str, Any]) -> set[str]:
 
 
 def _unsupported_search_features(searches: Any) -> set[str]:
-    unsupported: set[str] = set()
-    if not isinstance(searches, list):
-        return unsupported
-
-    for item in searches:
-        if not isinstance(item, dict):
-            continue
-        if item.get("recency") is not None:
-            unsupported.add("commands.search_query[].recency")
-        for key, value in item.items():
-            if key not in {"q", "domains", "recency"} and _has_value(value):
-                unsupported.add(f"commands.search_query[].{key}")
-    return unsupported
+    return _unsupported_array_item_features("search_query", searches)
 
 
 def _unsupported_open_features(opens: Any) -> set[str]:
-    unsupported: set[str] = set()
-    if not isinstance(opens, list):
-        return unsupported
-    for item in opens:
-        if not isinstance(item, dict):
-            continue
-        for key, value in item.items():
-            if key not in {"ref_id", "lineno"} and _has_value(value):
-                unsupported.add(f"commands.open[].{key}")
-    return unsupported
+    return _unsupported_array_item_features("open", opens)
 
 
 def _unsupported_time_features(times: Any) -> set[str]:
+    return _unsupported_array_item_features("time", times)
+
+
+def _unsupported_array_item_features(command: str, items: Any) -> set[str]:
     unsupported: set[str] = set()
-    if not isinstance(times, list):
+    if not isinstance(items, list):
         return unsupported
-    for item in times:
+    allowed = WEB_RUN_SUPPORTED_COMMAND_FIELDS.get(command)
+    if not isinstance(allowed, frozenset):
+        return {f"commands.{command}"} if _has_value(items) else set()
+    for item in items:
         if not isinstance(item, dict):
             continue
         for key, value in item.items():
-            if key != "utc_offset" and _has_value(value):
-                unsupported.add(f"commands.time[].{key}")
+            if key not in allowed and _has_value(value):
+                unsupported.add(f"commands.{command}[].{key}")
     return unsupported
 
 
