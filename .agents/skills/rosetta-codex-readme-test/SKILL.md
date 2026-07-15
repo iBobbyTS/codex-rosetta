@@ -198,8 +198,11 @@ not infer a suite-specific pass condition from this skill.
 
 For `context_compaction_summary_quality`, read canonical expected facts from
 the suite root, not the isolated worktree, and verify the two model cells use
-byte-identical task and scenario bytes before running either cell. Never place
-the evaluator's expected values in the tested model's prompt.
+byte-identical `TASK.md`, `scenario.py`, and `QUERY.md` bytes before running
+either cell. Run phase 1 from `TASK.md`, retain its thread id, and only after
+the required compaction resume that same thread and model with `QUERY.md`.
+Capture phase 1 and resume output separately. Never place the evaluator's
+expected values in either tested-model prompt.
 
 The outer evaluating agent decides success by the task's core objective, not by
 perfect compliance with every incidental instruction. Mark the task successful
@@ -262,7 +265,9 @@ affecting interpretation. Classify each run as `success`,
 `success with deviations`, or `failure`, and briefly separate minor deviations
 from failures of the core objective. State explicitly what the selected suite
 measures. The summary-quality suite measures only deterministic fact retention
-after compaction; it is not a general model-quality benchmark.
+after compaction; it is one small regression scenario, not a general
+model-quality benchmark. Report both phase exit statuses, the phase-1 marker,
+same-thread resume evidence, and any command or compaction during resume.
 
 Include every additional field required by the selected suite's guide. When an
 evaluation artifact is required, the final report must agree with it.

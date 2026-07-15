@@ -4,12 +4,16 @@
   "model": "gpt-5.6-terra",
   "gateway_provider": "Pixel (K12)",
   "codex_model_provider": "openai",
-  "model_auto_compact_token_limit": 17000,
+  "model_auto_compact_token_limit": 15000,
   "expected_reason": "context_limit",
   "expected_mode": "native",
   "expected_compaction_count": 1,
   "expected_command_starts": 1,
   "expected_rosetta_mapping_rows": 0,
+  "phase1_marker": "PHASE1:QUALITY_CONTEXT_READY",
+  "resume_prompt_file": "QUERY.md",
+  "resume_auto_compact_token_limit": 1000000,
+  "expected_resume_compaction_count": 0,
   "expected_facts_source": "tests/live_agent/context_compaction_summary_quality/expected_facts.json",
   "evaluation_artifact": "artifacts/evaluation.json"
 }

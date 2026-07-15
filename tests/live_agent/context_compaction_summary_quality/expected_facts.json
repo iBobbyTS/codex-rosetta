@@ -1,9 +1,13 @@
 {
   "project": "Orchid",
-  "stage": "2 completed",
-  "ledger_policy": "do not modify ledger.csv",
+  "completed_stage": "phase 2 completed",
+  "immutable_file": "never modify ledger.csv",
   "timezone": "UTC only",
-  "endpoint": "/v2/checkpoint",
-  "predeploy_check": "verify_delta",
-  "reference_code": "A7-KAPPA"
+  "active_endpoint": "/v3/checkpoint",
+  "superseded_endpoint": "/v2/checkpoint",
+  "predeploy_gate": "run verify_delta immediately before production and require exit 0",
+  "reference_code": "A7-KAPPA",
+  "rollout_strategy": "two-phase rollout",
+  "strategy_reason": "checkpoint writes are idempotent",
+  "deployment_owner": null
 }

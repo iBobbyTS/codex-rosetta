@@ -11,10 +11,16 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "task_id": "01",
   "classification": "completed",
   "protocol_preconditions_satisfied": true,
+  "phase1_exit_status": 0,
+  "resume_exit_status": 0,
+  "phase1_marker_observed": true,
+  "same_thread_resume": true,
   "compaction_reason": "context_limit",
   "gateway_compaction_mode": "native",
   "compaction_count": 1,
+  "resume_compaction_count": 0,
   "command_starts": 1,
+  "resume_command_starts": 0,
   "baseline_tokens": 14500,
   "post_compaction_tokens": 10000,
   "command_output_chars": 128000,
@@ -24,24 +30,32 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "thread_id": "<thread-id>",
   "summary_reviewer": "coding_agent_or_developer",
   "summary_review": "effective",
-  "summary_review_note": "All seven values match.",
+  "summary_review_note": "All eleven values match.",
   "summary_fact_checks": {
     "project": "preserved",
-    "stage": "preserved",
-    "ledger_policy": "preserved",
+    "completed_stage": "preserved",
+    "immutable_file": "preserved",
     "timezone": "preserved",
-    "endpoint": "preserved",
-    "predeploy_check": "preserved",
-    "reference_code": "preserved"
+    "active_endpoint": "preserved",
+    "superseded_endpoint": "preserved",
+    "predeploy_gate": "preserved",
+    "reference_code": "preserved",
+    "rollout_strategy": "preserved",
+    "strategy_reason": "preserved",
+    "deployment_owner": "preserved"
   },
   "final_response_json": {
     "project": "Orchid",
-    "stage": "2 completed",
-    "ledger_policy": "do not modify ledger.csv",
+    "completed_stage": "phase 2 completed",
+    "immutable_file": "never modify ledger.csv",
     "timezone": "UTC only",
-    "endpoint": "/v2/checkpoint",
-    "predeploy_check": "verify_delta",
-    "reference_code": "A7-KAPPA"
+    "active_endpoint": "/v3/checkpoint",
+    "superseded_endpoint": "/v2/checkpoint",
+    "predeploy_gate": "run verify_delta immediately before production and require exit 0",
+    "reference_code": "A7-KAPPA",
+    "rollout_strategy": "two-phase rollout",
+    "strategy_reason": "checkpoint writes are idempotent",
+    "deployment_owner": null
   },
   "error": null
 }
@@ -49,11 +63,24 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
 
 For each key:
 
-- `preserved`: exact value match;
-- `missing`: key absent or empty;
-- `contradicted`: key present with a different non-empty value.
+- `preserved`: the fixed field rule below is satisfied;
+- `missing`: the key/value or a required atomic qualifier is absent;
+- `contradicted`: the value asserts a conflicting project state.
 
-Set `summary_review` to `effective` only when all seven checks are preserved.
+Use these field rules only for this one scenario:
+
+- `project`, both endpoints, and `reference_code` match exactly;
+- `completed_stage` says phase 2 is completed, case-insensitively;
+- `immutable_file` contains `ledger.csv` and an explicit never/do-not-modify
+  constraint;
+- `timezone` contains both `UTC` and `only`;
+- `predeploy_gate` contains `verify_delta`, immediately-before-production
+  ordering, and required exit code 0;
+- `rollout_strategy` conveys a two-phase rollout and `strategy_reason` conveys
+  idempotent checkpoint writes;
+- `deployment_owner` is JSON null.
+
+Set `summary_review` to `effective` only when all eleven checks are preserved.
 Set it to `ineffective` when protocol preconditions pass but at least one fact
 is missing or contradicted. Set it to `not_scored` when a protocol precondition
 fails, and explain that failure without converting it into a quality judgment.
