@@ -143,3 +143,89 @@ def test_main_rejects_removed_verbose_option(
         cli.main()
 
     assert exc_info.value.code == 2
+
+
+def test_main_manages_web_run_sidecar_around_gateway_lifecycle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text("{}", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    events: list[str] = []
+    observed_runtime_environment: list[tuple[str | None, str | None]] = []
+    config = SimpleNamespace(
+        host="127.0.0.1",
+        port=8765,
+        socket=None,
+        providers={},
+        models={},
+        log_bodies=False,
+        local_mode=False,
+    )
+
+    class FakeSupervisor:
+        def __init__(self, received_config_path: str) -> None:
+            assert received_config_path == str(config_path)
+
+        def start(self) -> None:
+            events.append("sidecar-start")
+            monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_URL", "http://127.0.0.1:8767")
+            monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_TOKEN", "managed-token")
+
+        def stop(self) -> None:
+            events.append("sidecar-stop")
+            monkeypatch.delenv("CODEX_ROSETTA_WEB_RUN_URL")
+            monkeypatch.delenv("CODEX_ROSETTA_WEB_RUN_TOKEN")
+
+    class FakeGatewayConfig:
+        def __new__(cls, _raw):
+            observed_runtime_environment.append(
+                (
+                    cli.os.environ.get("CODEX_ROSETTA_WEB_RUN_URL"),
+                    cli.os.environ.get("CODEX_ROSETTA_WEB_RUN_TOKEN"),
+                )
+            )
+            return config
+
+        @classmethod
+        def from_raw_with_env(cls, _raw):
+            return config
+
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "codex-rosetta-gateway",
+            "--no-banner",
+            "--config",
+            str(tmp_path),
+            "--codex-home",
+            str(codex_home),
+            "--no-local-mode",
+            "--with-web-run",
+        ],
+    )
+    monkeypatch.setattr(cli, "WebRunSidecarSupervisor", FakeSupervisor)
+    monkeypatch.setattr(cli, "GatewayConfig", FakeGatewayConfig)
+    monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        gateway_app,
+        "create_app",
+        lambda *_args, **_kwargs: events.append("create-app") or object(),
+    )
+
+    async def fake_run_gateway(*_args, **_kwargs) -> None:
+        events.append("run-gateway")
+
+    monkeypatch.setattr(gateway_app, "run_gateway", fake_run_gateway)
+
+    cli.main()
+
+    assert observed_runtime_environment == [("http://127.0.0.1:8767", "managed-token")]
+    assert events == [
+        "sidecar-start",
+        "create-app",
+        "run-gateway",
+        "sidecar-stop",
+    ]

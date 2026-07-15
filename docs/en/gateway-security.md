@@ -132,9 +132,26 @@ The repository does not publish a Docker image. From the repository root, use
 exact wheel into the versioned Compose build. A plain Compose invocation must
 also provide `LOCAL_WHEEL` and must not rely on the old registry image name.
 
-Browser-backed `web.run` is an optional Compose profile. Start it together with
-the gateway by supplying a dedicated random bearer token of at least 24
-characters:
+For a gateway running directly on the host, the simplest way to enable the
+browser-backed `web.run` service is:
+
+```bash
+codex-rosetta-gateway --with-web-run
+```
+
+This explicit option requires both Docker and `docker-compose`. The CLI builds
+the packaged sidecar context, creates an isolated Compose project, and binds
+only to `127.0.0.1`. It starts with candidate port `8766`; occupied ports and
+port-allocation races advance to the next port automatically. The generated
+bearer token and selected URL override `server.web_run` only for the running
+process, continue to apply after Admin config reloads, and are restored on
+shutdown. Gateway startup fails closed if the service or Chromium does not
+become ready. Normal exit and `Ctrl-C` remove only that invocation's managed
+Compose project.
+
+For a gateway that also runs inside Compose, browser-backed `web.run` remains
+an optional profile. Start it together with the gateway by supplying a dedicated
+random bearer token of at least 24 characters:
 
 ```bash
 CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>' make compose-up-web-run
@@ -160,12 +177,13 @@ container runs the exact local checkout. The token must be the same for the
 gateway and sidecar; the Compose network URL must remain
 `http://web-run:8080`.
 
-Use the container name for routine inspection, restart, and sidecar-only stop:
+Use the Compose service name for routine inspection, restart, and sidecar-only
+stop. Reuse the same environment variables and profile from startup:
 
 ```bash
-docker logs -f web-run
-docker restart web-run
-docker stop web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run logs -f web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run restart web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run stop web-run
 ```
 
 To stop and remove the complete Compose stack, reuse the exported variables and
@@ -176,12 +194,13 @@ docker-compose -f docker/docker-compose.yaml \
   --profile web-run down
 ```
 
-This builds a separate service and container named `web-run`. Compose does not
-publish its port to the host; the gateway reaches it over the private Compose
-network and receives `CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`. The
-sidecar receives no gateway configuration directory or provider credentials.
-Its bearer token is masked by the Admin configuration API and Gateway Logs.
-Outside Compose, configure matching `server.web_run.base_url` and
+This builds a separate `web-run` service. Compose assigns the project-scoped
+container name and does not publish its port to the host; the gateway reaches
+it over the private Compose network and receives
+`CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`. The sidecar receives no gateway
+configuration directory or provider credentials. Its bearer token is masked by
+the Admin configuration API and Gateway Logs. Outside Compose or the managed
+CLI option, configure matching `server.web_run.base_url` and
 `server.web_run.token` values (or the corresponding URL/Token environment
 variables) explicitly.
 

@@ -1,0 +1,20 @@
+services:
+  web-run:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: codex-rosetta-web-run-local:${CODEX_ROSETTA_VERSION:-dev}
+    init: true
+    environment:
+      - WEB_RUN_TOKEN=${CODEX_ROSETTA_WEB_RUN_TOKEN:?Managed web-run token is required}
+    ports:
+      - "127.0.0.1:${CODEX_ROSETTA_WEB_RUN_HOST_PORT:?Managed web-run host port is required}:8080"
+    mem_limit: "2g"
+    pids_limit: 512
+    shm_size: "1gb"
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777
+    security_opt:
+      - seccomp=seccomp_profile.json
+    restart: "no"

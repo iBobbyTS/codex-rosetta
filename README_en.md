@@ -43,6 +43,16 @@ Start the local gateway each time you use it:
 codex-rosetta-gateway --host 127.0.0.1 --log-level warning
 ```
 
+To start the optional browser-backed `web.run` sidecar with the local gateway,
+use `--with-web-run`. The CLI builds and manages an isolated Docker Compose
+service, starts at loopback port `8766`, automatically advances past occupied
+ports, generates an ephemeral bearer token, and removes the service when the
+gateway exits:
+
+```bash
+codex-rosetta-gateway --with-web-run
+```
+
 The default `warning` level shows only warnings and errors. Use
 `--log-level stats` to maintain request counts by original upstream model name
 on one terminal line, `info` to print request summaries, or `error` to show only
