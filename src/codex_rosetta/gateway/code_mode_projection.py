@@ -14,6 +14,7 @@ from .tool_profiles import (
 )
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
+    WEB_RUN_SIDECAR_CAPABILITY,
     project_modified_web_run_function,
 )
 
@@ -301,7 +302,13 @@ def project_exec_tool_definitions(
                     == "modified"
                 ):
                     projected_function = project_modified_web_run_function(
-                        parsed["function"]
+                        parsed["function"],
+                        browser_available=(
+                            WEB_RUN_SIDECAR_CAPABILITY
+                            in getattr(
+                                profile_route, "tool_runtime_capabilities", frozenset()
+                            )
+                        ),
                     )
                     if projected_function is None:
                         continue

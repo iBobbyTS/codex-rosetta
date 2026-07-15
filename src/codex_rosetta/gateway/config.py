@@ -9,7 +9,7 @@ import os
 import re
 import sys
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -28,6 +28,7 @@ from .tool_profiles import (
     resolve_tool_profile_inputs,
     validate_tool_profile_reference,
 )
+from .web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
 from .transport import ProviderInfo
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -73,6 +74,8 @@ MAX_API_KEY_LABEL_LENGTH = 128
 REQUEST_BODY_LIMIT_OPTIONS_MB = (64, 128, 256, 512, 1024)
 DEFAULT_REQUEST_BODY_LIMIT_MB = 128
 UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
+WEB_RUN_SIDECAR_URL_ENV = "CODEX_ROSETTA_WEB_RUN_URL"
+WEB_RUN_SIDECAR_TOKEN_ENV = "CODEX_ROSETTA_WEB_RUN_TOKEN"
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -107,6 +110,64 @@ def normalize_request_body_limit_mb(value: Any) -> int | None:
             "64, 128, 256, 512, 1024, or 'unlimited'"
         )
     return value
+
+
+def normalize_web_run_sidecar(
+    value: Any,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> tuple[str | None, str | None, float]:
+    """Resolve and validate the optional authenticated ``web-run`` sidecar."""
+    if value is None:
+        mapping: dict[str, Any] = {}
+    elif isinstance(value, dict):
+        mapping = value
+    else:
+        raise ValueError("config: server.web_run must be an object")
+    unsupported = set(mapping) - {"base_url", "token", "timeout_seconds"}
+    if unsupported:
+        raise ValueError(
+            f"config: server.web_run has unsupported fields: {sorted(unsupported)}"
+        )
+
+    environment = os.environ if environ is None else environ
+    environment_url = environment.get(WEB_RUN_SIDECAR_URL_ENV)
+    environment_token = environment.get(WEB_RUN_SIDECAR_TOKEN_ENV)
+    raw_url = environment_url or mapping.get("base_url", "")
+    raw_token = environment_token or mapping.get("token", "")
+    if not isinstance(raw_url, str) or not isinstance(raw_token, str):
+        raise ValueError("config: server.web_run base_url and token must be strings")
+    base_url = raw_url.strip().rstrip("/")
+    token = raw_token.strip()
+    if bool(base_url) != bool(token):
+        raise ValueError(
+            "config: server.web_run base_url and token must be configured together"
+        )
+    if base_url:
+        parsed = urlsplit(base_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or parsed.hostname is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError(
+                "config: server.web_run base_url must be an HTTP(S) URL without "
+                "credentials, query, or fragment"
+            )
+        if parsed.path not in {"", "/"}:
+            raise ValueError("config: server.web_run base_url must not contain a path")
+    timeout = mapping.get("timeout_seconds", 45.0)
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+        raise ValueError("config: server.web_run timeout_seconds must be a number")
+    timeout = float(timeout)
+    if not 1.0 <= timeout <= 120.0:
+        raise ValueError(
+            "config: server.web_run timeout_seconds must be between 1 and 120"
+        )
+    return base_url or None, token or None, timeout
 
 
 def validate_api_key_label(value: Any, *, field: str = "label") -> str:
@@ -551,6 +612,13 @@ class GatewayConfig:
         self.local_mode, self.local_mode_confirmed = normalize_local_mode_settings(
             _server
         )
+        (
+            self.web_run_sidecar_url,
+            self.web_run_sidecar_token,
+            self.web_run_sidecar_timeout,
+        ) = normalize_web_run_sidecar(_server.get("web_run"))
+        if self.web_run_sidecar_token:
+            self.token_values.add(self.web_run_sidecar_token)
         self.credential_visible: bool = _server.get("credential_visible", False)
         self.request_body_limit_mb = normalize_request_body_limit_mb(
             _server.get("request_body_limit_mb", DEFAULT_REQUEST_BODY_LIMIT_MB)
@@ -899,5 +967,10 @@ class GatewayConfig:
                 else {}
             ),
             responses_processing=self.provider_responses_processing[provider_name],
+            tool_runtime_capabilities=(
+                frozenset({WEB_RUN_SIDECAR_CAPABILITY})
+                if self.web_run_sidecar_url and self.web_run_sidecar_token
+                else frozenset()
+            ),
         )
         return route, self.providers[provider_name]

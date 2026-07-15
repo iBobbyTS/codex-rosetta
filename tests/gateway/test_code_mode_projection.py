@@ -27,6 +27,7 @@ from codex_rosetta.gateway.proxy import ProviderMetadataStore, handle_non_stream
 from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
+from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute
 
@@ -240,6 +241,44 @@ def test_modified_web_run_projects_only_rosetta_supported_capabilities():
     assert "find" not in description
     assert "empty query" not in description
     assert "## Decision boundary" in description
+
+
+def test_modified_web_run_projects_browser_commands_when_sidecar_is_available():
+    route = _route()
+    object.__setattr__(
+        route,
+        "tool_runtime_capabilities",
+        frozenset({WEB_RUN_SIDECAR_CAPABILITY}),
+    )
+    definitions = project_exec_tool_definitions(
+        _web_run_section(),
+        exec_tool_projections_for_route(route),
+        profile_route=route,
+    )
+
+    function = definitions["web-run"]["function"]
+    assert set(function["parameters"]["properties"]) == {
+        "search_query",
+        "open",
+        "click",
+        "find",
+        "screenshot",
+        "time",
+        "response_length",
+    }
+    assert function["parameters"]["properties"]["click"]["items"]["required"] == [
+        "ref_id",
+        "id",
+    ]
+    assert function["parameters"]["properties"]["screenshot"]["items"]["required"] == [
+        "ref_id",
+        "pageno",
+    ]
+    description = function["description"]
+    assert "`click`" in description
+    assert "`find`" in description
+    assert "`screenshot`" in description
+    assert "`finance`" not in description
 
 
 def test_passthrough_web_run_preserves_the_live_codex_definition():

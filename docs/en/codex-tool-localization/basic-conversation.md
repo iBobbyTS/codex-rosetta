@@ -62,20 +62,32 @@ direct-URL `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,
 rejects credentials and non-public addresses, permits at most five redirects,
 and applies a 15-second and 2 MiB response limit. It returns normalized,
-line-addressable text and supports `lineno`; stored references such as
-`turn0search0`, JavaScript rendering, compressed pages, and non-text content
-remain unsupported. Supported search options are query/domain filters, search
-context size, response length, and a conservative output budget. Requests
-containing `click`, `find`, `image_query`, `screenshot`, finance, weather,
-sports, recency, blocked-domain, location, or non-live access semantics return
-HTTP `501` with `code: "not_implemented"` before any partial operation runs.
-Every `501` message from these auxiliary endpoints also ends with
-`Consider "Browser Use" skill` so Codex can choose the browser fallback.
-When a selected Profile sets `web.run` to Passthrough, `/alpha/search` remains
-native upstream pass-through even when a Tavily Token is configured. When it
-sets `web.run` to Modified, supported commands use the local executor; search
-queries require a Tavily Token on the `web.run` card, while direct-URL `open`
-and time-only requests use Python.
+line-addressable text and supports `lineno`; stored `turnXsearchY` references
+resolve to their scoped search-result URL.
+
+An optional, separately built `web-run` Docker sidecar adds JavaScript-rendered
+`open`, session-scoped `turnXfetchY` page references, numbered-link `click`,
+case-insensitive `find`, and PDF `turnXviewY` references. PDF `open` and `find`
+use PyMuPDF embedded-text extraction. PDF `screenshot` renders the requested
+page with PyMuPDF and uses Tesseract when the rendered page has no embedded
+text. The Codex Search endpoint returns text rather than a multimodal image
+item, so screenshot results contain rendered dimensions and extracted/OCR text;
+they do not inject PDF pixels into the model conversation. Without the sidecar,
+the model-facing Modified schema omits `click`, `find`, and `screenshot`, and
+static `open` remains the bounded Python implementation.
+
+Supported search options are query/domain filters, search context size,
+response length, and a conservative output budget. Requests containing
+`image_query`, finance, weather, sports, recency, blocked-domain, location, or
+non-live access semantics return HTTP `501` with `code: "not_implemented"`
+before any partial operation runs. Every `501` message from these auxiliary
+endpoints also ends with `Consider "Browser Use" skill` so Codex can choose the
+browser fallback. When a selected Profile sets `web.run` to Passthrough,
+`/alpha/search` remains native upstream pass-through even when Tavily or the
+sidecar is configured. When it sets `web.run` to Modified, supported commands
+use the local executors; search queries require a Tavily Token on the `web.run`
+card, direct-URL `open` and time-only requests work without Tavily, and browser
+commands require the optional sidecar.
 
 ## Responses To Chat Conversion
 

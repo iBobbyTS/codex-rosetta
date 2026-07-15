@@ -48,10 +48,12 @@ Codex 工具行为以 Codex 0.144.1 为基准；生图一行明确记录 Codex 0
 | Hosted `web_search` | **成功** | `deepseek-v4-flash → deepseek-v4-flash` | Rosetta 本地化 Hosted 工具后，Tavily 返回了可用搜索结果。 |
 | `web.run` / `search_query` | **成功** | `gpt-5.6-sol → deepseek-v4-flash`；`gpt-5.6-terra → gpt-5.6-terra` | 搜索经本地 Codex Search API 和 Tavily 执行成功。 |
 | `web.run` / `open` | **成功** | `gpt-5.6-sol → deepseek-v4-flash` | Rosetta 成功解析已存储的 `turnXsearchY` 引用，并返回可读页面内容。 |
-| `web.run` / `find` | **按设计未实现** | `gpt-5.6-sol → deepseek-v4-flash` | 调用成功到达 Rosetta，并返回包含 Browser Use 提示的约定 Not Implemented 错误。 |
-| `web.run` / `click` | **按设计未实现** | `gpt-5.6-sol → deepseek-v4-flash` | 调用成功到达 Rosetta，并返回包含 Browser Use 提示的约定 Not Implemented 错误。 |
+| `web.run` / `find` | **历史测试：未实现** | `gpt-5.6-sol → deepseek-v4-flash` | 该次运行早于可选 `web-run` sidecar；调用到达 Rosetta 后返回包含 Browser Use 提示的约定 Not Implemented 错误。 |
+| `web.run` / `click` | **历史测试：未实现** | `gpt-5.6-sol → deepseek-v4-flash` | 该次运行早于可选 `web-run` sidecar；调用到达 Rosetta 后返回包含 Browser Use 提示的约定 Not Implemented 错误。 |
 
-`find` 和 `click` 的契约测试成功只证明路由和受控失败行为正确，不代表浏览操作已经实现。
+可选 sidecar 现在已经实现浏览器版 `open`、`find`、`click` 和 PDF `screenshot`，
+但在新的实机运行记录测试模型和 Gateway Logs 前，本表不会把它们提升为成功。历史契约
+运行只证明当时未支持的调用能够正确路由并受控失败。
 
 ## Namespace 工具
 
@@ -86,8 +88,9 @@ Codex 工具行为以 Codex 0.144.1 为基准；生图一行明确记录 Codex 0
 - `tool_search`；
 - `clock.sleep` 和其他未列出的 Clock 操作；
 - 上表以外的 Memories 和 Skills 操作；
-- 其他 `web.run` 命令，例如 `image_query`、`finance`、`weather`、`sports`、
-  `time` 和 `screenshot`；
+- 使用当前模型实测 sidecar 版 `web.run` 的 `find`、`click` 和 PDF `screenshot`；
+- 其他 `web.run` 命令，例如 `image_query`、`finance`、`weather`、`sports` 和
+  `time`；
 - GitHub、MCP、App 和 Connector Namespace 工具；
 - 默认禁用的旧工具面，例如 `shell_command` 和 `multi_agent_v1`。
 

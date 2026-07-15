@@ -116,6 +116,71 @@ The repository does not publish a Docker image. From the repository root, use
 exact wheel into the versioned Compose build. A plain Compose invocation must
 also provide `LOCAL_WHEEL` and must not rely on the old registry image name.
 
+Browser-backed `web.run` is an optional Compose profile. Start it together with
+the gateway by supplying a dedicated random bearer token of at least 24
+characters:
+
+```bash
+CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>' make compose-up-web-run
+```
+
+The Make target is only a convenience wrapper. To use Docker Compose directly,
+build the current checkout's wheel, export the values consumed by the Compose
+file, and enable the `web-run` profile:
+
+```bash
+python -m build --wheel
+export LOCAL_WHEEL="$(basename "$(ls -t dist/*.whl | head -n 1)")"
+export CODEX_ROSETTA_WEB_RUN_URL='http://web-run:8080'
+export CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>'
+
+docker-compose -f docker/docker-compose.yaml \
+  --profile web-run up --build -d
+```
+
+`LOCAL_WHEEL` must be the filename of a wheel under the repository's `dist/`
+directory. The Gateway Dockerfile deliberately installs that wheel so the
+container runs the exact local checkout. The token must be the same for the
+gateway and sidecar; the Compose network URL must remain
+`http://web-run:8080`.
+
+Use the container name for routine inspection, restart, and sidecar-only stop:
+
+```bash
+docker logs -f web-run
+docker restart web-run
+docker stop web-run
+```
+
+To stop and remove the complete Compose stack, reuse the exported variables and
+profile:
+
+```bash
+docker-compose -f docker/docker-compose.yaml \
+  --profile web-run down
+```
+
+This builds a separate service and container named `web-run`. Compose does not
+publish its port to the host; the gateway reaches it over the private Compose
+network and receives `CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`. The
+sidecar receives no gateway configuration directory or provider credentials.
+Its bearer token is masked by the Admin configuration API and Gateway Logs.
+Outside Compose, configure matching `server.web_run.base_url` and
+`server.web_run.token` values (or the corresponding URL/Token environment
+variables) explicitly.
+
+The sidecar runs Chromium as the image's unprivileged `pwuser`, uses the pinned
+Playwright seccomp profile required by Chromium's user-namespace sandbox, keeps
+a read-only root filesystem, and stores only bounded temporary browser/PDF
+state. Each Codex Search request ID is mapped to an isolated browser context;
+contexts expire after 15 minutes and retain at most 16 page/PDF references and
+40 MiB of PDF data. The container also has explicit memory and process limits.
+Navigation, subresources, redirects, and PDF downloads are restricted to public
+HTTP(S) addresses. This is a defense boundary, not a guarantee that arbitrary
+web content is trustworthy: keep the sidecar unexposed, use a unique token, and
+apply outbound network controls when deployment policy requires stricter site
+allowlisting.
+
 The Admin login limiter keys attempts by the direct peer address. Forwarded
 client-IP headers are ignored because the gateway does not yet expose a
 trusted-proxy allowlist. A reverse proxy therefore shares one limiter bucket;

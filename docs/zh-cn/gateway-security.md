@@ -97,6 +97,61 @@ Gateway/Provider API credential；除非确实需要在可信 Admin 会话中显
 当前 checkout 的 wheel，并把这个精确 wheel 交给版本化 Compose 配置进行构建。若直接
 运行 Compose，也必须显式提供 `LOCAL_WHEEL`，不能再依赖旧的 registry 镜像名。
 
+浏览器版 `web.run` 是可选的 Compose profile。提供一个不少于 24 个字符的独立随机
+Bearer Token，即可与网关一起启动：
+
+```bash
+CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>' make compose-up-web-run
+```
+
+Make target 只是快捷封装。若要直接使用 Docker Compose，请先构建当前 checkout 的
+wheel，导出 Compose 文件使用的变量，再启用 `web-run` profile：
+
+```bash
+python -m build --wheel
+export LOCAL_WHEEL="$(basename "$(ls -t dist/*.whl | head -n 1)")"
+export CODEX_ROSETTA_WEB_RUN_URL='http://web-run:8080'
+export CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>'
+
+docker-compose -f docker/docker-compose.yaml \
+  --profile web-run up --build -d
+```
+
+`LOCAL_WHEEL` 必须是仓库 `dist/` 目录下的 wheel 文件名。Gateway Dockerfile 会明确
+安装这个 wheel，确保容器运行的就是当前本地 checkout。Gateway 和 sidecar 必须使用
+同一个 Token，Compose 网络地址应保持为 `http://web-run:8080`。
+
+日常查看日志、重启和只停止 sidecar 可以直接使用容器名：
+
+```bash
+docker logs -f web-run
+docker restart web-run
+docker stop web-run
+```
+
+停止并删除完整 Compose stack 时，复用上述已导出的变量和 profile：
+
+```bash
+docker-compose -f docker/docker-compose.yaml \
+  --profile web-run down
+```
+
+该命令会构建独立 service 和名为 `web-run` 的容器。Compose 不会向宿主机发布它的
+端口；网关通过私有 Compose 网络访问，并收到
+`CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`。sidecar 不会挂载网关配置目录，
+也不会收到 Provider credential。它的 Bearer Token 会在 Admin 配置 API 和 Gateway
+Logs 中被遮盖。若不使用 Compose，需要显式配置相互匹配的
+`server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
+
+sidecar 以镜像内的非特权 `pwuser` 运行 Chromium，使用 Chromium user-namespace sandbox
+所需的固定版本 Playwright seccomp profile 和只读根文件系统，并只保存有界的临时
+浏览器/PDF 状态。每个 Codex Search request ID 都映射到独立 browser context；
+context 会在 15 分钟后过期，最多保留 16 个页面/PDF 引用和 40 MiB PDF 数据；容器
+本身也有明确的内存和进程数限制。导航、子资源、重定向和 PDF 下载都限制为公开
+HTTP(S) 地址。这是一层防护边界，并不代表任意网页内容都可信：
+不要把 sidecar 端口对外发布，使用独立 Token；如果部署策略需要更严格的网站 allowlist，
+还应配置出站网络控制。
+
 Admin 登录限流按直连 peer 地址统计。由于网关尚未提供可信代理 allowlist，客户端
 IP 转发头会被忽略；因此反向代理后的请求会共享一个限流桶，建议同时在反向代理上
 配置限流作为额外防护。Request log 的客户端归属采用同一规则，只记录 TCP 直连

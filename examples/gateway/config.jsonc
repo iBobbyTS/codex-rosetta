@@ -70,6 +70,13 @@
     "port": 8765,
     // One of 64, 128, 256, 512, 1024, or "unlimited". Values are MiB.
     "request_body_limit_mb": 128,
+    // Optional browser/PDF sidecar. Docker's compose-up-web-run target supplies
+    // equivalent environment overrides, so this block can stay commented there.
+    // "web_run": {
+    //   "base_url": "http://web-run:8080",
+    //   "token": "${CODEX_ROSETTA_WEB_RUN_TOKEN}",
+    //   "timeout_seconds": 45
+    // },
     "admin_password": "${CODEX_ROSETTA_ADMIN_PASSWORD}",
     "credential_visible": false,
     "api_keys": [

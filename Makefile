@@ -148,6 +148,16 @@ compose-up: build-package
 	LOCAL_WHEEL="$$LOCAL_WHEEL" CODEX_ROSETTA_VERSION="$(VERSION)" \
 		docker-compose -f docker/docker-compose.yaml up --build -d
 
+compose-up-web-run: build-package
+	@test -n "$(CODEX_ROSETTA_WEB_RUN_TOKEN)" || (echo "CODEX_ROSETTA_WEB_RUN_TOKEN is required" >&2; exit 1)
+	@LOCAL_WHEEL=$$(ls dist/*.whl | head -n 1 | xargs basename); \
+	test -n "$$LOCAL_WHEEL" || (echo "Local wheel build did not produce dist/*.whl" >&2; exit 1); \
+	echo "Building Compose gateway and optional web-run sidecar from the current checkout"; \
+	LOCAL_WHEEL="$$LOCAL_WHEEL" CODEX_ROSETTA_VERSION="$(VERSION)" \
+	CODEX_ROSETTA_WEB_RUN_URL="http://web-run:8080" \
+	CODEX_ROSETTA_WEB_RUN_TOKEN="$(CODEX_ROSETTA_WEB_RUN_TOKEN)" \
+		docker-compose -f docker/docker-compose.yaml --profile web-run up --build -d
+
 push-docker:
 	@echo "Disabled: this repository does not publish Docker images." >&2
 	@false
@@ -217,6 +227,7 @@ help:
 	@echo "Docker:"
 	@echo "  build-docker   - Build Docker image (local x64)"
 	@echo "  compose-up     - Rebuild the current checkout wheel and start local Compose"
+	@echo "  compose-up-web-run - Start Compose with the optional browser/PDF sidecar"
 	@echo "  push-docker    - Disabled (Docker publishing is not configured)"
 	@echo "  clean-docker   - Clean Docker images"
 	@echo ""
@@ -252,4 +263,4 @@ help:
 	@echo ""
 	@echo "Detected version: $(VERSION)"
 
-.PHONY: all lint lint-fix test test-integration test-gateway check-codex-compat update-codex-compat-baseline check-release-version build-package push-package clean-package build push clean build-docker compose-up push-docker clean-docker deploy-dev help
+.PHONY: all lint lint-fix test test-integration test-gateway check-codex-compat update-codex-compat-baseline check-release-version build-package push-package clean-package build push clean build-docker compose-up compose-up-web-run push-docker clean-docker deploy-dev help
