@@ -1,87 +1,58 @@
 # Context Compaction Protocol Test
 
-This suite verifies Codex's remote-compaction request and response contract
-through Codex-Rosetta. It is a protocol diagnostic, not a model-quality or
-summary-quality benchmark.
+This suite verifies Codex Remote Compaction V2 routing, wire shape, persistence,
+and replay through Codex-Rosetta. It does not score summary quality; use
+`context_compaction_summary_quality` for the controlled fact-retention matrix.
 
-## Scenario
+## Scenarios
 
-- `01`: run one deterministic foreground command, then require a second model
-  turn to report the fixed result marker.
+- `01`: `deepseek-v4-flash` context-limit compaction through Rosetta mode.
+- `02`: `gpt-5.6-terra` context-limit native passthrough through
+  `Pixel (K12)`.
+- `03`: `gpt-5.6-terra` through `Pixel (K12)` to
+  `deepseek-v4-flash`; require `comp_hash_changed` and Rosetta mode.
+- `04`: reverse `03`; require `comp_hash_changed` and Rosetta mode.
 
-The isolated Codex configuration must use the built-in `openai` provider ID and
-set `model_auto_compact_token_limit = 1000`. The deliberately low limit makes
-Codex attempt compaction after the first tool result and before the second
-model turn. Use a normal provider configuration and token limit for any
-non-diagnostic agent test.
+Every cell uses a separate timestamped run root, Codex Home, copied gateway
+configuration, port, gateway process, and Gateway Logs trace.
 
-Use this isolated configuration for the remote-v2 run:
+## Provider routing
+
+In the copied config only, route every `gpt-5.6-terra` cell to the existing
+provider named exactly `Pixel (K12)`. Keep `deepseek-v4-flash` on its existing
+sole provider. Verify both provider names and actual upstream models from the
+trace; model aliases alone are not evidence.
+
+For context-limit tasks `01` and `02`, set:
 
 ```toml
 model_provider = "openai"
-model = "gpt-5.5"
-openai_base_url = "http://127.0.0.1:<port>/v1"
-model_auto_compact_token_limit = 1000
-sandbox_mode = "danger-full-access"
-approval_policy = "never"
-model_reasoning_effort = "medium"
-
-[projects."<RUN_ROOT>/worktree"]
-trust_level = "trusted"
+model_auto_compact_token_limit = 17000
 ```
 
-In the copied Gateway configuration only, add a temporary `gpt-5.5` LLM model
-group routed to the selected provider when one does not already exist. For a
-TURNING run, preserve the copied `TURNING` provider and route the model name
-unchanged. Pass the copied Gateway client key to Codex as `CODEX_API_KEY`;
-never print it or persist it outside the isolated run.
+The deterministic command emits more than 100,000 characters of neutral filler
+so the 17,000-token diagnostic limit sits above both the baseline and
+post-compaction turns, while the pending command result forces one compaction
+before the next model call. Record the baseline and post-compaction Codex token
+counts plus the command-output character count. Require both token counts below
+17,000, at least 100,000 command-output characters, and exactly one genuine
+`context_limit` compaction after the command. A run without that measured shape
+is invalid and must be reported rather than silently accepted.
 
-For a provider-identity comparison, keep every other runtime field unchanged
-and replace the Codex provider with an explicitly configured provider whose id
-and display name are both `custom`. The expected method then changes from
-remote v2 to `local_model_summary`.
+For model-switch tasks `03` and `04`, use the normal token limit. Retain the
+first execution's thread id and run:
 
-```toml
-model_provider = "custom"
-model = "gpt-5.5"
-model_auto_compact_token_limit = 1000
-sandbox_mode = "danger-full-access"
-approval_policy = "never"
-model_reasoning_effort = "medium"
-
-[model_providers.custom]
-name = "custom"
-wire_api = "responses"
-requires_openai_auth = true
-base_url = "http://127.0.0.1:<port>/v1"
-experimental_bearer_token = "<copied-gateway-client-key>"
-
-[projects."<RUN_ROOT>/worktree"]
-trust_level = "trusted"
+```bash
+codex exec resume -m TARGET <thread-id> \
+  "Proceed with the resume phase of the existing task."
 ```
 
-Use a separate timestamp run for the custom comparison. This low token limit
-and model alias are diagnostic settings and must not be reused for normal agent
-tests.
+Non-interactive resume requires the new prompt. The first phase's fixed code is
+not repeated in that prompt, so the target marker proves context continuation.
 
 ## Result interpretation
 
-Inspect both the Codex stderr/rollout and the Gateway Logs trace.
-The parent agent must follow [`EVALUATION.md`](EVALUATION.md), write the bounded
-machine-readable conclusion to `RUN_ROOT/artifacts/evaluation.json`, and state
-both whether compaction succeeded and which compaction method Codex used.
-
-- `completed`: the trace contains a request whose input includes
-  `compaction_trigger`, the response contains exactly one completed
-  `type: "compaction"` or `type: "compaction_summary"` output item, and Codex
-  reaches `RESULT:COMPACT_OK`. Codex accepts `compaction_summary` as the wire
-  compatibility alias for its internal compaction item.
-- `remote_compaction_error_reproduced`: Codex sends `compaction_trigger`, then
-  reports the error pattern declared in `expected.json` before reaching the
-  marker.
-- `not_triggered`: no genuine `compaction_trigger` input item is present. This
-  is an invalid run rather than evidence that compaction works.
-
-Do not count the string `compaction_trigger` when it merely appears inside a
-prompt, source listing, tool result, or error message. It must be the `type` of
-an item in the outgoing Responses request.
+Follow [`EVALUATION.md`](EVALUATION.md). Require a genuine trigger item, exact
+reason/mode, one canonical compaction output, installed follow-up input, the
+expected mapping count, and the final marker. Do not count strings that merely
+appear inside prompts, source listings, tool output, or errors.

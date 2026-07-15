@@ -1,5 +1,5 @@
 {
-  "id": "01",
+  "id": "02",
   "timeout_seconds": 120,
   "model": "deepseek-v4-flash",
   "gateway_provider": "Deepseek (Official)",
@@ -10,6 +10,6 @@
   "expected_compaction_count": 1,
   "expected_command_starts": 1,
   "expected_rosetta_mapping_rows": 1,
-  "success_marker": "RESULT:COMPACTION_PROTOCOL_OK",
+  "expected_facts_source": "tests/live_agent/context_compaction_summary_quality/expected_facts.json",
   "evaluation_artifact": "artifacts/evaluation.json"
 }

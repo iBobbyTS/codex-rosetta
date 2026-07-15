@@ -20,6 +20,16 @@
 模型，生成的目录就只包含已配置的模型名称。已配置名称与八个打包 slug 之一相同时，
 会在解析后的 JSON 值层面原样复用该条目。
 
+### 压缩哈希 overlay
+
+Rosetta 保留上游 catalog 资产原文，只在 materialization 时应用运行时
+`comp_hash` overlay。`gpt-5.6-sol`/`terra`/`luna` 保留已审查的上游组值（当前为
+`3000`），`gpt-5.5`/`5.4`/`5.4-mini` 也保留上游组值（当前为 `2911`）。其余组由
+Rosetta 管理：`gpt-5.2`、`codex-auto-review`、DeepSeek V4、GLM 5.2、两个 Qwen
+3.7、MiMo V2.5、MiniMax M3 和 Kimi K2.7 Code。每组都非空；同组共享值，不同组不得
+碰撞。未知 alias 使用确定性的 `rosetta-comp-v1:custom:<sha256(slug)>`。上游 hash
+缺失或未经审查的碰撞会使兼容检查失败，而不会静默关闭切模压缩。
+
 本地模式还会配置 Codex 使用 Rosetta，而不只是写入模型目录。它选择自定义 Provider
 ID `codex_rosetta`，但生成的 Provider `name` 会严格写成 `OpenAI`。这个区别是有意
 的：Codex 把 `model_provider` 当作 ID 解析，而 `provider.is_openai()` 检查的是已选

@@ -1,15 +1,18 @@
 ---
 name: rosetta-codex-readme-test
-description: Run controlled Codex-through-Codex-Rosetta tool-use tasks copied from tests/agent_workspace into an isolated repository-local runtime. Use when Codex needs to compare model-facing and native tool calls, validate command execution or process continuation, identify the resulting Codex session and Rosetta trace, or smoke-test real providers without measuring general model quality.
+description: Run controlled Codex-through-Codex-Rosetta tool-use tasks copied from tests/live_agent into an isolated repository-local runtime. Use when Codex needs to compare model-facing and native tool calls, validate command execution or process continuation, identify the resulting Codex session and Rosetta trace, or smoke-test real providers without measuring general model quality.
 ---
 
 # Rosetta Codex Agent Tool Test
 
 ## Purpose
 
-Run repeatable real-agent tests from `tests/agent_workspace` through
-`codex-rosetta-gateway`. Test only whether the model selects and sequences tools
-correctly. Do not score reasoning, coding skill, prose, or general agent quality.
+Run repeatable real-agent tests from `tests/live_agent` through
+`codex-rosetta-gateway`. Usually test only whether the model selects and
+sequences tools correctly. Do not score reasoning, coding skill, prose, or
+general agent quality. The deterministic context-compaction summary-quality
+suite is the narrow exception: score only its fixed fact-retention fields after
+its protocol preconditions pass.
 
 Never execute a template in place. Copy one task into a disposable workspace
 under this repository. Keep temporary configuration and Codex sessions inside
@@ -19,7 +22,7 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
 ## Runtime Contract
 
 - Resolve the repository root with `git rev-parse --show-toplevel`.
-- Select the suite and task from `tests/agent_workspace` as requested, then
+- Select the suite and task from `tests/live_agent` as requested, then
   read that suite's `README.md`, optional `EVALUATION.md`, and task
   `expected.json` before configuring the run. Suite-specific models, feature
   flags, provider identities, task order, and result fields live there rather
@@ -38,7 +41,7 @@ exists, stop and use another unused minute rather than adding a suffix.
 
    ```bash
    ROOT=$(git rev-parse --show-toplevel)
-   SUITE="$ROOT/tests/agent_workspace/<suite>"
+   SUITE="$ROOT/tests/live_agent/<suite>"
    TASK_ID=<task-id>
    test -f "$SUITE/README.md"
    test -f "$SUITE/$TASK_ID/TASK.md"
@@ -154,7 +157,8 @@ exists, stop and use another unused minute rather than adding a suffix.
 2. Read `TASK.md` as the exact prompt. Do not paraphrase or add hints. Read the
    suite `README.md`, optional `EVALUATION.md`, and task `expected.json` for
    configuration, timeout, and evidence requirements. They are guidance for
-   the parent agent and must not be inserted into the tested model's prompt.
+   the test executor (including a coding agent or developer) and must not be
+   inserted into the tested model's prompt.
 
 3. Run Codex non-interactively with the isolated home and bounded duration:
 
@@ -191,6 +195,11 @@ Use three bounded evidence sources:
 Compare the evidence with `worktree/expected.json` and apply the field meanings
 and output schema defined by the selected suite's README/EVALUATION guide. Do
 not infer a suite-specific pass condition from this skill.
+
+For `context_compaction_summary_quality`, read canonical expected facts from
+the suite root, not the isolated worktree, and verify the two model cells use
+byte-identical task and scenario bytes before running either cell. Never place
+the evaluator's expected values in the tested model's prompt.
 
 The outer evaluating agent decides success by the task's core objective, not by
 perfect compliance with every incidental instruction. Mark the task successful
@@ -231,7 +240,7 @@ For every cell, record:
 - Work only inside `tmp/agent_testing_workspace/<timestamp>` after copying the
   selected template.
 - Do not run agent tasks in the repository source tree or any external project.
-- Do not edit the canonical files under `tests/agent_workspace` during a run.
+- Do not edit the canonical files under `tests/live_agent` during a run.
 - Do not alter, reload, kill, or reuse the user's main gateway.
 - Keep the copied gateway config and Codex home under the run root.
 - On macOS, write only the Web Admin **Gateway Logs** stream trace under
@@ -251,8 +260,9 @@ Report the model, provider identity, task id, exit status, observed marker,
 thread id, rollout path, trace path, observed upstream model, and any warning
 affecting interpretation. Classify each run as `success`,
 `success with deviations`, or `failure`, and briefly separate minor deviations
-from failures of the core objective. State explicitly that the result measures
-tool-call behavior only.
+from failures of the core objective. State explicitly what the selected suite
+measures. The summary-quality suite measures only deterministic fact retention
+after compaction; it is not a general model-quality benchmark.
 
 Include every additional field required by the selected suite's guide. When an
 evaluation artifact is required, the final report must agree with it.

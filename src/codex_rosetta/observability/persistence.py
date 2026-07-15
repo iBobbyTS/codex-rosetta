@@ -19,6 +19,7 @@ import threading
 import warnings
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -160,6 +161,7 @@ class PersistenceManager:
         self._redactor = SecretRedactor(token_values)
         self._mapping_cipher: Any | None = None
         self._tool_mapping_lock = threading.RLock()
+        self._compaction_mapping_lock = threading.RLock()
         self._tool_mapping_max_row_bytes = _positive_tool_mapping_limit(
             tool_mapping_max_row_bytes,
             field="tool_mapping_max_row_bytes",
@@ -200,6 +202,9 @@ class PersistenceManager:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._init_tables()
+            self.cleanup_expired_codex_compaction_mappings(
+                datetime.now(timezone.utc).isoformat()
+            )
             self._validate_encrypted_tool_mappings()
             self._secure_storage_paths()
             self._migrate_legacy()
@@ -393,6 +398,22 @@ class PersistenceManager:
                 ON tool_call_mappings(
                     principal_id, provider_name, model, session_id
                 );
+            CREATE TABLE IF NOT EXISTS codex_compaction_mappings (
+                principal_id      TEXT NOT NULL,
+                token_hash        TEXT NOT NULL,
+                replacement_text  TEXT NOT NULL,
+                replacement_bytes INTEGER NOT NULL,
+                source_model      TEXT NOT NULL,
+                reason            TEXT NOT NULL,
+                prompt_sha256     TEXT NOT NULL,
+                created_at        TEXT NOT NULL,
+                expires_at        TEXT NOT NULL,
+                PRIMARY KEY (principal_id, token_hash)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ccm_expire_at
+                ON codex_compaction_mappings(expires_at);
+            CREATE INDEX IF NOT EXISTS idx_ccm_principal
+                ON codex_compaction_mappings(principal_id);
         """)
         self._migrate_add_columns()
         self._migrate_tool_call_mapping_encryption()
@@ -1240,6 +1261,105 @@ class PersistenceManager:
         with self._tool_mapping_lock:
             row = self._conn.execute(
                 "SELECT COUNT(*) FROM tool_call_mappings"
+            ).fetchone()
+            return row[0] if row else 0
+
+    # ------------------------------------------------------------------
+    # Codex remote-compaction mappings
+    # ------------------------------------------------------------------
+
+    def store_codex_compaction_mapping(
+        self,
+        *,
+        principal_id: str,
+        token_hash: str,
+        replacement_text: str,
+        source_model: str,
+        reason: str,
+        prompt_sha256: str,
+        created_at: str,
+        expires_at: str,
+    ) -> None:
+        """Persist one plaintext Rosetta remote-compaction replacement."""
+        replacement_bytes = len(replacement_text.encode("utf-8"))
+        with self._compaction_mapping_lock:
+            self._conn.execute(
+                "INSERT INTO codex_compaction_mappings "
+                "(principal_id, token_hash, replacement_text, replacement_bytes, "
+                "source_model, reason, prompt_sha256, created_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    principal_id,
+                    token_hash,
+                    replacement_text,
+                    replacement_bytes,
+                    source_model,
+                    reason,
+                    prompt_sha256,
+                    created_at,
+                    expires_at,
+                ),
+            )
+            self._conn.commit()
+
+    def get_codex_compaction_mapping(
+        self,
+        *,
+        principal_id: str,
+        token_hash: str,
+        now: str,
+        renewed_expires_at: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Return one live replacement owned by *principal_id*, if any.
+
+        ``renewed_expires_at`` supports the gateway's rolling seven-day
+        retention policy without making callers that only inspect rows mutate
+        them implicitly.
+        """
+        with self._compaction_mapping_lock:
+            self._conn.execute(
+                "DELETE FROM codex_compaction_mappings WHERE expires_at <= ?", (now,)
+            )
+            row = self._conn.execute(
+                "SELECT replacement_text, replacement_bytes, source_model, reason, "
+                "prompt_sha256, created_at, expires_at "
+                "FROM codex_compaction_mappings "
+                "WHERE principal_id = ? AND token_hash = ?",
+                (principal_id, token_hash),
+            ).fetchone()
+            if row is not None and renewed_expires_at is not None:
+                self._conn.execute(
+                    "UPDATE codex_compaction_mappings SET expires_at = ? "
+                    "WHERE principal_id = ? AND token_hash = ?",
+                    (renewed_expires_at, principal_id, token_hash),
+                )
+            self._conn.commit()
+        if row is None:
+            return None
+        return {
+            "replacement_text": row[0],
+            "replacement_bytes": row[1],
+            "source_model": row[2],
+            "reason": row[3],
+            "prompt_sha256": row[4],
+            "created_at": row[5],
+            "expires_at": renewed_expires_at or row[6],
+        }
+
+    def cleanup_expired_codex_compaction_mappings(self, now: str) -> int:
+        """Delete expired Rosetta remote-compaction mappings."""
+        with self._compaction_mapping_lock:
+            cursor = self._conn.execute(
+                "DELETE FROM codex_compaction_mappings WHERE expires_at <= ?", (now,)
+            )
+            self._conn.commit()
+            return cursor.rowcount
+
+    def count_codex_compaction_mappings(self) -> int:
+        """Return the number of retained Rosetta remote-compaction mappings."""
+        with self._compaction_mapping_lock:
+            row = self._conn.execute(
+                "SELECT COUNT(*) FROM codex_compaction_mappings"
             ).fetchone()
             return row[0] if row else 0
 

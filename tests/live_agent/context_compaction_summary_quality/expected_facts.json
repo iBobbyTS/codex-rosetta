@@ -1,0 +1,9 @@
+{
+  "project": "Orchid",
+  "stage": "2 completed",
+  "ledger_policy": "do not modify ledger.csv",
+  "timezone": "UTC only",
+  "endpoint": "/v2/checkpoint",
+  "predeploy_check": "verify_delta",
+  "reference_code": "A7-KAPPA"
+}

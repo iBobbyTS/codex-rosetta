@@ -1,5 +1,21 @@
 # Gateway Security and Authentication
 
+## Remote compaction retention
+
+Rosetta Remote Compaction V2 stores a plaintext handoff replacement in the
+gateway SQLite database for seven days. The returned `encrypted_content` is an
+opaque `rskc_v1_` handle, not ciphertext; only its SHA-256 is stored beside the
+plaintext. Mappings are isolated by authenticated principal, expire on cleanup,
+and are renewed when replayed. A missing, expired, or cross-principal handle is
+silently discarded. This logical TTL does not erase rollout files, explicitly
+enabled raw traces, test artifacts, backups, or already-freed SQLite pages.
+
+For a configured OpenAI Responses passthrough route, only `context_limit` and
+`user_requested` retain native compaction unchanged. Rosetta does not probe the
+upstream and never falls back after a native failure. All model-switch reasons
+and every other route use Rosetta's no-tools summary request; native compaction
+items that those routes cannot process are silently discarded.
+
 Codex-Rosetta fails closed: every gateway configuration must contain a
 non-empty Admin password and at least one gateway access key. The default bind
 address is `127.0.0.1`, and API credential reveal is disabled by default.

@@ -18,8 +18,11 @@ handling rather than prose quality.
   its evaluator uses Rosetta Gateway Logs to distinguish `web.run` from hosted
   `web_search` and to prove which local executor ran.
 - [`context_compaction`](context_compaction/README.md): forcing a second
-  model turn across Codex remote compaction and recording whether an
-  OpenAI-identified provider returns a valid compaction item.
+  model turn across Codex remote compaction and validating only its routing,
+  wire, persistence, and replay protocol.
+- [`context_compaction_summary_quality`](context_compaction_summary_quality/README.md):
+  comparing deterministic post-compaction fact retention with byte-identical
+  GPT and DeepSeek fixtures; evaluation belongs to the test executor.
 - [`namespace_tools`](namespace_tools/README.md): directly exercising the
   `clock`, `memories`, and `skills` Namespace tools.
 - [`subagent_tools`](subagent_tools/README.md): six isolated lifecycle
@@ -42,10 +45,11 @@ configuration, feature flags, and pass criteria.
 ## Real-provider defaults
 
 The default third-party comparison model is `deepseek-v4-flash`; the native
-GPT comparison model is `gpt-5.6-terra`. A normal real-provider comparison uses
-both. Always confirm the Gateway provider and actual upstream model in Rosetta
-Gateway Logs: a Codex-facing alias by itself is not evidence of the upstream
-route.
+GPT comparison model is `gpt-5.6-terra`. For context-compaction protocol and
+summary-quality matrices, route GPT to `Pixel (K12)` in the copied test config.
+A normal real-provider comparison uses both models. Always confirm the Gateway
+provider and actual upstream model in Rosetta Gateway Logs: a Codex-facing
+alias by itself is not evidence of the upstream route.
 
 Every model, provider identity, and task matrix cell requires a separate
 timestamp run root. Never reuse the Codex home, copied Gateway configuration,

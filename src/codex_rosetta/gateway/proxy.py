@@ -40,6 +40,15 @@ from codex_rosetta.routing import ResolvedRoute, is_openai_responses_passthrough
 from codex_rosetta.observability.error_dump import dump_error
 
 from .codex_search_references import CodexSearchReferenceStore
+from .codex_compaction import (
+    COMPACT_PROMPT_SHA256,
+    InvalidCodexCompactionRequest,
+    InvalidCompactionSummary,
+    build_compaction_response,
+    create_compaction_mapping,
+    extract_assistant_summary,
+    prepare_codex_compaction,
+)
 from .code_mode_projection import ExecToolProjection, exec_tool_projections_for_route
 from .logging import (
     BodyLogState,
@@ -201,6 +210,163 @@ def _conversion_failure_response(
     ):
         return error_response_for_source(source_provider, 504, str(exc))
     return error_response_for_source(source_provider, 400, str(exc))
+
+
+async def _run_rosetta_compaction(
+    *,
+    route: ResolvedRoute,
+    provider_info: ProviderInfo,
+    preparation: Any,
+    transport: UpstreamTransport,
+    metadata_store: ProviderMetadataStore | None,
+    codex_tool_store: CodexToolLocalizationStore | None,
+    extra_headers: dict[str, str] | None,
+    persistence: Any | None,
+    state_scope: GatewayStateScope,
+    codex_window_id: str | None,
+    window_tool_search_store: WindowToolSearchStore | None,
+    image_fetch_workers: ImageFetchWorkerPool | None,
+    stream: bool,
+) -> tuple[Response | StreamingResponse, dict[str, Any]]:
+    """Execute the internal no-tools summary call and return a V2 item."""
+    if persistence is None:
+        return (
+            error_response_for_source(
+                route.source_provider,
+                503,
+                "Rosetta remote compaction requires gateway persistence",
+            ),
+            {"compaction_mode": "rosetta", "compaction_reason": preparation.reason},
+        )
+    assert preparation.summary_request is not None
+    summary_response, summary_profile = await handle_non_streaming(
+        route,
+        provider_info,
+        preparation.summary_request,
+        transport=transport,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        extra_headers=extra_headers,
+        persistence=persistence,
+        state_scope=state_scope,
+        codex_window_id=codex_window_id,
+        window_tool_search_store=window_tool_search_store,
+        upstream_error_log_state=None,
+        body_log_state=None,
+        image_fetch_workers=image_fetch_workers,
+        skip_codex_compaction=True,
+        disable_error_dump=True,
+    )
+    profile: dict[str, Any] = {
+        "compaction_mode": "rosetta",
+        "compaction_reason": preparation.reason,
+        "compaction_rehydrated_count": preparation.rehydrated_count,
+        "compaction_dropped_rosetta_count": preparation.dropped_rosetta_count,
+        "compaction_dropped_native_count": preparation.dropped_native_count,
+        "compaction_prompt_sha256": COMPACT_PROMPT_SHA256,
+    }
+    profile.update(
+        {f"compaction_summary_{key}": value for key, value in summary_profile.items()}
+    )
+    if summary_response.status_code >= 400:
+        return summary_response, profile
+    try:
+        summary_payload = json.loads(summary_response.body)
+        if not isinstance(summary_payload, dict):
+            raise InvalidCompactionSummary("internal compaction response is not JSON")
+        summary = extract_assistant_summary(summary_payload)
+    except (InvalidCompactionSummary, ValueError, TypeError) as exc:
+        logger.warning(
+            "Rosetta compaction summary failed (reason=%s, prompt_sha256=%s): %s",
+            preparation.reason,
+            COMPACT_PROMPT_SHA256,
+            exc,
+        )
+        return error_response_for_source(route.source_provider, 502, str(exc)), profile
+    try:
+        mapping = create_compaction_mapping(
+            persistence,
+            principal_id=state_scope.principal_id,
+            source_model=str(preparation.body.get("model", "")),
+            reason=preparation.reason,
+            summary=summary,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Rosetta compaction persistence failed (reason=%s, prompt_sha256=%s): %s",
+            preparation.reason,
+            COMPACT_PROMPT_SHA256,
+            exc,
+        )
+        return error_response_for_source(route.source_provider, 503, str(exc)), profile
+    return (
+        build_compaction_response(
+            model=str(preparation.body.get("model", "")),
+            token=mapping.token,
+            stream=stream,
+        ),
+        profile,
+    )
+
+
+async def _prepare_codex_compaction_request(
+    *,
+    route: ResolvedRoute,
+    provider_info: ProviderInfo,
+    body: dict[str, Any],
+    transport: UpstreamTransport,
+    metadata_store: ProviderMetadataStore | None,
+    codex_tool_store: CodexToolLocalizationStore | None,
+    extra_headers: dict[str, str] | None,
+    persistence: Any | None,
+    state_scope: GatewayStateScope,
+    codex_window_id: str | None,
+    window_tool_search_store: WindowToolSearchStore | None,
+    image_fetch_workers: ImageFetchWorkerPool | None,
+    stream: bool,
+    enabled: bool = True,
+) -> tuple[dict[str, Any], Response | StreamingResponse | None, dict[str, Any]]:
+    """Apply V2 replay/policy, returning an early response only when required."""
+    if not enabled:
+        return body, None, {}
+    try:
+        preparation = prepare_codex_compaction(
+            body,
+            route=route,
+            persistence=persistence,
+            principal_id=state_scope.principal_id,
+        )
+    except InvalidCodexCompactionRequest as exc:
+        return (
+            body,
+            error_response_for_source(route.source_provider, 400, str(exc)),
+            {},
+        )
+    profile = {
+        "compaction_mode": preparation.mode,
+        "compaction_reason": preparation.reason,
+        "compaction_rehydrated_count": preparation.rehydrated_count,
+        "compaction_dropped_rosetta_count": preparation.dropped_rosetta_count,
+        "compaction_dropped_native_count": preparation.dropped_native_count,
+    }
+    if preparation.mode != "rosetta":
+        return preparation.body, None, profile if preparation.mode else {}
+    response, compaction_profile = await _run_rosetta_compaction(
+        route=route,
+        provider_info=provider_info,
+        preparation=preparation,
+        transport=transport,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        extra_headers=extra_headers,
+        persistence=persistence,
+        state_scope=state_scope,
+        codex_window_id=codex_window_id,
+        window_tool_search_store=window_tool_search_store,
+        image_fetch_workers=image_fetch_workers,
+        stream=stream,
+    )
+    return preparation.body, response, compaction_profile
 
 
 # ---------------------------------------------------------------------------
@@ -2344,6 +2510,8 @@ async def handle_non_streaming(
     upstream_error_log_state: UpstreamErrorLogState | None = None,
     body_log_state: BodyLogState | None = None,
     image_fetch_workers: ImageFetchWorkerPool | None = None,
+    skip_codex_compaction: bool = False,
+    disable_error_dump: bool = False,
 ) -> tuple[Response, dict[str, Any]]:
     """Non-streaming proxy: convert -> forward -> convert back -> respond.
 
@@ -2364,6 +2532,31 @@ async def handle_non_streaming(
     persistent_mappings: list[LocalizedToolMapping] = []
     used_mapping_call_ids: set[str] = set()
     profile: dict[str, Any] = {}
+    error_dump_persistence = None if disable_error_dump else persistence
+    (
+        body,
+        compaction_response,
+        compaction_profile,
+    ) = await _prepare_codex_compaction_request(
+        route=route,
+        provider_info=provider_info,
+        body=body,
+        transport=transport,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        extra_headers=extra_headers,
+        persistence=persistence,
+        state_scope=scope,
+        codex_window_id=codex_window_id,
+        window_tool_search_store=window_tool_search_store,
+        image_fetch_workers=image_fetch_workers,
+        stream=False,
+        enabled=not skip_codex_compaction,
+    )
+    profile.update(compaction_profile)
+    if compaction_response is not None:
+        assert isinstance(compaction_response, Response)
+        return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
     body = _apply_tool_adaptation(body, route)
@@ -2407,7 +2600,7 @@ async def handle_non_streaming(
                 state=upstream_error_log_state,
             )
             dump_error(
-                persistence,
+                error_dump_persistence,
                 request_body=body,
                 response_text=resp.error_text,
                 converted_body=body,
@@ -2542,7 +2735,7 @@ async def handle_non_streaming(
             state=upstream_error_log_state,
         )
         dump_error(
-            persistence,
+            error_dump_persistence,
             request_body=body,
             response_text=resp.error_text,
             converted_body=target_body,
@@ -3230,7 +3423,7 @@ async def _handle_direct_responses_streaming(
     )
 
 
-async def handle_streaming(
+async def handle_streaming(  # noqa: C901
     route: ResolvedRoute,
     provider_info: ProviderInfo,
     body: dict[str, Any],
@@ -3276,6 +3469,28 @@ async def handle_streaming(
     persistent_mappings: list[LocalizedToolMapping] = []
     used_mapping_call_ids: set[str] = set()
     profile: dict[str, Any] = {}
+    (
+        body,
+        compaction_response,
+        compaction_profile,
+    ) = await _prepare_codex_compaction_request(
+        route=route,
+        provider_info=provider_info,
+        body=body,
+        transport=transport,
+        metadata_store=metadata_store,
+        codex_tool_store=codex_tool_store,
+        extra_headers=extra_headers,
+        persistence=persistence,
+        state_scope=scope,
+        codex_window_id=codex_window_id,
+        window_tool_search_store=window_tool_search_store,
+        image_fetch_workers=image_fetch_workers,
+        stream=True,
+    )
+    profile.update(compaction_profile)
+    if compaction_response is not None:
+        return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
     body = _apply_tool_adaptation(body, route)
