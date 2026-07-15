@@ -17,6 +17,22 @@
         "type": "Option<String>"
       }
     },
+    "code_mode_exec_shape": {
+      "description_builder_sha256": "60b29330e44424d693a4c5b62f3ba64d6150d307f14d8b57da9cf1a761a16008",
+      "nested_declaration_renderer_sha256": "80d9ffb8ca7469a0bcc74d5c9ce52cdb631edcdc271efdf9c0bf587febf563cd",
+      "nested_sample_renderer_sha256": "c1b48d36df4e857b2dd640b1374e3aa38fc25c49803f9154adb0d18368663193",
+      "nested_section_heading_renderer_sha256": "2bd54e63ee0a3deefcc64bcc1b39d0abed019778eadadb3e299babc4becf208d",
+      "public_tool_names": {
+        "PUBLIC_TOOL_NAME": "exec",
+        "WAIT_TOOL_NAME": "wait"
+      },
+      "web_command_schema_sha256": "6371391751d2a5dddad546aa810a6c64f770498702cec8153df74d1d7dff6f9b",
+      "web_description_sha256": "1f3879b44690eb7aad9ba97351acda16c4d0c26847bcb4af2964d5989404407e",
+      "web_tool_names": {
+        "RUN_TOOL_NAME": "run",
+        "WEB_NAMESPACE": "web"
+      }
+    },
     "codex_header_constants": {
       "OPENAI_BETA_HEADER": "OpenAI-Beta",
       "X_CODEX_INSTALLATION_ID_HEADER": "x-codex-installation-id",

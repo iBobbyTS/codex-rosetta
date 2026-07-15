@@ -28,7 +28,7 @@ from .tool_profiles import (
     resolve_tool_profile_inputs,
     validate_tool_profile_reference,
 )
-from .web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
+from .web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from .transport import ProviderInfo
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -999,8 +999,8 @@ class GatewayConfig:
             ),
             responses_processing=self.provider_responses_processing[provider_name],
             tool_runtime_capabilities=(
-                frozenset({WEB_RUN_SIDECAR_CAPABILITY})
-                if self.web_run_sidecar_url and self.web_run_sidecar_token
+                frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
+                if self.web_search["tavily_api_key"]
                 else frozenset()
             ),
         )

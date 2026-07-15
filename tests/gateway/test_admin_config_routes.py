@@ -12,7 +12,7 @@ from typing import Any, cast
 import pytest
 
 from codex_rosetta.gateway.admin.routes import _shared
-from codex_rosetta.gateway.admin.routes import config as config_routes
+from codex_rosetta.gateway import web_run_health
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     get_config,
@@ -226,6 +226,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     persistence = _PersistenceState(captured_tokens)
     metrics = MetricsCollector()
     metrics.update_token_values(initial_config.token_values)
+    health_invalidations = []
     app = SimpleNamespace(
         config_path=str(config_path),
         gateway_config=initial_config,
@@ -234,6 +235,9 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
         metrics=metrics,
         internal_token="internal-token",
         auth_state=auth_state,
+        web_run_health_state=SimpleNamespace(
+            invalidate=lambda: health_invalidations.append(True)
+        ),
     )
 
     updated_data = _config_data()
@@ -252,6 +256,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     assert auth_state.admin_token is not None
     assert auth_state.admin_token != previous_token
     assert app.max_body_size == 512 * 1024 * 1024
+    assert health_invalidations == [True]
     assert persistence._redactor == {
         "internal-token",
         "rotated-gateway-token",
@@ -751,8 +756,8 @@ def test_network_search_status_reports_service_and_browser(
         calls.append((client.kwargs, method, url, kwargs))
         return SimpleNamespace(status_code=200, json=lambda: health)
 
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(config_routes, "request_bounded_response", fake_request)
+    monkeypatch.setattr(web_run_health, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(web_run_health, "request_bounded_response", fake_request)
 
     response = _run(get_network_search_status(request))
 
@@ -781,8 +786,8 @@ def test_network_search_status_hides_unreachable_sidecar_error(monkeypatch):
     async def fail_request(*args, **kwargs):
         raise RuntimeError("sensitive upstream detail")
 
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(config_routes, "request_bounded_response", fail_request)
+    monkeypatch.setattr(web_run_health, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(web_run_health, "request_bounded_response", fail_request)
 
     response = _run(get_network_search_status(request))
 

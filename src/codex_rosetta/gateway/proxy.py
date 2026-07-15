@@ -49,7 +49,11 @@ from .codex_compaction import (
     extract_assistant_summary,
     prepare_codex_compaction,
 )
-from .code_mode_projection import ExecToolProjection, exec_tool_projections_for_route
+from .code_mode_projection import (
+    ExecToolProjection,
+    exec_tool_projections_for_route,
+    project_modified_exec_web_run_description,
+)
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -100,8 +104,8 @@ from .transport import (
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
-    WEB_RUN_SIDECAR_CAPABILITY,
     project_modified_web_run_function,
+    web_run_model_availability,
 )
 from .web_search import (
     TavilySearchClient,
@@ -787,15 +791,29 @@ def _filter_profile_tool(
         return adapted, removed
     adapted = apply_profile_tool_mutations(tool, item_id, route)
     if (
+        item_id == "custom.exec"
+        and route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) == "modified"
+        and isinstance(adapted, dict)
+    ):
+        description = adapted.get("description")
+        if isinstance(description, str):
+            projected_description = project_modified_exec_web_run_description(
+                description,
+                route,
+            )
+            if projected_description != description:
+                adapted = dict(adapted)
+                adapted["description"] = projected_description
+    if (
         item_id == WEB_RUN_PROFILE_ITEM_ID
         and state == "modified"
         and isinstance(adapted, dict)
     ):
+        search_available, browser_available = web_run_model_availability(route)
         projected = project_modified_web_run_function(
             adapted,
-            browser_available=(
-                WEB_RUN_SIDECAR_CAPABILITY in route.tool_runtime_capabilities
-            ),
+            search_available=search_available,
+            browser_available=browser_available,
         )
         if projected is None:
             return None, {name} if isinstance(name, str) else set()

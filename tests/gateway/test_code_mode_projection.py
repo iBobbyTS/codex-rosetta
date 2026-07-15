@@ -7,11 +7,14 @@ import json
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
     build_exec_script,
     exec_tool_projections_for_route,
     project_exec_tool_definitions,
+    project_modified_exec_web_run_description,
 )
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
@@ -27,12 +30,18 @@ from codex_rosetta.gateway.proxy import ProviderMetadataStore, handle_non_stream
 from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
-from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
+from codex_rosetta.gateway.web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
+    WEB_RUN_SIDECAR_CAPABILITY,
+)
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute
 
 
-def _route() -> ResolvedRoute:
+def _route(
+    *,
+    tool_runtime_capabilities: frozenset[str] = frozenset(),
+) -> ResolvedRoute:
     contract = tool_profile_contract()
     return ResolvedRoute(
         source_provider="openai_responses",
@@ -45,6 +54,7 @@ def _route() -> ResolvedRoute:
             item_id: dict(values)
             for item_id, values in contract["readonly"]["builtin"]["inputs"].items()
         },
+        tool_runtime_capabilities=tool_runtime_capabilities,
     )
 
 
@@ -93,6 +103,21 @@ declare const tools: { web__run(args: {
   response_length?: "short" | "medium" | "long";
 }): Promise<unknown>; };
 ```"""
+
+
+def _exec_description_with_full_web_run() -> str:
+    return "\n\n".join(
+        [
+            "Run JavaScript.",
+            _section("apply_patch", "input", "string"),
+            _web_run_section(),
+            _section(
+                "skills__read",
+                "args",
+                "{ authority: { kind: string; }; package: string; resource: string; }",
+            ),
+        ]
+    )
 
 
 def _exec_description() -> str:
@@ -205,7 +230,9 @@ def _exec_description() -> str:
 
 
 def test_modified_web_run_projects_only_rosetta_supported_capabilities():
-    route = _route()
+    route = _route(
+        tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
+    )
     definitions = project_exec_tool_definitions(
         _web_run_section(),
         exec_tool_projections_for_route(route),
@@ -244,11 +271,10 @@ def test_modified_web_run_projects_only_rosetta_supported_capabilities():
 
 
 def test_modified_web_run_projects_browser_commands_when_sidecar_is_available():
-    route = _route()
-    object.__setattr__(
-        route,
-        "tool_runtime_capabilities",
-        frozenset({WEB_RUN_SIDECAR_CAPABILITY}),
+    route = _route(
+        tool_runtime_capabilities=frozenset(
+            {WEB_RUN_BASIC_SEARCH_CAPABILITY, WEB_RUN_SIDECAR_CAPABILITY}
+        )
     )
     definitions = project_exec_tool_definitions(
         _web_run_section(),
@@ -314,6 +340,100 @@ def test_modified_web_run_with_no_parseable_supported_branch_fails_closed():
     )
 
     assert "web-run" not in definitions
+
+
+@pytest.mark.parametrize(
+    ("capabilities", "expected_commands"),
+    [
+        (frozenset(), {"open", "time", "response_length"}),
+        (
+            frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY}),
+            {"search_query", "open", "time", "response_length"},
+        ),
+        (
+            frozenset({WEB_RUN_SIDECAR_CAPABILITY}),
+            {"open", "click", "find", "screenshot", "time", "response_length"},
+        ),
+        (
+            frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY, WEB_RUN_SIDECAR_CAPABILITY}),
+            {
+                "search_query",
+                "open",
+                "click",
+                "find",
+                "screenshot",
+                "time",
+                "response_length",
+            },
+        ),
+    ],
+)
+def test_modified_exec_web_run_description_matches_runtime_capabilities(
+    capabilities, expected_commands
+):
+    route = _route(tool_runtime_capabilities=capabilities)
+
+    projected = project_modified_exec_web_run_description(
+        _exec_description_with_full_web_run(), route
+    )
+    definitions = project_exec_tool_definitions(
+        projected,
+        {
+            "web-run": ExecToolProjection(
+                item_id="namespace.web.run",
+                chat_name="web-run",
+                nested_name="web__run",
+            )
+        },
+    )
+
+    assert set(definitions["web-run"]["function"]["parameters"]["properties"]) == (
+        expected_commands
+    )
+    assert "finance" not in projected
+    assert "weather" not in projected
+    assert "sports" not in projected
+    assert "image_query" not in projected
+
+
+def test_modified_exec_web_run_preserves_other_sections():
+    description = _exec_description_with_full_web_run()
+    apply_patch_section = _section("apply_patch", "input", "string")
+    skills_section = _section(
+        "skills__read",
+        "args",
+        "{ authority: { kind: string; }; package: string; resource: string; }",
+    )
+
+    projected = project_modified_exec_web_run_description(description, _route())
+
+    assert apply_patch_section in projected
+    assert skills_section in projected
+
+
+def test_modified_exec_web_run_removes_only_malformed_section():
+    malformed_web = """### `web__run`
+Malformed declaration.
+
+exec tool declaration:
+```ts
+declare const tools: { web__run(args: Map<string, unknown>): Promise<unknown>; };
+```"""
+    next_section = _section("clock__curr_time", "args", "{}")
+    description = f"Run JavaScript.\n\n{malformed_web}\n\n{next_section}"
+
+    projected = project_modified_exec_web_run_description(description, _route())
+
+    assert "web__run" not in projected
+    assert next_section in projected
+
+
+def test_modified_exec_web_run_does_not_invent_missing_section():
+    description = f"Run JavaScript.\n\n{_section('update_plan', 'args', '{}')}"
+
+    assert (
+        project_modified_exec_web_run_description(description, _route()) == description
+    )
 
 
 def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
@@ -586,7 +706,9 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
 
 
 def test_modified_web_run_request_sends_pruned_function_to_upstream_model():
-    route = _route()
+    route = _route(
+        tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
+    )
     body = {
         "tools": [
             {

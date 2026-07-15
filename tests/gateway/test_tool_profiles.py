@@ -6,9 +6,14 @@ import copy
 
 import pytest
 
+from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.admin.tool_catalog import load_tool_catalog
 from codex_rosetta.gateway import tool_profiles as tool_profiles_module
+from codex_rosetta.gateway.code_mode_projection import (
+    ExecToolProjection,
+    project_exec_tool_definitions,
+)
 from codex_rosetta.gateway.proxy import (
     _apply_converted_request_tool_adaptation,
     _apply_tool_adaptation,
@@ -19,7 +24,10 @@ from codex_rosetta.gateway.tool_profiles import (
     resolve_tool_profile,
     tool_profile_contract,
 )
-from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
+from codex_rosetta.gateway.web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
+    WEB_RUN_SIDECAR_CAPABILITY,
+)
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -32,14 +40,18 @@ def _profile(**overrides: str) -> dict[str, str]:
 def _route(
     profile: dict[str, str],
     inputs: dict[str, dict[str, str]] | None = None,
+    *,
+    target_provider: ProviderType = "openai_chat",
+    tool_runtime_capabilities: frozenset[str] = frozenset(),
 ) -> ResolvedRoute:
     return ResolvedRoute(
         source_provider="openai_responses",
-        target_provider="openai_chat",
+        target_provider=target_provider,
         provider_name="test",
         tool_profile_name="custom",
         tool_profile=profile,
         tool_profile_inputs=inputs or {},
+        tool_runtime_capabilities=tool_runtime_capabilities,
     )
 
 
@@ -795,6 +807,29 @@ def _web_run_tool(*commands: str) -> dict:
                 "required": ["ref_id", "id"],
             },
         },
+        "open": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "ref_id": {"type": "string"},
+                    "lineno": {"type": "number"},
+                },
+                "required": ["ref_id"],
+            },
+        },
+        "time": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"utc_offset": {"type": "string"}},
+                "required": ["utc_offset"],
+            },
+        },
+        "response_length": {
+            "type": "string",
+            "enum": ["short", "medium", "long"],
+        },
         "finance": {
             "type": "array",
             "items": {"type": "object", "properties": {}},
@@ -813,9 +848,68 @@ def _web_run_tool(*commands: str) -> dict:
     }
 
 
+def _exec_web_run_description() -> str:
+    return """Run JavaScript.
+
+### `update_plan`
+Update the plan.
+
+exec tool declaration:
+```ts
+declare const tools: { update_plan(args: {}): Promise<unknown>; };
+```
+
+### `web__run`
+Tool for accessing the internet.
+* `search_query`: Search the internet (and optionally with a domain or recency filter).
+* `image_query`: Search for images.
+* `open`: Open a result or URL.
+* `click`: Open a numbered link.
+* `find`: Find text in a page.
+* `screenshot`: Capture a PDF page.
+* `finance`: Look up market prices.
+* `weather`: Look up forecasts.
+* `sports`: Look up schedules.
+* `time`: Look up the time.
+
+exec tool declaration:
+```ts
+declare const tools: { web__run(args: {
+  search_query?: Array<{ q: string; recency?: number; domains?: Array<string>; }>;
+  image_query?: Array<{ q: string; }>;
+  open?: Array<{ ref_id: string; lineno?: number; }>;
+  click?: Array<{ ref_id: string; id: number; }>;
+  find?: Array<{ ref_id: string; pattern: string; }>;
+  screenshot?: Array<{ ref_id: string; pageno: number; }>;
+  finance?: Array<{ ticker: string; }>;
+  weather?: Array<{ location: string; }>;
+  sports?: Array<{ fn: string; }>;
+  time?: Array<{ utc_offset: string; }>;
+  response_length?: "short" | "medium" | "long";
+}): Promise<unknown>; };
+```"""
+
+
+def _projected_exec_web_commands(description: str) -> set[str]:
+    definitions = project_exec_tool_definitions(
+        description,
+        {
+            "web-run": ExecToolProjection(
+                item_id="namespace.web.run",
+                chat_name="web-run",
+                nested_name="web__run",
+            )
+        },
+    )
+    return set(definitions["web-run"]["function"]["parameters"]["properties"])
+
+
 def test_modified_web_run_removes_locally_unsupported_schema_branches():
     body = {"tools": [_web_run_tool("search_query", "click", "finance")]}
-    route = _route(_profile(**{"namespace.web.run": "modified"}))
+    route = _route(
+        _profile(**{"namespace.web.run": "modified"}),
+        tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY}),
+    )
 
     adapted = _apply_tool_adaptation(body, route)
 
@@ -826,6 +920,46 @@ def test_modified_web_run_removes_locally_unsupported_schema_branches():
     ) == {"q"}
     assert "finance" not in function["description"]
     assert "click" not in function["description"]
+
+
+def test_modified_web_run_without_tavily_keeps_only_static_capabilities():
+    body = {
+        "tools": [
+            _web_run_tool(
+                "search_query",
+                "open",
+                "time",
+                "response_length",
+            )
+        ]
+    }
+    route = _route(_profile(**{"namespace.web.run": "modified"}))
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert set(adapted["tools"][0]["parameters"]["properties"]) == {
+        "open",
+        "time",
+        "response_length",
+    }
+
+
+def test_modified_web_run_removes_unknown_schema_and_guidance():
+    tool = _web_run_tool("open")
+    tool["description"] += "\nUse `future_command` for a future capability."
+    tool["parameters"]["properties"]["future_command"] = {
+        "type": "array",
+        "items": {"type": "object", "properties": {}},
+    }
+
+    adapted = _apply_tool_adaptation(
+        {"tools": [tool]},
+        _route(_profile(**{"namespace.web.run": "modified"})),
+    )
+
+    function = adapted["tools"][0]
+    assert set(function["parameters"]["properties"]) == {"open"}
+    assert "future_command" not in function["description"]
 
 
 def test_modified_web_run_keeps_supported_browser_branches_with_sidecar():
@@ -856,6 +990,88 @@ def test_modified_web_run_without_supported_schema_fails_closed():
     adapted = _apply_tool_adaptation(body, route)
 
     assert "tools" not in adapted
+
+
+def test_tool_mapping_only_modified_web_run_rewrites_nested_exec_description():
+    description = _exec_web_run_description()
+    body = {"tools": [{"type": "custom", "name": "exec", "description": description}]}
+    route = _route(
+        _profile(
+            **{
+                "custom.exec": "passthrough",
+                "namespace.web.run": "modified",
+            }
+        ),
+        target_provider="openai_responses",
+        tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY}),
+    )
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    projected_description = adapted["tools"][0]["description"]
+    assert _projected_exec_web_commands(projected_description) == {
+        "search_query",
+        "open",
+        "time",
+        "response_length",
+    }
+    assert "recency" not in projected_description
+    assert "### `update_plan`" in projected_description
+
+
+def test_tool_mapping_only_modified_web_run_rewrites_lite_additional_tools():
+    body = {
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "exec",
+                        "description": _exec_web_run_description(),
+                    }
+                ],
+            }
+        ]
+    }
+    route = _route(
+        _profile(
+            **{
+                "custom.exec": "passthrough",
+                "namespace.web.run": "modified",
+            }
+        ),
+        target_provider="openai_responses",
+        tool_runtime_capabilities=frozenset({WEB_RUN_SIDECAR_CAPABILITY}),
+    )
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    projected_description = adapted["input"][0]["tools"][0]["description"]
+    assert _projected_exec_web_commands(projected_description) == {
+        "open",
+        "click",
+        "find",
+        "screenshot",
+        "time",
+        "response_length",
+    }
+
+
+def test_tool_mapping_only_passthrough_web_run_keeps_nested_exec_description():
+    description = _exec_web_run_description()
+    body = {"tools": [{"type": "custom", "name": "exec", "description": description}]}
+    route = _route(
+        _profile(
+            **{
+                "custom.exec": "passthrough",
+                "namespace.web.run": "passthrough",
+            }
+        ),
+        target_provider="openai_responses",
+    )
+
+    assert _apply_tool_adaptation(body, route) is body
 
 
 def test_chat_default_disables_hosted_web_search():

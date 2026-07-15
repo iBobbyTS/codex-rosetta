@@ -14,8 +14,8 @@ from .tool_profiles import (
 )
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
-    WEB_RUN_SIDECAR_CAPABILITY,
     project_modified_web_run_function,
+    web_run_model_availability,
 )
 
 
@@ -46,6 +46,7 @@ _TOKEN_RE = re.compile(
     r"|(?P<symbol>[{}:;?,|&<>\[\]()])"
 )
 _WHITESPACE_RE = re.compile(r"\s+")
+_EXEC_SECTION_HEADING_RE = re.compile(r"(?m)^### `([^`]+)`(?: \(`[^`]+`\))?[ \t]*$")
 
 
 def _tokenize_typescript(source: str) -> list[_Token]:
@@ -301,14 +302,13 @@ def project_exec_tool_definitions(
                     and route_tool_state(profile_route, projection.item_id)
                     == "modified"
                 ):
+                    search_available, browser_available = web_run_model_availability(
+                        profile_route
+                    )
                     projected_function = project_modified_web_run_function(
                         parsed["function"],
-                        browser_available=(
-                            WEB_RUN_SIDECAR_CAPABILITY
-                            in getattr(
-                                profile_route, "tool_runtime_capabilities", frozenset()
-                            )
-                        ),
+                        search_available=search_available,
+                        browser_available=browser_available,
                     )
                     if projected_function is None:
                         continue
@@ -348,7 +348,7 @@ def build_exec_script(
 
 
 def _exec_description_sections(description: str) -> dict[str, str]:
-    matches = list(re.finditer(r"(?m)^### `([^`]+)`(?: \(`[^`]+`\))?\s*$", description))
+    matches = list(_EXEC_SECTION_HEADING_RE.finditer(description))
     sections: dict[str, str] = {}
     for index, match in enumerate(matches):
         end = (
@@ -358,16 +358,79 @@ def _exec_description_sections(description: str) -> dict[str, str]:
     return sections
 
 
+def project_modified_exec_web_run_description(
+    exec_description: str,
+    profile_route: Any,
+) -> str:
+    """Replace the live nested ``web__run`` section with supported capabilities."""
+    matches = list(_EXEC_SECTION_HEADING_RE.finditer(exec_description))
+    web_match_index = next(
+        (index for index, match in enumerate(matches) if match.group(1) == "web__run"),
+        None,
+    )
+    if web_match_index is None:
+        return exec_description
+
+    heading = matches[web_match_index]
+    section_end = (
+        matches[web_match_index + 1].start()
+        if web_match_index + 1 < len(matches)
+        else len(exec_description)
+    )
+    section = exec_description[heading.end() : section_end]
+    projection = ExecToolProjection(
+        item_id=WEB_RUN_PROFILE_ITEM_ID,
+        chat_name="web-run",
+        nested_name="web__run",
+    )
+    parsed = _project_one_definition(section, projection)
+    if parsed is None:
+        return exec_description[: heading.start()] + exec_description[section_end:]
+
+    search_available, browser_available = web_run_model_availability(profile_route)
+    projected_function = project_modified_web_run_function(
+        parsed["function"],
+        search_available=search_available,
+        browser_available=browser_available,
+    )
+    declaration = _nested_declaration_match(section, projection.nested_name)
+    declaration_label = section.find("exec tool declaration:")
+    if (
+        projected_function is None
+        or declaration is None
+        or declaration_label < 0
+        or declaration.start(2) < declaration_label
+    ):
+        return exec_description[: heading.start()] + exec_description[section_end:]
+
+    try:
+        input_type = _render_typescript_schema(projected_function["parameters"])
+    except ValueError:
+        return exec_description[: heading.start()] + exec_description[section_end:]
+
+    trailing_match = re.search(r"\s*$", section)
+    trailing = trailing_match.group() if trailing_match is not None else ""
+    declaration_block = (
+        section[declaration_label : declaration.start(2)]
+        + input_type
+        + section[declaration.end(2) :]
+    ).rstrip()
+    projected_description = str(projected_function.get("description") or "").strip()
+    body_parts = [part for part in (projected_description, declaration_block) if part]
+    projected_body = "\n\n".join(body_parts)
+    replacement = f"{heading.group()}\n{projected_body}{trailing}"
+    return (
+        exec_description[: heading.start()]
+        + replacement
+        + exec_description[section_end:]
+    )
+
+
 def _project_one_definition(
     section: str,
     projection: ExecToolProjection,
 ) -> dict[str, Any] | None:
-    declaration = re.search(
-        rf"\b{re.escape(projection.nested_name)}\((args|input):\s*(.*?)\)"
-        r":\s*Promise<",
-        section,
-        flags=re.DOTALL,
-    )
+    declaration = _nested_declaration_match(section, projection.nested_name)
     if declaration is None:
         return None
     input_name, input_type = declaration.groups()
@@ -402,6 +465,130 @@ def _project_one_definition(
     }
 
 
+def _nested_declaration_match(section: str, nested_name: str) -> re.Match[str] | None:
+    return re.search(
+        rf"\b{re.escape(nested_name)}\((args|input):\s*(.*?)\)"
+        r":\s*Promise<",
+        section,
+        flags=re.DOTALL,
+    )
+
+
+def _render_typescript_schema(  # noqa: C901
+    schema: dict[str, Any], *, indent: int = 0
+) -> str:
+    """Render the constrained JSON Schema produced by the Codex TS parser."""
+    if "enum" in schema:
+        values = schema.get("enum")
+        if not isinstance(values, list) or not values:
+            raise ValueError("invalid enum schema")
+        return " | ".join(_render_typescript_literal(value) for value in values)
+    if "const" in schema:
+        return _render_typescript_literal(schema["const"])
+    if "anyOf" in schema:
+        choices = schema.get("anyOf")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("invalid union schema")
+        return " | ".join(
+            _render_typescript_schema(choice, indent=indent)
+            for choice in choices
+            if isinstance(choice, dict)
+        )
+    if "allOf" in schema:
+        choices = schema.get("allOf")
+        if not isinstance(choices, list) or not choices:
+            raise ValueError("invalid intersection schema")
+        return " & ".join(
+            _render_typescript_schema(choice, indent=indent)
+            for choice in choices
+            if isinstance(choice, dict)
+        )
+    if schema.get("not") == {}:
+        return "never"
+
+    schema_type = schema.get("type")
+    if schema_type == "string":
+        return "string"
+    if schema_type in {"number", "integer"}:
+        return "number"
+    if schema_type == "boolean":
+        return "boolean"
+    if schema_type == "null":
+        return "null"
+    if schema_type == "array":
+        items = schema.get("items")
+        if isinstance(items, dict):
+            return f"Array<{_render_typescript_schema(items, indent=indent)}>"
+        prefix_items = schema.get("prefixItems")
+        if isinstance(prefix_items, list):
+            return (
+                "["
+                + ", ".join(
+                    _render_typescript_schema(item, indent=indent)
+                    for item in prefix_items
+                    if isinstance(item, dict)
+                )
+                + "]"
+            )
+        raise ValueError("invalid array schema")
+    if schema_type == "object":
+        return _render_typescript_object(schema, indent=indent)
+    raise ValueError("unsupported schema")
+
+
+def _render_typescript_object(schema: dict[str, Any], *, indent: int) -> str:
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        raise ValueError("invalid object properties")
+    required = set(schema.get("required", []))
+    if not properties and schema.get("additionalProperties") is False:
+        return "{}"
+
+    child_indent = indent + 2
+    prefix = " " * child_indent
+    lines = ["{"]
+    for name, value in properties.items():
+        if not isinstance(name, str) or not isinstance(value, dict):
+            raise ValueError("invalid object property")
+        description = value.get("description")
+        if isinstance(description, str):
+            lines.extend(f"{prefix}// {line}" for line in description.splitlines())
+        rendered_name = (
+            name
+            if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", name)
+            else json.dumps(name)
+        )
+        optional = "" if name in required else "?"
+        rendered_value = _render_typescript_schema(value, indent=child_indent)
+        rendered_value = rendered_value.replace("\n", f"\n{prefix}")
+        lines.append(f"{prefix}{rendered_name}{optional}: {rendered_value};")
+
+    additional = schema.get("additionalProperties", False)
+    if additional is True:
+        lines.append(f"{prefix}[key: string]: unknown;")
+    elif isinstance(additional, dict):
+        rendered_additional = _render_typescript_schema(
+            additional, indent=child_indent
+        ).replace("\n", f"\n{prefix}")
+        lines.append(f"{prefix}[key: string]: {rendered_additional};")
+    elif additional is not False:
+        raise ValueError("invalid additionalProperties")
+    lines.append(f"{' ' * indent}}}")
+    return "\n".join(lines)
+
+
+def _render_typescript_literal(value: Any) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if value is None:
+        return "null"
+    if isinstance(value, str | int | float):
+        return json.dumps(value, ensure_ascii=False)
+    raise ValueError("unsupported literal")
+
+
 def _javascript_json_literal(value: Any) -> str:
     return (
         json.dumps(value, ensure_ascii=False, separators=(",", ":"))
@@ -415,4 +602,5 @@ __all__ = [
     "build_exec_script",
     "exec_tool_projections_for_route",
     "project_exec_tool_definitions",
+    "project_modified_exec_web_run_description",
 ]

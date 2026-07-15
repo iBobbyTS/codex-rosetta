@@ -308,6 +308,9 @@ def _activate_gateway_config(
         app.admin_cors_origins = activation.admin_cors_origins
         app.max_body_size = activation.max_body_size
         app.gateway_config = new_config
+        web_run_health_state = getattr(app, "web_run_health_state", None)
+        if web_run_health_state is not None:
+            web_run_health_state.invalidate()
     except BaseException:
         _rollback_gateway_activation(request, rollback)
         raise
@@ -343,6 +346,9 @@ def _rollback_gateway_activation(
     app.admin_cors_origins = rollback.admin_cors_origins
     app.max_body_size = rollback.max_body_size
     app.gateway_config = rollback.gateway_config
+    web_run_health_state = getattr(app, "web_run_health_state", None)
+    if web_run_health_state is not None:
+        web_run_health_state.invalidate()
     if rollback.persistence is not None:
         state, value = rollback.persistence
         state.rollback_update(value)

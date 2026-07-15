@@ -7,20 +7,27 @@ import re
 from typing import Any
 
 WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
+WEB_RUN_BASIC_SEARCH_CAPABILITY = "web_run_basic_search"
 WEB_RUN_SIDECAR_CAPABILITY = "web_run_sidecar"
 
 # ``None`` means the command has no nested object fields to prune. A field set
 # describes the only model-visible fields Rosetta accepts for each array item.
-WEB_RUN_SUPPORTED_COMMAND_FIELDS: dict[str, frozenset[str] | None] = {
-    "search_query": frozenset({"q", "domains"}),
+WEB_RUN_BASE_COMMAND_FIELDS: dict[str, frozenset[str] | None] = {
     "open": frozenset({"ref_id", "lineno"}),
     "time": frozenset({"utc_offset"}),
     "response_length": None,
+}
+WEB_RUN_SEARCH_COMMAND_FIELDS: dict[str, frozenset[str]] = {
+    "search_query": frozenset({"q", "domains"}),
 }
 WEB_RUN_SIDECAR_COMMAND_FIELDS: dict[str, frozenset[str]] = {
     "click": frozenset({"ref_id", "id"}),
     "find": frozenset({"ref_id", "pattern"}),
     "screenshot": frozenset({"ref_id", "pageno"}),
+}
+WEB_RUN_SUPPORTED_COMMAND_FIELDS = {
+    **WEB_RUN_BASE_COMMAND_FIELDS,
+    **WEB_RUN_SEARCH_COMMAND_FIELDS,
 }
 WEB_RUN_SUPPORTED_COMMANDS = frozenset(WEB_RUN_SUPPORTED_COMMAND_FIELDS)
 WEB_RUN_KNOWN_COMMANDS = frozenset(
@@ -49,6 +56,7 @@ _SEARCH_RECENCY_CLAIM_RE = re.compile(
 def project_modified_web_run_function(
     function: dict[str, Any],
     *,
+    search_available: bool = False,
     browser_available: bool = False,
 ) -> dict[str, Any] | None:
     """Restrict a live Codex ``web.run`` definition to Rosetta capabilities."""
@@ -56,7 +64,9 @@ def project_modified_web_run_function(
     if not isinstance(parameters, dict):
         return None
     projected_parameters = project_modified_web_run_schema(
-        parameters, browser_available=browser_available
+        parameters,
+        search_available=search_available,
+        browser_available=browser_available,
     )
     if projected_parameters is None:
         return None
@@ -65,8 +75,17 @@ def project_modified_web_run_function(
     projected["parameters"] = projected_parameters
     description = projected.get("description")
     if isinstance(description, str):
+        properties = parameters.get("properties")
+        live_commands = (
+            frozenset(str(name) for name in properties)
+            if isinstance(properties, dict)
+            else frozenset()
+        )
         projected["description"] = project_modified_web_run_description(
-            description, browser_available=browser_available
+            description,
+            search_available=search_available,
+            browser_available=browser_available,
+            live_commands=live_commands,
         )
     return projected
 
@@ -74,6 +93,7 @@ def project_modified_web_run_function(
 def project_modified_web_run_schema(
     schema: dict[str, Any],
     *,
+    search_available: bool = False,
     browser_available: bool = False,
 ) -> dict[str, Any] | None:
     """Keep only live schema branches implemented by Rosetta's local bridge."""
@@ -84,7 +104,8 @@ def project_modified_web_run_schema(
     projected = copy.deepcopy(schema)
     projected_properties: dict[str, Any] = {}
     for command, allowed_fields in web_run_supported_command_fields(
-        browser_available=browser_available
+        search_available=search_available,
+        browser_available=browser_available,
     ).items():
         command_schema = properties.get(command)
         if not isinstance(command_schema, dict):
@@ -109,13 +130,19 @@ def project_modified_web_run_schema(
 def project_modified_web_run_description(
     description: str,
     *,
+    search_available: bool = False,
     browser_available: bool = False,
+    live_commands: frozenset[str] = frozenset(),
 ) -> str:
     """Remove unsupported command guidance from the live Codex description."""
     retained: list[str] = []
-    unsupported_commands = WEB_RUN_KNOWN_COMMANDS - frozenset(
-        web_run_supported_command_fields(browser_available=browser_available)
+    supported_commands = frozenset(
+        web_run_supported_command_fields(
+            search_available=search_available,
+            browser_available=browser_available,
+        )
     )
+    unsupported_commands = (WEB_RUN_KNOWN_COMMANDS | live_commands) - supported_commands
     unsupported_markers = tuple(
         marker
         for command in sorted(unsupported_commands)
@@ -131,13 +158,24 @@ def project_modified_web_run_description(
 
 
 def web_run_supported_command_fields(
-    *, browser_available: bool
+    *, search_available: bool = False, browser_available: bool
 ) -> dict[str, frozenset[str] | None]:
     """Return the command schema implemented by the active local executors."""
-    supported = dict(WEB_RUN_SUPPORTED_COMMAND_FIELDS)
+    supported = dict(WEB_RUN_BASE_COMMAND_FIELDS)
+    if search_available:
+        supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
     if browser_available:
         supported.update(WEB_RUN_SIDECAR_COMMAND_FIELDS)
     return supported
+
+
+def web_run_model_availability(route: Any) -> tuple[bool, bool]:
+    """Return configured search and ready browser capabilities for one route."""
+    capabilities = getattr(route, "tool_runtime_capabilities", frozenset())
+    return (
+        WEB_RUN_BASIC_SEARCH_CAPABILITY in capabilities,
+        WEB_RUN_SIDECAR_CAPABILITY in capabilities,
+    )
 
 
 def _project_array_command(
@@ -175,8 +213,11 @@ def _project_array_command(
 
 
 __all__ = [
+    "WEB_RUN_BASE_COMMAND_FIELDS",
+    "WEB_RUN_BASIC_SEARCH_CAPABILITY",
     "WEB_RUN_KNOWN_COMMANDS",
     "WEB_RUN_PROFILE_ITEM_ID",
+    "WEB_RUN_SEARCH_COMMAND_FIELDS",
     "WEB_RUN_SIDECAR_COMMAND_FIELDS",
     "WEB_RUN_SIDECAR_CAPABILITY",
     "WEB_RUN_SUPPORTED_COMMANDS",
@@ -185,5 +226,6 @@ __all__ = [
     "project_modified_web_run_description",
     "project_modified_web_run_function",
     "project_modified_web_run_schema",
+    "web_run_model_availability",
     "web_run_supported_command_fields",
 ]

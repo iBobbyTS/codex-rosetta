@@ -164,7 +164,8 @@ async def execute_local_codex_search(
         raise CodexSearchInvalidRequest("'commands' must be an object")
 
     supported_fields = web_run_supported_command_fields(
-        browser_available=browser_client is not None
+        search_available=True,
+        browser_available=browser_client is not None,
     )
     unsupported = _unsupported_features(
         commands, body.get("settings"), supported_fields=supported_fields
