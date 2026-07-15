@@ -185,6 +185,14 @@ Outside Compose, configure matching `server.web_run.base_url` and
 `server.web_run.token` values (or the corresponding URL/Token environment
 variables) explicitly.
 
+The Admin **Web Search** page keeps basic Tavily credentials separate from the
+advanced browser service. Its read-only advanced section reports sidecar service
+availability and browser readiness independently. The status endpoint uses a
+two-second bounded request to the sidecar's public `/health` route and never
+returns the sidecar URL, bearer token, or upstream error text. The page checks
+immediately, refreshes every five seconds while active, and stops when another
+Admin page is selected.
+
 The sidecar runs Chromium as the image's unprivileged `pwuser`, uses the pinned
 Playwright seccomp profile required by Chromium's user-namespace sandbox, keeps
 a read-only root filesystem, and stores only bounded temporary browser/PDF

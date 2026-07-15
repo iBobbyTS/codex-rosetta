@@ -570,6 +570,30 @@ def _validate_description_visibility_contract(
         )
 
 
+def _validate_state_descriptions_contract(
+    catalog: dict[str, Any], supported: dict[str, tuple[str, ...]]
+) -> None:
+    """Validate optional localized descriptions selected by Profile state."""
+    for item in catalog["items"]:
+        descriptions = item.get("state_descriptions_i18n")
+        if descriptions is None:
+            continue
+        if not isinstance(descriptions, dict) or any(
+            not isinstance(state, str) or not isinstance(i18n_key, str) or not i18n_key
+            for state, i18n_key in descriptions.items()
+        ):
+            raise ValueError(
+                f"catalog item {item['id']!r} state_descriptions_i18n must map "
+                "states to non-empty i18n keys"
+            )
+        unsupported = sorted(set(descriptions) - set(supported[item["id"]]))
+        if unsupported:
+            raise ValueError(
+                f"catalog item {item['id']!r} state_descriptions_i18n contains "
+                f"unsupported states: {unsupported}"
+            )
+
+
 def _internal_containers_when_disabled_contract(
     catalog: dict[str, Any], supported: dict[str, tuple[str, ...]]
 ) -> frozenset[str]:
@@ -660,6 +684,7 @@ def tool_profile_contract() -> dict[str, Any]:
         field="builtin_profile",
     )
     _validate_description_visibility_contract(catalog, supported)
+    _validate_state_descriptions_contract(catalog, supported)
 
     profiles = [
         {

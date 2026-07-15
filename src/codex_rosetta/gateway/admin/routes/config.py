@@ -13,6 +13,7 @@ from ...config import (
     GatewayConfig,
     default_tool_profile_for_provider,
     load_config_raw,
+    normalize_web_search,
     provider_supports_tool_profiles,
 )
 from ...providers import known_provider_types
@@ -39,6 +40,8 @@ from ._shared import (
 import logging
 
 logger = logging.getLogger("codex-rosetta-gateway")
+_NETWORK_SEARCH_STATUS_MAX_BYTES = 64 * 1024
+_NETWORK_SEARCH_STATUS_TIMEOUT_SECONDS = 2.0
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -102,6 +105,52 @@ def _apply_local_mode_server_settings(
             )
         server["local_mode_confirmed"] = True
     server["local_mode"] = local_mode
+    return None
+
+
+def _apply_web_search_settings(
+    server: dict[str, Any], body: dict[str, Any]
+) -> Response | None:
+    """Merge one masked Admin edit into ``server.web_search``."""
+    if "web_search" not in body:
+        return None
+    incoming = body.get("web_search")
+    if not isinstance(incoming, dict):
+        return JSONResponse(
+            {"error": "'web_search' must be an object"}, status_code=400
+        )
+    unsupported = set(incoming) - {"provider", "tavily_api_key"}
+    if unsupported:
+        return JSONResponse(
+            {"error": f"'web_search' has unsupported fields: {sorted(unsupported)}"},
+            status_code=400,
+        )
+    current = server.get("web_search")
+    current = dict(current) if isinstance(current, dict) else {}
+    provider = incoming.get("provider", current.get("provider", "tavily"))
+    next_value: dict[str, Any] = {"provider": provider}
+    if "tavily_api_key" in incoming:
+        api_key = incoming["tavily_api_key"]
+        if not isinstance(api_key, str):
+            return JSONResponse(
+                {"error": "'web_search.tavily_api_key' must be a string"},
+                status_code=400,
+            )
+        if "***" in api_key:
+            existing_key = current.get("tavily_api_key")
+            if isinstance(existing_key, str) and existing_key:
+                next_value["tavily_api_key"] = existing_key
+        elif api_key.strip():
+            next_value["tavily_api_key"] = api_key.strip()
+    else:
+        existing_key = current.get("tavily_api_key")
+        if isinstance(existing_key, str) and existing_key:
+            next_value["tavily_api_key"] = existing_key
+    try:
+        normalize_web_search(next_value)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    server["web_search"] = next_value
     return None
 
 
@@ -704,6 +753,10 @@ async def put_server_settings(request: Any) -> Response:
     if local_mode_error is not None:
         return local_mode_error
 
+    web_search_error = _apply_web_search_settings(server, body)
+    if web_search_error is not None:
+        return web_search_error
+
     if "stream_trace" in body:
         stream_trace = body.get("stream_trace") or {}
         if not isinstance(stream_trace, dict):
@@ -737,6 +790,46 @@ async def put_server_settings(request: Any) -> Response:
 
     response_server = _mask_server_config(data.get("server", {}))
     return JSONResponse({"ok": True, "server": response_server})
+
+
+async def get_network_search_status(request: Any) -> Response:
+    """Return bounded, credential-free Docker sidecar health state."""
+    config = _get_gateway_config(request)
+    if config is None or not config.web_run_sidecar_url:
+        return JSONResponse(
+            {"configured": False, "service_online": False, "browser_ready": None}
+        )
+    try:
+        async with AsyncClient(
+            timeout=_NETWORK_SEARCH_STATUS_TIMEOUT_SECONDS
+        ) as client:
+            response = await request_bounded_response(
+                client,
+                "GET",
+                f"{config.web_run_sidecar_url}/health",
+                max_success_bytes=_NETWORK_SEARCH_STATUS_MAX_BYTES,
+                max_error_bytes=_NETWORK_SEARCH_STATUS_MAX_BYTES,
+            )
+        body = response.json()
+    except Exception:
+        return JSONResponse(
+            {"configured": True, "service_online": False, "browser_ready": None}
+        )
+    service_online = (
+        response.status_code == 200
+        and isinstance(body, dict)
+        and body.get("status") == "ok"
+    )
+    browser_ready = body.get("browser_ready") if service_online else None
+    if not isinstance(browser_ready, bool):
+        browser_ready = None
+    return JSONResponse(
+        {
+            "configured": True,
+            "service_online": service_online,
+            "browser_ready": browser_ready,
+        }
+    )
 
 
 async def reload_config(request: Any) -> Response:

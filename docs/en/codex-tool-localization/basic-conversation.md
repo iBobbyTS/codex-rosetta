@@ -56,8 +56,8 @@ not translate vendor-specific image APIs.
 
 Standalone Search has an additional local bridge. When the selected Profile
 marks `web.run` as Modified, `/v1/alpha/search` executes the reliable subset
-locally: `search_query` uses the Provider and Token configured beneath the
-`web.run` card in that Profile. Tavily is currently the only provider,
+locally: `search_query` uses the global Provider and API Key configured under
+Admin **Web Search** (`server.web_search`). Tavily is currently the only provider,
 direct-URL `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,
 rejects credentials and non-public addresses, permits at most five redirects,
@@ -83,11 +83,18 @@ non-live access semantics return HTTP `501` with `code: "not_implemented"`
 before any partial operation runs. Every `501` message from these auxiliary
 endpoints also ends with `Consider "Browser Use" skill` so Codex can choose the
 browser fallback. When a selected Profile sets `web.run` to Passthrough,
-`/alpha/search` remains native upstream pass-through even when Tavily or the
+`/v1/alpha/search` remains native upstream pass-through even when Tavily or the
 sidecar is configured. When it sets `web.run` to Modified, supported commands
-use the local executors; search queries require a Tavily Token on the `web.run`
-card, direct-URL `open` and time-only requests work without Tavily, and browser
-commands require the optional sidecar.
+use Rosetta's search service; search queries require the global Tavily API Key,
+direct-URL `open` and time-only requests work without Tavily, and browser commands
+require the optional sidecar. The Hosted `web_search` tool remains independent:
+its Provider, Token, and guidance continue to belong to the selected Profile.
+
+`/v1/alpha/search` above is the Codex-facing Gateway route. Passthrough does not
+assume that an upstream Base URL omitted `/v1`: it appends the relative
+`alpha/search` path to the configured Base URL. A Base URL ending in `/v1`
+therefore receives `/v1/alpha/search`, while a versionless Base URL receives
+`/alpha/search`.
 
 ## Responses To Chat Conversion
 

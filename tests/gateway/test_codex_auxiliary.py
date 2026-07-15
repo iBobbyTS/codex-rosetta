@@ -43,6 +43,7 @@ def _make_config(
     image_state: str | None = None,
     image_base_url: str = "https://images.example/v1",
     image_token: str = "image-token",
+    upstream_base_url: str = "https://upstream.example/v1",
 ) -> GatewayConfig:
     provider_by_api_type = {
         "responses_passthrough": "openai",
@@ -82,10 +83,6 @@ def _make_config(
             }
         if local_search or explicit_web_mapping:
             tools["namespace.web.run"] = "modified"
-            inputs["namespace.web.run"] = {
-                "provider": "tavily",
-                "token": tavily_api_key or "",
-            }
         if image_state is not None:
             tools["namespace.image_gen.imagegen"] = image_state
             inputs["namespace.image_gen.imagegen"] = {
@@ -101,7 +98,7 @@ def _make_config(
                     "provider": provider_by_api_type[api_type],
                     "api_type": api_type,
                     "api_key": "upstream-key",
-                    "base_url": "https://upstream.example/v1",
+                    "base_url": upstream_base_url,
                 }
             },
             "tool_profiles": tool_profiles,
@@ -126,6 +123,10 @@ def _make_config(
                         "key": "gateway-key",
                     }
                 ],
+                "web_search": {
+                    "provider": "tavily",
+                    "tavily_api_key": tavily_api_key or "",
+                },
             },
         }
     )
@@ -317,7 +318,7 @@ def test_web_run_mapping_profile_intercepts_tool_mapping_only_search() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_web_run_mapping_requires_profile_token_for_search_query() -> None:
+def test_web_run_mapping_requires_global_api_key_for_search_query() -> None:
     config = _make_config(tool_profile="test-web-run-mapping")
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
@@ -327,7 +328,7 @@ def test_web_run_mapping_requires_profile_token_for_search_query() -> None:
 
     assert response.status_code == 501
     payload = json.loads(response.body)
-    assert "web.run Profile card" in payload["error"]["message"]
+    assert "Admin > Web Search" in payload["error"]["message"]
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
@@ -348,6 +349,26 @@ def test_custom_pass_through_profile_keeps_search_native_with_tavily() -> None:
 
     assert response.status_code == 202
     request.app.transport.send_passthrough.assert_awaited_once()
+    assert request.app.transport.send_passthrough.await_args.args[1] == (
+        "https://upstream.example/v1/alpha/search"
+    )
+
+
+def test_search_passthrough_does_not_force_v1_into_upstream_base_url() -> None:
+    config = _make_config(
+        upstream_base_url="https://upstream.example",
+        tool_profile="test-pass-through",
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 202
+    assert request.app.transport.send_passthrough.await_args.args[1] == (
+        "https://upstream.example/alpha/search"
+    )
 
 
 def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:
