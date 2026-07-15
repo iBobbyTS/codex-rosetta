@@ -789,13 +789,18 @@ def _load_persistent_tool_mappings(
         raise RuntimeError(
             "Persistent tool-history storage is unavailable; refusing lossy replay"
         )
+    now = datetime.now(timezone.utc)
     try:
         rows = persistence.query_tool_call_mappings(
             principal_id=state_scope.principal_id,
             provider_name=state_scope.provider_name,
             model=state_scope.model,
             session_id=state_scope.conversation_id,
-            now=datetime.now(timezone.utc).isoformat(),
+            now=now.isoformat(),
+            renew_expire_at=(
+                now + timedelta(hours=DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
+            ).isoformat(),
+            renewed_at=now.isoformat(),
         )
     except Exception as exc:
         logger.error("Failed to load persistent tool-call mappings", exc_info=True)

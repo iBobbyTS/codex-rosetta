@@ -129,6 +129,30 @@ class TestPersistenceManagerSchema:
 
 
 class TestPersistenceManagerToolCallMappings:
+    def test_query_can_refresh_mapping_ttl(self, tmp_path):
+        pm = PersistenceManager(str(tmp_path))
+        _upsert_mapping(
+            pm,
+            "call_refresh",
+            expire_at="2026-01-01T01:00:00+00:00",
+            timestamp="2026-01-01T00:00:00+00:00",
+        )
+
+        rows = pm.query_tool_call_mappings(
+            **_TOOL_SCOPE,
+            now="2026-01-01T00:30:00+00:00",
+            renew_expire_at="2026-01-02T00:30:00+00:00",
+            renewed_at="2026-01-01T00:30:00+00:00",
+        )
+
+        assert rows[0]["expire_at"] == "2026-01-02T00:30:00+00:00"
+        assert rows[0]["updated_at"] == "2026-01-01T00:30:00+00:00"
+        assert pm.query_tool_call_mappings(
+            **_TOOL_SCOPE,
+            now="2026-01-01T01:30:00+00:00",
+        )
+        pm.close()
+
     def test_upsert_query_delete_and_cleanup(self, tmp_path):
         pm = PersistenceManager(str(tmp_path))
         original = {
