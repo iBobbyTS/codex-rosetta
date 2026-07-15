@@ -41,6 +41,7 @@ from .providers import (
     get_default_base_url,
     known_provider_types,
 )
+from .web_run_supervisor import WebRunSidecarStartupError, WebRunSidecarSupervisor
 
 logger = get_logger()
 
@@ -522,6 +523,14 @@ def main() -> None:
         choices=["info", "stats", "warning", "error"],
         help="Terminal log level (default: warning)",
     )
+    parser.add_argument(
+        "--with-web-run",
+        action="store_true",
+        help=(
+            "Start and manage the Docker web-run sidecar; automatically uses the "
+            "first available loopback port"
+        ),
+    )
 
     # ``init`` subcommand
     sub = parser.add_subparsers(dest="command")
@@ -585,52 +594,63 @@ def main() -> None:
         _create_initial_config(config_path)
 
     _configure_local_mode_startup(parser, args, config_path, codex_home)
-
-    runtime_config = load_config(config_path)
-
-    # CLI --proxy overrides config-level server.proxy
-    if args.proxy:
-        runtime_config.setdefault("server", {})["proxy"] = args.proxy
-
-    config = GatewayConfig(runtime_config)
-
     setup_logging(log_level=args.log_level)
-
-    host = args.host or config.host
-    port = args.port or config.port
-    socket_path = args.socket or config.socket
-
-    if config.local_mode and host.strip().lower() not in {"127.0.0.1", "localhost"}:
-        print(
-            "Remote use of this gateway requires manually configuring "
-            "config.toml and model_catalog_json.",
-            file=sys.stderr,
-        )
-
-    logger.info("Config loaded from %s", config_path)
-    if socket_path:
-        logger.info("Starting codex-rosetta gateway on unix:%s", socket_path)
-    else:
-        logger.info("Starting codex-rosetta gateway on %s:%d", host, port)
-    logger.info("Configured providers: %s", list(config.providers.keys()))
-    logger.info("Configured models: %s", list(config.models.keys()))
-    logger.info("Codex Home: %s", codex_home)
-    if config.log_bodies:
-        logger.info(
-            "Request/response body logging enabled on the dedicated DEBUG body "
-            "logger (configured API tokens are redacted)"
-        )
-
-    app = create_app(
-        config,
-        config_path=config_path,
-        codex_home=codex_home,
-        gateway_port=port,
-    )
-
-    from .app import run_gateway
-
+    sidecar = WebRunSidecarSupervisor(config_path) if args.with_web_run else None
     try:
-        asyncio.run(run_gateway(app, host, port, socket=socket_path))
-    except KeyboardInterrupt:
-        pass
+        if sidecar is not None:
+            try:
+                sidecar.start()
+            except WebRunSidecarStartupError as exc:
+                parser.error(str(exc))
+
+        runtime_config = load_config(config_path)
+
+        # CLI --proxy overrides config-level server.proxy
+        if args.proxy:
+            runtime_config.setdefault("server", {})["proxy"] = args.proxy
+
+        config = GatewayConfig(runtime_config)
+        host = args.host or config.host
+        port = args.port or config.port
+        socket_path = args.socket or config.socket
+
+        if config.local_mode and host.strip().lower() not in {
+            "127.0.0.1",
+            "localhost",
+        }:
+            print(
+                "Remote use of this gateway requires manually configuring "
+                "config.toml and model_catalog_json.",
+                file=sys.stderr,
+            )
+
+        logger.info("Config loaded from %s", config_path)
+        if socket_path:
+            logger.info("Starting codex-rosetta gateway on unix:%s", socket_path)
+        else:
+            logger.info("Starting codex-rosetta gateway on %s:%d", host, port)
+        logger.info("Configured providers: %s", list(config.providers.keys()))
+        logger.info("Configured models: %s", list(config.models.keys()))
+        logger.info("Codex Home: %s", codex_home)
+        if config.log_bodies:
+            logger.info(
+                "Request/response body logging enabled on the dedicated DEBUG body "
+                "logger (configured API tokens are redacted)"
+            )
+
+        app = create_app(
+            config,
+            config_path=config_path,
+            codex_home=codex_home,
+            gateway_port=port,
+        )
+
+        from .app import run_gateway
+
+        try:
+            asyncio.run(run_gateway(app, host, port, socket=socket_path))
+        except KeyboardInterrupt:
+            pass
+    finally:
+        if sidecar is not None:
+            sidecar.stop()

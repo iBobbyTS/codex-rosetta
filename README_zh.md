@@ -41,6 +41,14 @@ token 发送。详见[网关安全与认证](docs/zh-cn/gateway-security.md)。
 codex-rosetta-gateway --host 127.0.0.1 -v
 ```
 
+若要同时启动可选的浏览器版 `web.run` sidecar，请增加 `--with-web-run`。CLI 会构建
+并托管一个隔离的 Docker Compose service，从回环端口 `8766` 开始选择，遇到占用会
+自动顺延，同时生成临时 Bearer Token；Gateway 退出时会删除该 service：
+
+```bash
+codex-rosetta-gateway --with-web-run
+```
+
 ### 本地模式
 
 本地模式默认开启。它使用项目内预设的模型配置，自动匹配配置进网关的模型并注入

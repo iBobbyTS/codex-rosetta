@@ -27,6 +27,10 @@ codex-rosetta-gateway --log-level warning
 codex-rosetta-gateway --log-level error
 ```
 
+运行 `codex-rosetta-gateway --with-web-run` 可以在宿主机 Gateway 启动时一并拉起
+可选的浏览器/PDF sidecar。CLI 会从回环端口 `8766` 开始选择第一个空闲端口，等待
+Chromium 就绪，并在退出时清理托管 service。
+
 `warning` 是默认档位，不打印每个正常请求，但保留 warning 和 error；`info` 还会打印
 请求摘要；`stats` 在同一行持续刷新各模型的请求数，例如
 `model-1: 12, model-2: 7`。计数键使用 provider 的原始 upstream 模型名，不使用对外

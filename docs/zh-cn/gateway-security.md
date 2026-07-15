@@ -110,8 +110,21 @@ Gateway/Provider API credential；除非确实需要在可信 Admin 会话中显
 当前 checkout 的 wheel，并把这个精确 wheel 交给版本化 Compose 配置进行构建。若直接
 运行 Compose，也必须显式提供 `LOCAL_WHEEL`，不能再依赖旧的 registry 镜像名。
 
-浏览器版 `web.run` 是可选的 Compose profile。提供一个不少于 24 个字符的独立随机
-Bearer Token，即可与网关一起启动：
+当 Gateway 直接运行在宿主机时，启用浏览器版 `web.run` 最简单的方式是：
+
+```bash
+codex-rosetta-gateway --with-web-run
+```
+
+这个显式参数要求本机同时提供 Docker 和 `docker-compose`。CLI 会构建安装包内的
+sidecar 上下文，创建隔离的 Compose project，并且只绑定 `127.0.0.1`。端口从候选值
+`8766` 开始选择；遇到已占用端口或启动时的端口竞争会自动顺延。自动生成的 Bearer
+Token 和选定 URL 只在当前进程中覆盖 `server.web_run`，Admin 热重载后仍然有效，退出
+时恢复原环境。若 service 或 Chromium 未能就绪，Gateway 会 fail-closed，不会继续启动；
+正常退出或 `Ctrl-C` 只删除本次调用托管的 Compose project。
+
+当 Gateway 本身也运行在 Compose 中时，浏览器版 `web.run` 仍是可选 profile。提供
+一个不少于 24 个字符的独立随机 Bearer Token，即可与网关一起启动：
 
 ```bash
 CODEX_ROSETTA_WEB_RUN_TOKEN='<random-sidecar-token>' make compose-up-web-run
@@ -134,12 +147,13 @@ docker-compose -f docker/docker-compose.yaml \
 安装这个 wheel，确保容器运行的就是当前本地 checkout。Gateway 和 sidecar 必须使用
 同一个 Token，Compose 网络地址应保持为 `http://web-run:8080`。
 
-日常查看日志、重启和只停止 sidecar 可以直接使用容器名：
+日常查看日志、重启和只停止 sidecar 应使用 Compose service 名，并复用启动时的环境变量
+和 profile：
 
 ```bash
-docker logs -f web-run
-docker restart web-run
-docker stop web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run logs -f web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run restart web-run
+docker-compose -f docker/docker-compose.yaml --profile web-run stop web-run
 ```
 
 停止并删除完整 Compose stack 时，复用上述已导出的变量和 profile：
@@ -149,11 +163,11 @@ docker-compose -f docker/docker-compose.yaml \
   --profile web-run down
 ```
 
-该命令会构建独立 service 和名为 `web-run` 的容器。Compose 不会向宿主机发布它的
-端口；网关通过私有 Compose 网络访问，并收到
-`CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`。sidecar 不会挂载网关配置目录，
-也不会收到 Provider credential。它的 Bearer Token 会在 Admin 配置 API 和 Gateway
-Logs 中被遮盖。若不使用 Compose，需要显式配置相互匹配的
+该命令会构建独立的 `web-run` service；Compose 自行分配 project-scoped 容器名，且不会
+向宿主机发布端口。网关通过私有 Compose 网络访问，并收到
+`CODEX_ROSETTA_WEB_RUN_URL=http://web-run:8080`。sidecar 不会挂载网关配置目录，也不会
+收到 Provider credential。它的 Bearer Token 会在 Admin 配置 API 和 Gateway Logs 中
+被遮盖。若既不使用 Compose，也不使用 CLI 托管参数，需要显式配置相互匹配的
 `server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
 
 Admin **联网搜索**页面把基础 Tavily 凭据与高级浏览器服务分开。高级 Section

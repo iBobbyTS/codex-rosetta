@@ -65,7 +65,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "codex_rosetta" = ["py.typed", "shims/providers/*/provider.yaml", "shims/providers/*/*/provider.yaml"]
-"codex_rosetta.gateway" = ["codex_models_0_144_4.json", "codex_model_presets.json", "codex_compact_prompt.md", "codex_compact_summary_prefix.md"]
+"codex_rosetta.gateway" = ["codex_models_0_144_4.json", "codex_model_presets.json", "codex_compact_prompt.md", "codex_compact_summary_prefix.md", "resources/web_run/*", "resources/web_run/.dockerignore"]
 "codex_rosetta.gateway.admin" = ["admin.html", "admin_i18n.json", "tool_catalog.json"]
 
 [tool.setuptools.dynamic]
@@ -82,7 +82,12 @@ include = [
     "scripts/check_codex_compatibility.py",
     "scripts/check_release_version.py",
 ]
-exclude = ["src/codex_rosetta/_vendor", "llm_api_simple_tests", "tests/integration"]
+exclude = [
+    "src/codex_rosetta/_vendor",
+    "src/codex_rosetta/gateway/resources",
+    "llm_api_simple_tests",
+    "tests/integration",
+]
 
 [tool.ruff]
 target-version = "py314"
@@ -108,4 +113,4 @@ max-complexity = 15
 [tool.complexipy]
 paths = ["src"]
 max-complexity-allowed = 25
-exclude = ["**/_vendor/**"]
+exclude = ["**/_vendor/**", "**/gateway/resources/**"]

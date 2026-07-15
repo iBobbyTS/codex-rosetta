@@ -27,6 +27,10 @@ codex-rosetta-gateway --log-level warning
 codex-rosetta-gateway --log-level error
 ```
 
+Use `codex-rosetta-gateway --with-web-run` to start the optional browser/PDF
+sidecar together with a host-run gateway. The CLI selects the first available
+loopback port from `8766`, waits for Chromium readiness, and manages cleanup.
+
 `warning` is the default and suppresses normal per-request output while
 retaining warnings and errors. `stats` maintains per-model request counts on a
 single refreshed line, keyed by each provider's original upstream model name

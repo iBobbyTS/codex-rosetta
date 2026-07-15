@@ -52,9 +52,8 @@ services:
 
   web-run:
     profiles: ["web-run"]
-    container_name: web-run
     build:
-      context: web-run
+      context: ../src/codex_rosetta/gateway/resources/web_run
       dockerfile: Dockerfile
     image: codex-rosetta-web-run-local:${CODEX_ROSETTA_VERSION:-dev}
     init: true
@@ -67,5 +66,5 @@ services:
     tmpfs:
       - /tmp:size=512m,mode=1777
     security_opt:
-      - seccomp=web-run/seccomp_profile.json
+      - seccomp=../src/codex_rosetta/gateway/resources/web_run/seccomp_profile.json
     restart: unless-stopped
