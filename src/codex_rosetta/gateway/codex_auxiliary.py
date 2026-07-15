@@ -34,6 +34,7 @@ from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_profiles import route_tool_state
 from .transport import UpstreamConnectionError, UpstreamTransport
 from .web_run_capabilities import WEB_RUN_PROFILE_ITEM_ID
+from .web_run_sidecar import WebRunBrowserClient, WebRunSidecarHTTPClient
 from .web_search import TavilySearchClient, profile_search_config
 
 _BROWSER_USE_HINT = 'Consider "Browser Use" skill'
@@ -100,6 +101,7 @@ async def handle_codex_auxiliary(
     *,
     search_client: TavilySearchClient | None = None,
     page_client: StaticPageClient | None = None,
+    browser_client: WebRunBrowserClient | None = None,
 ) -> Response:
     """Handle Codex Search locally when configured, or pass auxiliaries through."""
 
@@ -148,6 +150,7 @@ async def handle_codex_auxiliary(
     image_tool_state = route_tool_state(route, IMAGEGEN_PROFILE_ITEM_ID, "disabled")
     web_run_mapping = web_run_state == "modified"
     web_run_config = profile_search_config(route, WEB_RUN_PROFILE_ITEM_ID)
+    resolved_browser_client = browser_client or _configured_browser_client(config)
     use_profile_images = (
         upstream_path in IMAGE_ENDPOINTS and image_tool_state == "modified"
     )
@@ -158,6 +161,7 @@ async def handle_codex_auxiliary(
             body,
             web_run_config,
             native_passthrough_available=False,
+            browser_available=resolved_browser_client is not None,
         )
     )
     native_endpoint_available = _native_auxiliary_endpoint_available(
@@ -218,6 +222,7 @@ async def handle_codex_auxiliary(
                 web_run_config,
                 search_client,
                 page_client,
+                resolved_browser_client,
                 reference_store,
                 principal_id,
             )
@@ -284,12 +289,23 @@ def _search_reference_context(
     )
 
 
+def _configured_browser_client(config: GatewayConfig) -> WebRunBrowserClient | None:
+    if not config.web_run_sidecar_url or not config.web_run_sidecar_token:
+        return None
+    return WebRunSidecarHTTPClient(
+        config.web_run_sidecar_url,
+        config.web_run_sidecar_token,
+        timeout=config.web_run_sidecar_timeout,
+    )
+
+
 async def _handle_local_search(
     trace: StreamTraceLogger | None,
     body: dict[str, Any],
     web_search_config: dict[str, Any],
     search_client: TavilySearchClient | None,
     page_client: StaticPageClient | None,
+    browser_client: WebRunBrowserClient | None,
     reference_store: CodexSearchReferenceStore | None,
     principal_id: str | None,
 ) -> tuple[Response, int, str | None]:
@@ -301,6 +317,7 @@ async def _handle_local_search(
             web_search_config,
             client=search_client,
             page_client=page_client,
+            browser_client=browser_client,
             reference_store=reference_store,
             principal_id=principal_id,
         )

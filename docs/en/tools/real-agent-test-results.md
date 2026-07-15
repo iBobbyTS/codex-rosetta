@@ -54,12 +54,14 @@ stdin and restarted the process. The later two-stage continuation proved that
 | Hosted `web_search` | **Success** | `deepseek-v4-flash → deepseek-v4-flash` | Rosetta localized the hosted tool and Tavily returned a usable search result. |
 | `web.run` / `search_query` | **Success** | `gpt-5.6-sol → deepseek-v4-flash`; `gpt-5.6-terra → gpt-5.6-terra` | Search completed through the local Codex Search API and Tavily executor. |
 | `web.run` / `open` | **Success** | `gpt-5.6-sol → deepseek-v4-flash` | Rosetta resolved the stored `turnXsearchY` reference and returned readable page content. |
-| `web.run` / `find` | **Not implemented by design** | `gpt-5.6-sol → deepseek-v4-flash` | The call reached Rosetta and returned the documented Not Implemented error with the Browser Use hint. |
-| `web.run` / `click` | **Not implemented by design** | `gpt-5.6-sol → deepseek-v4-flash` | The call reached Rosetta and returned the documented Not Implemented error with the Browser Use hint. |
+| `web.run` / `find` | **Historical test: not implemented** | `gpt-5.6-sol → deepseek-v4-flash` | The run predates the optional `web-run` sidecar. It reached Rosetta and returned the documented Not Implemented error with the Browser Use hint. |
+| `web.run` / `click` | **Historical test: not implemented** | `gpt-5.6-sol → deepseek-v4-flash` | The run predates the optional `web-run` sidecar. It reached Rosetta and returned the documented Not Implemented error with the Browser Use hint. |
 
-The successful `find` and `click` contract tests prove correct routing and
-bounded failure behavior; they do not mean those browser operations are
-implemented.
+The optional sidecar now implements browser-backed `open`, `find`, `click`, and
+PDF `screenshot`, but this table does not promote them to Success until a new
+real-agent run records its model and Gateway Logs. The historical contract runs
+only prove that the earlier unsupported calls routed and failed in a controlled
+way.
 
 ## Namespace tools
 
@@ -94,8 +96,10 @@ The existing result set does not establish a final status for:
 - `tool_search`;
 - `clock.sleep` and other unlisted Clock operations;
 - Memories and Skills operations other than the rows above;
+- sidecar-backed `web.run` `find`, `click`, and PDF `screenshot` with a current
+  model;
 - other `web.run` commands such as `image_query`, `finance`, `weather`,
-  `sports`, `time`, and `screenshot`;
+  `sports`, and `time`;
 - GitHub, MCP, App, and Connector Namespace tools;
 - disabled legacy surfaces such as `shell_command` and `multi_agent_v1`.
 

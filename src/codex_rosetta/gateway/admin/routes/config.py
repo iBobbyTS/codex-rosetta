@@ -51,6 +51,16 @@ def _mask_web_search_config(value: Any) -> dict[str, Any]:
     return masked
 
 
+def _mask_web_run_config(value: Any) -> dict[str, Any]:
+    """Return a copy of server.web_run with its bearer token masked."""
+    if not isinstance(value, dict):
+        return {}
+    masked = dict(value)
+    if "token" in masked:
+        masked["token"] = _mask_api_key(str(masked["token"]))
+    return masked
+
+
 def _mask_server_config(value: Any) -> dict[str, Any]:
     """Return a copy of server config with sensitive admin values masked."""
     server = dict(value) if isinstance(value, dict) else {}
@@ -64,6 +74,8 @@ def _mask_server_config(value: Any) -> dict[str, Any]:
         ]
     if "web_search" in server:
         server["web_search"] = _mask_web_search_config(server["web_search"])
+    if "web_run" in server:
+        server["web_run"] = _mask_web_run_config(server["web_run"])
     return server
 
 

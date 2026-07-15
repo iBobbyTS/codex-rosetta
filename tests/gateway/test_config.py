@@ -22,6 +22,7 @@ from codex_rosetta.gateway.config import (
     DEFAULT_CODEX_HOME,
     DEFAULT_CONFIG_DIR,
     GatewayConfig,
+    WEB_RUN_SIDECAR_CAPABILITY,
     config_path_for_dir,
     discover_config,
     load_config,
@@ -123,6 +124,90 @@ def test_local_mode_defaults_to_enabled_and_unconfirmed() -> None:
 
     assert config.local_mode is True
     assert config.local_mode_confirmed is False
+
+
+def test_web_run_sidecar_is_disabled_by_default() -> None:
+    config = GatewayConfig(_minimal_raw())
+
+    assert config.web_run_sidecar_url is None
+    assert config.web_run_sidecar_token is None
+    assert config.web_run_sidecar_timeout == 45.0
+    route, _provider = config.resolve("openai_responses", "gpt-test")
+    assert WEB_RUN_SIDECAR_CAPABILITY not in route.tool_runtime_capabilities
+
+
+def test_web_run_sidecar_config_enables_route_capability() -> None:
+    config = GatewayConfig(
+        _minimal_raw(
+            web_run={
+                "base_url": "http://web-run:8080/",
+                "token": "sidecar-secret-token-for-tests",
+                "timeout_seconds": 12,
+            }
+        )
+    )
+
+    assert config.web_run_sidecar_url == "http://web-run:8080"
+    assert config.web_run_sidecar_token == "sidecar-secret-token-for-tests"
+    assert config.web_run_sidecar_timeout == 12.0
+    assert "sidecar-secret-token-for-tests" in config.token_values
+    route, _provider = config.resolve("openai_responses", "gpt-test")
+    assert WEB_RUN_SIDECAR_CAPABILITY in route.tool_runtime_capabilities
+
+
+def test_web_run_sidecar_environment_overrides_config(monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_URL", "http://browser.internal:9090")
+    monkeypatch.setenv(
+        "CODEX_ROSETTA_WEB_RUN_TOKEN", "environment-sidecar-secret-token"
+    )
+
+    config = GatewayConfig(_minimal_raw())
+
+    assert config.web_run_sidecar_url == "http://browser.internal:9090"
+    assert config.web_run_sidecar_token == "environment-sidecar-secret-token"
+
+
+def test_empty_web_run_sidecar_environment_preserves_config(monkeypatch) -> None:
+    monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_URL", "")
+    monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_TOKEN", "")
+
+    config = GatewayConfig(
+        _minimal_raw(
+            web_run={
+                "base_url": "http://web-run:8080",
+                "token": "configured-sidecar-secret-token",
+            }
+        )
+    )
+
+    assert config.web_run_sidecar_url == "http://web-run:8080"
+    assert config.web_run_sidecar_token == "configured-sidecar-secret-token"
+
+
+@pytest.mark.parametrize(
+    "web_run",
+    [
+        "http://web-run:8080",
+        {"base_url": "http://web-run:8080"},
+        {"token": "sidecar-secret-token-for-tests"},
+        {
+            "base_url": "file:///tmp/socket",
+            "token": "sidecar-secret-token-for-tests",
+        },
+        {
+            "base_url": "http://web-run:8080/path",
+            "token": "sidecar-secret-token-for-tests",
+        },
+        {
+            "base_url": "http://web-run:8080",
+            "token": "sidecar-secret-token-for-tests",
+            "timeout_seconds": 0,
+        },
+    ],
+)
+def test_invalid_web_run_sidecar_config_is_rejected(web_run) -> None:
+    with pytest.raises(ValueError, match="server.web_run"):
+        GatewayConfig(_minimal_raw(web_run=web_run))
 
 
 @pytest.mark.parametrize("field", ["local_mode", "local_mode_confirmed"])

@@ -612,6 +612,29 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert body["server"]["request_body_limit_mb"] == 128
 
 
+def test_get_config_masks_web_run_sidecar_token(tmp_path):
+    config = _config_data()
+    config["server"]["web_run"] = {
+        "base_url": "http://web-run:8080",
+        "token": "sidecar-secret-token-1234567890",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+
+    response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode())
+    assert body["server"]["web_run"] == {
+        "base_url": "http://web-run:8080",
+        "token": "side***7890",
+    }
+
+
 @pytest.mark.parametrize("credential_visible", [False, True])
 @pytest.mark.parametrize(
     ("stored_password", "runtime_password"),

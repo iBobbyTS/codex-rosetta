@@ -47,6 +47,8 @@ class ResolvedRoute:
         tool_profile_inputs: Function-card input values for the selected profile.
         responses_processing: Internal handling mode for same-format OpenAI
             Responses routes. This does not represent a distinct wire protocol.
+        tool_runtime_capabilities: Gateway-owned optional tool executors available
+            to this route. Core converters treat these as opaque capability names.
     """
 
     source_provider: ProviderType
@@ -59,6 +61,7 @@ class ResolvedRoute:
     tool_profile: dict[str, str] = field(default_factory=dict)
     tool_profile_inputs: dict[str, dict[str, str]] = field(default_factory=dict)
     responses_processing: Literal["passthrough", "rosetta"] = "rosetta"
+    tool_runtime_capabilities: frozenset[str] = field(default_factory=frozenset)
 
 
 class Router(Protocol):

@@ -16,6 +16,7 @@ from codex_rosetta.gateway.codex_search import (
     should_use_local_codex_search,
 )
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
+from codex_rosetta.gateway.web_run_sidecar import WebRunSidecarInvalidRequest
 from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
@@ -55,6 +56,21 @@ class _FakePageClient:
             title="Python 3 Documentation",
             lines=("Overview", "What's new", "Tutorial", "Library Reference"),
         )
+
+
+class _FakeBrowserClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def execute(
+        self,
+        *,
+        session_id: str,
+        operation: str,
+        arguments: dict[str, Any],
+    ) -> str:
+        self.calls.append((session_id, operation, arguments))
+        return f"browser:{operation}:{arguments['ref_id']}"
 
 
 def _body(commands: dict[str, Any], **extra: Any) -> dict[str, Any]:
@@ -187,6 +203,81 @@ def test_search_result_reference_can_be_opened_in_the_same_session() -> None:
     assert page_client.calls == ["https://docs.python.org/3/"]
     assert "Title: Python 3 Documentation" in open_result.output
     assert open_result.stored_reference_open_count == 1
+
+
+def test_sidecar_executes_open_click_find_and_pdf_screenshot() -> None:
+    store = CodexSearchReferenceStore()
+    asyncio.run(
+        execute_local_codex_search(
+            _body({"search_query": [{"q": "python"}]}),
+            {"tavily_api_key": "tvly-test"},
+            client=_FakeTavilyClient(),
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+    browser = _FakeBrowserClient()
+
+    result = asyncio.run(
+        execute_local_codex_search(
+            _body(
+                {
+                    "open": [{"ref_id": "turn0search0", "lineno": 2}],
+                    "click": [{"ref_id": "turn1fetch0", "id": 7}],
+                    "find": [{"ref_id": "turn1fetch0", "pattern": "Python"}],
+                    "screenshot": [
+                        {"ref_id": "https://example.com/file.pdf", "pageno": 3}
+                    ],
+                }
+            ),
+            {},
+            browser_client=browser,
+            reference_store=store,
+            principal_id="client-a",
+        )
+    )
+
+    session_ids = {call[0] for call in browser.calls}
+    assert len(session_ids) == 1
+    assert len(next(iter(session_ids))) == 64
+    assert browser.calls[0][1:] == (
+        "open",
+        {"ref_id": "https://docs.python.org/3/", "lineno": 2},
+    )
+    assert browser.calls[1][1:] == (
+        "click",
+        {"ref_id": "turn1fetch0", "id": 7},
+    )
+    assert browser.calls[2][1:] == (
+        "find",
+        {"ref_id": "turn1fetch0", "pattern": "Python"},
+    )
+    assert browser.calls[3][1:] == (
+        "screenshot",
+        {"ref_id": "https://example.com/file.pdf", "pageno": 3},
+    )
+    assert result.open_count == 1
+    assert result.browser_open_count == 1
+    assert result.click_count == 1
+    assert result.find_count == 1
+    assert result.screenshot_count == 1
+    assert result.trace_summary()["executor"] == "tavily_python_web_run_sidecar"
+
+
+def test_sidecar_invalid_reference_maps_to_codex_invalid_request() -> None:
+    class InvalidBrowser:
+        async def execute(self, **kwargs: Any) -> str:
+            del kwargs
+            raise WebRunSidecarInvalidRequest("Unknown or expired page reference")
+
+    with pytest.raises(CodexSearchInvalidRequest, match="Unknown or expired"):
+        asyncio.run(
+            execute_local_codex_search(
+                _body({"click": [{"ref_id": "turn9fetch0", "id": 1}]}),
+                {},
+                browser_client=InvalidBrowser(),
+            )
+        )
 
 
 @pytest.mark.parametrize(
