@@ -75,6 +75,8 @@ def _request(app, path: str) -> Request:
         "/admin/keys/",
         "/admin/tools",
         "/admin/tools/",
+        "/admin/network-search",
+        "/admin/network-search/",
         "/admin/dashboard",
         "/admin/logs",
         "/admin/gateway-logs",

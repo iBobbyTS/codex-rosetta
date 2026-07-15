@@ -420,6 +420,47 @@ class TestRequestBodyLimit:
             GatewayConfig(_minimal_raw(request_body_limit_mb=value))
 
 
+class TestWebSearchConfig:
+    """Global Rosetta web search settings are validated and redacted."""
+
+    def test_defaults_to_unconfigured_tavily(self):
+        config = GatewayConfig(_minimal_raw())
+
+        assert config.web_search == {
+            "provider": "tavily",
+            "tavily_api_key": "",
+        }
+
+    def test_configured_key_is_available_and_redacted(self):
+        config = GatewayConfig(
+            _minimal_raw(
+                web_search={
+                    "provider": "tavily",
+                    "tavily_api_key": " tvly-secret ",
+                }
+            )
+        )
+
+        assert config.web_search == {
+            "provider": "tavily",
+            "tavily_api_key": "tvly-secret",
+        }
+        assert "tvly-secret" in config.token_values
+
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            ("tavily", "must be an object"),
+            ({"provider": "other"}, "provider must be one of"),
+            ({"tavily_api_key": 42}, "tavily_api_key must be a string"),
+            ({"token": "legacy"}, "unsupported fields"),
+        ],
+    )
+    def test_rejects_invalid_values(self, value, message):
+        with pytest.raises(ValueError, match=message):
+            GatewayConfig(_minimal_raw(web_search=value))
+
+
 class TestStreamTraceConfig:
     """server.stream_trace is parsed into runtime trace settings."""
 

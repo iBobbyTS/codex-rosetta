@@ -17,9 +17,9 @@ from codex_rosetta.gateway.tool_profiles import (
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
-    resolve_tool_profile_inputs,
     tool_profile_contract,
 )
+from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -252,25 +252,20 @@ def test_bundled_profile_input_overrides_reject_user_profiles():
         normalize_tool_profile_input_overrides({"custom": {}})
 
 
-def test_bundled_profile_input_override_changes_fields_but_not_tool_states():
+def test_bundled_profile_input_override_rejects_removed_web_run_inputs():
     name = "builtin"
-    tools_before = resolve_tool_profile(name, {})
-    overrides = normalize_tool_profile_input_overrides(
-        {
-            name: {
-                "namespace.web.run": {
-                    "provider": "tavily",
-                    "token": "search-token",
+
+    with pytest.raises(ValueError, match="unknown catalog IDs"):
+        normalize_tool_profile_input_overrides(
+            {
+                name: {
+                    "namespace.web.run": {
+                        "provider": "tavily",
+                        "token": "search-token",
+                    }
                 }
             }
-        }
-    )
-
-    inputs = resolve_tool_profile_inputs(name, {}, overrides)
-
-    assert inputs["namespace.web.run"]["token"] == "search-token"
-    assert resolve_tool_profile(name, {}) == tools_before
-    assert tools_before["namespace.web.run"] == "modified"
+        )
 
 
 @pytest.mark.parametrize(
@@ -358,6 +353,28 @@ def test_description_visibility_defaults_to_all_states_and_supports_override(
         item["description_visible_when"] = ["expanded"]
         tool_profiles_module.tool_profile_contract.cache_clear()
         with pytest.raises(ValueError, match="contains unsupported states"):
+            tool_profiles_module.tool_profile_contract()
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
+
+
+def test_state_descriptions_require_supported_states_and_i18n_keys(monkeypatch):
+    catalog = copy.deepcopy(load_tool_catalog())
+    item = next(
+        item for item in catalog["items"] if item["id"] == "function.exec_command"
+    )
+    item["state_descriptions_i18n"] = {"modified": "tools.description.wait"}
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        tool_profiles_module.tool_profile_contract()
+        item["state_descriptions_i18n"] = {"expanded": "tools.description.wait"}
+        tool_profiles_module.tool_profile_contract.cache_clear()
+        with pytest.raises(ValueError, match="contains unsupported states"):
+            tool_profiles_module.tool_profile_contract()
+        item["state_descriptions_i18n"] = {"modified": ""}
+        tool_profiles_module.tool_profile_contract.cache_clear()
+        with pytest.raises(ValueError, match="non-empty i18n keys"):
             tool_profiles_module.tool_profile_contract()
     finally:
         tool_profiles_module.tool_profile_contract.cache_clear()
@@ -752,6 +769,93 @@ def test_modified_web_search_profile_matches_preview_alias():
     assert adapted["tools"][0]["description"] == (
         "Search current documentation.\n\nPrefer primary sources."
     )
+
+
+def _web_run_tool(*commands: str) -> dict:
+    command_properties = {
+        "search_query": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "q": {"type": "string"},
+                    "recency": {"type": "number"},
+                },
+                "required": ["q"],
+            },
+        },
+        "click": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "ref_id": {"type": "string"},
+                    "id": {"type": "number"},
+                },
+                "required": ["ref_id", "id"],
+            },
+        },
+        "finance": {
+            "type": "array",
+            "items": {"type": "object", "properties": {}},
+        },
+    }
+    return {
+        "type": "function",
+        "name": "web__run",
+        "description": "\n".join(f"Use `{command}`." for command in commands),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                command: command_properties[command] for command in commands
+            },
+        },
+    }
+
+
+def test_modified_web_run_removes_locally_unsupported_schema_branches():
+    body = {"tools": [_web_run_tool("search_query", "click", "finance")]}
+    route = _route(_profile(**{"namespace.web.run": "modified"}))
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    function = adapted["tools"][0]
+    assert set(function["parameters"]["properties"]) == {"search_query"}
+    assert set(
+        function["parameters"]["properties"]["search_query"]["items"]["properties"]
+    ) == {"q"}
+    assert "finance" not in function["description"]
+    assert "click" not in function["description"]
+
+
+def test_modified_web_run_keeps_supported_browser_branches_with_sidecar():
+    body = {"tools": [_web_run_tool("click", "finance")]}
+    route = _route(_profile(**{"namespace.web.run": "modified"}))
+    object.__setattr__(
+        route,
+        "tool_runtime_capabilities",
+        frozenset({WEB_RUN_SIDECAR_CAPABILITY}),
+    )
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert set(adapted["tools"][0]["parameters"]["properties"]) == {"click"}
+
+
+def test_passthrough_web_run_keeps_complete_schema():
+    body = {"tools": [_web_run_tool("search_query", "finance")]}
+    route = _route(_profile(**{"namespace.web.run": "passthrough"}))
+
+    assert _apply_tool_adaptation(body, route) is body
+
+
+def test_modified_web_run_without_supported_schema_fails_closed():
+    body = {"tools": [_web_run_tool("finance")]}
+    route = _route(_profile(**{"namespace.web.run": "modified"}))
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert "tools" not in adapted
 
 
 def test_chat_default_disables_hosted_web_search():

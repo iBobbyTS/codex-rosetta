@@ -76,6 +76,7 @@ DEFAULT_REQUEST_BODY_LIMIT_MB = 128
 UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
 WEB_RUN_SIDECAR_URL_ENV = "CODEX_ROSETTA_WEB_RUN_URL"
 WEB_RUN_SIDECAR_TOKEN_ENV = "CODEX_ROSETTA_WEB_RUN_TOKEN"
+WEB_SEARCH_PROVIDERS = frozenset({"tavily"})
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -110,6 +111,31 @@ def normalize_request_body_limit_mb(value: Any) -> int | None:
             "64, 128, 256, 512, 1024, or 'unlimited'"
         )
     return value
+
+
+def normalize_web_search(value: Any) -> dict[str, str]:
+    """Validate the global Rosetta search-service configuration."""
+    if value is None:
+        mapping: dict[str, Any] = {}
+    elif isinstance(value, dict):
+        mapping = value
+    else:
+        raise ValueError("config: server.web_search must be an object")
+    unsupported = set(mapping) - {"provider", "tavily_api_key"}
+    if unsupported:
+        raise ValueError(
+            f"config: server.web_search has unsupported fields: {sorted(unsupported)}"
+        )
+    provider = mapping.get("provider", "tavily")
+    api_key = mapping.get("tavily_api_key", "")
+    if not isinstance(provider, str) or provider not in WEB_SEARCH_PROVIDERS:
+        raise ValueError(
+            "config: server.web_search.provider must be one of "
+            f"{sorted(WEB_SEARCH_PROVIDERS)}"
+        )
+    if not isinstance(api_key, str):
+        raise ValueError("config: server.web_search.tavily_api_key must be a string")
+    return {"provider": provider, "tavily_api_key": api_key.strip()}
 
 
 def normalize_web_run_sidecar(
@@ -614,6 +640,9 @@ class GatewayConfig:
         self.local_mode, self.local_mode_confirmed = normalize_local_mode_settings(
             _server
         )
+        self.web_search = normalize_web_search(_server.get("web_search"))
+        if self.web_search["tavily_api_key"]:
+            self.token_values.add(self.web_search["tavily_api_key"])
         (
             self.web_run_sidecar_url,
             self.web_run_sidecar_token,

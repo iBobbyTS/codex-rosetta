@@ -35,6 +35,7 @@ from .config import (
     delete_provider,
     fetch_upstream_models,
     get_config,
+    get_network_search_status,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -96,6 +97,7 @@ def register_admin_routes(app: Any) -> None:
         "models",
         "keys",
         "tools",
+        "network-search",
         "dashboard",
         "logs",
         "gateway-logs",
@@ -126,6 +128,9 @@ def register_admin_routes(app: Any) -> None:
     )
     app.route("/admin/api/config/server", methods=["PUT"])(put_server_settings)
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)
+    app.route("/admin/api/network-search/status", methods=["GET"])(
+        get_network_search_status
+    )
     # Tool catalog and profiles
     app.route("/admin/api/tools/catalog", methods=["GET"])(get_tool_catalog)
     app.route("/admin/api/tools/profiles", methods=["GET"])(get_tool_profiles)

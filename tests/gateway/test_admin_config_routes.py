@@ -12,9 +12,11 @@ from typing import Any, cast
 import pytest
 
 from codex_rosetta.gateway.admin.routes import _shared
+from codex_rosetta.gateway.admin.routes import config as config_routes
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     get_config,
+    get_network_search_status,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -612,6 +614,186 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert body["server"]["request_body_limit_mb"] == 128
 
 
+def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(
+    tmp_path,
+):
+    config = _config_data()
+    config["server"]["web_search"] = {
+        "provider": "tavily",
+        "tavily_api_key": "tvly-secret-value",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {
+            "web_search": {
+                "provider": "tavily",
+                "tavily_api_key": "tvly***alue",
+            }
+        },
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["web_search"] == {
+        "provider": "tavily",
+        "tavily_api_key": "tvly-secret-value",
+    }
+    assert app.gateway_config.web_search["tavily_api_key"] == "tvly-secret-value"
+    assert "tvly-secret-value" in app.gateway_config.token_values
+    assert (
+        json.loads(response.body)["server"]["web_search"]["tavily_api_key"]
+        == "tvly***alue"
+    )
+
+
+def test_put_server_settings_clears_web_search_key(tmp_path):
+    config = _config_data()
+    config["server"]["web_search"] = {
+        "provider": "tavily",
+        "tavily_api_key": "tvly-secret-value",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {"web_search": {"provider": "tavily", "tavily_api_key": ""}},
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
+        "web_search"
+    ] == {"provider": "tavily"}
+    assert app.gateway_config.web_search["tavily_api_key"] == ""
+
+
+def test_put_server_settings_rejects_invalid_web_search_fields(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(_config_data()).encode()
+    config_path.write_bytes(original)
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(config_path=str(config_path), gateway_config=initial_config)
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {"web_search": {"provider": "other", "token": "legacy"}},
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 400
+    assert config_path.read_bytes() == original
+    assert app.gateway_config is initial_config
+
+
+class _FakeAsyncClient:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return None
+
+
+def test_network_search_status_is_unconfigured_without_sidecar():
+    request = SimpleNamespace(
+        app=SimpleNamespace(gateway_config=GatewayConfig(_config_data()))
+    )
+
+    response = _run(get_network_search_status(request))
+
+    assert json.loads(response.body) == {
+        "configured": False,
+        "service_online": False,
+        "browser_ready": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("health", "expected"),
+    [
+        ({"status": "ok", "browser_ready": False}, (True, False)),
+        ({"status": "ok", "browser_ready": True}, (True, True)),
+    ],
+)
+def test_network_search_status_reports_service_and_browser(
+    monkeypatch, health, expected
+):
+    config = _config_data()
+    config["server"]["web_run"] = {
+        "base_url": "http://web-run:8080",
+        "token": "sidecar-token",
+    }
+    request = SimpleNamespace(app=SimpleNamespace(gateway_config=GatewayConfig(config)))
+    calls = []
+
+    async def fake_request(client, method, url, **kwargs):
+        calls.append((client.kwargs, method, url, kwargs))
+        return SimpleNamespace(status_code=200, json=lambda: health)
+
+    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(config_routes, "request_bounded_response", fake_request)
+
+    response = _run(get_network_search_status(request))
+
+    body = json.loads(response.body)
+    assert body == {
+        "configured": True,
+        "service_online": expected[0],
+        "browser_ready": expected[1],
+    }
+    assert calls[0][0]["timeout"] == 2.0
+    assert calls[0][1:3] == ("GET", "http://web-run:8080/health")
+    assert calls[0][3] == {
+        "max_success_bytes": 64 * 1024,
+        "max_error_bytes": 64 * 1024,
+    }
+
+
+def test_network_search_status_hides_unreachable_sidecar_error(monkeypatch):
+    config = _config_data()
+    config["server"]["web_run"] = {
+        "base_url": "http://web-run:8080",
+        "token": "sidecar-token",
+    }
+    request = SimpleNamespace(app=SimpleNamespace(gateway_config=GatewayConfig(config)))
+
+    async def fail_request(*args, **kwargs):
+        raise RuntimeError("sensitive upstream detail")
+
+    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(config_routes, "request_bounded_response", fail_request)
+
+    response = _run(get_network_search_status(request))
+
+    assert json.loads(response.body) == {
+        "configured": True,
+        "service_online": False,
+        "browser_ready": None,
+    }
+    assert b"sensitive upstream detail" not in response.body
+
+
 def test_get_config_masks_web_run_sidecar_token(tmp_path):
     config = _config_data()
     config["server"]["web_run"] = {
@@ -811,7 +993,13 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["provider"] == "openai"
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
-    assert body["tool_profile_presets"] == [{"id": "builtin", "name": "Chat Default"}]
+    assert body["tool_profile_presets"] == [
+        {"id": "builtin", "name": "Chat Default"},
+        {
+            "id": "openai-responses-tool-mapping-only",
+            "name": "OpenAI Responses Tool Mapping Only",
+        },
+    ]
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "grouped-upstream"
     )
@@ -1394,14 +1582,24 @@ def test_admin_html_uses_page_routes():
     assert 'href="/admin/providers"' in html
     assert 'href="/admin/models"' in html
     assert 'href="/admin/keys"' in html
-    assert 'href="/admin/web-search"' not in html
+    assert 'href="/admin/network-search"' in html
     assert 'href="/admin/dashboard"' in html
     assert 'href="/admin/logs"' in html
     assert 'href="/admin/gateway-logs"' in html
     assert 'data-page="keys"' in html
-    assert 'data-page="web-search"' not in html
+    assert 'data-page="network-search"' in html
     assert 'id="page-keys"' in html
-    assert 'id="page-web-search"' not in html
+    assert 'id="page-network-search"' in html
+    network_page = html.split('id="page-network-search"', 1)[1].split(
+        "<!-- Dashboard Page -->", 1
+    )[0]
+    assert 'id="networkSearchProvider"' in network_page
+    assert 'id="networkSearchApiKey"' in network_page
+    assert 'id="networkSearchSidecarStatus"' in network_page
+    assert 'id="networkSearchBrowserStatus"' in network_page
+    assert 'name="webRunBaseUrl"' not in network_page
+    assert "setInterval(loadNetworkSearchStatus, 5000)" in html
+    assert "clearInterval(networkSearchTimer)" in html
     assert "codex-rosetta-tab" not in html
     assert "data-tab" not in html
     assert "currentTab" not in html

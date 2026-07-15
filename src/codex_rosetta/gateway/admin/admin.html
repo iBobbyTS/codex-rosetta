@@ -612,6 +612,7 @@ body { padding-bottom: 26px; }
   <a class="nav-link" href="/admin/models" data-page="models" data-i18n="nav.models">Models</a>
   <a class="nav-link" href="/admin/keys" data-page="keys" data-i18n="nav.keys">API Keys</a>
   <a class="nav-link" href="/admin/tools" data-page="tools" data-i18n="nav.tools">Tools</a>
+  <a class="nav-link" href="/admin/network-search" data-page="network-search" data-i18n="nav.networkSearch">Web Search</a>
   <a class="nav-link" href="/admin/dashboard" data-page="dashboard" data-i18n="nav.dashboard">Dashboard</a>
   <a class="nav-link" href="/admin/logs" data-page="logs" data-i18n="nav.logs">Request Log</a>
   <a class="nav-link" href="/admin/gateway-logs" data-page="gateway-logs" data-i18n="nav.gatewayLogs">Gateway Logs</a>
@@ -749,6 +750,43 @@ body { padding-bottom: 26px; }
       <div class="tool-catalog-layout" id="toolCatalogLayout" hidden>
         <div class="tool-catalog-groups" id="toolCatalogGroups"></div>
         <aside class="tool-detail-panel" id="toolDetailPanel" aria-live="polite"></aside>
+      </div>
+    </div>
+  </div>
+
+  <!-- Network Search Page -->
+  <div class="page-panel" id="page-network-search">
+    <div class="section">
+      <div class="section-header">
+        <h2 data-i18n="section.basicSearch">Basic Search</h2>
+        <button class="btn btn-primary btn-sm" onclick="saveNetworkSearchSettings()" data-i18n="btn.save">Save</button>
+      </div>
+      <div class="provider-card" style="max-width:560px">
+        <div class="form-group">
+          <label data-i18n="label.searchProvider">Search Provider</label>
+          <select id="networkSearchProvider">
+            <option value="tavily">Tavily</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label data-i18n="label.searchApiKey">API Key</label>
+          <input id="networkSearchApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="label.searchApiKeyPlaceholder" placeholder="Enter the Tavily API key">
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-header">
+        <h2 data-i18n="section.advancedSearch">Advanced Search</h2>
+      </div>
+      <div class="provider-card" style="max-width:560px">
+        <div class="form-group">
+          <label data-i18n="label.sidecarService">Sidecar Service</label>
+          <span id="networkSearchSidecarStatus" class="badge" data-i18n="status.checking">Checking</span>
+        </div>
+        <div class="form-group">
+          <label data-i18n="label.sidecarBrowser">Browser</label>
+          <span id="networkSearchBrowserStatus" class="badge" data-i18n="status.unknown">Unknown</span>
+        </div>
       </div>
     </div>
   </div>
@@ -1540,13 +1578,17 @@ function applyI18n() {
   if (currentPage === 'dashboard') loadMetrics();
   if (currentPage === 'logs') loadLogs();
   if (currentPage === 'tools') renderToolCatalog();
+  if (currentPage === 'network-search') {
+    renderNetworkSearchSettings();
+    loadNetworkSearchStatus();
+  }
   if (currentPage === 'gateway-logs') renderStreamTraceSettings();
   // Re-render DB status footer with cached data
   if (_lastPersistence != null) renderPersistence(_lastPersistence, _lastTotalReq);
 }
 
 // ===================== Page Routing =====================
-const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'tools', 'dashboard', 'logs', 'gateway-logs']);
+const ADMIN_PAGE_IDS = new Set(['providers', 'models', 'keys', 'tools', 'network-search', 'dashboard', 'logs', 'gateway-logs']);
 const DEFAULT_ADMIN_PAGE = 'providers';
 
 function getCurrentPageFromLocation() {
@@ -1589,6 +1631,7 @@ const DEFAULT_STREAM_TRACE_PATH = '~/.config/codex-rosetta-gateway/log.jsonl';
 const LOG_LIMIT = 30;
 let dashboardTimer = null;
 let logTimer = null;
+let networkSearchTimer = null;
 const expandedLogRows = new Set();  // track expanded error detail rows by timestamp
 let toolCatalogData = null;
 let toolCatalogError = '';
@@ -1974,12 +2017,14 @@ function renderToolDetail() {
   const summary = `<div class="tool-description">${esc(t('tools.summary.' + item.id))}</div>`;
   const showDescription = item.description_i18n && isToolCardContentVisible(item.id, item.description_visible_when);
   const description = showDescription ? `<div class="tool-description">${esc(t(item.description_i18n))}</div>` : '';
+  const stateDescriptionKey = item.state_descriptions_i18n?.[toolEffectiveState(item)];
+  const stateDescription = stateDescriptionKey ? `<div class="tool-description">${esc(t(stateDescriptionKey))}</div>` : '';
   const placement = renderToolCodexPlacement(item);
   const projection = item.exec_projection ? `<div class="tool-description">${esc(t('tools.detail.dynamicProjection'))}</div>` : '';
   const inputs = renderToolProfileInputs(item);
   const showNote = item.note_i18n && isToolCardContentVisible(item.id, item.note_visible_when);
   const note = showNote ? `<div class="tool-description tool-detail-note">${esc(t(item.note_i18n))}</div>` : '';
-  const body = summary + description + placement + projection + inputs + note;
+  const body = summary + description + stateDescription + placement + projection + inputs + note;
   panel.innerHTML = `<div class="tool-detail-header"><div class="tool-detail-heading"><span class="tool-detail-kicker">${esc(t('tools.detail.title'))}</span><span class="tool-detail-name">${esc(item.name)}</span></div>${renderToolKindBadge(item)}</div><div class="tool-detail-body">${body}</div>`;
 }
 
@@ -2119,6 +2164,7 @@ function showLoginOverlay() {
   // Stop background polling timers to prevent repeated 401 → showLoginOverlay loops
   if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
   if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (networkSearchTimer) { clearInterval(networkSearchTimer); networkSearchTimer = null; }
   const overlay = document.getElementById('loginOverlay');
   // Don't re-clear fields if already showing (would dismiss password manager popup)
   if (overlay.style.display === 'flex') return;
@@ -2395,6 +2441,7 @@ async function loadConfig() {
     document.getElementById('requestBodyLimitMb').value = String((configData.server && configData.server.request_body_limit_mb) || 128);
     document.getElementById('localModeEnabled').checked = !configData.server || configData.server.local_mode !== false;
     renderStreamTraceSettings();
+    renderNetworkSearchSettings();
     renderProviders();
     renderModels();
     // Detect host IP in background (for proxy placeholder hints)
@@ -2430,6 +2477,61 @@ async function saveServerSettings() {
   const res = await api.put('/admin/api/config/server', body);
   if (res.ok) { showToast(t('toast.serverSaved')); loadConfig(); }
   else { showToast(res.error || 'Failed', 'error'); }
+}
+
+function renderNetworkSearchSettings() {
+  if (!configData) return;
+  const settings = (configData.server && configData.server.web_search) || {};
+  const provider = document.getElementById('networkSearchProvider');
+  const apiKey = document.getElementById('networkSearchApiKey');
+  if (!provider || !apiKey) return;
+  provider.value = settings.provider || 'tavily';
+  apiKey.value = settings.tavily_api_key || '';
+}
+
+async function saveNetworkSearchSettings() {
+  const web_search = {
+    provider: document.getElementById('networkSearchProvider').value,
+    tavily_api_key: document.getElementById('networkSearchApiKey').value.trim()
+  };
+  const res = await api.put('/admin/api/config/server', {web_search});
+  if (res.ok) {
+    showToast(t('toast.networkSearchSaved'));
+    await loadConfig();
+  } else {
+    showToast(res.error || 'Failed', 'error');
+  }
+}
+
+function setNetworkSearchStatus(element, label, state) {
+  element.textContent = t(label);
+  element.className = `badge ${state === 'ok' ? 'badge-ok' : state === 'error' ? 'badge-error' : 'badge-cap'}`;
+}
+
+async function loadNetworkSearchStatus() {
+  const service = document.getElementById('networkSearchSidecarStatus');
+  const browser = document.getElementById('networkSearchBrowserStatus');
+  if (!service || !browser) return;
+  try {
+    const status = await api.get('/admin/api/network-search/status');
+    if (!status.configured) {
+      setNetworkSearchStatus(service, 'status.notConfigured', 'neutral');
+      setNetworkSearchStatus(browser, 'status.unknown', 'neutral');
+    } else if (!status.service_online) {
+      setNetworkSearchStatus(service, 'status.offline', 'error');
+      setNetworkSearchStatus(browser, 'status.unknown', 'neutral');
+    } else {
+      setNetworkSearchStatus(service, 'status.online', 'ok');
+      setNetworkSearchStatus(
+        browser,
+        status.browser_ready ? 'status.ready' : 'status.notReady',
+        status.browser_ready ? 'ok' : 'error'
+      );
+    }
+  } catch (_) {
+    setNetworkSearchStatus(service, 'status.offline', 'error');
+    setNetworkSearchStatus(browser, 'status.unknown', 'neutral');
+  }
 }
 
 function renderStreamTraceSettings() {
@@ -3758,11 +3860,17 @@ function loadActivePageData() {
   if (currentPage === 'tools') {
     loadToolCatalog();
   }
+  if (currentPage === 'network-search') {
+    renderNetworkSearchSettings();
+    loadNetworkSearchStatus();
+    networkSearchTimer = setInterval(loadNetworkSearchStatus, 5000);
+  }
 }
 
 function stopTimers() {
   if (dashboardTimer) { clearInterval(dashboardTimer); dashboardTimer = null; }
   if (logTimer) { clearInterval(logTimer); logTimer = null; }
+  if (networkSearchTimer) { clearInterval(networkSearchTimer); networkSearchTimer = null; }
 }
 
 // Filter change handlers

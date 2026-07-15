@@ -889,41 +889,14 @@
       "name": "web__run",
       "type": "function",
       "policy_id": "web_run_mapping",
-      "description_i18n": "tools.description.web_search_mapping",
-      "description_visible_when": [
-        "modified"
-      ],
+      "state_descriptions_i18n": {
+        "passthrough": "tools.description.web_run_passthrough",
+        "modified": "tools.description.web_run_modified"
+      },
       "exec_projection": {
         "chat_name": "web-run",
         "nested_name": "web__run"
-      },
-      "profile_inputs": [
-        {
-          "id": "provider",
-          "label_i18n": "tools.input.web_search.provider",
-          "type": "select",
-          "default": "tavily",
-          "visible_when": [
-            "modified"
-          ],
-          "options": [
-            {
-              "value": "tavily",
-              "label": "Tavily"
-            }
-          ]
-        },
-        {
-          "id": "token",
-          "label_i18n": "tools.input.web_run.token",
-          "placeholder_i18n": "tools.input.web_run.token_placeholder",
-          "type": "password",
-          "default": "",
-          "visible_when": [
-            "modified"
-          ]
-        }
-      ]
+      }
     },
     {
       "id": "namespace.memories.add_ad_hoc_note",

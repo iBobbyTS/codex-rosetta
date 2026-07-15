@@ -98,6 +98,11 @@ from .transport import (
     UpstreamTransport,
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
+from .web_run_capabilities import (
+    WEB_RUN_PROFILE_ITEM_ID,
+    WEB_RUN_SIDECAR_CAPABILITY,
+    project_modified_web_run_function,
+)
 from .web_search import (
     TavilySearchClient,
     WEB_SEARCH_PROFILE_ITEM_ID,
@@ -769,7 +774,8 @@ def _filter_profile_tool(
     if item_id is None:
         return tool, set()
     name = _tool_identifier(tool)
-    if route_tool_state(route, item_id) == "disabled" and not (
+    state = route_tool_state(route, item_id)
+    if state == "disabled" and not (
         route.target_provider == "openai_chat"
         and is_internal_container_when_disabled(route, item_id)
     ):
@@ -779,7 +785,22 @@ def _filter_profile_tool(
         if adapted is None and isinstance(name, str):
             removed.add(name)
         return adapted, removed
-    return apply_profile_tool_mutations(tool, item_id, route), set()
+    adapted = apply_profile_tool_mutations(tool, item_id, route)
+    if (
+        item_id == WEB_RUN_PROFILE_ITEM_ID
+        and state == "modified"
+        and isinstance(adapted, dict)
+    ):
+        projected = project_modified_web_run_function(
+            adapted,
+            browser_available=(
+                WEB_RUN_SIDECAR_CAPABILITY in route.tool_runtime_capabilities
+            ),
+        )
+        if projected is None:
+            return None, {name} if isinstance(name, str) else set()
+        return projected, set()
+    return adapted, set()
 
 
 def _filter_profile_tools(

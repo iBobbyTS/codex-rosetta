@@ -200,7 +200,7 @@ async def execute_local_codex_search(
     api_key = str(config.get("tavily_api_key") or "").strip()
     if queries and client is None and not api_key:
         raise CodexSearchNotImplemented(
-            "Codex search_query requires a Tavily Token on the selected web.run Profile card"
+            "Codex search_query requires a Tavily API key in Admin > Web Search"
         )
     search_client = client or (TavilyHTTPClient(api_key) if queries else None)
     resolved_page_client = page_client or (

@@ -158,7 +158,10 @@ def test_tool_detail_copy_is_localized_and_matches_profile_behavior():
         "对模型隐藏，改用Claude Code风格的Edit和Write，Rosetta负责翻译"
     )
     assert translations["zh"]["tools.description.web_search_mapping"] == (
-        "替换掉原本的`/alpha/search`搜索端点，使用配置好的搜索服务商进行搜索"
+        "替换掉原本的`/v1/alpha/search`搜索端点，使用配置好的搜索服务商进行搜索"
+    )
+    assert translations["zh"]["tools.description.web_run_passthrough"] == (
+        "将 `/v1/alpha/search` 直接传到上游模型 API。"
     )
     for item_id in (
         "read",
@@ -380,7 +383,19 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.test_sync_tool": "disabled",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
-    assert catalog["preset_profiles"] == []
+    assert catalog["preset_profiles"] == [
+        {
+            "id": "openai-responses-tool-mapping-only",
+            "name": "OpenAI Responses Tool Mapping Only",
+            "defaults": {
+                "function": "passthrough",
+                "custom": "passthrough",
+                "hosted": "passthrough",
+                "namespace": "passthrough",
+                "custom_injection": "disabled",
+            },
+        }
+    ]
 
     assert policies[items["custom.apply_patch"]["policy_id"]]["default"] == ("disabled")
     assert "hosted.image_generation" not in items
@@ -434,12 +449,11 @@ def test_catalog_defaults_and_namespace_image_policy():
         },
     ]
     assert items["hosted.web_search"]["profile_inputs"] == search_inputs
-    web_run_inputs = [dict(input_definition) for input_definition in search_inputs[:2]]
-    assert items["namespace.web.run"]["profile_inputs"] == web_run_inputs
-    assert (
-        items["hosted.web_search"]["description_i18n"]
-        == (items["namespace.web.run"]["description_i18n"])
-    )
+    assert "profile_inputs" not in items["namespace.web.run"]
+    assert items["namespace.web.run"]["state_descriptions_i18n"] == {
+        "passthrough": "tools.description.web_run_passthrough",
+        "modified": "tools.description.web_run_modified",
+    }
     assert items["custom.exec"]["profile_inputs"] == [
         {
             "id": "guidance",
@@ -651,7 +665,9 @@ def test_catalog_api_is_read_only_and_returns_bundled_resource():
 
 def test_admin_tools_view_has_profile_editor_and_all_filters():
     html = load_admin_html()
-    page = html.split('id="page-tools"', 1)[1].split("<!-- Dashboard Page -->", 1)[0]
+    page = html.split('id="page-tools"', 1)[1].split("<!-- Network Search Page -->", 1)[
+        0
+    ]
 
     assert 'href="/admin/tools"' in html
     assert "api.get('/admin/api/tools/catalog')" in html
@@ -673,7 +689,10 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "item.description_i18n" in html
     assert "item.note_i18n" in html
     assert "item.note_visible_when" in html
-    assert "summary + description + placement + projection + inputs + note" in html
+    assert (
+        "summary + description + stateDescription + placement + projection + inputs + note"
+        in html
+    )
     assert "function renderToolCodexPlacement(item)" in html
     assert "item.codex_placement" in html
     assert "item.exec_projection" in html
@@ -779,7 +798,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     assert response.status_code == 200
     profiles = json.loads(getattr(response, "body"))["profiles"]
     assert [(profile["id"], profile["readonly"]) for profile in profiles] == [
-        ("builtin", True)
+        ("builtin", True),
+        ("openai-responses-tool-mapping-only", True),
     ]
 
     response = asyncio.run(

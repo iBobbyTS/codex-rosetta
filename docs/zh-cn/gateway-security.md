@@ -156,6 +156,11 @@ docker-compose -f docker/docker-compose.yaml \
 Logs 中被遮盖。若不使用 Compose，需要显式配置相互匹配的
 `server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
 
+Admin **联网搜索**页面把基础 Tavily 凭据与高级浏览器服务分开。高级 Section
+只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以两秒超时、
+有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token
+或上游错误正文。页面进入后立即检查，仅在页面停留期间每五秒刷新，离开后停止。
+
 sidecar 以镜像内的非特权 `pwuser` 运行 Chromium，使用 Chromium user-namespace sandbox
 所需的固定版本 Playwright seccomp profile 和只读根文件系统，并只保存有界的临时
 浏览器/PDF 状态。每个 Codex Search request ID 都映射到独立 browser context；
