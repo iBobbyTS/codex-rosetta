@@ -53,16 +53,18 @@ Chat Default marks the parent `exec` tool Disabled for model exposure. On a Resp
 
 For Exec Expansion cards, **Pass through** means representation-only adaptation: expose the current declaration as a normal Chat Function and translate its call back to `exec`, without appending any catalog text. Chat Default uses this state for `exec_command`, `write_stdin`, `update_plan`, `view_image`, `get_goal`, Clock, Memories, and Skills. **Modified** is retained where the Profile changes model-visible guidance or behavior: `create_goal` and `update_goal` append guidance, while `web.run` uses the selected Tavily-backed Rosetta search mapping.
 
-With `web.run` Modified and no configured sidecar, Rosetta exposes only the
-implemented static subset: `search_query`, bounded `open` for public URLs or
-stored `turnXsearchY` references, and fixed-offset `time`. A healthy,
-authenticated `web-run` sidecar additionally exposes browser `open`, `find`,
-`click`, and PDF `screenshot`; the sidecar must be started through the supplied
+With `web.run` Modified, Rosetta rewrites the live `web__run` declaration even
+when it remains nested inside a custom `exec` tool on a Tool Mapping only route.
+The model always sees bounded `open`, fixed-offset `time`, and
+`response_length`; `search_query` appears only when the global Tavily Key is
+configured. A healthy, authenticated `web-run` sidecar additionally exposes
+browser `open`, `find`, `click`, and PDF `screenshot` only while its shared
+five-second health cache reports `browser_ready=true`; the sidecar must be started through the supplied
 Compose profile so Chromium receives its required seccomp configuration. In
 the isolated 2026-07-14 run, `gpt-5.6-sol → deepseek-v4-flash` successfully
 used both the static and sidecar-backed subsets. Unsupported live declaration
 branches are removed before the upstream request and still fail closed at
-runtime.
+runtime. Passthrough preserves the complete nested declaration unchanged.
 
 Chat Default keeps `image_gen__imagegen` Modified and exposes editable Base URL and Token fields. Once those credentials are saved, Rosetta projects the Function to the upstream model and handles the resulting OpenAI-style image generation or edit request through `/v1/images/generations` or `/v1/images/edits`. Leave the Token blank until image generation is intentionally configured.
 

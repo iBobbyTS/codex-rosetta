@@ -28,6 +28,7 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "apply_patch",
     "approval_messages_fields",
     "codex_header_constants",
+    "code_mode_exec_shape",
     "endpoints",
     "model_messages_fields",
     "response_item_additional_tools_fields",
@@ -45,6 +46,10 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     "apply_patch": "tool name, format, syntax, and grammar SHA-256 match",
     "approval_messages_fields": "ApprovalMessages field names, Rust types, and attributes match",
     "codex_header_constants": "extracted Codex HTTP header names and values match",
+    "code_mode_exec_shape": (
+        "exec name, nested section/declaration renderers, web tool identity, "
+        "description, and command schema match"
+    ),
     "endpoints": "extracted endpoint constants match",
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "response_item_additional_tools_fields": (
@@ -343,6 +348,17 @@ def _required_string(text: str, pattern: str, description: str) -> str:
     return match.group(1)
 
 
+def _function_body_sha256(text: str, name: str) -> str:
+    match = re.search(
+        rf"\b(?:pub(?:\(crate\))?\s+)?fn\s+{re.escape(name)}\b",
+        text,
+    )
+    if match is None:
+        raise ContractExtractionError(f"missing function declaration: {name}")
+    body = _braced_block(text, match.start())
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def _responses_lite_model_capabilities(models_json: str) -> list[dict[str, Any]]:
     try:
         payload = json.loads(models_json)
@@ -445,6 +461,15 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     apply_patch_grammar = _read(
         source_root, "codex-rs/core/src/tools/handlers/apply_patch.lark"
     )
+    code_mode_description = _read(
+        source_root, "codex-rs/code-mode-protocol/src/description.rs"
+    )
+    code_mode_lib = _read(source_root, "codex-rs/code-mode-protocol/src/lib.rs")
+    web_run_tool = _read(source_root, "codex-rs/ext/web-search/src/tool.rs")
+    web_run_description = _read(
+        source_root, "codex-rs/ext/web-search/web_run_description.md"
+    )
+    web_run_schema = _read(source_root, "codex-rs/ext/web-search/src/schema.rs")
 
     header_constants = _string_constants(
         client,
@@ -488,6 +513,32 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
             openai_models, "ApprovalMessages"
         ),
         "codex_header_constants": header_constants,
+        "code_mode_exec_shape": {
+            "description_builder_sha256": _function_body_sha256(
+                code_mode_description, "build_exec_tool_description"
+            ),
+            "nested_declaration_renderer_sha256": _function_body_sha256(
+                code_mode_description, "render_code_mode_tool_declaration"
+            ),
+            "nested_sample_renderer_sha256": _function_body_sha256(
+                code_mode_description, "render_code_mode_sample"
+            ),
+            "nested_section_heading_renderer_sha256": _function_body_sha256(
+                code_mode_description, "render_tool_heading"
+            ),
+            "public_tool_names": _string_constants(
+                code_mode_lib, r"(?:PUBLIC_TOOL_NAME|WAIT_TOOL_NAME)"
+            ),
+            "web_command_schema_sha256": hashlib.sha256(
+                web_run_schema.encode("utf-8")
+            ).hexdigest(),
+            "web_description_sha256": hashlib.sha256(
+                web_run_description.encode("utf-8")
+            ).hexdigest(),
+            "web_tool_names": _string_constants(
+                web_run_tool, r"(?:WEB_NAMESPACE|RUN_TOOL_NAME)"
+            ),
+        },
         "compaction_input_fields": _struct_fields(common, "CompactionInput"),
         "content_item_variants": _enum_variants(models, "ContentItem"),
         "endpoints": _string_constants(client, r"[A-Z0-9_]+_ENDPOINT"),

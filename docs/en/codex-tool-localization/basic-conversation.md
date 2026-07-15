@@ -30,7 +30,7 @@ This is important because Codex relies on fields that are not part of a minimal 
 - Native Responses tool item structure.
 - Provider-specific request fields such as `include`.
 
-Tool Profiles are selectable for this mode. Tool Mapping only now defaults to the bundled **OpenAI Responses Tool Mapping Only** profile: every native function, custom, hosted, and Namespace tool is Passthrough, so Rosetta does not replace, disable, inject, or locally map them. Its only disabled catalog entries are synthetic tool injections, which prevents Rosetta from adding tools that Codex did not send. Select **Chat Default** explicitly if you want Rosetta's local `web.run` mapping or other Chat-oriented tool behavior. Other Responses fields and upstream response bytes remain on the direct path.
+Tool Profiles are selectable for this mode. Tool Mapping only now defaults to the bundled **OpenAI Responses Tool Mapping Only** profile: every native function, custom, hosted, and Namespace tool is Passthrough, so Rosetta does not replace, disable, inject, or locally map them. Its only disabled catalog entries are synthetic tool injections, which prevents Rosetta from adding tools that Codex did not send. Select **Chat Default** or a copied Profile with `web.run` set to Modified explicitly if you want Rosetta's local `web.run` mapping or other Chat-oriented tool behavior. For Modified `web.run`, Rosetta rewrites only the live `web__run` section nested in the custom `exec` description; other Responses fields and upstream response bytes remain on the direct path.
 
 Codex's standalone Search and Images clients use three additional JSON endpoints:
 
@@ -74,7 +74,9 @@ text. The Codex Search endpoint returns text rather than a multimodal image
 item, so screenshot results contain rendered dimensions and extracted/OCR text;
 they do not inject PDF pixels into the model conversation. Without the sidecar,
 the model-facing Modified schema omits `click`, `find`, and `screenshot`, and
-static `open` remains the bounded Python implementation.
+static `open` remains the bounded Python implementation. Configuring the
+sidecar is not enough to advertise browser commands: its bounded health status
+must report both an online service and `browser_ready=true`.
 
 Supported search options are query/domain filters, search context size,
 response length, and a conservative output budget. Requests containing
@@ -85,9 +87,11 @@ endpoints also ends with `Consider "Browser Use" skill` so Codex can choose the
 browser fallback. When a selected Profile sets `web.run` to Passthrough,
 `/v1/alpha/search` remains native upstream pass-through even when Tavily or the
 sidecar is configured. When it sets `web.run` to Modified, supported commands
-use Rosetta's search service; search queries require the global Tavily API Key,
-direct-URL `open` and time-only requests work without Tavily, and browser commands
-require the optional sidecar. The Hosted `web_search` tool remains independent:
+use Rosetta's search service. The model-visible definition always retains
+direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
+`search_query` only when the global Tavily API Key is configured, and adds
+`click`, `find`, and `screenshot` only while the optional sidecar reports
+`browser_ready=true`. The Hosted `web_search` tool remains independent:
 its Provider, Token, and guidance continue to belong to the selected Profile.
 
 `/v1/alpha/search` above is the Codex-facing Gateway route. Passthrough does not

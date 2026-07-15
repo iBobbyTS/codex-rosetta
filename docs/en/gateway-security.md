@@ -191,7 +191,10 @@ availability and browser readiness independently. The status endpoint uses a
 two-second bounded request to the sidecar's public `/health` route and never
 returns the sidecar URL, bearer token, or upstream error text. The page checks
 immediately, refreshes every five seconds while active, and stops when another
-Admin page is selected.
+Admin page is selected. Model requests share the same five-second health cache;
+Modified `web.run` advertises browser commands only while the cached status is
+online with `browser_ready=true`. Concurrent refreshes are coalesced, and config
+hot reload invalidates the cached status.
 
 The sidecar runs Chromium as the image's unprivileged `pwuser`, uses the pinned
 Playwright seccomp profile required by Chromium's user-namespace sandbox, keeps

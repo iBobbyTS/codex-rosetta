@@ -9,9 +9,14 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from codex_rosetta._vendor.httpserver import StreamingResponse
+from codex_rosetta.gateway.code_mode_projection import (
+    ExecToolProjection,
+    project_exec_tool_definitions,
+)
 from codex_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
+from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute, is_openai_responses_passthrough
 
@@ -107,6 +112,94 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert captured_body == body
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile
+
+
+def test_tool_mapping_only_sends_capability_pruned_nested_web_run_upstream():
+    captured_body: dict[str, Any] = {}
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        response = {"id": "resp_123", "object": "response", "output": []}
+        return UpstreamResponse(
+            status_code=200,
+            body=response,
+            raw_content=json.dumps(response).encode(),
+        )
+
+    profile = dict(
+        tool_profile_contract()["readonly"]["openai-responses-tool-mapping-only"][
+            "tools"
+        ]
+    )
+    profile["namespace.web.run"] = "modified"
+    route = ResolvedRoute(
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="test-provider",
+        upstream_model="gpt-test",
+        tool_profile_name="modified-web-run",
+        tool_profile=profile,
+        responses_processing="passthrough",
+        tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY}),
+    )
+    description = """Run JavaScript.
+
+### `web__run`
+* `search_query`: Search (and optionally with a domain or recency filter).
+* `open`: Open a result.
+* `finance`: Look up prices.
+* `time`: Look up time.
+
+exec tool declaration:
+```ts
+declare const tools: { web__run(args: {
+  search_query?: Array<{ q: string; recency?: number; domains?: Array<string>; }>;
+  open?: Array<{ ref_id: string; lineno?: number; }>;
+  finance?: Array<{ ticker: string; }>;
+  time?: Array<{ utc_offset: string; }>;
+  response_length?: "short" | "medium" | "long";
+}): Promise<unknown>; };
+```"""
+    body = {
+        "model": "gpt-test",
+        "input": "hello",
+        "custom_passthrough_field": {"kept": True},
+        "tools": [{"type": "custom", "name": "exec", "description": description}],
+    }
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+
+    asyncio.run(
+        handle_non_streaming(
+            route,
+            _provider_info(),
+            body,
+            transport=transport,
+        )
+    )
+
+    projected_description = captured_body["tools"][0]["description"]
+    definitions = project_exec_tool_definitions(
+        projected_description,
+        {
+            "web-run": ExecToolProjection(
+                item_id="namespace.web.run",
+                chat_name="web-run",
+                nested_name="web__run",
+            )
+        },
+    )
+    assert set(definitions["web-run"]["function"]["parameters"]["properties"]) == {
+        "search_query",
+        "open",
+        "time",
+        "response_length",
+    }
+    assert "finance" not in projected_description
+    assert "recency" not in projected_description
+    assert captured_body["custom_passthrough_field"] == {"kept": True}
 
 
 def test_remote_compaction_native_reason_is_byte_passthrough_without_mapping(tmp_path):

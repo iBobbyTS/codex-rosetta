@@ -6,6 +6,7 @@ import asyncio
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,6 +18,7 @@ from codex_rosetta._vendor.httpserver import (
 )
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.error_dump import dump_error
+from codex_rosetta.routing import ResolvedRoute
 
 from .admin_session import load_or_create_admin_session_secret
 from .auth import (
@@ -59,7 +61,13 @@ from .proxy import (
 )
 from .state_scope import GatewayStateScope
 from .tool_adaptation import CodexToolLocalizationStore
+from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
+from .web_run_capabilities import (
+    WEB_RUN_PROFILE_ITEM_ID,
+    WEB_RUN_SIDECAR_CAPABILITY,
+)
+from .web_run_health import WebRunHealthState
 
 logger = get_logger()
 
@@ -509,6 +517,57 @@ def _apply_route_model_alias(
     return model, model
 
 
+async def _resolve_request_tool_runtime_capabilities(
+    app: Any,
+    config: GatewayConfig,
+    route: ResolvedRoute,
+    body: dict[str, Any],
+) -> ResolvedRoute:
+    """Add request-time optional executors to an immutable route snapshot."""
+    if route.source_provider not in {"openai_responses", "open_responses"}:
+        return route
+    if route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) != "modified":
+        return route
+    if not config.web_run_sidecar_url or not config.web_run_sidecar_token:
+        return route
+    if not _request_exposes_web_run(body):
+        return route
+
+    health_state: WebRunHealthState = app.web_run_health_state
+    status = await health_state.status(config.web_run_sidecar_url)
+    if status.browser_ready is not True:
+        return route
+
+    capabilities = set(route.tool_runtime_capabilities)
+    capabilities.add(WEB_RUN_SIDECAR_CAPABILITY)
+    return replace(route, tool_runtime_capabilities=frozenset(capabilities))
+
+
+def _request_exposes_web_run(body: dict[str, Any]) -> bool:
+    """Return whether a Responses request contains direct or nested web.run."""
+    containers: list[Any] = [body.get("tools")]
+    input_items = body.get("input")
+    if isinstance(input_items, list):
+        containers.extend(
+            item.get("tools")
+            for item in input_items
+            if isinstance(item, dict) and item.get("type") == "additional_tools"
+        )
+    for container in containers:
+        if not isinstance(container, list):
+            continue
+        for tool in container:
+            if not isinstance(tool, dict):
+                continue
+            if tool.get("name") == "web__run":
+                return True
+            if tool.get("type") == "custom" and tool.get("name") == "exec":
+                description = tool.get("description")
+                if isinstance(description, str) and "### `web__run`" in description:
+                    return True
+    return False
+
+
 async def _proxy_handler(
     request: Any,
     source_provider: ProviderType,
@@ -574,6 +633,13 @@ async def _proxy_handler(
         )
         resp.headers["x-request-id"] = request_id
         return resp
+
+    route = await _resolve_request_tool_runtime_capabilities(
+        request.app,
+        config,
+        route,
+        body,
+    )
 
     # Model aliases are applied before converter/upstream use while logging
     # preserves both public and upstream identities.
@@ -979,6 +1045,7 @@ def create_app(
     window_tool_search_store = WindowToolSearchStore()
     codex_search_reference_store = CodexSearchReferenceStore()
     image_fetch_workers = ImageFetchWorkerPool()
+    web_run_health_state = WebRunHealthState()
     transport = HttpTransport()
 
     app = App(
@@ -989,6 +1056,7 @@ def create_app(
         max_concurrent_request_parses=_INBOUND_MAX_CONCURRENT_REQUEST_PARSES,
     )
     setattr(app, "gateway_config", config)
+    setattr(app, "web_run_health_state", web_run_health_state)
     setattr(app, "codex_home", resolve_codex_home(codex_home))
     setattr(app, "gateway_port", config.port if gateway_port is None else gateway_port)
     app.admin_cors_origins = tuple(config.admin_cors_origins)  # type: ignore

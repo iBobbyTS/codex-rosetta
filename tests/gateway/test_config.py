@@ -22,11 +22,14 @@ from codex_rosetta.gateway.config import (
     DEFAULT_CODEX_HOME,
     DEFAULT_CONFIG_DIR,
     GatewayConfig,
-    WEB_RUN_SIDECAR_CAPABILITY,
     config_path_for_dir,
     discover_config,
     load_config,
     resolve_codex_home,
+)
+from codex_rosetta.gateway.web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
+    WEB_RUN_SIDECAR_CAPABILITY,
 )
 
 
@@ -136,7 +139,7 @@ def test_web_run_sidecar_is_disabled_by_default() -> None:
     assert WEB_RUN_SIDECAR_CAPABILITY not in route.tool_runtime_capabilities
 
 
-def test_web_run_sidecar_config_enables_route_capability() -> None:
+def test_web_run_sidecar_config_does_not_claim_browser_readiness() -> None:
     config = GatewayConfig(
         _minimal_raw(
             web_run={
@@ -152,7 +155,22 @@ def test_web_run_sidecar_config_enables_route_capability() -> None:
     assert config.web_run_sidecar_timeout == 12.0
     assert "sidecar-secret-token-for-tests" in config.token_values
     route, _provider = config.resolve("openai_responses", "gpt-test")
-    assert WEB_RUN_SIDECAR_CAPABILITY in route.tool_runtime_capabilities
+    assert WEB_RUN_SIDECAR_CAPABILITY not in route.tool_runtime_capabilities
+
+
+def test_web_search_key_enables_basic_route_capability() -> None:
+    config = GatewayConfig(
+        _minimal_raw(
+            web_search={
+                "provider": "tavily",
+                "tavily_api_key": "tvly-test-key",
+            }
+        )
+    )
+
+    route, _provider = config.resolve("openai_responses", "gpt-test")
+
+    assert WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
 
 
 def test_web_run_sidecar_environment_overrides_config(monkeypatch) -> None:

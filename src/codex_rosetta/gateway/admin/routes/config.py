@@ -26,6 +26,7 @@ from ...tool_profiles import (
     tool_profile_contract,
     validate_tool_profile_reference,
 )
+from ...web_run_health import WebRunHealthState
 from ...transport.http.transport import request_bounded_response
 from ._shared import (
     _build_provider_entry,
@@ -40,8 +41,6 @@ from ._shared import (
 import logging
 
 logger = logging.getLogger("codex-rosetta-gateway")
-_NETWORK_SEARCH_STATUS_MAX_BYTES = 64 * 1024
-_NETWORK_SEARCH_STATUS_TIMEOUT_SECONDS = 2.0
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -795,41 +794,14 @@ async def put_server_settings(request: Any) -> Response:
 async def get_network_search_status(request: Any) -> Response:
     """Return bounded, credential-free Docker sidecar health state."""
     config = _get_gateway_config(request)
-    if config is None or not config.web_run_sidecar_url:
-        return JSONResponse(
-            {"configured": False, "service_online": False, "browser_ready": None}
-        )
-    try:
-        async with AsyncClient(
-            timeout=_NETWORK_SEARCH_STATUS_TIMEOUT_SECONDS
-        ) as client:
-            response = await request_bounded_response(
-                client,
-                "GET",
-                f"{config.web_run_sidecar_url}/health",
-                max_success_bytes=_NETWORK_SEARCH_STATUS_MAX_BYTES,
-                max_error_bytes=_NETWORK_SEARCH_STATUS_MAX_BYTES,
-            )
-        body = response.json()
-    except Exception:
-        return JSONResponse(
-            {"configured": True, "service_online": False, "browser_ready": None}
-        )
-    service_online = (
-        response.status_code == 200
-        and isinstance(body, dict)
-        and body.get("status") == "ok"
+    health_state = getattr(request.app, "web_run_health_state", None)
+    if health_state is None:
+        health_state = WebRunHealthState()
+        request.app.web_run_health_state = health_state
+    status = await health_state.status(
+        config.web_run_sidecar_url if config is not None else None
     )
-    browser_ready = body.get("browser_ready") if service_online else None
-    if not isinstance(browser_ready, bool):
-        browser_ready = None
-    return JSONResponse(
-        {
-            "configured": True,
-            "service_online": service_online,
-            "browser_ready": browser_ready,
-        }
-    )
+    return JSONResponse(status.as_dict())
 
 
 async def reload_config(request: Any) -> Response:
