@@ -57,6 +57,43 @@ declare const tools: {{ {name}({input_name}: {input_type}): Promise<unknown>; }}
 ```"""
 
 
+def _web_run_section() -> str:
+    return """### `web__run`
+Tool for accessing the internet.
+* `search_query`: Search the internet (and optionally with a domain or recency filter).
+* `image_query`: Search for images.
+* `open`: Open a result or URL.
+* `click`: Open a numbered link.
+* `find`: Find text in a page.
+* `screenshot`: Capture a PDF page.
+* `finance`: Look up market prices.
+* `weather`: Look up forecasts.
+* `sports`: Look up schedules.
+* `time`: Look up the time.
+* Combine {"finance": [...]} and {"find": [...]} when useful.
+* If called accidentally, send an empty query.
+
+## Decision boundary
+Browse whenever current information is required.
+
+exec tool declaration:
+```ts
+declare const tools: { web__run(args: {
+  search_query?: Array<{ q: string; recency?: number; domains?: Array<string>; }>;
+  image_query?: Array<{ q: string; recency?: number; domains?: Array<string>; }>;
+  open?: Array<{ ref_id: string; lineno?: number; }>;
+  click?: Array<{ ref_id: string; id: number; }>;
+  find?: Array<{ ref_id: string; pattern: string; }>;
+  screenshot?: Array<{ ref_id: string; pageno: number; }>;
+  finance?: Array<{ ticker: string; type: string; market?: string; }>;
+  weather?: Array<{ location: string; start?: string; duration?: number; }>;
+  sports?: Array<{ fn: string; league: string; }>;
+  time?: Array<{ utc_offset: string; }>;
+  response_length?: "short" | "medium" | "long";
+}): Promise<unknown>; };
+```"""
+
+
 def _exec_description() -> str:
     sections = [
         _section("apply_patch", "input", "string"),
@@ -164,6 +201,80 @@ def _exec_description() -> str:
         ),
     ]
     return "Run JavaScript.\n\n" + "\n\n".join(sections)
+
+
+def test_modified_web_run_projects_only_rosetta_supported_capabilities():
+    route = _route()
+    definitions = project_exec_tool_definitions(
+        _web_run_section(),
+        exec_tool_projections_for_route(route),
+        profile_route=route,
+    )
+
+    function = definitions["web-run"]["function"]
+    parameters = function["parameters"]
+    assert set(parameters["properties"]) == {
+        "search_query",
+        "open",
+        "time",
+        "response_length",
+    }
+    assert set(parameters["properties"]["search_query"]["items"]["properties"]) == {
+        "q",
+        "domains",
+    }
+    assert set(parameters["properties"]["open"]["items"]["properties"]) == {
+        "ref_id",
+        "lineno",
+    }
+    assert set(parameters["properties"]["time"]["items"]["properties"]) == {
+        "utc_offset"
+    }
+    assert parameters["additionalProperties"] is False
+
+    description = function["description"]
+    assert "optionally by domain" in description
+    assert "recency" not in description
+    assert "image_query" not in description
+    assert "click" not in description
+    assert "find" not in description
+    assert "empty query" not in description
+    assert "## Decision boundary" in description
+
+
+def test_passthrough_web_run_preserves_the_live_codex_definition():
+    route = _route()
+    route.tool_profile["namespace.web.run"] = "passthrough"
+
+    definitions = project_exec_tool_definitions(
+        _web_run_section(),
+        exec_tool_projections_for_route(route),
+        profile_route=route,
+    )
+
+    function = definitions["web-run"]["function"]
+    parameters = function["parameters"]
+    assert "image_query" in parameters["properties"]
+    assert "click" in parameters["properties"]
+    assert "recency" in parameters["properties"]["search_query"]["items"]["properties"]
+    assert "empty query" in function["description"]
+
+
+def test_modified_web_run_with_no_parseable_supported_branch_fails_closed():
+    route = _route()
+    malformed = _section(
+        "web__run",
+        "args",
+        "{ search_query?: string; open?: string; time?: string; }",
+    )
+
+    definitions = project_exec_tool_definitions(
+        malformed,
+        exec_tool_projections_for_route(route),
+        profile_route=route,
+    )
+
+    assert "web-run" not in definitions
 
 
 def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
@@ -433,6 +544,36 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
     assert "apply_patch" not in names
     assert adapted["tool_choice"] == "auto"
     assert set(adapted[EXEC_PROJECTIONS_KEY]) == set(projections)
+
+
+def test_modified_web_run_request_sends_pruned_function_to_upstream_model():
+    route = _route()
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": _web_run_section(),
+                    "parameters": {"type": "object"},
+                },
+            }
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(route),
+        profile_route=route,
+        hide_exec_container=True,
+    )
+
+    assert [tool["function"]["name"] for tool in adapted["tools"]] == ["web-run"]
+    properties = adapted["tools"][0]["function"]["parameters"]["properties"]
+    assert set(properties) == {"search_query", "open", "time", "response_length"}
 
 
 def test_disabled_exec_container_is_hidden_when_no_child_can_be_parsed():
