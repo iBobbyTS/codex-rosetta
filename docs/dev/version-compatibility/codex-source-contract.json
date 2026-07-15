@@ -179,6 +179,55 @@
       "effort",
       "summary"
     ],
+    "remote_compaction_v2": {
+      "comp_hash_changed_requires_nonempty_distinct": true,
+      "compaction_item_fields": {
+        "encrypted_content": {
+          "attributes": [],
+          "type": "String"
+        },
+        "id": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<String>"
+        },
+        "internal_chat_message_metadata_passthrough": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<InternalChatMessageMetadataPassthrough>"
+        }
+      },
+      "feature_default_enabled": true,
+      "metadata_enums": {
+        "CompactionImplementation": [
+          "Responses",
+          "ResponsesCompact",
+          "ResponsesCompactionV2"
+        ],
+        "CompactionPhase": [
+          "MidTurn",
+          "PreTurn",
+          "StandaloneTurn"
+        ],
+        "CompactionReason": [
+          "CompHashChanged",
+          "ContextLimit",
+          "ModelDownshift",
+          "UserRequested"
+        ],
+        "CompactionStrategy": [
+          "Memento",
+          "PrefixCompaction"
+        ]
+      },
+      "prompt_sha256": "ab0c334d4faca17e3afbb9b16967c1b2fdcc7242a9a0880af57949fa236d6d07",
+      "summary_prefix_sha256": "e9b088e794a6bb9082ac053fcc760bd818d7e720ee4bcdc72c6e480de7b7cb0e",
+      "trigger_variant_present": true
+    },
     "response_create_ws_request_fields": [
       "client_metadata",
       "generate",

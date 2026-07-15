@@ -12,6 +12,7 @@ from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
+from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute, is_openai_responses_passthrough
 
 
@@ -106,6 +107,152 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert captured_body == body
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile
+
+
+def test_remote_compaction_native_reason_is_byte_passthrough_without_mapping(tmp_path):
+    captured_body: dict[str, Any] = {}
+    native = {
+        "id": "resp_native",
+        "object": "response",
+        "model": "gpt-test",
+        "status": "completed",
+        "output": [{"type": "compaction", "encrypted_content": "upstream-token"}],
+    }
+    raw = json.dumps(native, separators=(",", ":")).encode()
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(status_code=200, body=native, raw_content=raw)
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    body = {
+        "model": "gpt-test",
+        "input": [{"type": "compaction_trigger"}],
+        "client_metadata": {
+            "x-codex-turn-metadata": json.dumps(
+                {"compaction": {"reason": "context_limit"}}
+            )
+        },
+    }
+    persistence = PersistenceManager(str(tmp_path))
+
+    response, profile = asyncio.run(
+        handle_non_streaming(
+            _responses_route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            persistence=persistence,
+        )
+    )
+
+    assert response.body == raw
+    assert captured_body == body
+    assert profile["compaction_mode"] == "native"
+    assert persistence.count_codex_compaction_mappings() == 0
+    persistence.close()
+
+
+def test_model_switch_compaction_uses_rosetta_summary_even_on_passthrough_route(
+    tmp_path,
+):
+    captured: list[dict[str, Any]] = []
+    summary = {
+        "id": "resp_summary",
+        "object": "response",
+        "model": "gpt-test",
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Orchid summary"}],
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured.append(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=summary,
+            raw_content=json.dumps(summary).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    body = {
+        "model": "gpt-test",
+        "input": [
+            {"type": "message", "role": "user", "content": "history"},
+            {"type": "compaction_trigger"},
+        ],
+        "tools": [{"type": "function", "name": "not-forwarded"}],
+        "client_metadata": {
+            "x-codex-turn-metadata": json.dumps(
+                {"compaction": {"reason": "comp_hash_changed"}}
+            )
+        },
+    }
+    persistence = PersistenceManager(str(tmp_path))
+
+    response, profile = asyncio.run(
+        handle_non_streaming(
+            _responses_route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            persistence=persistence,
+        )
+    )
+
+    payload = json.loads(response.body)
+    assert response.status_code == 200
+    assert profile["compaction_mode"] == "rosetta"
+    assert len(captured) == 1
+    assert captured[0]["input"][-1]["content"][0]["text"].startswith(
+        "You are performing a CONTEXT CHECKPOINT COMPACTION"
+    )
+    assert "tools" not in captured[0]
+    assert "client_metadata" not in captured[0]
+    assert payload["output"][0]["encrypted_content"].startswith("rskc_v1_")
+    assert persistence.count_codex_compaction_mappings() == 1
+    persistence.close()
+
+
+def test_internal_call_can_retain_persistence_without_writing_error_dump():
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        return UpstreamResponse(
+            status_code=500,
+            body={"error": "summary failed"},
+            raw_content=b'{"error":"summary failed"}',
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    persistence = MagicMock()
+
+    response, _ = asyncio.run(
+        handle_non_streaming(
+            _responses_route(),
+            _provider_info(),
+            {"model": "gpt-test", "input": []},
+            transport=transport,
+            persistence=persistence,
+            disable_error_dump=True,
+        )
+    )
+
+    assert response.status_code == 500
+    persistence.insert_error_dump.assert_not_called()
+    persistence.insert_dump_body.assert_not_called()
 
 
 def test_direct_passthrough_preserves_image_generation_tools():

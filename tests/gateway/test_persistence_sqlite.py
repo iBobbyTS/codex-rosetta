@@ -35,6 +35,66 @@ _TOOL_SCOPE = {
 }
 
 
+class TestCodexCompactionMappings:
+    def test_stores_plaintext_but_only_token_hash_and_renews_on_read(self, tmp_path):
+        pm = PersistenceManager(str(tmp_path))
+        plaintext = "prefixed summary with Orchid and A7-KAPPA"
+        pm.store_codex_compaction_mapping(
+            principal_id="client-a",
+            token_hash="a" * 64,
+            replacement_text=plaintext,
+            source_model="deepseek-v4-flash",
+            reason="comp_hash_changed",
+            prompt_sha256="b" * 64,
+            created_at="2026-07-01T00:00:00+00:00",
+            expires_at="2026-07-08T00:00:00+00:00",
+        )
+
+        row = pm.get_codex_compaction_mapping(
+            principal_id="client-a",
+            token_hash="a" * 64,
+            now="2026-07-02T00:00:00+00:00",
+            renewed_expires_at="2026-07-09T00:00:00+00:00",
+        )
+
+        assert row is not None
+        assert row["replacement_text"] == plaintext
+        assert row["replacement_bytes"] == len(plaintext.encode("utf-8"))
+        assert row["expires_at"] == "2026-07-09T00:00:00+00:00"
+        columns = pm._conn.execute(
+            "SELECT token_hash, replacement_text FROM codex_compaction_mappings"
+        ).fetchone()
+        assert columns == ("a" * 64, plaintext)
+        pm.close()
+
+    def test_principal_isolation_and_expiry(self, tmp_path):
+        pm = PersistenceManager(str(tmp_path))
+        pm.store_codex_compaction_mapping(
+            principal_id="client-a",
+            token_hash="a" * 64,
+            replacement_text="summary",
+            source_model="model",
+            reason="context_limit",
+            prompt_sha256="b" * 64,
+            created_at="2026-07-01T00:00:00+00:00",
+            expires_at="2026-07-08T00:00:00+00:00",
+        )
+        assert (
+            pm.get_codex_compaction_mapping(
+                principal_id="client-b",
+                token_hash="a" * 64,
+                now="2026-07-02T00:00:00+00:00",
+            )
+            is None
+        )
+        assert (
+            pm.cleanup_expired_codex_compaction_mappings("2026-07-08T00:00:00+00:00")
+            == 1
+        )
+        assert pm.count_codex_compaction_mappings() == 0
+        pm.close()
+
+
 # -- Helpers --
 
 

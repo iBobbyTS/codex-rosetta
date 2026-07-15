@@ -72,8 +72,9 @@ def test_catalog_uses_only_configured_models_and_clones_terra_for_custom_names()
     assert custom["slug"] == custom["display_name"] == custom["description"]
     assert custom["slug"] == "alpha-model"
     for key, value in terra.items():
-        if key not in {"slug", "display_name", "description"}:
+        if key not in {"slug", "display_name", "description", "comp_hash"}:
             assert custom[key] == value
+    assert custom["comp_hash"].startswith("rosetta-comp-v1:custom:")
 
 
 def test_catalog_preserves_official_bundled_entries_for_configured_slugs() -> None:
@@ -262,12 +263,59 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
         assert model["service_tiers"] == []
         assert model["additional_speed_tiers"] == []
         assert model["effective_context_window_percent"] == 85
-        assert model["comp_hash"] is None
+        assert model["comp_hash"].startswith("rosetta-comp-v1:")
         assert identity in model["base_instructions"]
         assert "GPT-5" not in model["base_instructions"]
         messages = json.dumps(model["model_messages"], ensure_ascii=False)
         assert identity in messages
         assert "GPT-5" not in messages
+
+
+def test_catalog_compaction_hash_groups_are_stable_and_non_null() -> None:
+    requested = {
+        "gpt-5.6-sol": {},
+        "gpt-5.6-terra": {},
+        "gpt-5.6-luna": {},
+        "gpt-5.5": {},
+        "gpt-5.4": {},
+        "gpt-5.4-mini": {},
+        "gpt-5.2": {},
+        "codex-auto-review": {},
+        "deepseek-v4-flash": {},
+        "deepseek-v4-pro": {},
+        "glm-5.2": {},
+        "qwen3.7-plus": {},
+        "qwen3.7-max": {},
+        "mimo-v2.5-flash": {},
+        "mimo-v2.5-pro": {},
+        "minimax-m3": {},
+        "kimi-k2.7-code": {},
+        "unlisted-model": {},
+    }
+    catalog = build_model_catalog(
+        {"model_groups": {"models": {"type": "llm", "models": requested}}}
+    )
+    hashes = {model["slug"]: model["comp_hash"] for model in catalog["models"]}
+    assert all(isinstance(value, str) and value for value in hashes.values())
+    assert hashes["gpt-5.6-sol"] == hashes["gpt-5.6-terra"] == hashes["gpt-5.6-luna"]
+    assert hashes["gpt-5.5"] == hashes["gpt-5.4"] == hashes["gpt-5.4-mini"]
+    assert hashes["deepseek-v4-flash"] == hashes["deepseek-v4-pro"]
+    assert hashes["mimo-v2.5-flash"] == hashes["mimo-v2.5-pro"]
+    groups = {
+        hashes["gpt-5.6-sol"],
+        hashes["gpt-5.5"],
+        hashes["gpt-5.2"],
+        hashes["codex-auto-review"],
+        hashes["deepseek-v4-flash"],
+        hashes["glm-5.2"],
+        hashes["qwen3.7-plus"],
+        hashes["qwen3.7-max"],
+        hashes["mimo-v2.5-flash"],
+        hashes["minimax-m3"],
+        hashes["kimi-k2.7-code"],
+        hashes["unlisted-model"],
+    }
+    assert len(groups) == 12
 
 
 def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) -> None:

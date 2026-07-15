@@ -31,6 +31,7 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "endpoints",
     "model_messages_fields",
     "response_item_additional_tools_fields",
+    "remote_compaction_v2",
     "responses_lite_model_capabilities",
     "responses_metadata_keys",
     "sse_event_names",
@@ -48,6 +49,10 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "response_item_additional_tools_fields": (
         "ResponseItem::AdditionalTools field names, Rust types, and attributes match"
+    ),
+    "remote_compaction_v2": (
+        "RemoteCompactionV2 default/stage, exact bundled prompts, V2 item fields, "
+        "metadata enums, and comp_hash transition contract match"
     ),
     "responses_lite_model_capabilities": (
         "use_responses_lite model list and key protocol capability snapshot match"
@@ -427,6 +432,13 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     model_catalog = _read(source_root, "codex-rs/models-manager/models.json")
     client = _read(source_root, "codex-rs/core/src/client.rs")
     responses_metadata = _read(source_root, "codex-rs/core/src/responses_metadata.rs")
+    compaction_facts = _read(source_root, "codex-rs/analytics/src/facts.rs")
+    features = _read(source_root, "codex-rs/features/src/lib.rs")
+    session_turn = _read(source_root, "codex-rs/core/src/session/turn.rs")
+    compact_prompt = _read(source_root, "codex-rs/prompts/templates/compact/prompt.md")
+    compact_summary_prefix = _read(
+        source_root, "codex-rs/prompts/templates/compact/summary_prefix.md"
+    )
     apply_patch_spec = _read(
         source_root, "codex-rs/core/src/tools/handlers/apply_patch_spec.rs"
     )
@@ -507,6 +519,38 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
             models, "ResponseItem", "AdditionalTools"
         ),
         "response_item_variants": _enum_variants(models, "ResponseItem"),
+        "remote_compaction_v2": {
+            "comp_hash_changed_requires_nonempty_distinct": (
+                ".zip(current)" in session_turn
+                and "previous != current" in session_turn
+            ),
+            "compaction_item_fields": _enum_variant_field_contracts(
+                models, "ResponseItem", "Compaction"
+            ),
+            "feature_default_enabled": bool(
+                re.search(
+                    r"id:\s*Feature::RemoteCompactionV2,.*?stage:\s*Stage::Stable,"
+                    r".*?default_enabled:\s*true,",
+                    features,
+                    flags=re.DOTALL,
+                )
+            ),
+            "metadata_enums": {
+                name: _enum_variants(compaction_facts, name)
+                for name in (
+                    "CompactionReason",
+                    "CompactionImplementation",
+                    "CompactionPhase",
+                    "CompactionStrategy",
+                )
+            },
+            "prompt_sha256": hashlib.sha256(compact_prompt.encode("utf-8")).hexdigest(),
+            "summary_prefix_sha256": hashlib.sha256(
+                compact_summary_prefix.encode("utf-8")
+            ).hexdigest(),
+            "trigger_variant_present": "CompactionTrigger"
+            in _enum_variants(models, "ResponseItem"),
+        },
         "responses_api_request_fields": _struct_fields(common, "ResponsesApiRequest"),
         "responses_lite_model_capabilities": _responses_lite_model_capabilities(
             model_catalog

@@ -1,14 +1,13 @@
-# Parent-Agent Evaluation Guide
+# Context-Compaction Protocol Evaluation
 
-This document is for the parent agent running the context-compaction fixture.
-The tested model must not decide whether compaction succeeded or which
-compaction implementation Codex used. Those conclusions come from the isolated
-Codex configuration, rollout, stderr, and Gateway Logs trace.
+This guide is for the test executor, including a coding agent or developer.
+The tested model must not classify its own compaction. This suite evaluates
+only the Codex/Rosetta protocol and routing contract; summary quality belongs
+to the separate `context_compaction_summary_quality` suite.
 
 ## Required output
 
-Write the following object to `RUN_ROOT/artifacts/evaluation.json` and mirror
-its conclusion in the parent agent's final response:
+Write a bounded object to `RUN_ROOT/artifacts/evaluation.json`:
 
 ```json
 {
@@ -19,77 +18,55 @@ its conclusion in the parent agent's final response:
   "remote_compaction_trigger_observed": true,
   "compaction_success": true,
   "compaction_method": "remote_v2_responses",
-  "wire_compaction_item_type": "compaction_summary",
-  "summary_output_item_type": null,
+  "compaction_reason": "context_limit",
+  "gateway_compaction_mode": "rosetta",
+  "wire_compaction_item_type": "compaction",
   "accepted_compaction_item_count": 1,
   "followup_compaction_input_observed": true,
-  "followup_summary_message_observed": false,
   "error": null,
-  "model": "gpt-5.5",
-  "gateway_provider": "TURNING",
+  "model": "deepseek-v4-flash",
+  "gateway_provider": "Deepseek (Official)",
   "codex_model_provider": "openai",
-  "thread_id": "<thread-id>"
+  "thread_id": "<thread-id>",
+  "command_starts": 1,
+  "baseline_tokens": 14500,
+  "post_compaction_tokens": 10000,
+  "command_output_chars": 128000,
+  "rosetta_mapping_rows": 1
 }
 ```
 
-Use `null` for `wire_compaction_item_type` when no accepted remote compaction
-item is returned. Use `summary_output_item_type` for the ordinary output item
-that carries a local model summary. Do not include credentials, full prompts,
-compaction payloads, summaries, or unbounded error bodies.
+Do not include credentials, prompts, compaction payloads, summary plaintext,
+or unbounded error bodies.
 
 ## Success decision
 
-Set `compaction_triggered` when either a remote compaction trigger or a local
-compaction request/event is observed. Keep
-`remote_compaction_trigger_observed` separate so a successful local compaction
-is not mislabeled as remote v2.
+For Remote Compaction V2, require all of these:
 
-For `remote_v2_responses`, set `compaction_success` to `true` only when all of
-these are observed:
+1. A genuine outgoing item has `type: "compaction_trigger"`.
+2. The metadata reason and gateway mode match `expected.json`.
+3. The compact response contains exactly one completed `compaction` item (or
+   the accepted `compaction_summary` compatibility alias).
+4. A later request carries the installed `type: "compaction"` item.
+5. Codex reaches the task marker without a compact-task error.
+6. The one-shot fixture command runs exactly once when the task has one.
+7. `baseline_tokens` and `post_compaction_tokens` are both below
+   `model_auto_compact_token_limit`, the command emits at least 100,000
+   characters, and the genuine `context_limit` compaction occurs after that
+   command result and before the final model response.
 
-1. A genuine outgoing input item has `type: "compaction_trigger"`.
-2. The compact response contains exactly one completed item whose wire type is
-   `compaction` or `compaction_summary`.
-3. A later request carries the installed `type: "compaction"` input item.
-4. Codex does not report a compact-task error and reaches the task marker.
-
-An accepted output item without the later installed compaction input is not a
-successful end-to-end compaction.
-
-For `local_model_summary`, require all of these instead:
-
-1. A normal `/v1/responses` request has `request_kind: "compaction"`, no
-   `compaction_trigger` item, and no tools.
-2. The request contains the local summarization instruction and the upstream
-   returns one completed summary message.
-3. A later turn contains the installed summary message rather than an opaque
-   `compaction` item.
-4. The rollout records compaction, Codex reports no compact-task error, and the
-   task reaches its marker.
-
-## Compaction method
-
-Report Codex's context-compaction implementation, not HTTP content encoding or
-request compression:
-
-| `compaction_method` | Evidence |
-|---|---|
-| `remote_v2_responses` | Normal `/v1/responses` request containing `compaction_trigger` |
-| `remote_legacy_responses_compact` | Request sent to `/v1/responses/compact` |
-| `local_model_summary` | Normal `/v1/responses` request with `request_kind: "compaction"`, a summarization prompt, no trigger, and no tools |
-| `token_budget_local` | The Token Budget feature selects its local compaction path |
-| `not_triggered` | No compaction request or local compaction event is observed |
-| `unknown` | Evidence is incomplete or contradictory |
-
-For this fixture's required configuration, the expected method is
-`remote_v2_responses`. The wire response may still use the accepted
-`compaction_summary` alias; that does not change the method.
+For Rosetta mode, also verify the expected mapping count. For native mode,
+verify the mapping table remains unchanged. For model-switch tasks, verify the
+first model initiates compaction and the target model produces the resume
+marker.
 
 ## Classification
 
-- `completed`: every success condition above is satisfied.
-- `remote_compaction_error_reproduced`: a genuine remote compaction request is
-  followed by the declared compact-task error.
-- `not_triggered`: the scenario ran but no compaction occurred.
-- `infrastructure_failure`: the scenario never reached the tested provider due
-  to gateway startup, authentication, timeout, or connection failure.
+- `completed`: every protocol condition is satisfied.
+- `remote_compaction_error_reproduced`: a genuine trigger is followed by the
+  bounded compact-task error recorded in the artifact.
+- `not_triggered`: the scenario ran but no genuine trigger was sent.
+- `infrastructure_failure`: the tested provider was never reached.
+
+Never use summary wording or fact retention to change this suite's protocol
+classification.

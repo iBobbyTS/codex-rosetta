@@ -1,5 +1,18 @@
 # 网关安全与认证
 
+## 远程压缩留存
+
+Rosetta Remote Compaction V2 会在 gateway SQLite 数据库中保存明文交接替换文本七天。
+返回的 `encrypted_content` 是 `rskc_v1_` opaque handle，并非密文；数据库只保存其
+SHA-256 和明文。映射按已鉴权 principal 隔离，清理时过期，重放时续期。缺失、过期或
+跨 principal 的 handle 会静默丢弃。该逻辑 TTL 不会抹除 rollout 文件、显式开启的 raw
+trace、测试 artifact、备份或 SQLite 已释放页中的历史字节。
+
+对于配置为 OpenAI Responses passthrough 的路由，只有 `context_limit` 和
+`user_requested` 原样走原生压缩。Rosetta 不探测上游能力，原生请求失败后也不会回退。
+所有切模型原因和其他所有路由均使用 Rosetta 的无工具摘要请求；此类路由无法处理的
+原生 compaction item 会静默丢弃。
+
 Codex-Rosetta 默认关闭未授权访问：每份网关配置都必须包含非空的 Admin 密码，
 并至少包含一个网关访问密钥。默认监听地址为 `127.0.0.1`，API 凭证显示功能默认关闭。
 

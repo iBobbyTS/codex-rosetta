@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
@@ -22,6 +23,28 @@ CODEX_API_KEY_ID = "codex"
 CODEX_API_KEY_LABEL = "codex"
 CODEX_PROVIDER_ID = "codex_rosetta"
 ENABLED_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
+
+_UPSTREAM_COMPACTION_GROUPS = {
+    "gpt-5.6-sol": "gpt-5.6",
+    "gpt-5.6-terra": "gpt-5.6",
+    "gpt-5.6-luna": "gpt-5.6",
+    "gpt-5.5": "gpt-5.5-5.4",
+    "gpt-5.4": "gpt-5.5-5.4",
+    "gpt-5.4-mini": "gpt-5.5-5.4",
+}
+_ROSETTA_COMPACTION_GROUPS = {
+    "gpt-5.2": "rosetta-comp-v1:gpt-5.2",
+    "codex-auto-review": "rosetta-comp-v1:codex-auto-review",
+    "deepseek-v4-flash": "rosetta-comp-v1:deepseek-v4",
+    "deepseek-v4-pro": "rosetta-comp-v1:deepseek-v4",
+    "glm-5.2": "rosetta-comp-v1:glm-5.2",
+    "qwen3.7-plus": "rosetta-comp-v1:qwen3.7-plus",
+    "qwen3.7-max": "rosetta-comp-v1:qwen3.7-max",
+    "mimo-v2.5-flash": "rosetta-comp-v1:mimo-v2.5",
+    "mimo-v2.5-pro": "rosetta-comp-v1:mimo-v2.5",
+    "minimax-m3": "rosetta-comp-v1:minimax-m3",
+    "kimi-k2.7-code": "rosetta-comp-v1:kimi-k2.7-code",
+}
 
 _MODEL_CATALOG_ASSIGNMENT_RE = re.compile(
     r"^[ \t]*(?:model_catalog_json|[\"']model_catalog_json[\"'])[ \t]*="
@@ -457,6 +480,53 @@ def _configured_model_upstreams(raw_config: dict[str, Any]) -> dict[str, str | N
     return configured
 
 
+def _apply_compaction_hash_overlay(
+    models: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Apply Rosetta-owned compaction groups without mutating catalog assets."""
+    upstream_values: dict[str, str] = {}
+    for model in models:
+        slug = model.get("slug")
+        if not isinstance(slug, str):
+            raise ValueError("Codex catalog model has no valid slug")
+        upstream_group = _UPSTREAM_COMPACTION_GROUPS.get(slug)
+        if upstream_group is None:
+            continue
+        value = model.get("comp_hash")
+        if not isinstance(value, str) or not value:
+            raise ValueError(f"upstream comp_hash is missing for {slug}")
+        existing = upstream_values.setdefault(upstream_group, value)
+        if existing != value:
+            raise ValueError(f"upstream comp_hash collision in group {upstream_group}")
+
+    seen: dict[str, str] = {}
+    for model in models:
+        slug = model["slug"]
+        if slug in _UPSTREAM_COMPACTION_GROUPS:
+            comp_hash = upstream_values[_UPSTREAM_COMPACTION_GROUPS[slug]]
+        else:
+            comp_hash = _ROSETTA_COMPACTION_GROUPS.get(slug)
+            if comp_hash is None:
+                digest = hashlib.sha256(slug.encode("utf-8")).hexdigest()
+                comp_hash = f"rosetta-comp-v1:custom:{digest}"
+        prior_slug = seen.get(comp_hash)
+        if prior_slug is not None:
+            prior_group = _UPSTREAM_COMPACTION_GROUPS.get(
+                prior_slug, _ROSETTA_COMPACTION_GROUPS.get(prior_slug)
+            )
+            this_group = _UPSTREAM_COMPACTION_GROUPS.get(
+                slug, _ROSETTA_COMPACTION_GROUPS.get(slug)
+            )
+            if prior_group != this_group:
+                raise ValueError(
+                    f"unreviewed comp_hash collision between {prior_slug} and {slug}"
+                )
+        else:
+            seen[comp_hash] = slug
+        model["comp_hash"] = comp_hash
+    return models
+
+
 def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
     """Build a Codex catalog from configured models or the bundled defaults."""
     bundled = _catalog_resource()
@@ -473,7 +543,7 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
 
     configured_upstream_names = _configured_model_upstreams(raw_config)
     if not configured_upstream_names:
-        return {"models": base_models}
+        return {"models": _apply_compaction_hash_overlay(base_models)}
 
     selected_models: list[dict[str, Any]] = []
     for name in sorted(configured_upstream_names):
@@ -488,7 +558,7 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
                 model["tool_mode"] = "code_mode_only"
         selected_models.append(model)
 
-    return {"models": selected_models}
+    return {"models": _apply_compaction_hash_overlay(selected_models)}
 
 
 def catalog_path(codex_home: str) -> str:

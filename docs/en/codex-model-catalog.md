@@ -31,6 +31,19 @@ contains only the configured model names. A configured name matching one of the
 eight bundled slugs reuses that entry byte-for-byte at the parsed JSON value
 level.
 
+### Compaction-hash overlay
+
+Rosetta preserves the upstream catalog asset and applies a runtime-only
+`comp_hash` overlay while materializing a catalog. `gpt-5.6-sol`/`terra`/`luna`
+retain their reviewed upstream group value (currently `3000`), as do
+`gpt-5.5`/`5.4`/`5.4-mini` (currently `2911`). Rosetta owns all other groups:
+`gpt-5.2`, `codex-auto-review`, DeepSeek V4, GLM 5.2, each Qwen 3.7 variant,
+MiMo V2.5, MiniMax M3, and Kimi K2.7 Code. Every group is non-empty; equal
+groups share a value and different groups must not collide. Unknown aliases get
+the deterministic `rosetta-comp-v1:custom:<sha256(slug)>` value. An upstream
+missing hash or an unreviewed collision fails compatibility checks instead of
+silently disabling model-switch compaction.
+
 Local mode also configures Codex to use Rosetta, not only the catalog. It
 selects the custom Provider ID `codex_rosetta`, while the generated provider's
 `name` is exactly `OpenAI`. This distinction is intentional: Codex resolves

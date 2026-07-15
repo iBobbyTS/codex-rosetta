@@ -937,6 +937,7 @@ async def _periodic_tool_call_mapping_cleanup(app: App) -> None:
         try:
             now = datetime.now(timezone.utc).isoformat()
             persistence.cleanup_expired_tool_call_mappings(now)
+            persistence.cleanup_expired_codex_compaction_mappings(now)
         except Exception as exc:
             logger.warning("Failed to clean up tool-call mapping cache: %s", exc)
 

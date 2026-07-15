@@ -6,6 +6,8 @@ import json
 import runpy
 from pathlib import Path
 
+from codex_rosetta.gateway.codex_compaction import COMPACT_PROMPT, SUMMARY_PREFIX
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = (
     REPO_ROOT / "docs" / "dev" / "version-compatibility" / "codex-source-contract.json"
@@ -184,6 +186,16 @@ def test_checked_in_baseline_uses_canonical_serialization():
     assert baseline_text == snapshot_json(baseline)
     assert baseline["schema_version"] == 1
     assert baseline["codex_source_commit"]
+
+
+def test_bundled_remote_compaction_prompts_match_the_reviewed_codex_source():
+    source_root = REPO_ROOT.parent / "openai-codex-src"
+    assert COMPACT_PROMPT == (
+        source_root / "codex-rs/prompts/templates/compact/prompt.md"
+    ).read_text(encoding="utf-8")
+    assert SUMMARY_PREFIX == (
+        source_root / "codex-rs/prompts/templates/compact/summary_prefix.md"
+    ).read_text(encoding="utf-8")
 
 
 def test_snapshot_classification_always_uses_three_result_categories():

@@ -58,6 +58,10 @@ codex-rs/core/src/responses_metadata.rs
 codex-rs/core/src/session/turn.rs
 codex-rs/core/src/context_manager/
 codex-rs/core/src/compact_remote.rs
+codex-rs/core/src/compact_remote_v2.rs
+codex-rs/core/src/compact_remote_v2_attempt.rs
+codex-rs/prompts/templates/compact/prompt.md
+codex-rs/prompts/templates/compact/summary_prefix.md
 codex-rs/core/src/tools/spec_plan.rs
 codex-rs/core/src/tools/handlers/apply_patch_spec.rs
 codex-rs/core/src/tools/handlers/tool_search.rs
@@ -79,6 +83,9 @@ Key points to confirm:
 - tool type, grammar, call/output item of `apply_patch`;
 - reasoning effort, summary, encrypted content and response headers;
 - History and window generation after compact, resume, fork, subagent;
+- `RemoteCompactionV2` stage/default, final `compaction_trigger`, exactly one
+  `compaction` output with required string `encrypted_content`, metadata enum
+  values, and the non-empty/unequal `comp_hash_changed` predicate;
 - `ModelInfo` and nested-struct fields, enum wire values, serde rename/default/skip behavior, instruction-template precedence, unknown-model fallback, and every runtime consumer;
 - The complete bundled `models.json` key set and per-model values, including keys ignored by the current client and valid defaulted fields omitted from the JSON;
 - Whether catalog-selected tool surfaces changed, especially `web.run` versus hosted `web_search` and collaboration v2 versus `multi_agent_v1`.
@@ -341,6 +348,11 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 
 - `reasoning_content` of `deepseek-v4-flash` remains renewable before and after the tool and in subsequent turns;
 - reasoning summary/encrypted state does not lead to invalid requests or repeated thinking content;
+- Run `tests/live_agent/context_compaction` as a protocol-only four-cell matrix,
+  routing GPT to `Pixel (K12)` in the copied config. Separately run
+  `tests/live_agent/context_compaction_summary_quality` for GPT and DeepSeek;
+  require byte-identical task/scenario input and exactly one command plus one
+  installed compaction before scoring deterministic fact retention;
 - No orphan tool output, repeated tool calls or history cache confusion after compact/resume;
 - Long conversations can still continue to complete file tool tasks after reaching the compact threshold;
 - Historical tool mapping and final behavior remain consistent after closing and restoring the Codex session.

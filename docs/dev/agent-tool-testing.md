@@ -1,7 +1,7 @@
 # Real-Agent Tool-Use Testing
 
 Codex-Rosetta keeps deterministic agent workspaces under
-`tests/agent_workspace`. They test whether a model uses exposed tools correctly
+`tests/live_agent`. They test whether a model uses exposed tools correctly
 after protocol conversion. They are not benchmarks of reasoning, coding,
 instruction following in general, or answer quality.
 
@@ -15,12 +15,12 @@ instruction following in general, or answer quality.
 - Keep templates immutable and run only disposable copies.
 
 The first suite is
-[`tests/agent_workspace/command_execution`](../../tests/agent_workspace/command_execution/README.md).
+[`tests/live_agent/command_execution`](../../tests/live_agent/command_execution/README.md).
 It covers a foreground command, delayed completion, one interactive input, and
 two ordered interactive inputs.
 
 The network-search suite is
-[`tests/agent_workspace/network_search`](../../tests/agent_workspace/network_search/README.md).
+[`tests/live_agent/network_search`](../../tests/live_agent/network_search/README.md).
 It retains a basic search-surface comparison, then covers every model-facing
 operation currently implemented by the local `web.run` bridge: domain-filtered
 Tavily search and response length, scoped `turnXsearchY` static open with
@@ -32,14 +32,20 @@ client, or external browser tool. Its outer evaluator follows the suite's
 and writes `artifacts/evaluation.json`.
 
 The context-compaction suite is
-[`tests/agent_workspace/context_compaction`](../../tests/agent_workspace/context_compaction/README.md).
+[`tests/live_agent/context_compaction`](../../tests/live_agent/context_compaction/README.md).
 It forces one command result followed by a second model turn while Codex uses
-an OpenAI-identified provider. Its result distinguishes a valid remote
-compaction response from the known zero-output-item failure; it does not score
-the generated summary.
+an OpenAI-identified provider. It validates only the routing, wire,
+persistence, and replay protocol.
+
+Deterministic summary quality is a separate matrix under
+[`tests/live_agent/context_compaction_summary_quality`](../../tests/live_agent/context_compaction_summary_quality/README.md).
+Its GPT and DeepSeek cells use byte-identical prompts and hidden command output;
+the test executor scores only post-compaction fact values. GPT is routed to
+`Pixel (K12)` in the copied test config, while DeepSeek remains
+`deepseek-v4-flash` on its sole provider.
 
 The Namespace-tools suite is
-[`tests/agent_workspace/namespace_tools`](../../tests/agent_workspace/namespace_tools/README.md).
+[`tests/live_agent/namespace_tools`](../../tests/live_agent/namespace_tools/README.md).
 It gives the agent a fixed sequence of direct calls to `clock.curr_time`,
 `memories.list`, and `skills.list`. It tests Namespace exposure,
 Responses-to-Chat flattening/restoration, and local tool execution rather than
@@ -48,7 +54,7 @@ seeds an isolated memory root, and treats an unavailable app-server
 orchestrator skill provider as a real `skills` Namespace failure.
 
 The Subagent-tools suite is
-[`tests/agent_workspace/subagent_tools`](../../tests/agent_workspace/subagent_tools/README.md).
+[`tests/live_agent/subagent_tools`](../../tests/live_agent/subagent_tools/README.md).
 It isolates all six `collaboration` Functions into separate tasks for
 `spawn_agent`, `wait_agent`, `list_agents`, `send_message`, `followup_task`,
 and `interrupt_agent`. Supporting lifecycle calls may prepare or verify a
@@ -61,7 +67,7 @@ case-sensitive IDs and display names `custom` and `OpenAI`; lowercase `openai`
 does not satisfy the OpenAI identity cell.
 
 The built-in Code Mode suite is
-[`tests/agent_workspace/builtin_tools`](../../tests/agent_workspace/builtin_tools/README.md).
+[`tests/live_agent/builtin_tools`](../../tests/live_agent/builtin_tools/README.md).
 It fixes the provider display name to `OpenAI` and the model catalog shape to
 `gpt-5.6-sol`, then exercises a yielded `exec` cell through top-level `wait`,
 two projected `update_plan` calls, one grouped localized file workflow
@@ -73,7 +79,7 @@ vision-capable upstream model rather than only proving that Codex can open the
 fixture.
 
 The image-generation suite is
-[`tests/agent_workspace/image_generation`](../../tests/agent_workspace/image_generation/README.md).
+[`tests/live_agent/image_generation`](../../tests/live_agent/image_generation/README.md).
 It may run only after projected `view_image` transport and deterministic visual
 recognition have passed for the same visual model and route. The task generates
 the exact scene `草坪上一只狗在跑`, uses the saved result path for one projected
@@ -158,10 +164,13 @@ not triggered according to the suite README and retain the exact compact
 response item types. A source listing or log message containing the same text
 does not prove that Codex issued a compaction request. Count both the canonical
 `compaction` item and the accepted `compaction_summary` wire alias.
-The parent agent follows the suite's `EVALUATION.md`, writes
-`artifacts/evaluation.json`, and explicitly reports the end-to-end compaction
-result and Codex compaction method. Do not confuse context compaction with HTTP
-compression such as zstd.
+The test executor (including a coding agent or developer) follows the selected
+suite's `EVALUATION.md` and writes `artifacts/evaluation.json`. Protocol tests
+report the end-to-end compaction result and method without scoring text.
+Summary-quality tests first require exactly one command and one compaction,
+then score deterministic fact retention; the tested model never evaluates its
+own summary. Do not confuse context compaction with HTTP compression such as
+zstd.
 When comparing provider identities, `openai` is expected to select remote v2,
 while a provider whose id and display name are `custom` is expected to run a
 normal no-tools Responses turn that produces a local summary message.
