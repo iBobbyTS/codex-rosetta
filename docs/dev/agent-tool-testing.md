@@ -37,12 +37,14 @@ It forces one command result followed by a second model turn while Codex uses
 an OpenAI-identified provider. It validates only the routing, wire,
 persistence, and replay protocol.
 
-Deterministic summary quality is a separate matrix under
+Deterministic summary quality is one small two-provider scenario under
 [`tests/live_agent/context_compaction_summary_quality`](../../tests/live_agent/context_compaction_summary_quality/README.md).
-Its GPT and DeepSeek cells use byte-identical prompts and hidden command output;
-the test executor scores only post-compaction fact values. GPT is routed to
-`Pixel (K12)` in the copied test config, while DeepSeek remains
-`deepseek-v4-flash` on its sole provider.
+Its GPT and DeepSeek cells use byte-identical `TASK.md`, `scenario.py`, and
+`QUERY.md` files. Phase 1 hides the eventual question, then the same thread and
+model resumes with `QUERY.md` only after compaction. The test executor scores
+only the fixed post-compaction values. GPT is routed to `Pixel (K12)` in the
+copied test config, while DeepSeek remains `deepseek-v4-flash` on its sole
+provider.
 
 The Namespace-tools suite is
 [`tests/live_agent/namespace_tools`](../../tests/live_agent/namespace_tools/README.md).
@@ -168,9 +170,11 @@ The test executor (including a coding agent or developer) follows the selected
 suite's `EVALUATION.md` and writes `artifacts/evaluation.json`. Protocol tests
 report the end-to-end compaction result and method without scoring text.
 Summary-quality tests first require exactly one command and one compaction,
-then score deterministic fact retention; the tested model never evaluates its
-own summary. Do not confuse context compaction with HTTP compression such as
-zstd.
+then submit the previously unseen query through a same-thread, same-model
+resume. Resume must not run another command or compaction. Only then does the
+test executor score deterministic fact retention; the tested model never
+evaluates its own summary. Do not confuse context compaction with HTTP
+compression such as zstd.
 When comparing provider identities, `openai` is expected to select remote v2,
 while a provider whose id and display name are `custom` is expected to run a
 normal no-tools Responses turn that produces a local summary message.

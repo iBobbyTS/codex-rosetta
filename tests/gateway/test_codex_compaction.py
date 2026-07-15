@@ -332,26 +332,47 @@ def test_live_quality_matrix_uses_identical_input_and_locked_provider_routes() -
     assert (quality / "01" / "scenario.py").read_bytes() == (
         quality / "02" / "scenario.py"
     ).read_bytes()
+    assert (quality / "01" / "QUERY.md").read_bytes() == (
+        quality / "02" / "QUERY.md"
+    ).read_bytes()
 
     gpt = json.loads((quality / "01" / "expected.json").read_text())
     deepseek = json.loads((quality / "02" / "expected.json").read_text())
     assert gpt["gateway_provider"] == "Pixel (K12)"
     assert deepseek["model"] == "deepseek-v4-flash"
-    assert gpt["model_auto_compact_token_limit"] == 17000
-    assert deepseek["model_auto_compact_token_limit"] == 17000
+    assert gpt["model_auto_compact_token_limit"] == 15000
+    assert deepseek["model_auto_compact_token_limit"] == 15000
     assert gpt["expected_compaction_count"] == 1
     assert deepseek["expected_compaction_count"] == 1
+    assert gpt["phase1_marker"] == "PHASE1:QUALITY_CONTEXT_READY"
+    assert deepseek["phase1_marker"] == gpt["phase1_marker"]
+    assert gpt["resume_prompt_file"] == "QUERY.md"
+    assert deepseek["resume_prompt_file"] == "QUERY.md"
+    assert gpt["resume_auto_compact_token_limit"] == 1_000_000
+    assert deepseek["resume_auto_compact_token_limit"] == 1_000_000
+    assert gpt["expected_resume_compaction_count"] == 0
+    assert deepseek["expected_resume_compaction_count"] == 0
 
     facts = json.loads((quality / "expected_facts.json").read_text())
     assert set(facts) == {
         "project",
-        "stage",
-        "ledger_policy",
+        "completed_stage",
+        "immutable_file",
         "timezone",
-        "endpoint",
-        "predeploy_check",
+        "active_endpoint",
+        "superseded_endpoint",
+        "predeploy_gate",
         "reference_code",
+        "rollout_strategy",
+        "strategy_reason",
+        "deployment_owner",
     }
+    model_prompts = (quality / "01" / "TASK.md").read_text() + (
+        quality / "01" / "QUERY.md"
+    ).read_text()
+    for value in facts.values():
+        if isinstance(value, str):
+            assert value not in model_prompts
 
 
 def test_protocol_context_limit_cells_use_identical_non_quality_fixture() -> None:

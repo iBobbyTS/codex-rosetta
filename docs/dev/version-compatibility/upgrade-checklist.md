@@ -351,8 +351,9 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - Run `tests/live_agent/context_compaction` as a protocol-only four-cell matrix,
   routing GPT to `Pixel (K12)` in the copied config. Separately run
   `tests/live_agent/context_compaction_summary_quality` for GPT and DeepSeek;
-  require byte-identical task/scenario input and exactly one command plus one
-  installed compaction before scoring deterministic fact retention;
+  require byte-identical task/scenario/resume-query input, exactly one command
+  plus one installed compaction, and a same-thread resume with no additional
+  command or compaction before scoring deterministic fact retention;
 - No orphan tool output, repeated tool calls or history cache confusion after compact/resume;
 - Long conversations can still continue to complete file tool tasks after reaching the compact threshold;
 - Historical tool mapping and final behavior remain consistent after closing and restoring the Codex session.
