@@ -1141,8 +1141,12 @@ class PersistenceManager:
         model: str,
         session_id: str,
         now: str,
+        renew_expire_at: str | None = None,
+        renewed_at: str | None = None,
     ) -> list[dict[str, Any]]:
-        """Authenticate and return exact non-expired mappings for a session."""
+        """Authenticate, return, and optionally renew non-expired session mappings."""
+        if (renew_expire_at is None) != (renewed_at is None):
+            raise ValueError("renew_expire_at and renewed_at must be provided together")
         where = (
             "principal_id = ? AND provider_name = ? AND model = ? "
             "AND session_id = ? AND expire_at > ?"
@@ -1166,6 +1170,18 @@ class PersistenceManager:
                 f"WHERE {where} ORDER BY updated_at ASC",
                 params,
             ).fetchall()
+            if rows and renew_expire_at is not None and renewed_at is not None:
+                try:
+                    self._conn.execute(
+                        "UPDATE tool_call_mappings "
+                        "SET expire_at = ?, updated_at = ? "
+                        f"WHERE {where}",
+                        (renew_expire_at, renewed_at, *params),
+                    )
+                    self._conn.commit()
+                except BaseException:
+                    self._conn.rollback()
+                    raise
         result: list[dict[str, Any]] = []
         for row in rows:
             original_tool_call, codex_tool_call = self._decrypt_tool_mapping_row(row)
@@ -1178,9 +1194,9 @@ class PersistenceManager:
                     "tool_call_id": row[4],
                     "original_tool_call": original_tool_call,
                     "codex_tool_call": codex_tool_call,
-                    "expire_at": row[9],
+                    "expire_at": renew_expire_at or row[9],
                     "created_at": row[10],
-                    "updated_at": row[11],
+                    "updated_at": renewed_at or row[11],
                 }
             )
         return result

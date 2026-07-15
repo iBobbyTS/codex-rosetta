@@ -62,7 +62,7 @@ seccomp 配置。2026-07-14 的隔离测试中，`gpt-5.6-sol → deepseek-v4-fl
 
 Chat Default 会保持 `image_gen__imagegen` 为 Modified，并显示可编辑的 Base URL 和 Token 字段。保存凭据后，Rosetta 会把该 Function 投影给上游模型，并通过 `/v1/images/generations` 或 `/v1/images/edits` 处理随后产生的 OpenAI 风格生图或改图请求。在明确配置生图前，应保持 Token 为空。
 
-投影 Function 的调用会被重组为调用嵌套 `tools` 对象的确定性 JavaScript，并作为调用 `exec` 的 `custom_tool_call` 返回 Codex。精确的 Chat 到 Codex 调用映射会写入现有的加密工具历史缓存，因此后续请求在其 24 小时 TTL 内可先恢复原始 Chat Function 和参数，再发送给上游。`view_image` 使用 `image(...)`，`image_gen.imagegen` 使用 `generatedImage(...)`，承载文本结果的其他投影工具使用 `text(...)`。
+投影 Function 的调用会被重组为调用嵌套 `tools` 对象的确定性 JavaScript，并作为调用 `exec` 的 `custom_tool_call` 返回 Codex。精确的 Chat 到 Codex 调用映射会写入现有的加密工具历史缓存；成功读取历史后，会先恢复原始 Chat Function 和参数，并从这次读取起重新计算 24 小时 TTL，再发送给上游。`view_image` 使用 `image(...)`，`image_gen.imagegen` 使用 `generatedImage(...)`，承载文本结果的其他投影工具使用 `text(...)`。
 
 Chat Default 会禁用 `apply_patch` 的 exec 投影，改为由 Rosetta 注入三个读取工具 `Read`、`Glob`、`Grep`，以及两个写入工具 `Edit`、`Write`。`Edit` 和 `Write` 可以在内部使用 Codex 嵌套的 `apply_patch` 实现，但不会向上游模型暴露 `apply_patch`。
 
