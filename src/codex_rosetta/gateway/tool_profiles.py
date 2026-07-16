@@ -11,6 +11,9 @@ from .admin.tool_catalog import load_tool_catalog
 BUILTIN_TOOL_PROFILE = "builtin"
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
+VIEW_IMAGE_PROFILE_ITEM_ID = "function.view_image"
+VIEW_IMAGE_DETAILS_INPUT_ID = "supported_details"
+DEFAULT_VIEW_IMAGE_DETAILS = ("auto", "low", "high")
 
 
 def _normalize_visible_when(
@@ -43,6 +46,8 @@ def _normalize_profile_select_options(
     input_id: str,
     value: Any,
     default: str,
+    *,
+    require_default_match: bool = True,
 ) -> list[dict[str, str]]:
     """Validate one catalog-declared select option list."""
     if not isinstance(value, list) or not value:
@@ -82,7 +87,7 @@ def _normalize_profile_select_options(
             )
         option_values.add(option_value)
         normalized.append({"value": option_value, "label": option_label})
-    if default not in option_values:
+    if require_default_match and default not in option_values:
         raise ValueError(
             f"catalog item {item_id!r} profile input {input_id!r} "
             "select default must match an option value"
@@ -142,24 +147,15 @@ def _normalize_profile_input_definition(
             f"default exceeds {MAX_TOOL_PROFILE_INPUT_LENGTH} characters"
         )
     input_type = value.get("type", "text")
-    if input_type not in {"text", "password", "select", "textarea"}:
+    if input_type not in {"text", "password", "select", "textarea", "checkbox_group"}:
         raise ValueError(
             f"catalog item {item_id!r} profile input {input_id!r} "
-            "type must be 'text', 'password', 'select', or 'textarea'"
+            "type must be 'text', 'password', 'select', 'textarea', or "
+            "'checkbox_group'"
         )
-    options = value.get("options")
-    if input_type == "select":
-        value = dict(
-            value,
-            options=_normalize_profile_select_options(
-                item_id, input_id, options, default
-            ),
-        )
-    elif options is not None:
-        raise ValueError(
-            f"catalog item {item_id!r} profile input {input_id!r} "
-            "options are only supported for type 'select'"
-        )
+    value = _normalize_profile_input_options(
+        item_id, input_id, value, input_type, default
+    )
     placeholder_i18n = value.get("placeholder_i18n")
     if placeholder_i18n is not None and (
         not isinstance(placeholder_i18n, str) or not placeholder_i18n
@@ -185,7 +181,61 @@ def _normalize_profile_input_definition(
     if ui_hidden:
         value = dict(value, ui_hidden=True)
     value = _normalize_profile_input_readonly(item_id, input_id, value, input_type)
-    return input_id, dict(value, default=default, type=input_type)
+    return input_id, dict(value, default=value.get("default", default), type=input_type)
+
+
+def _normalize_profile_input_options(
+    item_id: str,
+    input_id: str,
+    value: dict[str, Any],
+    input_type: str,
+    default: str,
+) -> dict[str, Any]:
+    """Validate select-like profile inputs and canonicalize checkbox defaults."""
+    options = value.get("options")
+    if input_type not in {"select", "checkbox_group"}:
+        if options is not None:
+            raise ValueError(
+                f"catalog item {item_id!r} profile input {input_id!r} "
+                "options are only supported for type 'select' or 'checkbox_group'"
+            )
+        return value
+    normalized_options = _normalize_profile_select_options(
+        item_id,
+        input_id,
+        options,
+        default,
+        require_default_match=input_type == "select",
+    )
+    if input_type == "select":
+        return dict(value, options=normalized_options)
+    selected = _normalize_checkbox_group_value(
+        default, normalized_options, item_id=item_id, input_id=input_id
+    )
+    return dict(value, options=normalized_options, default=",".join(selected))
+
+
+def _normalize_checkbox_group_value(
+    value: str,
+    options: list[dict[str, str]],
+    *,
+    item_id: str,
+    input_id: str,
+) -> tuple[str, ...]:
+    """Validate a comma-separated checkbox value and return canonical ordering."""
+    selected = [part.strip() for part in value.split(",") if part.strip()]
+    if not selected:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} requires one option"
+        )
+    allowed = {option["value"] for option in options}
+    unknown = sorted(set(selected) - allowed)
+    if unknown:
+        raise ValueError(
+            f"catalog item {item_id!r} profile input {input_id!r} contains "
+            f"unsupported options: {unknown}"
+        )
+    return tuple(option["value"] for option in options if option["value"] in selected)
 
 
 def _normalize_profile_input_readonly(
@@ -448,6 +498,15 @@ def _normalize_profile_input_values(
                 raise ValueError(
                     f"{field}.inputs.{item_id}.{input_id} must be one of "
                     f"{[option['value'] for option in definition['options']]}"
+                )
+            if definition["type"] == "checkbox_group":
+                input_value = ",".join(
+                    _normalize_checkbox_group_value(
+                        input_value,
+                        definition["options"],
+                        item_id=item_id,
+                        input_id=input_id,
+                    )
                 )
             normalized[item_id][input_id] = input_value
     return normalized
@@ -1029,6 +1088,44 @@ def apply_profile_tool_mutations(
             parameter["description"] = description
             changed = True
     return adapted if changed else tool
+
+
+def view_image_detail_values(route: Any) -> tuple[str, ...] | None:
+    """Return the selected view-image detail values for a Modified Profile."""
+    if route_tool_state(route, VIEW_IMAGE_PROFILE_ITEM_ID) != "modified":
+        return None
+    values = getattr(route, "tool_profile_inputs", {}).get(
+        VIEW_IMAGE_PROFILE_ITEM_ID, {}
+    )
+    selected = (
+        values.get(VIEW_IMAGE_DETAILS_INPUT_ID) if isinstance(values, dict) else None
+    )
+    if not isinstance(selected, str):
+        return DEFAULT_VIEW_IMAGE_DETAILS
+    options = tool_profile_contract()["input_definitions"][VIEW_IMAGE_PROFILE_ITEM_ID][
+        VIEW_IMAGE_DETAILS_INPUT_ID
+    ]["options"]
+    return _normalize_checkbox_group_value(
+        selected,
+        options,
+        item_id=VIEW_IMAGE_PROFILE_ITEM_ID,
+        input_id=VIEW_IMAGE_DETAILS_INPUT_ID,
+    )
+
+
+def apply_view_image_detail_profile(tool: Any, route: Any) -> Any:
+    """Restrict a Modified view_image declaration to selected detail values."""
+    details = view_image_detail_values(route)
+    if details is None or not isinstance(tool, dict):
+        return tool
+    adapted = copy.deepcopy(tool)
+    properties = adapted.get("parameters", {}).get("properties", {})
+    detail = properties.get("detail") if isinstance(properties, dict) else None
+    if not isinstance(detail, dict):
+        return tool
+    detail["enum"] = list(details)
+    detail["default"] = details[0]
+    return adapted
 
 
 def _append_profile_description(value: Any, append: str) -> str:

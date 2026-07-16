@@ -9,8 +9,10 @@ from typing import Any
 
 from .tool_profiles import (
     apply_profile_tool_mutations,
+    apply_view_image_detail_profile,
     route_tool_state,
     tool_profile_contract,
+    view_image_detail_values,
 )
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
@@ -30,6 +32,7 @@ class ExecToolProjection:
     input_field: str = "input"
     output_mode: str = "text"
     model_visible: bool = True
+    allowed_detail_values: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -274,6 +277,11 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
         projection = ExecToolProjection(
             item_id=item_id,
             model_visible=model_visible,
+            allowed_detail_values=(
+                view_image_detail_values(route)
+                if item_id == "function.view_image"
+                else None
+            ),
             **projection_definition,
         )
         projections[projection.chat_name] = projection
@@ -316,6 +324,10 @@ def project_exec_tool_definitions(
                 parsed["function"] = apply_profile_tool_mutations(
                     parsed["function"], projection.item_id, profile_route
                 )
+                if projection.item_id == "function.view_image":
+                    parsed["function"] = apply_view_image_detail_profile(
+                        parsed["function"], profile_route
+                    )
             definitions[chat_name] = parsed
     return definitions
 
@@ -335,6 +347,13 @@ def build_exec_script(
         nested_input: Any = value
     else:
         nested_input = arguments
+    if projection.allowed_detail_values is not None and "detail" in nested_input:
+        detail = nested_input["detail"]
+        if detail not in projection.allowed_detail_values:
+            raise ValueError(
+                f"{projection.chat_name} detail must be one of "
+                f"{list(projection.allowed_detail_values)}"
+            )
     literal = _javascript_json_literal(nested_input)
     output_helper = {
         "text": "text",

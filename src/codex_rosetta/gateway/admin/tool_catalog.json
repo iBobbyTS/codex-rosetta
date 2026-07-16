@@ -16,7 +16,8 @@
       "hosted.web_search": "disabled",
       "custom.apply_patch": "disabled",
       "custom.exec": "disabled",
-      "function.test_sync_tool": "disabled"
+      "function.test_sync_tool": "disabled",
+      "function.view_image": "modified"
     },
     "inputs": {
       "function.request_user_input": {
@@ -27,6 +28,9 @@
       },
       "function.update_goal": {
         "guidance": "Before updating a goal, use get_goal when goal state is uncertain. If no active goal exists or this tool reports that the thread has no goal, call create_goal first with a concise objective and no token_budget unless explicitly requested, then retry update_goal with the requested status."
+      },
+      "function.view_image": {
+        "supported_details": "auto,low,high"
       },
       "custom.exec": {
         "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...) or image(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
@@ -379,6 +383,21 @@
       "name": "view_image",
       "type": "function",
       "policy_id": "exec_projection",
+      "profile_inputs": [
+        {
+          "id": "supported_details",
+          "label_i18n": "tools.input.view_image.supported_details",
+          "type": "checkbox_group",
+          "default": "auto,low,high",
+          "options": [
+            {"value": "auto", "label": "auto"},
+            {"value": "low", "label": "low"},
+            {"value": "high", "label": "high"},
+            {"value": "original", "label": "original"}
+          ],
+          "visible_when": ["modified"]
+        }
+      ],
       "exec_projection": {
         "chat_name": "view_image",
         "nested_name": "view_image",
