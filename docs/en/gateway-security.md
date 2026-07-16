@@ -204,8 +204,11 @@ CLI option, configure matching `server.web_run.base_url` and
 `server.web_run.token` values (or the corresponding URL/Token environment
 variables) explicitly.
 
-The Admin **Web Search** page keeps basic Tavily credentials separate from the
-advanced browser service. Its read-only advanced section reports sidecar service
+The Admin **Web Search** page lets basic search use either Tavily credentials or
+**Self-hosted (Google)** in the existing sidecar. The latter sends no search API
+credential, but Google may rate-limit, challenge, or change its result page; such
+failures are returned as bounded `502` search errors instead of silently falling
+back to another provider. The read-only advanced section reports sidecar service
 availability and browser readiness independently. The status endpoint uses a
 two-second bounded request to the sidecar's public `/health` route and never
 returns the sidecar URL, bearer token, or upstream error text. The page checks
@@ -215,8 +218,19 @@ Modified `web.run` advertises browser commands only while the cached status is
 online with `browser_ready=true`. Concurrent refreshes are coalesced, and config
 hot reload invalidates the cached status.
 
+Self-hosted searches use short-lived isolated browser contexts with at most two
+concurrent searches. Search result URLs, titles, and snippets are bounded and
+normalized before returning to the gateway; domain filters are applied both to
+the Google query and to returned hostnames.
+
+The container pins Patchright and its Chromium build instead of installing the
+Playwright runtime or using the Playwright base image. Chromium runs headful
+inside a private Xvfb display, and browser contexts do not override the browser
+user agent. Patchright remains Chromium-only here; Google can still reject a
+data-center exit IP, which is surfaced as a bounded error rather than bypassed.
+
 The sidecar runs Chromium as the image's unprivileged `pwuser`, uses the pinned
-Playwright seccomp profile required by Chromium's user-namespace sandbox, keeps
+Chromium seccomp profile required by its user-namespace sandbox, keeps
 a read-only root filesystem, and stores only bounded temporary browser/PDF
 state. Each Codex Search request ID is mapped to an isolated browser context;
 contexts expire after 15 minutes and retain at most 16 page/PDF references and

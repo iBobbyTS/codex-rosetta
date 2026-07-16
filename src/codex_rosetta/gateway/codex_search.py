@@ -26,9 +26,9 @@ from .codex_search_references import (
 )
 from .web_search import (
     TavilyHTTPClient,
-    TavilySearchClient,
+    WebSearchClient,
     WebSearchSettings,
-    format_tavily_result_for_model,
+    format_web_search_result_for_model,
 )
 from .web_run_capabilities import (
     WEB_RUN_KNOWN_COMMANDS,
@@ -79,7 +79,8 @@ class CodexSearchBridgeResult:
     search_count: int
     open_count: int
     time_count: int
-    tavily_result_count: int
+    search_result_count: int
+    search_provider: str
     stored_reference_open_count: int = 0
     search_reference_count: int = 0
     search_cache_hit: bool = False
@@ -88,22 +89,34 @@ class CodexSearchBridgeResult:
     screenshot_count: int = 0
     browser_open_count: int = 0
 
+    @property
+    def tavily_result_count(self) -> int:
+        """Return Tavily-only count for backward-compatible trace consumers."""
+        return self.search_result_count if self.search_provider == "tavily" else 0
+
     def response_body(self) -> dict[str, str]:
         return {"output": self.output}
 
     def trace_summary(self) -> dict[str, Any]:
+        used_browser = bool(
+            self.browser_open_count
+            or self.click_count
+            or self.find_count
+            or self.screenshot_count
+        )
+        if self.search_provider == "self_hosted_google" and self.search_count:
+            executor = "google_web_run_sidecar"
+        elif used_browser:
+            executor = "tavily_python_web_run_sidecar"
+        else:
+            executor = "tavily_python"
         return {
-            "executor": (
-                "tavily_python_web_run_sidecar"
-                if self.browser_open_count
-                or self.click_count
-                or self.find_count
-                or self.screenshot_count
-                else "tavily_python"
-            ),
+            "executor": executor,
             "search_count": self.search_count,
             "open_count": self.open_count,
             "time_count": self.time_count,
+            "search_provider": self.search_provider,
+            "search_result_count": self.search_result_count,
             "tavily_result_count": self.tavily_result_count,
             "stored_reference_open_count": self.stored_reference_open_count,
             "search_reference_count": self.search_reference_count,
@@ -133,7 +146,10 @@ def should_use_local_codex_search(
 ) -> bool:
     """Choose the local bridge without taking native pass-through away by default."""
     config = web_search_config if isinstance(web_search_config, dict) else {}
-    if str(config.get("tavily_api_key") or "").strip():
+    provider = str(config.get("provider") or "tavily")
+    if str(config.get("tavily_api_key") or "").strip() or (
+        provider == "self_hosted_google" and browser_available
+    ):
         return True
     commands = body.get("commands")
     if not native_passthrough_available:
@@ -150,14 +166,14 @@ async def execute_local_codex_search(
     body: dict[str, Any],
     web_search_config: dict[str, Any] | None,
     *,
-    client: TavilySearchClient | None = None,
+    client: WebSearchClient | None = None,
     page_client: StaticPageClient | None = None,
     browser_client: WebRunBrowserClient | None = None,
     now: Callable[[], datetime] | None = None,
     reference_store: CodexSearchReferenceStore | None = None,
     principal_id: str | None = None,
 ) -> CodexSearchBridgeResult:
-    """Execute the deterministic Tavily/Python subset of ``SearchRequest``."""
+    """Execute the deterministic local subset of Codex ``SearchRequest``."""
     _validate_request_identity(body)
     commands = body.get("commands")
     if not isinstance(commands, dict):
@@ -198,12 +214,26 @@ async def execute_local_codex_search(
         )
 
     config = web_search_config if isinstance(web_search_config, dict) else {}
+    provider = str(config.get("provider") or "tavily")
     api_key = str(config.get("tavily_api_key") or "").strip()
-    if queries and client is None and not api_key:
-        raise CodexSearchNotImplemented(
-            "Codex search_query requires a Tavily API key in Admin > Web Search"
-        )
-    search_client = client or (TavilyHTTPClient(api_key) if queries else None)
+    search_client = client
+    if queries and search_client is None:
+        if provider == "tavily":
+            if not api_key:
+                raise CodexSearchNotImplemented(
+                    "Codex search_query requires a Tavily API key in Admin > Web Search"
+                )
+            search_client = TavilyHTTPClient(api_key)
+        elif provider == "self_hosted_google":
+            if browser_client is None:
+                raise CodexSearchNotImplemented(
+                    "Self-hosted Google search requires a healthy web-run sidecar"
+                )
+            search_client = cast(WebSearchClient, browser_client)
+        else:
+            raise CodexSearchNotImplemented(
+                f"Unsupported local web search provider: {provider}"
+            )
     resolved_page_client = page_client or (
         StaticPageHTTPClient() if open_operations and browser_client is None else None
     )
@@ -214,6 +244,7 @@ async def execute_local_codex_search(
         queries,
         body=body,
         search_client=search_client,
+        search_provider=provider,
         reference_store=reference_store,
         scope=scope,
     )
@@ -277,7 +308,8 @@ async def execute_local_codex_search(
         search_count=len(queries),
         open_count=len(open_operations),
         time_count=len(time_offsets),
-        tavily_result_count=search_execution.result_count,
+        search_result_count=search_execution.result_count,
+        search_provider=provider,
         stored_reference_open_count=stored_reference_open_count,
         search_reference_count=search_execution.reference_count,
         search_cache_hit=search_execution.cache_hit,
@@ -292,7 +324,8 @@ async def _execute_search_queries(
     queries: list[tuple[str, WebSearchSettings]],
     *,
     body: dict[str, Any],
-    search_client: TavilySearchClient | None,
+    search_client: WebSearchClient | None,
+    search_provider: str,
     reference_store: CodexSearchReferenceStore | None,
     scope: CodexSearchReferenceScope | None,
 ) -> _SearchExecution:
@@ -312,7 +345,8 @@ async def _execute_search_queries(
             raw = await search_client.search(query, settings=settings)
         except Exception as exc:
             raise CodexSearchExecutionError(
-                f"Tavily search failed for query {query!r}: {exc}"
+                f"{_search_provider_label(search_provider)} search failed for "
+                f"query {query!r}: {exc}"
             ) from exc
         query_drafts.append(_search_query_draft(query, raw))
 
@@ -326,7 +360,7 @@ async def _execute_search_queries(
 
     return _SearchExecution(
         sections=tuple(
-            format_tavily_result_for_model(
+            format_web_search_result_for_model(
                 draft.query,
                 _draft_as_tavily_result(draft),
             )
@@ -336,6 +370,14 @@ async def _execute_search_queries(
         reference_count=0,
         cache_hit=False,
     )
+
+
+def _search_provider_label(provider: str) -> str:
+    if provider == "self_hosted_google":
+        return "Self-hosted Google"
+    if provider == "tavily":
+        return "Tavily"
+    return provider or "Web"
 
 
 def _stored_search_execution(

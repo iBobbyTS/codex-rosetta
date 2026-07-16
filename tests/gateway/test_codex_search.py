@@ -73,6 +73,29 @@ class _FakeBrowserClient:
         return f"browser:{operation}:{arguments['ref_id']}"
 
 
+class _FakeSelfHostedGoogleClient(_FakeBrowserClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_calls: list[tuple[str, WebSearchSettings]] = []
+
+    async def search(
+        self,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        self.search_calls.append((query, settings))
+        return {
+            "results": [
+                {
+                    "title": "Python",
+                    "url": "https://www.python.org/",
+                    "content": "The Python programming language.",
+                }
+            ]
+        }
+
+
 def _body(commands: dict[str, Any], **extra: Any) -> dict[str, Any]:
     return {
         "id": "search-session",
@@ -480,6 +503,42 @@ def test_search_without_tavily_key_is_not_implemented() -> None:
         )
 
 
+def test_self_hosted_google_search_uses_web_run_sidecar() -> None:
+    client = _FakeSelfHostedGoogleClient()
+
+    result = asyncio.run(
+        execute_local_codex_search(
+            _body(
+                {"search_query": [{"q": "official Python", "domains": ["python.org"]}]}
+            ),
+            {"provider": "self_hosted_google", "tavily_api_key": ""},
+            browser_client=client,
+        )
+    )
+
+    assert client.search_calls == [
+        (
+            "official Python",
+            WebSearchSettings(include_domains=("python.org",)),
+        )
+    ]
+    assert "https://www.python.org/" in result.output
+    assert result.search_count == 1
+    assert result.trace_summary()["executor"] == "google_web_run_sidecar"
+    assert result.trace_summary()["search_result_count"] == 1
+    assert result.trace_summary()["tavily_result_count"] == 0
+
+
+def test_self_hosted_google_search_requires_sidecar() -> None:
+    with pytest.raises(CodexSearchNotImplemented, match="healthy web-run sidecar"):
+        asyncio.run(
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "python"}]}),
+                {"provider": "self_hosted_google", "tavily_api_key": ""},
+            )
+        )
+
+
 def test_max_output_tokens_applies_conservative_character_cap() -> None:
     result = asyncio.run(
         execute_local_codex_search(
@@ -507,6 +566,17 @@ def test_local_bridge_selection_preserves_native_passthrough_without_tavily() ->
         search,
         {"tavily_api_key": "tvly-test"},
         native_passthrough_available=True,
+    )
+    assert not should_use_local_codex_search(
+        search,
+        {"provider": "self_hosted_google"},
+        native_passthrough_available=True,
+    )
+    assert should_use_local_codex_search(
+        search,
+        {"provider": "self_hosted_google"},
+        native_passthrough_available=True,
+        browser_available=True,
     )
     assert should_use_local_codex_search(search, {}, native_passthrough_available=False)
     assert should_use_local_codex_search(page, {}, native_passthrough_available=True)

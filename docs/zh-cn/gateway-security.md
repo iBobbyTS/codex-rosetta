@@ -170,15 +170,26 @@ docker-compose -f docker/docker-compose.yaml \
 被遮盖。若既不使用 Compose，也不使用 CLI 托管参数，需要显式配置相互匹配的
 `server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
 
-Admin **联网搜索**页面把基础 Tavily 凭据与高级浏览器服务分开。高级 Section
+Admin **联网搜索**页面允许基础搜索选择 Tavily 凭据或现有 sidecar 内的
+**Self-hosted (Google)**。后者不会发送搜索 API 凭据，但 Google 可能限流、要求验证
+或改变结果页；这类失败会作为有界的 `502` 搜索错误返回，不会静默切换 Provider。高级 Section
 只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以两秒超时、
 有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token
 或上游错误正文。页面进入后立即检查，仅在页面停留期间每五秒刷新，离开后停止。
 模型请求复用同一个五秒健康缓存；Modified `web.run` 只有在缓存状态在线且
 `browser_ready=true` 时才声明浏览器命令。并发刷新会合并，配置热重载会使缓存失效。
 
+自托管搜索使用短生命周期、相互隔离的 browser context，并发上限为两个。搜索结果
+URL、标题和摘要在返回网关前会被限制长度并规范化；domain filter 同时应用于 Google
+查询和返回结果 hostname。
+
+容器固定使用 Patchright 及其 Chromium build，不再安装 Playwright runtime，也不再
+使用 Playwright 基础镜像。Chromium 以 headful 模式运行在私有 Xvfb display 内，
+browser context 不覆盖浏览器 User-Agent。此处 Patchright 仍仅使用 Chromium；Google
+仍可能拒绝数据中心出口 IP，这种情况会返回有界错误，不会尝试绕过。
+
 sidecar 以镜像内的非特权 `pwuser` 运行 Chromium，使用 Chromium user-namespace sandbox
-所需的固定版本 Playwright seccomp profile 和只读根文件系统，并只保存有界的临时
+所需的固定 Chromium seccomp profile 和只读根文件系统，并只保存有界的临时
 浏览器/PDF 状态。每个 Codex Search request ID 都映射到独立 browser context；
 context 会在 15 分钟后过期，最多保留 16 个页面/PDF 引用和 40 MiB PDF 数据；容器
 本身也有明确的内存和进程数限制。导航、子资源、重定向和 PDF 下载都限制为公开

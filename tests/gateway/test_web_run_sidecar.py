@@ -12,6 +12,7 @@ from codex_rosetta.gateway.web_run_sidecar import (
     WebRunSidecarHTTPClient,
     WebRunSidecarInvalidRequest,
 )
+from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
 def test_sidecar_client_sends_scoped_bearer_authenticated_operation(
@@ -70,3 +71,42 @@ def test_sidecar_client_maps_client_errors(monkeypatch) -> None:
                 arguments={"ref_id": "turn0fetch0", "id": 1},
             )
         )
+
+
+def test_sidecar_client_sends_bounded_google_search(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_request(client, method, url, **kwargs):
+        del client
+        captured.update(method=method, url=url, **kwargs)
+        return BoundedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=(
+                b'{"results":[{"title":"Python","url":"https://python.org",'
+                b'"content":"Welcome"}]}'
+            ),
+        )
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+    client = WebRunSidecarHTTPClient("http://web-run:8080", "sidecar-secret")
+
+    result = asyncio.run(
+        client.search(
+            "official Python",
+            settings=WebSearchSettings(
+                max_results=8,
+                search_depth="advanced",
+                include_domains=("python.org",),
+            ),
+        )
+    )
+
+    assert result["results"][0]["title"] == "Python"
+    assert captured["url"] == "http://web-run:8080/v1/search"
+    assert captured["json"] == {
+        "query": "official Python",
+        "max_results": 8,
+        "include_domains": ["python.org"],
+    }
+    assert captured["max_success_bytes"] == 1_000_000

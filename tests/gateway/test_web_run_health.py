@@ -9,7 +9,10 @@ from typing import cast
 from codex_rosetta.gateway import web_run_health
 from codex_rosetta.gateway.app import _resolve_request_tool_runtime_capabilities
 from codex_rosetta.gateway.config import GatewayConfig
-from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_SIDECAR_CAPABILITY
+from codex_rosetta.gateway.web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
+    WEB_RUN_SIDECAR_CAPABILITY,
+)
 from codex_rosetta.gateway.web_run_health import WebRunHealthState
 from codex_rosetta.routing import ResolvedRoute
 
@@ -203,6 +206,7 @@ def test_request_route_adds_browser_capability_only_when_ready(monkeypatch):
             SimpleNamespace(
                 web_run_sidecar_url="http://web-run:8080",
                 web_run_sidecar_token="sidecar-token",
+                web_search={"provider": "tavily", "tavily_api_key": ""},
             ),
         )
         route = ResolvedRoute(
@@ -240,6 +244,45 @@ def test_request_route_adds_browser_capability_only_when_ready(monkeypatch):
     assert WEB_RUN_SIDECAR_CAPABILITY in available.tool_runtime_capabilities
 
 
+def test_ready_sidecar_adds_self_hosted_google_search_capability(monkeypatch):
+    async def fake_request(*args, **kwargs):
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"status": "ok", "browser_ready": True},
+        )
+
+    monkeypatch.setattr(web_run_health, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(web_run_health, "request_bounded_response", fake_request)
+
+    config = cast(
+        GatewayConfig,
+        SimpleNamespace(
+            web_run_sidecar_url="http://web-run:8080",
+            web_run_sidecar_token="sidecar-token",
+            web_search={"provider": "self_hosted_google", "tavily_api_key": ""},
+        ),
+    )
+    route = ResolvedRoute(
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="test",
+        tool_profile={"namespace.web.run": "modified"},
+    )
+
+    resolved = asyncio.run(
+        _resolve_request_tool_runtime_capabilities(
+            SimpleNamespace(web_run_health_state=WebRunHealthState()),
+            config,
+            route,
+            {"tools": [{"type": "function", "name": "web__run"}]},
+        )
+    )
+
+    assert resolved.tool_runtime_capabilities == frozenset(
+        {WEB_RUN_BASIC_SEARCH_CAPABILITY, WEB_RUN_SIDECAR_CAPABILITY}
+    )
+
+
 def test_request_route_skips_health_for_passthrough_profile(monkeypatch):
     async def unexpected_request(*args, **kwargs):
         raise AssertionError("passthrough must not probe sidecar readiness")
@@ -253,6 +296,7 @@ def test_request_route_skips_health_for_passthrough_profile(monkeypatch):
             SimpleNamespace(
                 web_run_sidecar_url="http://web-run:8080",
                 web_run_sidecar_token="sidecar-token",
+                web_search={"provider": "tavily", "tavily_api_key": ""},
             ),
         )
         route = ResolvedRoute(

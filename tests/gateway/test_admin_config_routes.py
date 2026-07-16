@@ -693,6 +693,44 @@ def test_put_server_settings_clears_web_search_key(tmp_path):
     assert app.gateway_config.web_search["tavily_api_key"] == ""
 
 
+def test_put_server_settings_selects_self_hosted_google_and_preserves_tavily_key(
+    tmp_path,
+):
+    config = _config_data()
+    config["server"]["web_search"] = {
+        "provider": "tavily",
+        "tavily_api_key": "tvly-secret-value",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {
+            "web_search": {
+                "provider": "self_hosted_google",
+                "tavily_api_key": "tvly***alue",
+            }
+        },
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
+        "web_search"
+    ] == {
+        "provider": "self_hosted_google",
+        "tavily_api_key": "tvly-secret-value",
+    }
+    assert app.gateway_config.web_search["provider"] == "self_hosted_google"
+
+
 def test_put_server_settings_rejects_invalid_web_search_fields(tmp_path):
     config_path = tmp_path / "config.jsonc"
     original = json.dumps(_config_data()).encode()
@@ -1848,7 +1886,11 @@ def test_admin_html_uses_page_routes():
         "<!-- Dashboard Page -->", 1
     )[0]
     assert 'id="networkSearchProvider"' in network_page
+    assert '<option value="self_hosted_google">Self-hosted (Google)</option>' in (
+        network_page
+    )
     assert 'id="networkSearchApiKey"' in network_page
+    assert "apiKeyGroup.hidden = provider.value !== 'tavily'" in html
     assert 'id="networkSearchSidecarStatus"' in network_page
     assert 'id="networkSearchBrowserStatus"' in network_page
     assert 'name="webRunBaseUrl"' not in network_page

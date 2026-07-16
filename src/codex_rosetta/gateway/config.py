@@ -81,7 +81,7 @@ DEFAULT_REQUEST_BODY_LIMIT_MB = 128
 UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
 WEB_RUN_SIDECAR_URL_ENV = "CODEX_ROSETTA_WEB_RUN_URL"
 WEB_RUN_SIDECAR_TOKEN_ENV = "CODEX_ROSETTA_WEB_RUN_TOKEN"
-WEB_SEARCH_PROVIDERS = frozenset({"tavily"})
+WEB_SEARCH_PROVIDERS = frozenset({"tavily", "self_hosted_google"})
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
 
 
@@ -1090,7 +1090,8 @@ class GatewayConfig:
             responses_processing=self.provider_responses_processing[provider_name],
             tool_runtime_capabilities=(
                 frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
-                if self.web_search["tavily_api_key"]
+                if self.web_search["provider"] == "tavily"
+                and self.web_search["tavily_api_key"]
                 else frozenset()
             ),
         )

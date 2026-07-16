@@ -22,13 +22,15 @@ import pytesseract
 from fastapi import FastAPI, HTTPException, Request
 from PIL import Image
 from pydantic import BaseModel, ConfigDict, Field
-from playwright.async_api import (
+from patchright.async_api import (
     Browser,
     BrowserContext,
     Page,
     Playwright,
     async_playwright,
 )
+
+from google_search import GoogleSearchError, execute_google_search
 
 _SESSION_RE = re.compile(r"[a-f0-9]{64}")
 _PAGE_REFERENCE_RE = re.compile(r"turn[0-9]+fetch[0-9]+")
@@ -60,6 +62,16 @@ class ExecuteRequest(BaseModel):
     arguments: dict[str, Any]
 
 
+class SearchRequest(BaseModel):
+    """One authenticated self-hosted search request."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    query: str = Field(min_length=1, max_length=4_000)
+    max_results: int = Field(default=5, ge=1, le=10)
+    include_domains: list[str] = Field(default_factory=list, max_length=20)
+
+
 class BrowserOperationError(RuntimeError):
     """Stable client-visible browser operation failure."""
 
@@ -78,7 +90,7 @@ class PDFDocument:
 
 @dataclass
 class SessionState:
-    """Isolated Playwright context and bounded references for one Codex search ID."""
+    """Isolated Patchright context and bounded references for one Codex search ID."""
 
     context: BrowserContext
     pages: OrderedDict[str, Page] = field(default_factory=OrderedDict)
@@ -89,18 +101,19 @@ class SessionState:
 
 
 class WebRunService:
-    """Own Playwright and execute scoped navigation plus PDF rendering."""
+    """Own Patchright and execute scoped navigation plus PDF rendering."""
 
     def __init__(self) -> None:
-        self._playwright: Playwright | None = None
+        self._patchright: Playwright | None = None
         self._browser: Browser | None = None
         self._sessions: OrderedDict[str, SessionState] = OrderedDict()
         self._sessions_lock = asyncio.Lock()
+        self._search_semaphore = asyncio.Semaphore(2)
 
     async def start(self) -> None:
-        self._playwright = await async_playwright().start()
-        self._browser = await self._playwright.chromium.launch(
-            headless=True,
+        self._patchright = await async_playwright().start()
+        self._browser = await self._patchright.chromium.launch(
+            headless=False,
             chromium_sandbox=True,
             args=["--disable-dev-shm-usage"],
         )
@@ -113,8 +126,8 @@ class WebRunService:
             await session.context.close()
         if self._browser is not None:
             await self._browser.close()
-        if self._playwright is not None:
-            await self._playwright.stop()
+        if self._patchright is not None:
+            await self._patchright.stop()
 
     async def execute(self, request: ExecuteRequest) -> str:
         if _SESSION_RE.fullmatch(request.session_id) is None:
@@ -130,6 +143,24 @@ class WebRunService:
                 return await self._find(session, request.arguments)
             return await self._screenshot(session, request.arguments)
 
+    async def search(self, request: SearchRequest) -> dict[str, Any]:
+        """Execute one stateless Google search in an isolated context."""
+        if self._browser is None:
+            raise BrowserOperationError("Browser is not ready", status_code=503)
+        async with self._search_semaphore:
+            try:
+                return await execute_google_search(
+                    self._browser,
+                    query=request.query,
+                    max_results=request.max_results,
+                    include_domains=tuple(request.include_domains),
+                    route_handler=self._route_public_requests,
+                )
+            except ValueError as exc:
+                raise BrowserOperationError(str(exc)) from exc
+            except GoogleSearchError as exc:
+                raise BrowserOperationError(str(exc), status_code=502) from exc
+
     async def _session(self, session_id: str) -> SessionState:
         async with self._sessions_lock:
             await self._remove_expired_sessions()
@@ -144,7 +175,6 @@ class WebRunService:
                 raise BrowserOperationError("Browser is not ready", status_code=503)
             context = await self._browser.new_context(
                 accept_downloads=False,
-                user_agent=_USER_AGENT,
                 service_workers="block",
             )
             context.set_default_timeout(_ACTION_TIMEOUT_MS)
@@ -642,6 +672,14 @@ async def _execute(payload: ExecuteRequest, request: Request) -> dict[str, str]:
     except BrowserOperationError as exc:
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return {"output": output}
+
+
+@app.post("/v1/search")
+async def _search(payload: SearchRequest, request: Request) -> dict[str, Any]:
+    try:
+        return await request.app.state.service.search(payload)
+    except BrowserOperationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 def _error_response(status_code: int, message: str):

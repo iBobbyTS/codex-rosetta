@@ -39,6 +39,7 @@ def _make_config(
     *,
     upstream_model: str | None = "gpt-image-2",
     tavily_api_key: str | None = None,
+    search_provider: str = "tavily",
     tool_profile: str | None = None,
     image_state: str | None = None,
     image_base_url: str = "https://images.example/v1",
@@ -56,7 +57,7 @@ def _make_config(
         model["upstream_model"] = upstream_model
     tool_profiles: dict[str, Any] = {}
     explicit_web_mapping = tool_profile == "test-web-run-mapping"
-    local_search = tavily_api_key is not None and (
+    local_search = (tavily_api_key is not None or search_provider != "tavily") and (
         explicit_web_mapping or api_type != "responses"
     )
     explicit_pass_through = tool_profile == "test-pass-through" or (
@@ -123,7 +124,7 @@ def _make_config(
                     }
                 ],
                 "web_search": {
-                    "provider": "tavily",
+                    "provider": search_provider,
                     "tavily_api_key": tavily_api_key or "",
                 },
             },
@@ -312,6 +313,57 @@ def test_web_run_mapping_profile_intercepts_tool_mapping_only_search() -> None:
     assert response.status_code == 200
     assert "https://docs.python.org/3/" in json.loads(response.body)["output"]
     assert client.calls == [("Python documentation", WebSearchSettings())]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+class _FakeSelfHostedGoogleClient:
+    def __init__(self) -> None:
+        self.search_calls: list[tuple[str, WebSearchSettings]] = []
+
+    async def search(
+        self,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        self.search_calls.append((query, settings))
+        return {
+            "results": [
+                {
+                    "title": "Python documentation",
+                    "url": "https://docs.python.org/3/",
+                    "content": "Python documentation from Google Search.",
+                }
+            ]
+        }
+
+    async def execute(self, **kwargs: Any) -> str:
+        raise AssertionError(f"unexpected browser operation: {kwargs}")
+
+
+def test_self_hosted_google_preserves_codex_search_response_contract() -> None:
+    config = _make_config(
+        search_provider="self_hosted_google",
+        tool_profile="test-web-run-mapping",
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    client = _FakeSelfHostedGoogleClient()
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            browser_client=client,
+        )
+    )
+
+    assert response.status_code == 200
+    assert set(json.loads(response.body)) == {"output"}
+    assert "https://docs.python.org/3/" in json.loads(response.body)["output"]
+    assert client.search_calls == [("Python documentation", WebSearchSettings())]
     request.app.transport.send_passthrough.assert_not_awaited()
 
 

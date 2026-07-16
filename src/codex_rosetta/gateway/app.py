@@ -68,6 +68,7 @@ from .tool_adaptation import CodexToolLocalizationStore
 from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
 from .web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
     WEB_RUN_PROFILE_ITEM_ID,
     WEB_RUN_SIDECAR_CAPABILITY,
 )
@@ -544,6 +545,8 @@ async def _resolve_request_tool_runtime_capabilities(
 
     capabilities = set(route.tool_runtime_capabilities)
     capabilities.add(WEB_RUN_SIDECAR_CAPABILITY)
+    if config.web_search["provider"] == "self_hosted_google":
+        capabilities.add(WEB_RUN_BASIC_SEARCH_CAPABILITY)
     return replace(route, tool_runtime_capabilities=frozenset(capabilities))
 
 
