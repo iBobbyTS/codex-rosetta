@@ -1607,6 +1607,35 @@ def test_admin_html_exposes_confirmed_local_mode_setting():
     assert i18n["en"]["confirm.localModeExisting"]
 
 
+def test_admin_html_requires_confirmation_to_close_codex_restart_notice():
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
+    notice_source = html[
+        html.index("function showCodexRestartNotice()") : html.index(
+            "// ===================== Modal ====================="
+        )
+    ]
+
+    assert 'id="codexRestartNotice"' in html
+    assert 'onclick="confirmCodexRestartNotice()"' in html
+    assert "r.headers.get('X-Codex-Restart-Required') === 'true'" in html
+    assert "hidden = false" in notice_source
+    assert "hidden = true" in notice_source
+    assert "setTimeout" not in notice_source
+    assert "Restart Codex" in i18n["en"]["notice.codexRestart"]
+    assert "重启 Codex" in i18n["zh"]["notice.codexRestart"]
+    assert i18n["en"]["btn.confirm"] == "Confirm"
+    assert i18n["zh"]["btn.confirm"] == "确认"
+
+
 def test_admin_html_assumes_all_llm_models_support_tools():
     html_path = (
         Path(__file__).parents[2]
