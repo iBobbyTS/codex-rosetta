@@ -177,7 +177,7 @@ Rosetta Tool Profile：直传 / 修改 / 禁用 / 注入
 
 模型组仍是 provider、upstream model、protocol 和 Tool Profile 的唯一事实来源。catalog 决定 Codex 尝试发送什么；Rosetta 必须支持这种形态，或者在 catalog 中声明更保守的能力。
 
-Admin 的模型组弹窗会优先检查配置的上游模型名；未填写上游映射时检查暴露模型名。只有与 `codex_models_0_144_4.json` 或 `codex_model_presets.json` 中 slug 完整一致才算匹配，匹配后显示模型的 `display_name`，并根据 `input_modalities` 推导 text/vision 能力；带额外后缀或仅部分一致不会命中。每行始终显示“手动填写模型信息”按钮，点击后会在模型组弹窗右侧打开面板，包含单个预设的全部字段：`slug`、`display_name`、`description`、`identity`、`priority`、`context_window`、`input_modalities` 和 `supported_reasoning_levels`。已匹配时使用预设预填，未匹配时为空表；保存的 `model_info` 会覆盖自动预设，但暴露模型名仍作为实际路由使用的 catalog slug。
+Admin 的模型组弹窗会优先检查配置的上游模型名；未填写上游映射时检查暴露模型名。只有与 `codex_models_0_144_4.json` 或 `codex_model_presets.json` 中 slug 完整一致才算匹配，匹配后显示模型的 `display_name`，并根据 `input_modalities` 推导 text/vision 能力；带额外后缀或仅部分一致不会命中。每行始终显示“手动填写模型信息”按钮，点击后会在模型组弹窗右侧打开面板，包含单个预设的全部字段：`slug`、`display_name`、`description`、`identity`、`priority`、`context_window`、`input_modalities` 和 `supported_reasoning_levels`。已匹配时使用预设预填，未匹配时为空表；保存的 `model_info` 会覆盖自动预设，但暴露模型名仍作为实际路由使用的 catalog slug。输入模态和支持的推理等级使用 checkbox，并且只提供 catalog 模板能够物化的值。保存的覆盖配置只要任一可编辑字段与命中的预设不同，Admin 就会把自动检测标记为“已修改”；右侧面板的恢复按钮会显示命中的预设名称，点击后删除覆盖配置并重新以该预设为准。
 
 ### 第三方模型的推荐决策
 

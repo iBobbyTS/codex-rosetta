@@ -238,9 +238,9 @@ def _write_mapping_fields(
     warnings: list[str] | None,
 ) -> None:
     if mapping == "openai_responses":
-        body["reasoning"] = {"effort": _openai_effort(effort)}
+        body["reasoning"] = {"effort": effort}
     elif mapping == "openai_chat":
-        body["reasoning_effort"] = _openai_effort(effort)
+        body["reasoning_effort"] = _openai_chat_effort(effort)
     elif mapping == "anthropic":
         body["thinking"] = {"type": "adaptive"}
         output_config = dict(body.get("output_config") or {})
@@ -307,7 +307,7 @@ def _remove_reasoning_controls(body: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _openai_effort(effort: ReasoningEffort) -> str:
+def _openai_chat_effort(effort: ReasoningEffort) -> str:
     return "xhigh" if effort == "max" else effort
 
 

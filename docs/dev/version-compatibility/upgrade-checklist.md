@@ -220,7 +220,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Captured wire fixtures for `multi_agent_v1`, `multi_agent_v2/collaboration`;
 - Captured wire fixtures for code mode `exec/wait`, nested call and wait continuation;
 - web search multi-round event reconstruction, downgrade paths for disabled/missing keys, bounded identity-encoded auxiliary HTTP responses, and standalone Search `turnXsearchY` allocation/open scoped by authenticated principal plus `SearchRequest.id`, including retry stability, concurrent allocation, cross-session failure, TTL/capacity cleanup, and app shutdown cleanup;
-- Cross-format round trip of reasoning effort/summary/content/encrypted state;
+- Cross-format round trip of reasoning effort/summary/content/encrypted state, including exact OpenAI Responses `max` preservation without inheriting Chat-specific degradation;
 - orphan call/result, residual tool choice/config and history trimming after compact;
 - Concurrency windows, cache expiration, normal EOF, abnormal EOF,
   huge peer-declared HTTP chunks, oversized no-newline SSE lines, accumulated
@@ -231,7 +231,7 @@ The following behavior can be automatically verified using the fixed Codex reque
   rollback, unlimited mapping, and a real Codex image-history request above the
   former 50 MB ceiling;
 - `/v1/models` current OpenAI-style response remains distinct from Codex's dynamic `ModelInfo` catalog endpoint; statically verify the complete bundled catalog/schema contract without treating the gateway route as that endpoint;
-- Local-mode upstream catalog asset/source equality, eight-entry order, exact-name Terra-derived preset validation and prompt identity substitution, generic fallback aliases, CLI/WebUI first-use confirmation and clear behavior, `--no-local-mode` persistence without Codex Home mutation, custom Codex Home, TOML preservation, repeated synchronization with memory overrides remaining byte-idempotent, managed-only deletion, startup/model-mutation synchronization, remote-host warning, compensating rollback, and wheel/sdist resource inclusion;
+- Local-mode upstream catalog asset/source equality, eight-entry order, exact-name Terra-derived preset validation and prompt identity substitution, generic fallback aliases, Admin checkbox values plus all-field modified-preset detection and named restore behavior, CLI/WebUI first-use confirmation and clear behavior, `--no-local-mode` persistence without Codex Home mutation, custom Codex Home, TOML preservation, repeated synchronization with memory overrides remaining byte-idempotent, managed-only deletion, startup/model-mutation synchronization, remote-host warning, compensating rollback, and wheel/sdist resource inclusion;
 - Configuration/admin UI saving, defaults and runtime loading of Codex tool-adaptation switches.
 - Static tool-catalog contract: unique IDs, valid visible or explicitly UI-hidden placement/policy references, required fixed tools, direct Responses Namespace parents versus flat Code Mode `namespace__function` entries, normal/Code-Mode placement and conditional-exposure localization keys, generic per-state description keys, Function/Hosted input IDs/types/defaults/localization keys, no Profile inputs on `web.run`, hidden and Chat-Default-disabled `test_sync_tool`, excluded runtime-dynamic plugin/MCP/app/connector tools and obsolete hosted `image_generation`, current `image_gen__imagegen` coverage, bundled Profile defaults, supported states, and exact CLI/source metadata binding.
 

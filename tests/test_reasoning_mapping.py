@@ -113,7 +113,7 @@ def test_resolve_reasoning_mapping_falls_back_to_target_api(target_provider, exp
         ("medium", "medium"),
         ("high", "high"),
         ("xhigh", "xhigh"),
-        ("max", "xhigh"),
+        ("max", "max"),
     ],
 )
 def test_openai_responses_mapping_efforts(effort, expected):
