@@ -623,31 +623,48 @@ def _build_preset_profile(
     supported: dict[str, tuple[str, ...]],
     input_definitions: dict[str, dict[str, Any]],
     namespace_children: dict[str, tuple[str, ...]],
+    *,
+    builtin_tools: dict[str, str],
+    builtin_inputs: dict[str, dict[str, str]],
 ) -> dict[str, Any]:
     """Build and validate one immutable preset Profile."""
     defaults = preset.get("defaults", {})
     overrides = preset.get("tools", {})
-    tools: dict[str, str] = {}
-    for item in catalog["items"]:
-        item_id = item["id"]
-        state = overrides.get(item_id, defaults.get(item["type"]))
-        if state not in supported[item_id]:
-            raise ValueError(
-                f"bundled profile {preset.get('id')!r} has unsupported state "
-                f"{state!r} for {item_id!r}"
-            )
-        tools[item_id] = state
-    return {
-        "id": preset["id"],
-        "name": preset["name"],
-        "tools": _disable_namespace_children(tools, namespace_children),
-        "inputs": {
+    base = preset.get("base")
+    if base not in {None, "builtin"}:
+        raise ValueError(f"bundled profile {preset.get('id')!r} has invalid base")
+    if base == "builtin":
+        tools = _apply_bundled_tool_overrides(
+            f"preset_profiles.{preset.get('id')}.tools",
+            builtin_tools,
+            overrides,
+            supported,
+            namespace_children,
+        )
+        inputs = {item_id: dict(values) for item_id, values in builtin_inputs.items()}
+    else:
+        tools = {}
+        for item in catalog["items"]:
+            item_id = item["id"]
+            state = overrides.get(item_id, defaults.get(item["type"]))
+            if state not in supported[item_id]:
+                raise ValueError(
+                    f"bundled profile {preset.get('id')!r} has unsupported state "
+                    f"{state!r} for {item_id!r}"
+                )
+            tools[item_id] = state
+        inputs = {
             item_id: {
                 input_id: definition["default"]
                 for input_id, definition in item_inputs.items()
             }
             for item_id, item_inputs in input_definitions.items()
-        },
+        }
+    return {
+        "id": preset["id"],
+        "name": preset["name"],
+        "tools": _disable_namespace_children(tools, namespace_children),
+        "inputs": inputs,
     }
 
 
@@ -701,6 +718,8 @@ def tool_profile_contract() -> dict[str, Any]:
                 supported,
                 input_definitions,
                 namespace_children,
+                builtin_tools=builtin,
+                builtin_inputs=builtin_inputs,
             )
         )
 

@@ -52,6 +52,20 @@ provider's case-sensitive `name`. The managed provider uses Responses, the
 gateway's stable `codex` API key, and the effective local listening port.
 Existing non-Rosetta provider tables and their parameters remain untouched.
 
+The Admin Models page also owns three Codex task-model selections while
+confirmed local mode is active. The gateway persists them under `codex` in its
+own configuration. `codex.auto_review_model_override` is copied onto every
+generated catalog entry because Guardian reads the override from the current
+turn model's `ModelInfo`; `codex.memories.extract_model` and
+`codex.memories.consolidation_model` are written as `extract_model` and
+`consolidation_model` in Codex's `[memories]` TOML table. An unset or deleted
+selection stays yellow in the editable UI, while a configured alias is green.
+When local mode is not confirmed and active, the selects are locked to Codex's
+defaults (`codex-auto-review`, `gpt-5.4`, and `gpt-5.4-mini`) and are green only
+when that alias is configured, otherwise red. Disabling local mode removes the
+two managed TOML memory assignments with the other local-mode artifacts but
+retains the gateway selections for a later re-enable.
+
 `codex-auto-review` has one local-mode exception. When its upstream model is
 omitted or is also `codex-auto-review`, Rosetta preserves the official bundled
 entry, including its unset `tool_mode`. This lets OpenAI or GPT relay services
@@ -193,6 +207,18 @@ Rosetta Tool Profile: pass through / modify / disable / inject
 The model group remains the source of truth for provider, upstream model,
 protocol, and Tool Profile. The catalog determines what Codex attempts to send;
 Rosetta must then either support that shape or advertise a safer catalog value.
+
+In the Admin model-group dialog, Rosetta checks the configured upstream model
+name first, or the exposed model name when no upstream mapping is present. An
+exact slug match in either `codex_models_0_144_4.json` or
+`codex_model_presets.json` displays the model's `display_name` and derives
+text/vision support from `input_modalities`; partial or suffixed names do not
+match. The always-visible manual button opens a panel
+to the right with every per-model preset field: `slug`, `display_name`,
+`description`, `identity`, `priority`, `context_window`, `input_modalities`, and
+`supported_reasoning_levels`. A detected preset pre-fills the panel; an
+unmatched model starts empty. Saved `model_info` overrides the detected preset,
+while the exposed model name remains the catalog slug used for routing.
 
 ### Recommended decisions for a third-party model
 

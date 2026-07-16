@@ -13,11 +13,18 @@ from ...config import (
     GatewayConfig,
     default_tool_profile_for_provider,
     load_config_raw,
+    normalize_codex_settings,
+    normalize_local_mode_settings,
     normalize_web_search,
     provider_supports_tool_profiles,
 )
-from ...providers import known_provider_types
 from ...local_mode import config_toml_has_model_catalog
+from ...model_presets import (
+    model_capabilities,
+    model_presets_for_admin,
+    normalize_model_info,
+)
+from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     normalize_tool_profile_input_overrides,
@@ -171,35 +178,35 @@ def _get_version() -> str:
 def _normalize_model_entry(
     value: Any,
     *,
+    model_name: str = "",
     group_provider: str | None = None,
 ) -> dict[str, Any]:
     """Return a model config entry in admin-UI dict form."""
+    entry: dict[str, Any]
     if group_provider is not None:
-        entry: dict[str, Any] = {
-            "provider": group_provider,
-            "capabilities": ["text"],
-        }
+        entry = {"provider": group_provider}
         if isinstance(value, str):
             if value:
                 entry["upstream_model"] = value
             return entry
         if not isinstance(value, dict):
             return entry
-        entry["capabilities"] = value.get("capabilities", ["text"])
         if value.get("upstream_model"):
             entry["upstream_model"] = value["upstream_model"]
+        if isinstance(value.get("model_info"), dict):
+            entry["model_info"] = value["model_info"]
     elif isinstance(value, str):
-        entry = {"provider": value, "capabilities": ["text"]}
+        entry = {"provider": value}
     elif isinstance(value, dict):
-        entry = {
-            "provider": value.get("provider", ""),
-            "capabilities": value.get("capabilities", ["text"]),
-        }
+        entry = {"provider": value.get("provider", "")}
         if value.get("upstream_model"):
             entry["upstream_model"] = value["upstream_model"]
+        if isinstance(value.get("model_info"), dict):
+            entry["model_info"] = value["model_info"]
     else:
         return {}
 
+    entry["capabilities"] = model_capabilities(model_name, value)
     return entry
 
 
@@ -209,7 +216,7 @@ def _normalize_models_for_admin(
     """Normalize the expanded runtime model view for admin consumers."""
     normalized: dict[str, Any] = {}
     for name, value in raw_models.items():
-        entry = _normalize_model_entry(value)
+        entry = _normalize_model_entry(value, model_name=name)
         if not entry:
             continue
         normalized[name] = entry
@@ -236,6 +243,7 @@ def _normalize_model_groups_for_admin(
             for model_name, model_value in raw_group_models.items():
                 entry = _normalize_model_entry(
                     model_value,
+                    model_name=model_name,
                     group_provider=provider,
                 )
                 entry.pop("provider", None)
@@ -264,22 +272,27 @@ def _clean_group_model_entry(value: Any) -> dict[str, Any]:
         raise ValueError("model entries must be objects or strings")
 
     entry: dict[str, Any] = {}
-    capabilities_value = value.get("capabilities")
-    capabilities = (
-        [str(capability) for capability in capabilities_value]
-        if isinstance(capabilities_value, list) and capabilities_value
-        else ["text"]
-    )
-    invalid = set(capabilities) - {"text", "vision"}
-    if invalid:
-        raise ValueError(
-            f"LLM model capabilities must be text/vision, got {sorted(invalid)}"
-        )
-    entry["capabilities"] = list(dict.fromkeys(capabilities))
-
     upstream_model = str(value.get("upstream_model") or "").strip()
     if upstream_model:
         entry["upstream_model"] = upstream_model
+
+    model_info = value.get("model_info")
+    if model_info is not None:
+        entry["model_info"] = normalize_model_info(model_info, field="LLM model_info")
+
+    capabilities_value = value.get("capabilities")
+    if capabilities_value is not None:
+        capabilities = (
+            [str(capability) for capability in capabilities_value]
+            if isinstance(capabilities_value, list) and capabilities_value
+            else ["text"]
+        )
+        invalid = set(capabilities) - {"text", "vision"}
+        if invalid:
+            raise ValueError(
+                f"LLM model capabilities must be text/vision, got {sorted(invalid)}"
+            )
+        entry["capabilities"] = list(dict.fromkeys(capabilities))
 
     return entry
 
@@ -413,6 +426,8 @@ async def get_config(request: Any) -> Response:
                 {"id": profile["id"], "name": profile["name"]}
                 for profile in tool_profile_contract()["profiles"]
             ],
+            "model_presets": model_presets_for_admin(),
+            "codex": config.codex,
             "server": server,
             "credential_visible": config.credential_visible,
             "version": _get_version(),
@@ -789,6 +804,41 @@ async def put_server_settings(request: Any) -> Response:
 
     response_server = _mask_server_config(data.get("server", {}))
     return JSONResponse({"ok": True, "server": response_server})
+
+
+async def put_codex_settings(request: Any) -> Response:
+    """Persist Codex task-model overrides and synchronize local-mode files."""
+    config_path = _get_config_path(request)
+    if not config_path:
+        return JSONResponse({"error": "No config file path available"}, status_code=500)
+
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    try:
+        normalized = normalize_codex_settings(body)
+        data = load_config_raw(config_path)
+        local_mode, confirmed = normalize_local_mode_settings(data.get("server"))
+    except (TypeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
+
+    if not local_mode or not confirmed:
+        return JSONResponse(
+            {"error": "Codex task models require confirmed local mode"},
+            status_code=409,
+        )
+    if normalized:
+        data["codex"] = normalized
+    else:
+        data.pop("codex", None)
+
+    new_config, commit_error = _commit_gateway_config(request, config_path, data)
+    if commit_error is not None:
+        return commit_error
+    assert new_config is not None
+    return JSONResponse({"ok": True, "codex": new_config.codex})
 
 
 async def get_network_search_status(request: Any) -> Response:

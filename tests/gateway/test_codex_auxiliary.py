@@ -35,7 +35,7 @@ def _authenticated_principal() -> Any:
 
 
 def _make_config(
-    api_type: str = "responses_passthrough",
+    api_type: str = "responses",
     *,
     upstream_model: str | None = "gpt-image-2",
     tavily_api_key: str | None = None,
@@ -46,8 +46,7 @@ def _make_config(
     upstream_base_url: str = "https://upstream.example/v1",
 ) -> GatewayConfig:
     provider_by_api_type = {
-        "responses_passthrough": "openai",
-        "responses_rosetta": "openai",
+        "responses": "openai",
         "chat": "openai",
         "anthropic": "anthropic",
         "google": "google",
@@ -58,10 +57,10 @@ def _make_config(
     tool_profiles: dict[str, Any] = {}
     explicit_web_mapping = tool_profile == "test-web-run-mapping"
     local_search = tavily_api_key is not None and (
-        explicit_web_mapping or api_type != "responses_passthrough"
+        explicit_web_mapping or api_type != "responses"
     )
     explicit_pass_through = tool_profile == "test-pass-through" or (
-        tool_profile is None and api_type == "responses_passthrough"
+        tool_profile is None and api_type == "responses"
     )
     if (
         image_state is not None
@@ -151,7 +150,7 @@ def _make_request(body: Any) -> MagicMock:
 
 
 @pytest.mark.parametrize("upstream_path", ENDPOINTS)
-def test_responses_passthrough_forwards_each_endpoint(upstream_path: str) -> None:
+def test_responses_direct_transport_forwards_each_endpoint(upstream_path: str) -> None:
     config = _make_config()
     body = {"model": "gateway-model", "prompt": "draw a fox"}
     request = _make_request(body)
@@ -178,9 +177,7 @@ def test_responses_passthrough_forwards_each_endpoint(upstream_path: str) -> Non
     }
 
 
-@pytest.mark.parametrize(
-    "api_type", ["responses_rosetta", "chat", "anthropic", "google"]
-)
+@pytest.mark.parametrize("api_type", ["chat", "anthropic", "google"])
 @pytest.mark.parametrize("upstream_path", ENDPOINTS)
 def test_non_passthrough_modes_return_not_implemented(
     api_type: str, upstream_path: str
@@ -197,7 +194,7 @@ def test_non_passthrough_modes_return_not_implemented(
         assert "image_gen.imagegen is disabled" in payload["error"]["message"]
     else:
         assert (
-            "only implemented for OpenAI Responses (Tool Mapping only)"
+            "only implemented for OpenAI Responses providers"
             in payload["error"]["message"]
         )
     assert payload["error"]["message"].endswith('Consider "Browser Use" skill')
@@ -499,7 +496,7 @@ def test_tavily_configuration_does_not_intercept_image_endpoints() -> None:
 
 @pytest.mark.parametrize(
     "api_type",
-    ["responses_passthrough", "responses_rosetta", "chat", "anthropic", "google"],
+    ["responses", "chat", "anthropic", "google"],
 )
 @pytest.mark.parametrize("upstream_path", ["images/generations", "images/edits"])
 def test_modified_imagegen_uses_profile_openai_images_api(

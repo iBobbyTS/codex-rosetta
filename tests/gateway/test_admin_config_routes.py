@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -17,6 +18,7 @@ from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     get_config,
     get_network_search_status,
+    put_codex_settings,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -895,7 +897,7 @@ def test_put_provider_persists_provider_and_api_type(tmp_path):
     assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
 
 
-def test_put_provider_persists_responses_rosetta_processing_mode(tmp_path):
+def test_put_provider_persists_responses_processing_mode(tmp_path):
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
     initial_config = GatewayConfig(_config_data())
@@ -908,7 +910,7 @@ def test_put_provider_persists_responses_rosetta_processing_mode(tmp_path):
     request = SimpleNamespace(app=app, path_params={"name": "Qwen"})
     request.json = lambda: {
         "provider": "qwen",
-        "api_type": "responses_rosetta",
+        "api_type": "responses",
         "base_url": "https://qwen.example.test/v1",
         "api_key": "sk-new",
     }
@@ -917,7 +919,7 @@ def test_put_provider_persists_responses_rosetta_processing_mode(tmp_path):
 
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["Qwen"]["api_type"] == "responses_rosetta"
+    assert saved["providers"]["Qwen"]["api_type"] == "responses"
     assert app.gateway_config.provider_types["Qwen"] == "openai_responses"
     assert app.gateway_config.provider_responses_processing["Qwen"] == "rosetta"
 
@@ -999,12 +1001,29 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert body["tool_profile_presets"] == [
-        {"id": "builtin", "name": "Chat Default"},
+        {
+            "id": "builtin",
+            "name": "Chat Default（适用于第三方仅提供chat api的模型）",
+        },
         {
             "id": "openai-responses-tool-mapping-only",
-            "name": "OpenAI Responses Tool Mapping Only",
+            "name": "透传（适用于OpenAI官方API）",
+        },
+        {
+            "id": "web-run-injection",
+            "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
+        },
+        {
+            "id": "responses-tool-mapping",
+            "name": "工具映射（适用于第三方模型提供的Responses接口）",
         },
     ]
+    assert any(
+        preset["slug"] == "gpt-5.6-terra" and preset["display_name"] == "GPT-5.6-Terra"
+        for preset in body["model_presets"]
+    )
+    assert any(preset["slug"] == "deepseek-v4-pro" for preset in body["model_presets"])
+    assert body["codex"] == {}
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "grouped-upstream"
     )
@@ -1056,6 +1075,46 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.upstream_model == "gpt-upstream"
     assert route.model_capabilities == ["text"]
     assert route.tool_profile_name == "builtin"
+
+
+def test_put_model_group_persists_complete_model_info_and_derives_vision(tmp_path):
+    config = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    model_info = {
+        "slug": "vision-alias",
+        "display_name": "Vision Alias",
+        "description": "Custom model metadata",
+        "identity": "Vision Alias by Example",
+        "priority": 10,
+        "context_window": 262_144,
+        "input_modalities": ["text", "image"],
+        "supported_reasoning_levels": ["high"],
+    }
+    request = SimpleNamespace(app=app, path_params={"name": "Vision"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "llm",
+        "tool_profile": "builtin",
+        "models": {"vision-alias": {"model_info": model_info}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Vision"]["models"]["vision-alias"] == {
+        "model_info": model_info
+    }
+    route, _provider = app.gateway_config.resolve("openai_responses", "vision-alias")
+    assert route.model_capabilities == ["text", "vision"]
     assert route.tool_profile
 
 
@@ -1150,6 +1209,97 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
     ).read_text(encoding="utf-8")
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["local_mode"] is False
+
+
+def test_put_codex_settings_syncs_task_models_to_catalog_and_memories(tmp_path):
+    config = _config_data()
+    config["server"].update({"local_mode": True, "local_mode_confirmed": True})
+    config["model_groups"]["OpenAI"]["models"] = {
+        "review-alias": {},
+        "consolidation-alias": {},
+        "extract-alias": {},
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    codex_home = tmp_path / "codex"
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        codex_home=str(codex_home),
+        gateway_port=45678,
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app)
+    request.json = lambda: {
+        "auto_review_model_override": "review-alias",
+        "memories": {
+            "consolidation_model": "consolidation-alias",
+            "extract_model": "extract-alias",
+        },
+    }
+
+    response = _run(put_codex_settings(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["codex"] == request.json()
+    catalog = json.loads(
+        (codex_home / "model_catalog.json").read_text(encoding="utf-8")
+    )
+    assert all(
+        model["auto_review_model_override"] == "review-alias"
+        for model in catalog["models"]
+    )
+    codex_config = tomllib.loads(
+        (codex_home / "config.toml").read_text(encoding="utf-8")
+    )
+    assert codex_config["memories"]["consolidation_model"] == ("consolidation-alias")
+    assert codex_config["memories"]["extract_model"] == "extract-alias"
+
+    request.json = lambda: {
+        "auto_review_model_override": None,
+        "memories": {"consolidation_model": None, "extract_model": None},
+    }
+    clear_response = _run(put_codex_settings(request))
+
+    assert clear_response.status_code == 200
+    cleared = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "codex" not in cleared
+    cleared_codex_config = tomllib.loads(
+        (codex_home / "config.toml").read_text(encoding="utf-8")
+    )
+    assert cleared_codex_config.get("memories", {}) == {}
+
+
+@pytest.mark.parametrize(
+    ("local_mode", "confirmed"),
+    [(False, True), (True, False)],
+)
+def test_put_codex_settings_requires_confirmed_local_mode(
+    tmp_path, local_mode, confirmed
+):
+    config = _config_data()
+    config["server"].update(
+        {"local_mode": local_mode, "local_mode_confirmed": confirmed}
+    )
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(config)
+    config_path.write_text(original, encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {"auto_review_model_override": "gpt-test"},
+    )
+
+    response = _run(put_codex_settings(request))
+
+    assert response.status_code == 409
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_enabling_local_mode_through_admin_requires_explicit_confirmation(tmp_path):
@@ -1366,7 +1516,7 @@ def test_admin_html_function_filter_excludes_namespace_group():
     assert "toolCatalogFilter === 'function'" not in render_namespace
 
 
-def test_admin_html_splits_responses_internal_handling_options():
+def test_admin_html_exposes_one_responses_protocol_without_handling_hints():
     html_path = (
         Path(__file__).parents[2]
         / "src"
@@ -1378,16 +1528,13 @@ def test_admin_html_splits_responses_internal_handling_options():
     html = html_path.read_text(encoding="utf-8")
     i18n = _load_admin_i18n()
 
-    assert (
-        i18n["en"]["protocol.responsesPassthrough"]
-        == "OpenAI Responses (Tool Mapping only)"
-    )
-    assert i18n["en"]["protocol.responsesRosetta"] == "OpenAI Responses (Rosetta)"
-    assert "{value: 'responses_passthrough'" in html
-    assert "{value: 'responses_rosetta'" in html
-    assert 'id="provProtocolHint"' in html
-    assert "responses_passthrough: 'protocol.responsesPassthroughHint'" in html
-    assert "responses_rosetta: 'protocol.responsesRosettaHint'" in html
+    assert i18n["en"]["protocol.responses"] == "OpenAI Responses"
+    assert "{value: 'responses', labelKey: 'protocol.responses'}" in html
+    assert "{value: 'responses_passthrough'" not in html
+    assert "{value: 'responses_rosetta'" not in html
+    assert 'id="provProtocolHint"' not in html
+    assert "protocol.responsesPassthroughHint" not in html
+    assert "protocol.responsesRosettaHint" not in html
 
 
 def test_admin_html_shows_model_group_profile_for_all_llm_protocols():
@@ -1404,9 +1551,14 @@ def test_admin_html_shows_model_group_profile_for_all_llm_protocols():
     assert 'id="modelGroupProvider" onchange="onModelGroupProviderChange()"' in html
     assert "return !!provider;" in html
     assert "responses_pass_through" not in html
-    assert "group?.tool_profile || 'builtin'" in html
+    assert "group?.tool_profile || _defaultToolProfileForProvider(provider)" in html
     assert "_modelGroupProviderUsesToolProfiles() ? '' : 'none'" in html
     assert "if (_modelGroupProviderUsesToolProfiles())" in html
+    assert "function _defaultToolProfileForProvider(providerName)" in html
+    assert "return 'openai-responses-tool-mapping-only';" in html
+    assert "return 'web-run-injection';" in html
+    assert "return 'responses-tool-mapping';" in html
+    assert "Intentionally separate from the Chat branch" in html
 
 
 def test_admin_html_exposes_request_body_limit_options():
@@ -1563,13 +1715,49 @@ def test_admin_html_exposes_model_group_controls():
     assert "model-group-card${collapsed ? ' collapsed' : ''}" in html
     assert 'class="model-group-body"' in html
     assert 'name="modelGroupType"' not in html
-    assert 'class="checkbox-group group-cap-wrap"' in html
+    assert 'class="checkbox-group group-cap-wrap"' not in html
+    assert 'id="modelInfoModal"' in html
+    assert "function refreshModelGroupRowPreset(row)" in html
+    assert "function openModelInfo(row)" in html
+    assert "entry.model_info = structuredClone(row._modelInfo)" in html
+    assert 'id="fetchCapText"' not in html
+    assert 'id="fetchCapVision"' not in html
     assert 'name="fetchModelType"' not in html
     assert "type: 'llm'" in html
     assert 'id="modelReasoningGroup"' not in html
     assert 'id="modelToolAdaptationGroup"' not in html
     assert i18n["en"]["btn.addModelGroup"] == "+ Add Model Group"
     assert i18n["zh"]["btn.addModelGroup"] == "+ 添加模型组"
+
+
+def test_admin_html_exposes_local_mode_task_model_selects():
+    html_path = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "admin"
+        / "admin.html"
+    )
+    html = html_path.read_text(encoding="utf-8")
+    i18n = _load_admin_i18n()
+
+    assert html.index('data-i18n="section.codexTaskModels"') < html.index(
+        'data-i18n="section.models"'
+    )
+    assert 'id="autoReviewModel"' in html
+    assert 'id="memoryConsolidationModel"' in html
+    assert 'id="memoryExtractModel"' in html
+    assert "auto_review_model_override: 'codex-auto-review'" in html
+    assert "consolidation_model: 'gpt-5.4'" in html
+    assert "extract_model: 'gpt-5.4-mini'" in html
+    assert "server.local_mode !== false && server.local_mode_confirmed === true" in html
+    assert "'task-model-configured' : 'task-model-missing'" in html
+    assert "'task-model-configured' : 'task-model-unconfigured'" in html
+    assert "/admin/api/config/codex" in html
+    assert i18n["zh"]["label.autoApprovalModel"] == ("自动审批(默认codex-auto-review)")
+    assert i18n["zh"]["label.memoryConsolidationModel"] == ("记忆固化(默认gpt-5.4)")
+    assert i18n["zh"]["label.memoryExtractModel"] == ("记忆提取(默认gpt-5.4-mini)")
 
 
 def test_admin_html_uses_page_routes():

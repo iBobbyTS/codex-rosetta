@@ -238,6 +238,17 @@ code.copyable:hover { background: var(--bg-hover); }
 .multi-key-footer .key-count { font-size:11px;color:var(--text-dim); }
 .multi-key-footer .btn { font-size:11px;padding:2px 8px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+.model-group-modal-shell { display:flex;align-items:flex-start;gap:12px;max-width:calc(100vw - 32px); }
+.model-info-modal { display:none;width:460px; }
+.model-info-modal.open { display:block; }
+.model-info-grid { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
+.model-info-grid .span-2 { grid-column:1 / -1; }
+.model-info-grid textarea { width:100%;min-height:72px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:var(--mono);resize:vertical; }
+@media (max-width: 1050px) {
+  .model-group-modal-shell { flex-direction:column;align-items:stretch;max-height:94vh;overflow-y:auto; }
+  .model-group-modal-shell .modal { max-height:none; }
+  .model-info-modal { width:700px;max-width:90vw; }
+}
 
 /* Toast */
 .toast {
@@ -297,13 +308,25 @@ canvas { width: 100%; height: 160px; }
 .model-group-toggle { font-size:12px;min-width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center; }
 .model-group-body { display:block; }
 .model-group-card.collapsed .model-group-body { display:none; }
-.model-group-row { display:grid;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) auto;gap:8px;align-items:start;padding:8px 0;border-bottom:1px solid var(--border); }
+.model-group-row { display:grid;grid-template-columns:minmax(160px,1fr) minmax(160px,1fr) minmax(260px,1.4fr);gap:8px;align-items:start;padding:8px 0;border-bottom:1px solid var(--border); }
 .model-group-row:last-child { border-bottom:none; }
 .model-group-row input { padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:var(--mono); }
 .model-group-row .checkbox-group { gap:8px; }
 .model-group-row .checkbox-group label { font-size:12px; }
 .model-group-row .fetch-type-radios { margin:0 0 6px; }
 .model-group-row-actions { display:flex;align-items:center;justify-content:flex-end; }
+.model-preset-status { font-size:12px;color:var(--text-dim);line-height:1.35;margin-bottom:6px; }
+.model-preset-status.detected { color:var(--green); }
+.model-row-controls { display:flex;align-items:center;justify-content:space-between;gap:6px; }
+.codex-task-model-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
+.codex-task-model-field { display:flex;flex-direction:column;gap:6px; }
+.codex-task-model-field label { font-size:12px;color:var(--text-dim); }
+.codex-task-model-field select { width:100%;padding:8px 10px;background:var(--bg);border:2px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:var(--mono); }
+.codex-task-model-field select.task-model-configured { border-color:var(--green); }
+.codex-task-model-field select.task-model-unconfigured { border-color:var(--orange); }
+.codex-task-model-field select.task-model-missing { border-color:var(--red); }
+.codex-task-model-field select:disabled { opacity:1;cursor:not-allowed; }
+@media (max-width: 800px) { .codex-task-model-grid { grid-template-columns:1fr; } }
 .config-details { margin: 0 0 14px; }
 .config-details summary {
   cursor: pointer; font-size: 12px; color: var(--text-dim); user-select: none;
@@ -682,6 +705,25 @@ body { padding-bottom: 26px; }
   <div class="page-panel" id="page-models">
     <div class="section">
       <div class="section-header">
+        <h2 data-i18n="section.codexTaskModels">Codex Task Models</h2>
+      </div>
+      <div class="codex-task-model-grid">
+        <div class="codex-task-model-field">
+          <label for="autoReviewModel" data-i18n="label.autoApprovalModel">Automatic approval (default codex-auto-review)</label>
+          <select id="autoReviewModel" onchange="saveCodexTaskModels()"></select>
+        </div>
+        <div class="codex-task-model-field">
+          <label for="memoryConsolidationModel" data-i18n="label.memoryConsolidationModel">Memory consolidation (default gpt-5.4)</label>
+          <select id="memoryConsolidationModel" onchange="saveCodexTaskModels()"></select>
+        </div>
+        <div class="codex-task-model-field">
+          <label for="memoryExtractModel" data-i18n="label.memoryExtractModel">Memory extraction (default gpt-5.4-mini)</label>
+          <select id="memoryExtractModel" onchange="saveCodexTaskModels()"></select>
+        </div>
+      </div>
+    </div>
+    <div class="section">
+      <div class="section-header">
         <h2 data-i18n="section.models">Model Routing</h2>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm" onclick="openFetchModelsModal()" data-i18n="btn.fetchModels">&#x2B07; Fetch from Provider</button>
@@ -964,7 +1006,6 @@ body { padding-bottom: 26px; }
     <div class="form-group">
       <label data-i18n="label.providerProtocol">Protocol</label>
       <select id="provApiType" onchange="onProviderProtocolChange()"></select>
-      <div id="provProtocolHint" style="font-size:11px;color:var(--text-dim);margin-top:6px" aria-live="polite"></div>
     </div>
     <div class="form-group">
       <label data-i18n="label.baseUrl">Base URL<span class="hint-icon">?<span class="hint-popup" data-i18n="hint.docker">In Docker, "localhost" refers to the container itself. Use "host.docker.internal" (macOS/Windows) or "172.17.0.1" (Linux) to reach the host machine.</span></span></label>
@@ -995,6 +1036,7 @@ body { padding-bottom: 26px; }
 
 <!-- Model Group Modal -->
 <div class="modal-overlay" id="modelGroupModal">
+  <div class="model-group-modal-shell">
   <div class="modal modal-wide">
     <h3 id="modelGroupModalTitle" data-i18n="modal.addModelGroup">Add Model Group</h3>
     <div class="form-group">
@@ -1018,6 +1060,25 @@ body { padding-bottom: 26px; }
       <button class="btn" onclick="closeModal('modelGroupModal')" data-i18n="btn.cancel">Cancel</button>
       <button class="btn btn-primary" onclick="saveModelGroup()" data-i18n="btn.save">Save</button>
     </div>
+  </div>
+  <div class="modal model-info-modal" id="modelInfoModal">
+    <h3 data-i18n="modelInfo.title">Model Information</h3>
+    <div class="model-info-grid">
+      <div class="form-group span-2"><label data-i18n="modelInfo.slug">Slug</label><input id="modelInfoSlug"></div>
+      <div class="form-group"><label data-i18n="modelInfo.displayName">Display Name</label><input id="modelInfoDisplayName"></div>
+      <div class="form-group"><label data-i18n="modelInfo.identity">Identity</label><input id="modelInfoIdentity"></div>
+      <div class="form-group span-2"><label data-i18n="modelInfo.description">Description</label><textarea id="modelInfoDescription"></textarea></div>
+      <div class="form-group"><label data-i18n="modelInfo.priority">Priority</label><input id="modelInfoPriority" type="number" min="1"></div>
+      <div class="form-group"><label data-i18n="modelInfo.contextWindow">Context Window</label><input id="modelInfoContextWindow" type="number" min="1"></div>
+      <div class="form-group span-2"><label data-i18n="modelInfo.modalities">Input Modalities</label><input id="modelInfoModalities" placeholder="text, image"></div>
+      <div class="form-group span-2"><label data-i18n="modelInfo.reasoningLevels">Supported Reasoning Levels</label><input id="modelInfoReasoningLevels" placeholder="low, medium, high, xhigh, max"></div>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" type="button" onclick="clearModelInfo()" data-i18n="modelInfo.useAutomatic">Use Automatic</button>
+      <button class="btn" type="button" onclick="closeModelInfo()" data-i18n="btn.cancel">Cancel</button>
+      <button class="btn btn-primary" type="button" onclick="applyModelInfo()" data-i18n="btn.applyChanges">Apply Changes</button>
+    </div>
+  </div>
   </div>
 </div>
 
@@ -1045,11 +1106,6 @@ body { padding-bottom: 26px; }
       <div class="prefix-group">
         <label data-i18n="label.modelPrefix">Prefix:</label>
         <input id="fetchPrefix" placeholder="e.g. myprefix/" oninput="renderFetchedModels()">
-      </div>
-      <div class="fetch-caps-row" id="fetchCapsRow">
-        <label data-i18n="label.capabilities">Capabilities</label>
-        <label><input type="checkbox" id="fetchCapText" checked> text</label>
-        <label><input type="checkbox" id="fetchCapVision"> vision</label>
       </div>
     </div>
     <div id="fetchModelsLoading" style="display:none;text-align:center;padding:20px;color:var(--text-dim)">
@@ -1191,15 +1247,14 @@ function t(key, params) {
 }
 
 const PROVIDER_PROTOCOLS = [
-  {value: 'responses_passthrough', labelKey: 'protocol.responsesPassthrough'},
-  {value: 'responses_rosetta', labelKey: 'protocol.responsesRosetta'},
+  {value: 'responses', labelKey: 'protocol.responses'},
   {value: 'chat', labelKey: 'protocol.chat'},
   {value: 'anthropic', labelKey: 'protocol.anthropic'},
   {value: 'google', labelKey: 'protocol.google'},
 ];
 const PROTOCOL_DIVIDER_VALUE = '__protocol_divider__';
 function _responsesProtocols(url) {
-  return {responses_passthrough: url, responses_rosetta: url};
+  return {responses: url};
 }
 const PROVIDER_PRESETS = [
   {id: 'deepseek', label: 'DeepSeek', labelKey: 'provider.deepseek', logoShim: 'deepseek', protocols: {chat: 'https://api.deepseek.com', anthropic: 'https://api.deepseek.com/anthropic'}},
@@ -1273,8 +1328,7 @@ function _protocolLabelsByValue() {
 
 function _apiTypeToProviderType(apiType) {
   return {
-    responses_passthrough: 'openai_responses',
-    responses_rosetta: 'openai_responses',
+    responses: 'openai_responses',
     chat: 'openai_chat',
     anthropic: 'anthropic',
     google: 'google',
@@ -1328,8 +1382,8 @@ function _setProviderBaseUrl(value) {
 
 function _inferProviderSelection(cfg) {
   const apiTypeByBase = {
-    openai_responses: 'responses_passthrough',
-    open_responses: 'responses_passthrough',
+    openai_responses: 'responses',
+    open_responses: 'responses',
     openai_chat: 'chat',
     openai: 'chat',
     anthropic: 'anthropic',
@@ -1358,8 +1412,8 @@ function _inferProviderSelection(cfg) {
     'minimax--openai_chat': 'chat',
     moonshot: 'chat',
     openai: 'chat',
-    openai_responses: 'responses_passthrough',
-    open_responses: 'responses_passthrough',
+    openai_responses: 'responses',
+    open_responses: 'responses',
     openrouter: 'chat',
     'openrouter--anthropic': 'anthropic',
     'openrouter--openai_chat': 'chat',
@@ -1368,7 +1422,8 @@ function _inferProviderSelection(cfg) {
   };
 
   const legacyType = cfg.type || cfg.shim || '';
-  const apiType = cfg.api_type || apiTypeByLegacyType[legacyType] || apiTypeByBase[legacyType] || 'chat';
+  const configuredApiType = cfg.api_type;
+  const apiType = configuredApiType || apiTypeByLegacyType[legacyType] || apiTypeByBase[legacyType] || 'chat';
   const genericLegacyType = ['openai', 'openai_chat', 'openai_responses', 'open_responses'].includes(legacyType);
   const resolvedProviderId = cfg.provider || (genericLegacyType ? _providerPresetForUrl(apiType, cfg.base_url) : '') || providerByLegacyType[legacyType] || 'custom';
   const vendor = _providerVendorForResolvedProvider(resolvedProviderId);
@@ -1463,16 +1518,6 @@ function _renderProviderProtocolOptions(providerId, variantId, selectedApiType) 
 
   const values = PROVIDER_PROTOCOLS.map(p => p.value);
   protocolSel.value = values.includes(selectedApiType) ? selectedApiType : (supported[0] ? supported[0].value : 'chat');
-  _updateProviderProtocolHint();
-}
-
-function _updateProviderProtocolHint() {
-  const apiType = document.getElementById('provApiType').value;
-  const hintKey = {
-    responses_passthrough: 'protocol.responsesPassthroughHint',
-    responses_rosetta: 'protocol.responsesRosettaHint',
-  }[apiType];
-  document.getElementById('provProtocolHint').textContent = hintKey ? t(hintKey) : '';
 }
 
 function _updateProviderLogo() {
@@ -1528,7 +1573,6 @@ function onProviderProtocolChange() {
     return;
   }
   protocolSel.dataset.previousValue = protocolSel.value;
-  _updateProviderProtocolHint();
   _syncPresetBaseUrl(_providerPresetUrl);
 }
 
@@ -1573,7 +1617,7 @@ function applyI18n() {
     el.setAttribute('aria-label', t(el.dataset.i18nAriaLabel));
   });
   // Re-render dynamic content
-  if (configData) { renderProviders(); renderModels(); }
+  if (configData) { renderProviders(); renderCodexTaskModels(); renderModels(); }
   if (keysData) { renderKeys(); updateKeyFilterOptions(); }
   if (currentPage === 'dashboard') loadMetrics();
   if (currentPage === 'logs') loadLogs();
@@ -2336,8 +2380,9 @@ function openModelGroupModal(groupName) {
     ...Object.keys((configData && configData.tool_profiles) || {}).sort().map(name => ({id: name, name})),
   ];
   profileSelect.innerHTML = profileOptions.map(profile => `<option value="${escAttr(profile.id)}">${esc(profile.name)}</option>`).join('');
-  profileSelect.value = group?.tool_profile || 'builtin';
+  profileSelect.value = group?.tool_profile || _defaultToolProfileForProvider(provider);
   document.getElementById('modelGroupRows').innerHTML = '';
+  closeModelInfo();
   const models = group ? (group.models || {}) : {};
   const entries = Object.entries(models);
   if (entries.length) {
@@ -2355,32 +2400,141 @@ function _modelGroupProviderUsesToolProfiles() {
   return !!provider;
 }
 
+function _defaultToolProfileForProvider(providerName) {
+  const provider = configData?.providers?.[providerName] || {};
+  const apiType = provider.api_type || 'chat';
+  if (apiType === 'responses') {
+    const baseUrl = String(provider.base_url || '').replace(/\/$/, '');
+    if (provider.provider === 'openai' && baseUrl === 'https://api.openai.com/v1') {
+      return 'openai-responses-tool-mapping-only';
+    }
+    if (provider.provider === 'openai' || provider.provider === 'custom') {
+      return 'web-run-injection';
+    }
+    return 'responses-tool-mapping';
+  }
+  if (apiType === 'chat') return 'builtin';
+  // Intentionally separate from the Chat branch so future protocols can get
+  // an independent default without changing established Chat behavior.
+  return 'builtin';
+}
+
 function onModelGroupProviderChange() {
   if (!_editingModelGroupName) {
-    document.getElementById('modelGroupToolProfile').value = 'builtin';
+    const providerName = document.getElementById('modelGroupProvider').value;
+    document.getElementById('modelGroupToolProfile').value = _defaultToolProfileForProvider(providerName);
   }
   document.getElementById('modelGroupToolProfileGroup').style.display = _modelGroupProviderUsesToolProfiles() ? '' : 'none';
+}
+
+function _modelPresetBySlug(slug) {
+  return ((configData && configData.model_presets) || []).find(preset => preset.slug === slug) || null;
+}
+
+function _detectedModelPreset(row) {
+  const exposed = row.querySelector('.group-model-name').value.trim();
+  const upstream = row.querySelector('.group-upstream-model').value.trim();
+  return _modelPresetBySlug(upstream || exposed);
+}
+
+function refreshModelGroupRowPreset(row) {
+  const exposedName = row.querySelector('.group-model-name').value.trim();
+  const status = row.querySelector('.model-preset-status');
+  const preset = _detectedModelPreset(row);
+  status.classList.toggle('detected', !!preset);
+  status.textContent = preset
+    ? t('modelInfo.detected', {display_name: preset.display_name})
+    : t('modelInfo.notDetected');
+  if (_activeModelInfoRow === row && document.getElementById('modelInfoModal').classList.contains('open')) {
+    const currentInfo = row._modelInfo || preset || {};
+    document.getElementById('modelInfoSlug').value = currentInfo.slug || exposedName || '';
+  }
 }
 
 function addModelGroupRow(modelName, info) {
   const row = document.createElement('div');
   row.className = 'model-group-row';
-  const caps = _modelCaps(info || {});
+  row._modelInfo = (info && typeof info.model_info === 'object') ? structuredClone(info.model_info) : null;
   _modelGroupRowSeq++;
-  const checked = cap => caps.includes(cap) ? ' checked' : '';
   row.innerHTML = `
-    <input class="group-model-name" value="${escAttr(modelName || '')}" placeholder="exposed model name">
-    <input class="group-upstream-model" value="${escAttr(_modelUpstream(info || {}))}" placeholder="upstream model (optional)">
+    <input class="group-model-name" value="${escAttr(modelName || '')}" placeholder="exposed model name" oninput="refreshModelGroupRowPreset(this.closest('.model-group-row'))">
+    <input class="group-upstream-model" value="${escAttr(_modelUpstream(info || {}))}" placeholder="upstream model (optional)" oninput="refreshModelGroupRowPreset(this.closest('.model-group-row'))">
     <div>
-      <div class="checkbox-group group-cap-wrap">
-        <label><input type="checkbox" class="group-cap" value="text"${checked('text')}> text</label>
-        <label><input type="checkbox" class="group-cap" value="vision"${checked('vision')}> vision</label>
-      </div>
-      <div class="model-group-row-actions">
-        <button type="button" class="btn btn-sm btn-danger" onclick="this.closest('.model-group-row').remove()">${t('btn.delete')}</button>
+      <div class="model-preset-status"></div>
+      <div class="model-row-controls">
+        <button type="button" class="btn btn-sm" onclick="openModelInfo(this.closest('.model-group-row'))">${t('modelInfo.manual')}</button>
+        <button type="button" class="btn btn-sm btn-danger" onclick="removeModelGroupRow(this)">${t('btn.delete')}</button>
       </div>
     </div>`;
   document.getElementById('modelGroupRows').appendChild(row);
+  refreshModelGroupRowPreset(row);
+}
+
+let _activeModelInfoRow = null;
+
+function removeModelGroupRow(button) {
+  const row = button.closest('.model-group-row');
+  if (_activeModelInfoRow === row) closeModelInfo();
+  row.remove();
+}
+
+function _setModelInfoForm(info, exposedName) {
+  document.getElementById('modelInfoSlug').value = exposedName || '';
+  document.getElementById('modelInfoDisplayName').value = info?.display_name || '';
+  document.getElementById('modelInfoDescription').value = info?.description || '';
+  document.getElementById('modelInfoIdentity').value = info?.identity || '';
+  document.getElementById('modelInfoPriority').value = info?.priority || '';
+  document.getElementById('modelInfoContextWindow').value = info?.context_window || '';
+  document.getElementById('modelInfoModalities').value = (info?.input_modalities || []).join(', ');
+  document.getElementById('modelInfoReasoningLevels').value = (info?.supported_reasoning_levels || []).join(', ');
+}
+
+function openModelInfo(row) {
+  _activeModelInfoRow = row;
+  const exposedName = row.querySelector('.group-model-name').value.trim();
+  const source = row._modelInfo || _detectedModelPreset(row) || {};
+  _setModelInfoForm(source, source.slug || exposedName || row.querySelector('.group-upstream-model').value.trim());
+  document.getElementById('modelInfoModal').classList.add('open');
+}
+
+function closeModelInfo() {
+  const modal = document.getElementById('modelInfoModal');
+  if (modal) modal.classList.remove('open');
+  _activeModelInfoRow = null;
+}
+
+function _commaSeparatedModelInfo(fieldId) {
+  return document.getElementById(fieldId).value.split(',').map(value => value.trim()).filter(Boolean);
+}
+
+function applyModelInfo() {
+  if (!_activeModelInfoRow) return;
+  const info = {
+    slug: document.getElementById('modelInfoSlug').value.trim(),
+    display_name: document.getElementById('modelInfoDisplayName').value.trim(),
+    description: document.getElementById('modelInfoDescription').value.trim(),
+    identity: document.getElementById('modelInfoIdentity').value.trim(),
+    priority: Number(document.getElementById('modelInfoPriority').value),
+    context_window: Number(document.getElementById('modelInfoContextWindow').value),
+    input_modalities: _commaSeparatedModelInfo('modelInfoModalities'),
+    supported_reasoning_levels: _commaSeparatedModelInfo('modelInfoReasoningLevels'),
+  };
+  const stringsReady = [info.slug, info.display_name, info.description, info.identity].every(Boolean);
+  if (!stringsReady || !Number.isInteger(info.priority) || info.priority <= 0 || !Number.isInteger(info.context_window) || info.context_window <= 0 || !info.input_modalities.length || !info.supported_reasoning_levels.length) {
+    showToast(t('modelInfo.completeRequired'), 'error');
+    return;
+  }
+  _activeModelInfoRow._modelInfo = info;
+  refreshModelGroupRowPreset(_activeModelInfoRow);
+  closeModelInfo();
+}
+
+function clearModelInfo() {
+  if (!_activeModelInfoRow) return;
+  const row = _activeModelInfoRow;
+  row._modelInfo = null;
+  closeModelInfo();
+  refreshModelGroupRowPreset(row);
 }
 
 async function saveModelGroup() {
@@ -2395,12 +2549,10 @@ async function saveModelGroup() {
       showToast(`Duplicate model: ${modelName}`, 'error');
       return;
     }
-    const caps = [...row.querySelectorAll('.group-cap:checked')].map(cb => cb.value);
-    if (caps.length === 0) caps.push('text');
     const upstream = row.querySelector('.group-upstream-model').value.trim();
     const entry = {};
-    entry.capabilities = caps;
     if (upstream) entry.upstream_model = upstream;
+    if (row._modelInfo) entry.model_info = structuredClone(row._modelInfo);
     models[modelName] = entry;
   }
   if (!name || !provider || Object.keys(models).length === 0) {
@@ -2443,6 +2595,7 @@ async function loadConfig() {
     renderStreamTraceSettings();
     renderNetworkSearchSettings();
     renderProviders();
+    renderCodexTaskModels();
     renderModels();
     // Detect host IP in background (for proxy placeholder hints)
     if (!window._detectedHostIp) {
@@ -2455,6 +2608,90 @@ async function loadConfig() {
     }
   } catch(e) {
     console.error('Failed to load config:', e);
+  }
+}
+
+const CODEX_TASK_MODEL_DEFAULTS = {
+  auto_review_model_override: 'codex-auto-review',
+  consolidation_model: 'gpt-5.4',
+  extract_model: 'gpt-5.4-mini'
+};
+
+function codexLocalModeActive() {
+  const server = (configData && configData.server) || {};
+  return server.local_mode !== false && server.local_mode_confirmed === true;
+}
+
+function renderCodexTaskModelSelect(id, selectedModel, defaultModel) {
+  const select = document.getElementById(id);
+  if (!select || !configData) return;
+  const configuredModels = Object.keys(configData.models || {}).sort();
+  const configured = new Set(configuredModels);
+  const active = codexLocalModeActive();
+  select.classList.remove('task-model-configured', 'task-model-unconfigured', 'task-model-missing');
+
+  if (!active) {
+    select.innerHTML = `<option value="${escAttr(defaultModel)}">${esc(defaultModel)}</option>`;
+    select.value = defaultModel;
+    select.disabled = true;
+    select.classList.add(configured.has(defaultModel) ? 'task-model-configured' : 'task-model-missing');
+    return;
+  }
+
+  const options = [`<option value="">${t('label.notConfigured')}</option>`];
+  options.push(...configuredModels.map(model => `<option value="${escAttr(model)}">${esc(model)}</option>`));
+  if (selectedModel && !configured.has(selectedModel)) {
+    options.push(`<option value="${escAttr(selectedModel)}">${t('label.deletedModel', {model: esc(selectedModel)})}</option>`);
+  }
+  select.innerHTML = options.join('');
+  select.value = selectedModel || '';
+  select.disabled = false;
+  select.classList.add(selectedModel && configured.has(selectedModel) ? 'task-model-configured' : 'task-model-unconfigured');
+}
+
+function renderCodexTaskModels() {
+  if (!configData) return;
+  const codex = configData.codex || {};
+  const memories = codex.memories || {};
+  renderCodexTaskModelSelect(
+    'autoReviewModel',
+    codex.auto_review_model_override || '',
+    CODEX_TASK_MODEL_DEFAULTS.auto_review_model_override
+  );
+  renderCodexTaskModelSelect(
+    'memoryConsolidationModel',
+    memories.consolidation_model || '',
+    CODEX_TASK_MODEL_DEFAULTS.consolidation_model
+  );
+  renderCodexTaskModelSelect(
+    'memoryExtractModel',
+    memories.extract_model || '',
+    CODEX_TASK_MODEL_DEFAULTS.extract_model
+  );
+}
+
+async function saveCodexTaskModels() {
+  if (!codexLocalModeActive()) {
+    renderCodexTaskModels();
+    return;
+  }
+  const selects = ['autoReviewModel', 'memoryConsolidationModel', 'memoryExtractModel']
+    .map(id => document.getElementById(id));
+  selects.forEach(select => { select.disabled = true; });
+  const body = {
+    auto_review_model_override: selects[0].value || null,
+    memories: {
+      consolidation_model: selects[1].value || null,
+      extract_model: selects[2].value || null
+    }
+  };
+  const res = await api.put('/admin/api/config/codex', body);
+  if (res.ok) {
+    showToast(t('toast.codexTaskModelsSaved'));
+    await loadConfig();
+  } else {
+    showToast(res.error || 'Failed', 'error');
+    renderCodexTaskModels();
   }
 }
 
@@ -3133,10 +3370,6 @@ function openFetchModelsModal() {
   document.getElementById('fetchPrefix').value = '';
   document.getElementById('fetchModelSearch').value = '';
   document.getElementById('fetchAddBtn').disabled = true;
-  // Reset capability selectors
-  document.getElementById('fetchCapText').checked = true;
-  document.getElementById('fetchCapVision').checked = false;
-  document.getElementById('fetchCapsRow').style.display = '';
   document.getElementById('fetchModelsModal').classList.add('open');
 }
 
@@ -3156,14 +3389,6 @@ function onFetchModelGroupChange() {
   const isNew = selected === '__new__';
   document.getElementById('fetchNewGroupName').style.display = isNew ? '' : 'none';
   if (_fetchedModels.length) renderFetchedModels();
-}
-
-function _getFetchCapabilities() {
-  const caps = [];
-  if (document.getElementById('fetchCapText').checked) caps.push('text');
-  if (document.getElementById('fetchCapVision').checked) caps.push('vision');
-  if (caps.length === 0) caps.push('text');
-  return caps;
 }
 
 async function doFetchModels() {
@@ -3274,13 +3499,13 @@ async function bulkAddFetchedModels() {
       const displayName = prefix ? prefix + modelId : modelId;
       const entry = {};
       if (prefix) entry.upstream_model = modelId;
-      entry.capabilities = _getFetchCapabilities();
       models[displayName] = entry;
     }
     toRemove.forEach(name => { delete models[name]; });
     const res = await api.put(`/admin/api/config/model-groups/${encodeURIComponent(groupName)}`, {
       provider: _fetchProvider,
       type: 'llm',
+      tool_profile: currentGroup?.tool_profile || _defaultToolProfileForProvider(_fetchProvider),
       models,
     });
     if (!res.ok) throw new Error(res.error || 'Failed to update model group');

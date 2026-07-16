@@ -64,8 +64,7 @@ def _unavailable_auxiliary_message(
     if upstream_path in IMAGE_ENDPOINTS and image_tool_state == "disabled":
         return "image_gen.imagegen is disabled by the selected Tool Profile"
     return (
-        f"POST /v1/{upstream_path} is only implemented for "
-        "OpenAI Responses (Tool Mapping only) providers"
+        f"POST /v1/{upstream_path} is only implemented for OpenAI Responses providers"
     )
 
 

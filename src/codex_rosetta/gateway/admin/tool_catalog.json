@@ -9,7 +9,7 @@
   },
   "builtin_profile": {
     "id": "builtin",
-    "name": "Chat Default",
+    "name": "Chat Default（适用于第三方仅提供chat api的模型）",
     "tools": {
       "namespace.multi_agent_v1": "disabled",
       "namespace.image_gen.imagegen": "modified",
@@ -48,7 +48,7 @@
   "preset_profiles": [
     {
       "id": "openai-responses-tool-mapping-only",
-      "name": "OpenAI Responses Tool Mapping Only",
+      "name": "透传（适用于OpenAI官方API）",
       "defaults": {
         "function": "passthrough",
         "custom": "passthrough",
@@ -56,6 +56,25 @@
         "namespace": "passthrough",
         "custom_injection": "disabled"
       }
+    },
+    {
+      "id": "web-run-injection",
+      "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
+      "defaults": {
+        "function": "passthrough",
+        "custom": "passthrough",
+        "hosted": "passthrough",
+        "namespace": "passthrough",
+        "custom_injection": "disabled"
+      },
+      "tools": {
+        "namespace.web.run": "modified"
+      }
+    },
+    {
+      "id": "responses-tool-mapping",
+      "name": "工具映射（适用于第三方模型提供的Responses接口）",
+      "base": "builtin"
     }
   ],
   "policies": [
