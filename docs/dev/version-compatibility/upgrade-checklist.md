@@ -340,7 +340,12 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - Run `tests/agent_workspace/builtin_tools/01` through `06` with provider display name `OpenAI` and a model catalog exactly equivalent to `gpt-5.6-sol`; verify Code Mode `wait`, two Plan updates, model-hidden `apply_patch` with localized `Edit`/`Write` execution, `view_image`, the grouped Goal lifecycle, and real upstream visual recognition with a vision-capable model;
 - After `view_image` transport and deterministic visual recognition pass, run `tests/agent_workspace/image_generation/01` with a vision-capable model; verify that the current Codex auth path exposes `image_gen.imagegen`, the configured Images endpoint saves an artifact, projected `view_image` opens that exact path, and the outer evaluator confirms the returned description includes the requested dog, grass/lawn, and running concepts. If the tool is absent from the Codex source request, classify it as an exposure/auth-path failure before evaluating model capability;
 - Test `request_user_input` through an app-server JSON-RPC client that answers `ToolRequestUserInput`; `codex exec` explicitly rejects this request and cannot provide valid real-agent coverage;
-- plugin/MCP namespace finds the tool through `tool_search`, actually calls it and consumes the result;
+- Run `tests/live_agent/deferred_tool_search/01` in a fresh isolated Codex home
+  with its local marketplace and structured plugin mention; require the
+  plugin/MCP namespace to enter the model request, find the tool through
+  `tool_search`, actually call it, and consume the fixed marker result. A
+  successful `codex plugin add` or `codex mcp list` alone does not pass this
+  gate, and a manual top-level MCP registration is not an acceptable fallback;
 - `multi_agent_v1` and `multi_agent_v2/collaboration` provided by the version can spawn, communicate, wait and return results, and parent/window/thread does not cross talk;
 - For a new third-party alias, test collaboration v2 before retaining legacy `multi_agent_v1`; use v1 only when the newer lifecycle is demonstrably unreliable for that model;
 - When model catalog enables code mode, actually verify `exec/wait` and nested tool continuation; especially check that the payload received by `exec` is custom/raw-source, not function/JSON payload, and confirm that third-party models will recover with visible tool errors when they misuse the freeform tool and will not be fatal;

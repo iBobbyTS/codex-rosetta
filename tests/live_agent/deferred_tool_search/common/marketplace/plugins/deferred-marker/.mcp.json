@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "deferred-marker": {
+      "command": "python3",
+      "args": ["./server.py"],
+      "cwd": "."
+    }
+  }
+}
+

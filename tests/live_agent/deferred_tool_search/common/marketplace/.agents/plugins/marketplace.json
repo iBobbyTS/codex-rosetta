@@ -1,0 +1,20 @@
+{
+  "name": "rosetta-live-fixtures",
+  "interface": {
+    "displayName": "Rosetta Live Fixtures"
+  },
+  "plugins": [
+    {
+      "name": "deferred-marker",
+      "source": {
+        "source": "local",
+        "path": "./plugins/deferred-marker"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

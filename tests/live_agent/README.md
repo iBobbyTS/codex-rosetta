@@ -26,6 +26,9 @@ handling rather than prose quality.
   belongs to the test executor.
 - [`namespace_tools`](namespace_tools/README.md): directly exercising the
   `clock`, `memories`, and `skills` Namespace tools.
+- [`deferred_tool_search`](deferred_tool_search/README.md): installing a local
+  deterministic MCP plugin, activating it with a structured plugin mention,
+  and verifying deferred `tool_search` discovery and invocation.
 - [`subagent_tools`](subagent_tools/README.md): six isolated lifecycle
   scenarios covering every `collaboration` Function: spawn, wait, list,
   message, follow-up, and interrupt.
