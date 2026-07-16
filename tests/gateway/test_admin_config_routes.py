@@ -1748,6 +1748,52 @@ def test_admin_html_exposes_model_group_controls():
     assert 'id="modelInfoModal"' in html
     assert "function refreshModelGroupRowPreset(row)" in html
     assert "function openModelInfo(row)" in html
+    assert "const MODEL_INFO_PRESET_FIELDS = [" in html
+    assert "function _modelInfoMatchesPreset(info, preset)" in html
+    comparison_fields = (
+        "slug",
+        "display_name",
+        "description",
+        "identity",
+        "priority",
+        "context_window",
+        "input_modalities",
+        "supported_reasoning_levels",
+    )
+    comparison_section = html[
+        html.index("const MODEL_INFO_PRESET_FIELDS = [") : html.index(
+            "function updateModelInfoRestorePresetLabel(row)"
+        )
+    ]
+    for field in comparison_fields:
+        assert f"'{field}'" in comparison_section
+    assert "current.every((value, index) => value === expected[index])" in html
+    assert "t(modified ? 'modelInfo.detectedModified' : 'modelInfo.detected'" in html
+    assert ".model-preset-status.modified { color:var(--orange); }" in html
+    assert 'id="modelInfoRestorePreset"' in html
+    assert "function updateModelInfoRestorePresetLabel(row)" in html
+    assert "t('modelInfo.restorePreset', {display_name: preset.display_name})" in html
+    assert (
+        'class="checkbox-group model-info-checkbox-group" id="modelInfoModalities"'
+        in html
+    )
+    assert (
+        'class="checkbox-group model-info-checkbox-group" id="modelInfoReasoningLevels"'
+        in html
+    )
+    assert html.count('<input type="checkbox" value="text">text') == 1
+    assert html.count('<input type="checkbox" value="image">image') == 1
+    for effort in ("low", "medium", "high", "xhigh", "max", "ultra"):
+        assert html.count(f'<input type="checkbox" value="{effort}">{effort}') == 1
+    assert (
+        "_setModelInfoCheckboxes('modelInfoModalities', info?.input_modalities)" in html
+    )
+    assert "input_modalities: _checkedModelInfoValues('modelInfoModalities')" in html
+    assert (
+        "supported_reasoning_levels: _checkedModelInfoValues('modelInfoReasoningLevels')"
+        in html
+    )
+    assert "function _commaSeparatedModelInfo(fieldId)" not in html
     assert "entry.model_info = structuredClone(row._modelInfo)" in html
     assert 'id="fetchCapText"' not in html
     assert 'id="fetchCapVision"' not in html
@@ -1757,6 +1803,12 @@ def test_admin_html_exposes_model_group_controls():
     assert 'id="modelToolAdaptationGroup"' not in html
     assert i18n["en"]["btn.addModelGroup"] == "+ Add Model Group"
     assert i18n["zh"]["btn.addModelGroup"] == "+ 添加模型组"
+    assert i18n["en"]["modelInfo.modalities"] == "Input Modalities"
+    assert i18n["zh"]["modelInfo.reasoningLevels"] == "支持的推理等级"
+    assert (
+        i18n["zh"]["modelInfo.detectedModified"] == "自动检测: {display_name}(已修改)"
+    )
+    assert i18n["zh"]["modelInfo.restorePreset"] == "恢复{display_name}预设配置"
 
 
 def test_admin_html_exposes_local_mode_task_model_selects():

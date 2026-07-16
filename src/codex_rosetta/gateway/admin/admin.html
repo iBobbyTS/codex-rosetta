@@ -307,7 +307,8 @@ canvas { width: 100%; height: 160px; }
 /* Checkbox group */
 .checkbox-group { display: flex; gap: 14px; flex-wrap: wrap; }
 .checkbox-group label { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 5px; cursor: pointer; text-transform: none; letter-spacing: 0; }
-.checkbox-group input[type="checkbox"] { accent-color: var(--accent); }
+.checkbox-group input[type="checkbox"] { width:auto;accent-color:var(--accent); }
+.model-info-checkbox-group { min-height:38px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius); }
 .model-group-list { display:flex;flex-direction:column;gap:12px;margin-bottom:14px; }
 .model-group-card { border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);overflow:hidden; }
 .model-group-head { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border); }
@@ -327,6 +328,7 @@ canvas { width: 100%; height: 160px; }
 .model-group-row-actions { display:flex;align-items:center;justify-content:flex-end; }
 .model-preset-status { font-size:12px;color:var(--text-dim);line-height:1.35;margin-bottom:6px; }
 .model-preset-status.detected { color:var(--green); }
+.model-preset-status.modified { color:var(--orange); }
 .model-row-controls { display:flex;align-items:center;justify-content:space-between;gap:6px; }
 .codex-task-model-grid { display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px; }
 .codex-task-model-field { display:flex;flex-direction:column;gap:6px; }
@@ -1080,11 +1082,27 @@ body { padding-bottom: 26px; }
       <div class="form-group span-2"><label data-i18n="modelInfo.description">Description</label><textarea id="modelInfoDescription"></textarea></div>
       <div class="form-group"><label data-i18n="modelInfo.priority">Priority</label><input id="modelInfoPriority" type="number" min="1"></div>
       <div class="form-group"><label data-i18n="modelInfo.contextWindow">Context Window</label><input id="modelInfoContextWindow" type="number" min="1"></div>
-      <div class="form-group span-2"><label data-i18n="modelInfo.modalities">Input Modalities</label><input id="modelInfoModalities" placeholder="text, image"></div>
-      <div class="form-group span-2"><label data-i18n="modelInfo.reasoningLevels">Supported Reasoning Levels</label><input id="modelInfoReasoningLevels" placeholder="low, medium, high, xhigh, max"></div>
+      <div class="form-group span-2">
+        <label data-i18n="modelInfo.modalities">Input Modalities</label>
+        <div class="checkbox-group model-info-checkbox-group" id="modelInfoModalities">
+          <label><input type="checkbox" value="text">text</label>
+          <label><input type="checkbox" value="image">image</label>
+        </div>
+      </div>
+      <div class="form-group span-2">
+        <label data-i18n="modelInfo.reasoningLevels">Supported Reasoning Levels</label>
+        <div class="checkbox-group model-info-checkbox-group" id="modelInfoReasoningLevels">
+          <label><input type="checkbox" value="low">low</label>
+          <label><input type="checkbox" value="medium">medium</label>
+          <label><input type="checkbox" value="high">high</label>
+          <label><input type="checkbox" value="xhigh">xhigh</label>
+          <label><input type="checkbox" value="max">max</label>
+          <label><input type="checkbox" value="ultra">ultra</label>
+        </div>
+      </div>
     </div>
     <div class="modal-actions">
-      <button class="btn" type="button" onclick="clearModelInfo()" data-i18n="modelInfo.useAutomatic">Use Automatic</button>
+      <button class="btn" id="modelInfoRestorePreset" type="button" onclick="clearModelInfo()" data-i18n="modelInfo.useAutomatic">Use Automatic</button>
       <button class="btn" type="button" onclick="closeModelInfo()" data-i18n="btn.cancel">Cancel</button>
       <button class="btn btn-primary" type="button" onclick="applyModelInfo()" data-i18n="btn.applyChanges">Apply Changes</button>
     </div>
@@ -1641,6 +1659,7 @@ function applyI18n() {
     loadNetworkSearchStatus();
   }
   if (currentPage === 'gateway-logs') renderStreamTraceSettings();
+  if (_activeModelInfoRow) updateModelInfoRestorePresetLabel(_activeModelInfoRow);
   // Re-render DB status footer with cached data
   if (_lastPersistence != null) renderPersistence(_lastPersistence, _lastTotalReq);
 }
@@ -2467,17 +2486,44 @@ function _detectedModelPreset(row) {
   return _modelPresetBySlug(upstream || exposed);
 }
 
+const MODEL_INFO_PRESET_FIELDS = [
+  'slug', 'display_name', 'description', 'identity', 'priority', 'context_window',
+  'input_modalities', 'supported_reasoning_levels',
+];
+
+function _modelInfoMatchesPreset(info, preset) {
+  if (!info || !preset) return false;
+  return MODEL_INFO_PRESET_FIELDS.every(field => {
+    const current = info[field];
+    const expected = preset[field];
+    if (!Array.isArray(expected)) return current === expected;
+    return Array.isArray(current)
+      && current.length === expected.length
+      && current.every((value, index) => value === expected[index]);
+  });
+}
+
+function updateModelInfoRestorePresetLabel(row) {
+  const preset = _detectedModelPreset(row);
+  document.getElementById('modelInfoRestorePreset').textContent = preset
+    ? t('modelInfo.restorePreset', {display_name: preset.display_name})
+    : t('modelInfo.useAutomatic');
+}
+
 function refreshModelGroupRowPreset(row) {
   const exposedName = row.querySelector('.group-model-name').value.trim();
   const status = row.querySelector('.model-preset-status');
   const preset = _detectedModelPreset(row);
+  const modified = !!preset && !!row._modelInfo && !_modelInfoMatchesPreset(row._modelInfo, preset);
   status.classList.toggle('detected', !!preset);
+  status.classList.toggle('modified', modified);
   status.textContent = preset
-    ? t('modelInfo.detected', {display_name: preset.display_name})
+    ? t(modified ? 'modelInfo.detectedModified' : 'modelInfo.detected', {display_name: preset.display_name})
     : t('modelInfo.notDetected');
   if (_activeModelInfoRow === row && document.getElementById('modelInfoModal').classList.contains('open')) {
     const currentInfo = row._modelInfo || preset || {};
     document.getElementById('modelInfoSlug').value = currentInfo.slug || exposedName || '';
+    updateModelInfoRestorePresetLabel(row);
   }
 }
 
@@ -2515,8 +2561,19 @@ function _setModelInfoForm(info, exposedName) {
   document.getElementById('modelInfoIdentity').value = info?.identity || '';
   document.getElementById('modelInfoPriority').value = info?.priority || '';
   document.getElementById('modelInfoContextWindow').value = info?.context_window || '';
-  document.getElementById('modelInfoModalities').value = (info?.input_modalities || []).join(', ');
-  document.getElementById('modelInfoReasoningLevels').value = (info?.supported_reasoning_levels || []).join(', ');
+  _setModelInfoCheckboxes('modelInfoModalities', info?.input_modalities);
+  _setModelInfoCheckboxes('modelInfoReasoningLevels', info?.supported_reasoning_levels);
+}
+
+function _setModelInfoCheckboxes(groupId, values) {
+  const selected = new Set(Array.isArray(values) ? values : []);
+  document.querySelectorAll(`#${groupId} input[type="checkbox"]`).forEach(input => {
+    input.checked = selected.has(input.value);
+  });
+}
+
+function _checkedModelInfoValues(groupId) {
+  return [...document.querySelectorAll(`#${groupId} input[type="checkbox"]:checked`)].map(input => input.value);
 }
 
 function openModelInfo(row) {
@@ -2524,6 +2581,7 @@ function openModelInfo(row) {
   const exposedName = row.querySelector('.group-model-name').value.trim();
   const source = row._modelInfo || _detectedModelPreset(row) || {};
   _setModelInfoForm(source, source.slug || exposedName || row.querySelector('.group-upstream-model').value.trim());
+  updateModelInfoRestorePresetLabel(row);
   document.getElementById('modelInfoModal').classList.add('open');
 }
 
@@ -2531,10 +2589,6 @@ function closeModelInfo() {
   const modal = document.getElementById('modelInfoModal');
   if (modal) modal.classList.remove('open');
   _activeModelInfoRow = null;
-}
-
-function _commaSeparatedModelInfo(fieldId) {
-  return document.getElementById(fieldId).value.split(',').map(value => value.trim()).filter(Boolean);
 }
 
 function applyModelInfo() {
@@ -2546,8 +2600,8 @@ function applyModelInfo() {
     identity: document.getElementById('modelInfoIdentity').value.trim(),
     priority: Number(document.getElementById('modelInfoPriority').value),
     context_window: Number(document.getElementById('modelInfoContextWindow').value),
-    input_modalities: _commaSeparatedModelInfo('modelInfoModalities'),
-    supported_reasoning_levels: _commaSeparatedModelInfo('modelInfoReasoningLevels'),
+    input_modalities: _checkedModelInfoValues('modelInfoModalities'),
+    supported_reasoning_levels: _checkedModelInfoValues('modelInfoReasoningLevels'),
   };
   const stringsReady = [info.slug, info.display_name, info.description, info.identity].every(Boolean);
   if (!stringsReady || !Number.isInteger(info.priority) || info.priority <= 0 || !Number.isInteger(info.context_window) || info.context_window <= 0 || !info.input_modalities.length || !info.supported_reasoning_levels.length) {

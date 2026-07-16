@@ -224,7 +224,12 @@ to the right with every per-model preset field: `slug`, `display_name`,
 `description`, `identity`, `priority`, `context_window`, `input_modalities`, and
 `supported_reasoning_levels`. A detected preset pre-fills the panel; an
 unmatched model starts empty. Saved `model_info` overrides the detected preset,
-while the exposed model name remains the catalog slug used for routing.
+while the exposed model name remains the catalog slug used for routing. Input
+modalities and supported reasoning levels use checkboxes constrained to values
+that the catalog template can materialize. When a saved override differs from
+the detected preset in any editable field, Admin marks the detection as
+modified; the panel's restore action names the detected preset and removes the
+override so the preset becomes authoritative again.
 
 ### Recommended decisions for a third-party model
 

@@ -189,9 +189,17 @@ Codex-file write or restart notice. Replacing managed `[memories]` assignments
 reuses any retained blank-line separator before the next table, so repeated
 synchronization is byte-idempotent instead of accumulating whitespace. Gateway
 config, catalog, TOML, and hot activation use compensating rollback. An upgrade
-must rebind the packaged asset
-and retest this ownership, idempotence, compaction-hash, and Provider-identity
-contract before changing the declared Codex version.
+must rebind the packaged asset and retest this ownership, idempotence,
+compaction-hash, and Provider-identity contract before changing the declared
+Codex version.
+
+Admin exact-slug detection compares a saved `model_info` override with the
+matched preset across all eight editable fields, including ordered modality and
+reasoning arrays. Any mismatch is marked as modified. The editor constrains
+those two arrays to checkbox values the Terra template can materialize, and its
+named restore action removes the override so the detected preset is once again
+authoritative. Upgrade checks must keep the comparison field list aligned with
+the editable preset contract.
 
 The Models page exposes task-model routing only while local mode is both enabled
 and confirmed. It stores the source selections under gateway `codex`, copies
@@ -301,7 +309,7 @@ Currently `ResponsesPhaseBuffer` treats function/custom/MCP/shell/computer/tool_
 
 ## 5. Reasoning state
 
-Codex will request `reasoning.encrypted_content` when reasoning is turned on, and consume summary part, summary text delta/done and raw reasoning delta. Rosetta currently retains Responses summary/content/encrypted state through IR metadata, and uses provider extension fields such as `reasoning_content` in Chat upstream to maintain tool continuation.
+Codex will request `reasoning.encrypted_content` when reasoning is turned on, and consume summary part, summary text delta/done and raw reasoning delta. Rosetta currently retains Responses summary/content/encrypted state through IR metadata, and uses provider extension fields such as `reasoning_content` in Chat upstream to maintain tool continuation. OpenAI Responses reasoning effort is forwarded without degrading `max` to `xhigh`; Chat compatibility remains a separate mapping because endpoint-level accepted values do not guarantee that every upstream model supports every effort.
 
 Must check when upgrading:
 
