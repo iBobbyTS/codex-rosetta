@@ -60,7 +60,7 @@ Run task `01` once with each model:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
-| `gpt-5.6-terra` | `GPT中转站` | Responses Tool Mapping only |
+| `gpt-5.6-terra` | `GPT中转站` | direct OpenAI Responses |
 | `deepseek-v4-flash` | `DeepSeek` | Responses-to-Chat conversion |
 
 Use a separate timestamp run root, Codex home, copied Gateway config, port, and

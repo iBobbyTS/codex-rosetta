@@ -54,7 +54,7 @@ Chat Default marks the parent `exec` tool Disabled for model exposure. On a Resp
 For Exec Expansion cards, **Pass through** means representation-only adaptation: expose the current declaration as a normal Chat Function and translate its call back to `exec`, without appending any catalog text. Chat Default uses this state for `exec_command`, `write_stdin`, `update_plan`, `view_image`, `get_goal`, Clock, Memories, and Skills. **Modified** is retained where the Profile changes model-visible guidance or behavior: `create_goal` and `update_goal` append guidance, while `web.run` uses the selected Tavily-backed Rosetta search mapping.
 
 With `web.run` Modified, Rosetta rewrites the live `web__run` declaration even
-when it remains nested inside a custom `exec` tool on a Tool Mapping only route.
+when it remains nested inside a custom `exec` tool on a direct Responses route.
 The model always sees bounded `open`, fixed-offset `time`, and
 `response_length`; `search_query` appears only when the global Tavily Key is
 configured. A healthy, authenticated `web-run` sidecar additionally exposes
@@ -123,7 +123,7 @@ The important behavior is that tool calls must survive the round trip:
 
 ## Tool Profile Scope
 
-**OpenAI Responses (Tool Mapping only)** supports Tool Profiles while keeping the rest of the Responses request and response on the direct path. Responses Rosetta, Chat, Anthropic, and Google model groups also support Profile selection and processing. The bundled Profiles are **Chat Default** and **OpenAI Responses Tool Mapping Only**; create a copy when a separate policy is needed.
+Every LLM model group supports Tool Profile selection. The bundled Profiles are **Chat Default（适用于第三方仅提供chat api的模型）**, **透传（适用于OpenAI官方API）**, **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**, and **工具映射（适用于第三方模型提供的Responses接口）**. The Provider/protocol selection chooses the matching default when a model group is created; a user may still select a different Profile explicitly.
 
 The bundled Profile manages current Codex image generation through `image_gen.imagegen`. It does not contain the obsolete hosted `image_generation` tool.
 

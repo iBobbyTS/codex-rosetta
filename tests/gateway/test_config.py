@@ -23,6 +23,7 @@ from codex_rosetta.gateway.config import (
     DEFAULT_CONFIG_DIR,
     GatewayConfig,
     config_path_for_dir,
+    default_tool_profile_for_provider,
     discover_config,
     load_config,
     resolve_codex_home,
@@ -43,6 +44,106 @@ def test_default_config_search_only_uses_xdg_directory() -> None:
 
 def test_discover_config_resolves_explicit_directory() -> None:
     assert discover_config("/tmp/gateway") == "/tmp/gateway/config.jsonc"
+
+
+@pytest.mark.parametrize(
+    ("provider", "api_type", "base_url", "expected"),
+    [
+        (
+            "openai",
+            "responses",
+            "https://api.openai.com/v1",
+            "openai-responses-tool-mapping-only",
+        ),
+        (
+            "openai",
+            "responses",
+            "https://relay.example/v1",
+            "web-run-injection",
+        ),
+        ("custom", "responses", "https://relay.example", "web-run-injection"),
+        (
+            "qwen",
+            "responses",
+            "https://qwen.example/v1",
+            "responses-tool-mapping",
+        ),
+        ("custom", "chat", "https://chat.example/v1", "builtin"),
+        ("custom", "anthropic", "https://messages.example", "builtin"),
+    ],
+)
+def test_provider_selection_chooses_expected_builtin_tool_profile(
+    provider: str, api_type: str, base_url: str, expected: str
+) -> None:
+    assert (
+        default_tool_profile_for_provider(
+            {"provider": provider, "api_type": api_type, "base_url": base_url}
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("provider", "base_url", "expected_processing", "expected_profile"),
+    [
+        (
+            "openai",
+            "https://api.openai.com/v1",
+            "passthrough",
+            "openai-responses-tool-mapping-only",
+        ),
+        (
+            "openai",
+            "https://relay.example/v1",
+            "passthrough",
+            "web-run-injection",
+        ),
+        (
+            "custom",
+            "https://relay.example",
+            "passthrough",
+            "web-run-injection",
+        ),
+        (
+            "qwen",
+            "https://qwen.example/v1",
+            "rosetta",
+            "responses-tool-mapping",
+        ),
+    ],
+)
+def test_unified_responses_protocol_resolves_processing_and_profile(
+    provider: str,
+    base_url: str,
+    expected_processing: str,
+    expected_profile: str,
+) -> None:
+    raw = {
+        "providers": {
+            "upstream": {
+                "api_key": "sk-test",
+                "base_url": base_url,
+                "provider": provider,
+                "api_type": "responses",
+            }
+        },
+        "model_groups": {
+            "models": {
+                "provider": "upstream",
+                "type": "llm",
+                "models": {"test-model": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-admin-password",
+            "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+        },
+    }
+
+    route, _provider_info = GatewayConfig(raw).resolve("openai_responses", "test-model")
+
+    assert route.responses_processing == expected_processing
+    assert route.tool_profile_name == expected_profile
 
 
 def test_resolve_codex_home_uses_cli_environment_and_default_precedence(
@@ -127,6 +228,46 @@ def test_local_mode_defaults_to_enabled_and_unconfirmed() -> None:
 
     assert config.local_mode is True
     assert config.local_mode_confirmed is False
+
+
+def test_codex_task_model_settings_are_normalized() -> None:
+    raw = _minimal_raw()
+    raw["codex"] = {
+        "auto_review_model_override": " review-alias ",
+        "memories": {
+            "extract_model": " extract-alias ",
+            "consolidation_model": " consolidation-alias ",
+        },
+    }
+
+    config = GatewayConfig(raw)
+
+    assert config.codex == {
+        "auto_review_model_override": "review-alias",
+        "memories": {
+            "extract_model": "extract-alias",
+            "consolidation_model": "consolidation-alias",
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "codex",
+    [
+        "review-alias",
+        {"unknown": "review-alias"},
+        {"auto_review_model_override": ""},
+        {"memories": "extract-alias"},
+        {"memories": {"unknown": "extract-alias"}},
+        {"memories": {"extract_model": ""}},
+    ],
+)
+def test_invalid_codex_task_model_settings_are_rejected(codex) -> None:
+    raw = _minimal_raw()
+    raw["codex"] = codex
+
+    with pytest.raises(ValueError, match="config: codex"):
+        GatewayConfig(raw)
 
 
 def test_web_run_sidecar_is_disabled_by_default() -> None:
@@ -569,14 +710,14 @@ class TestProviderApiTypeResolution:
         assert route.target_provider == "anthropic"
         assert route.shim_name == "minimax--anthropic"
 
-    def test_custom_api_type_has_no_shim(self):
+    def test_custom_responses_api_type_has_no_shim(self):
         raw = {
             "providers": {
                 "Pixel": {
                     "api_key": "sk-test",
                     "base_url": "https://api.example.com",
                     "provider": "custom",
-                    "api_type": "responses_passthrough",
+                    "api_type": "responses",
                 }
             },
             "model_groups": {
@@ -597,17 +738,17 @@ class TestProviderApiTypeResolution:
         assert route.target_provider == "openai_responses"
         assert route.shim_name is None
         assert route.responses_processing == "passthrough"
-        assert route.tool_profile_name == "openai-responses-tool-mapping-only"
-        assert route.tool_profile["namespace.web.run"] == "passthrough"
+        assert route.tool_profile_name == "web-run-injection"
+        assert route.tool_profile["namespace.web.run"] == "modified"
 
-    def test_responses_rosetta_uses_same_wire_protocol_with_conversion_mode(self):
+    def test_listed_responses_provider_uses_conversion_mode(self):
         raw = {
             "providers": {
                 "Qwen": {
                     "api_key": "sk-test",
                     "base_url": "https://api.example.com",
                     "provider": "qwen",
-                    "api_type": "responses_rosetta",
+                    "api_type": "responses",
                 }
             },
             "model_groups": {
@@ -626,6 +767,14 @@ class TestProviderApiTypeResolution:
         assert cfg.provider_types["Qwen"] == "openai_responses"
         assert route.target_provider == "openai_responses"
         assert route.responses_processing == "rosetta"
+
+    @pytest.mark.parametrize("api_type", ["responses_passthrough", "responses_rosetta"])
+    def test_removed_responses_api_types_are_rejected(self, api_type):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["api_type"] = api_type
+
+        with pytest.raises(ValueError, match="unsupported provider api_type"):
+            GatewayConfig(raw)
 
     def test_legacy_type_config_still_resolves(self):
         raw = _minimal_raw()
@@ -764,7 +913,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
     }
 
 
-def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
+def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path):
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(
         json.dumps(
@@ -774,7 +923,7 @@ def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
                         "api_key": "sk-test",
                         "base_url": "https://api.example.test",
                         "provider": "custom",
-                        "api_type": "responses_rosetta",
+                        "api_type": "responses",
                     }
                 },
                 "tool_profiles": {},
@@ -794,10 +943,12 @@ def test_cli_add_rosetta_model_group_selects_builtin_profile(tmp_path):
     )
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["model_groups"]["Test Rosetta"]["tool_profile"] == "builtin"
+    assert saved["model_groups"]["Test Rosetta"]["tool_profile"] == (
+        "web-run-injection"
+    )
 
 
-def test_cli_add_tool_mapping_only_group_selects_passthrough_profile(tmp_path):
+def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(
         json.dumps(
@@ -807,7 +958,7 @@ def test_cli_add_tool_mapping_only_group_selects_passthrough_profile(tmp_path):
                         "api_key": "sk-test",
                         "base_url": "https://api.example.test",
                         "provider": "custom",
-                        "api_type": "responses_passthrough",
+                        "api_type": "responses",
                     }
                 },
                 "tool_profiles": {},
@@ -828,5 +979,5 @@ def test_cli_add_tool_mapping_only_group_selects_passthrough_profile(tmp_path):
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["Test Responses"]["tool_profile"] == (
-        "openai-responses-tool-mapping-only"
+        "web-run-injection"
     )

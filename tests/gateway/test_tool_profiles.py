@@ -100,6 +100,8 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     assert set(contract["readonly"]) == {
         "builtin",
         "openai-responses-tool-mapping-only",
+        "web-run-injection",
+        "responses-tool-mapping",
     }
     assert all(
         contract["builtin"][child_id] == "disabled"
@@ -420,9 +422,7 @@ def test_internal_container_when_disabled_must_be_boolean(monkeypatch):
         tool_profiles_module.tool_profile_contract.cache_clear()
 
 
-@pytest.mark.parametrize(
-    "api_type", ["responses_rosetta", "chat", "anthropic", "google"]
-)
+@pytest.mark.parametrize("api_type", ["responses", "chat", "anthropic", "google"])
 def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
     tools = _profile(**{"function.update_plan": "disabled"})
     raw = {
@@ -477,7 +477,7 @@ def test_gateway_config_rejects_unknown_group_profile():
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "api_type": "responses_rosetta",
+                "api_type": "responses",
             }
         },
         "tool_profiles": {},
@@ -505,7 +505,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "api_type": "responses_rosetta",
+                "api_type": "responses",
             }
         },
         "tool_profile_input_overrides": {
@@ -547,7 +547,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "api_type": "responses_passthrough",
+                "api_type": "responses",
             }
         },
         "tool_profiles": {"custom": {"tools": tools}},
@@ -569,7 +569,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
     body = {"tools": [{"type": "function", "name": "update_plan", "parameters": {}}]}
     adapted = _apply_tool_adaptation(body, route)
 
-    assert route.responses_processing == "passthrough"
+    assert route.responses_processing == "rosetta"
     assert route.tool_profile_name == "custom"
     assert route.tool_profile["function.update_plan"] == "disabled"
     assert "tools" not in adapted
@@ -581,12 +581,22 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
     assert set(contract["readonly"]) == {
         "builtin",
         "openai-responses-tool-mapping-only",
+        "web-run-injection",
+        "responses-tool-mapping",
     }
     assert resolve_tool_profile("builtin", {}) == contract["builtin"]
     assert "hosted.image_generation" not in contract["builtin"]
     assert contract["builtin"]["hosted.web_search"] == "disabled"
     assert contract["builtin"]["custom.apply_patch"] == "disabled"
     assert contract["builtin"]["namespace.web.run"] == "modified"
+    assert contract["readonly"]["web-run-injection"]["tools"] != contract["builtin"]
+    assert (
+        contract["readonly"]["web-run-injection"]["tools"]["namespace.web.run"]
+        == "modified"
+    )
+    assert (
+        contract["readonly"]["responses-tool-mapping"]["tools"] == contract["builtin"]
+    )
 
 
 def test_profile_filters_top_level_lite_and_namespace_children():

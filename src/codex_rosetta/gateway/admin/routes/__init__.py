@@ -36,6 +36,7 @@ from .config import (
     fetch_upstream_models,
     get_config,
     get_network_search_status,
+    put_codex_settings,
     put_model_group,
     put_provider,
     put_server_settings,
@@ -127,6 +128,7 @@ def register_admin_routes(app: Any) -> None:
         fetch_upstream_models
     )
     app.route("/admin/api/config/server", methods=["PUT"])(put_server_settings)
+    app.route("/admin/api/config/codex", methods=["PUT"])(put_codex_settings)
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)
     app.route("/admin/api/network-search/status", methods=["GET"])(
         get_network_search_status

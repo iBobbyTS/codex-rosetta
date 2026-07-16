@@ -373,7 +373,9 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["metadata"]["codex_source_commit"] == CODEX_0_144_4_SOURCE_COMMIT
     assert catalog["metadata"]["profile_selection"] == "model_group"
     assert catalog["builtin_profile"]["id"] == "builtin"
-    assert catalog["builtin_profile"]["name"] == "Chat Default"
+    assert catalog["builtin_profile"]["name"] == (
+        "Chat Default（适用于第三方仅提供chat api的模型）"
+    )
     assert catalog["builtin_profile"]["tools"] == {
         "namespace.multi_agent_v1": "disabled",
         "namespace.image_gen.imagegen": "modified",
@@ -386,7 +388,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["preset_profiles"] == [
         {
             "id": "openai-responses-tool-mapping-only",
-            "name": "OpenAI Responses Tool Mapping Only",
+            "name": "透传（适用于OpenAI官方API）",
             "defaults": {
                 "function": "passthrough",
                 "custom": "passthrough",
@@ -394,7 +396,24 @@ def test_catalog_defaults_and_namespace_image_policy():
                 "namespace": "passthrough",
                 "custom_injection": "disabled",
             },
-        }
+        },
+        {
+            "id": "web-run-injection",
+            "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
+            "defaults": {
+                "function": "passthrough",
+                "custom": "passthrough",
+                "hosted": "passthrough",
+                "namespace": "passthrough",
+                "custom_injection": "disabled",
+            },
+            "tools": {"namespace.web.run": "modified"},
+        },
+        {
+            "id": "responses-tool-mapping",
+            "name": "工具映射（适用于第三方模型提供的Responses接口）",
+            "base": "builtin",
+        },
     ]
 
     assert policies[items["custom.apply_patch"]["policy_id"]]["default"] == ("disabled")
@@ -650,6 +669,24 @@ def test_catalog_defaults_and_namespace_image_policy():
     ]
 
 
+def test_bundled_responses_profiles_preserve_or_map_only_intended_tools() -> None:
+    profiles = tool_profile_contract()["readonly"]
+    passthrough = profiles["openai-responses-tool-mapping-only"]["tools"]
+    web_run = profiles["web-run-injection"]["tools"]
+    mapping = profiles["responses-tool-mapping"]["tools"]
+
+    assert all(
+        state == ("disabled" if item_id.startswith("injection.") else "passthrough")
+        for item_id, state in passthrough.items()
+    )
+    assert {
+        item_id: state
+        for item_id, state in web_run.items()
+        if state != passthrough[item_id]
+    } == {"namespace.web.run": "modified"}
+    assert mapping == profiles["builtin"]["tools"]
+
+
 def test_catalog_api_is_read_only_and_returns_bundled_resource():
     app = _make_app()
 
@@ -769,7 +806,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
                 "provider": "custom",
-                "api_type": "responses_rosetta",
+                "api_type": "responses",
             }
         },
         "tool_profiles": {},
@@ -800,6 +837,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     assert [(profile["id"], profile["readonly"]) for profile in profiles] == [
         ("builtin", True),
         ("openai-responses-tool-mapping-only", True),
+        ("web-run-injection", True),
+        ("responses-tool-mapping", True),
     ]
 
     response = asyncio.run(

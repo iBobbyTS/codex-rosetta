@@ -77,6 +77,25 @@ def test_catalog_uses_only_configured_models_and_clones_terra_for_custom_names()
     assert custom["comp_hash"].startswith("rosetta-comp-v1:custom:")
 
 
+def test_catalog_applies_auto_review_override_to_every_selected_model() -> None:
+    raw = {
+        "codex": {"auto_review_model_override": "review-alias"},
+        "model_groups": {
+            "models": {
+                "type": "llm",
+                "models": {"review-alias": {}, "work-alias": {}},
+            }
+        },
+    }
+
+    models = build_model_catalog(raw)["models"]
+
+    assert {model["slug"] for model in models} == {"review-alias", "work-alias"}
+    assert all(
+        model["auto_review_model_override"] == "review-alias" for model in models
+    )
+
+
 def test_catalog_preserves_official_bundled_entries_for_configured_slugs() -> None:
     raw = {
         "model_groups": {
@@ -271,6 +290,58 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
         assert "GPT-5" not in messages
 
 
+def test_catalog_detects_preset_from_upstream_model_for_an_exposed_alias() -> None:
+    raw = {
+        "model_groups": {
+            "third-party": {
+                "type": "llm",
+                "models": {"deepseek-alias": {"upstream_model": "deepseek-v4-pro"}},
+            }
+        }
+    }
+
+    [model] = build_model_catalog(raw)["models"]
+
+    assert model["slug"] == "deepseek-alias"
+    assert model["display_name"] == "DeepSeek V4 Pro"
+    assert model["context_window"] == 1_000_000
+    assert model["input_modalities"] == ["text"]
+
+
+def test_catalog_applies_complete_manual_model_info_to_an_exposed_alias() -> None:
+    model_info = {
+        "slug": "ignored-source-slug",
+        "display_name": "Custom Vision Model",
+        "description": "A manually configured model",
+        "identity": "Custom Vision Model by Example",
+        "priority": 7,
+        "context_window": 131_072,
+        "input_modalities": ["text", "image"],
+        "supported_reasoning_levels": ["medium", "high"],
+    }
+    raw = {
+        "model_groups": {
+            "custom": {
+                "type": "llm",
+                "models": {"custom-alias": {"model_info": model_info}},
+            }
+        }
+    }
+
+    [model] = build_model_catalog(raw)["models"]
+
+    assert model["slug"] == "custom-alias"
+    assert model["display_name"] == "Custom Vision Model"
+    assert model["description"] == "A manually configured model"
+    assert model["priority"] == 7
+    assert model["context_window"] == model["max_context_window"] == 131_072
+    assert model["input_modalities"] == ["text", "image"]
+    assert [level["effort"] for level in model["supported_reasoning_levels"]] == [
+        "medium",
+        "high",
+    ]
+
+
 def test_catalog_compaction_hash_groups_are_stable_and_non_null() -> None:
     requested = {
         "gpt-5.6-sol": {},
@@ -393,6 +464,47 @@ def test_sync_uncomments_existing_local_mode_assignments_in_place(
     assert "# model_provider" not in updated
     assert updated.count("model_catalog_json =") == 1
     assert updated.count("model_provider =") == 1
+
+
+def test_sync_writes_and_clear_removes_only_memory_model_overrides(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(
+        "[memories]\n"
+        "generate_memories = false\n"
+        'extract_model = "old-extract"\n'
+        'consolidation_model = "old-consolidation"\n\n'
+        "[features]\n"
+        "multi_agent_v2 = true\n",
+        encoding="utf-8",
+    )
+    raw = {
+        "codex": {
+            "memories": {
+                "extract_model": "extract-alias",
+                "consolidation_model": "consolidation-alias",
+            }
+        }
+    }
+
+    _sync_transaction(codex_home, raw).apply()
+
+    parsed = tomllib.loads(config_toml.read_text(encoding="utf-8"))
+    assert parsed["memories"] == {
+        "generate_memories": False,
+        "extract_model": "extract-alias",
+        "consolidation_model": "consolidation-alias",
+    }
+    assert parsed["features"]["multi_agent_v2"] is True
+
+    CodexLocalModeTransaction.clear(str(codex_home)).apply()
+
+    cleared = tomllib.loads(config_toml.read_text(encoding="utf-8"))
+    assert cleared["memories"] == {"generate_memories": False}
+    assert cleared["features"]["multi_agent_v2"] is True
 
 
 def test_sync_only_uncomments_assignment_that_already_exists(tmp_path: Path) -> None:

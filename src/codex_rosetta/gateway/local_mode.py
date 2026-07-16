@@ -13,12 +13,12 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Any
 
-from .config import _atomic_write_bytes
+from .config import _atomic_write_bytes, normalize_codex_settings
+from .model_presets import load_model_preset_resource, normalize_model_info
 
 CATALOG_FILENAME = "model_catalog.json"
 CODEX_CONFIG_FILENAME = "config.toml"
 CATALOG_RESOURCE = "codex_models_0_144_4.json"
-PRESET_RESOURCE = "codex_model_presets.json"
 CODEX_API_KEY_ID = "codex"
 CODEX_API_KEY_LABEL = "codex"
 CODEX_PROVIDER_ID = "codex_rosetta"
@@ -74,6 +74,15 @@ _TABLE_HEADER_RE = re.compile(r"^[ \t]*\[\[?.*?\]\]?[ \t]*(?:#.*)?(?:\r?\n|$)")
 _DESKTOP_TABLE_RE = re.compile(
     r"^[ \t]*\[[ \t]*(?:desktop|[\"']desktop[\"'])[ \t]*\]"
     r"[ \t]*(?:#.*)?(?:\r?\n|$)"
+)
+_MEMORIES_TABLE_RE = re.compile(
+    r"^[ \t]*\[[ \t]*(?:memories|[\"']memories[\"'])[ \t]*\]"
+    r"[ \t]*(?:#.*)?(?:\r?\n|$)"
+)
+_MEMORY_MODEL_ASSIGNMENT_RE = re.compile(
+    r"^[ \t]*(?:extract_model|consolidation_model|"
+    r"[\"']extract_model[\"']|[\"']consolidation_model[\"'])"
+    r"[ \t]*=[^\r\n]*(?:\r?\n|$)"
 )
 _CODEX_PROVIDER_TABLE_RE = re.compile(
     r"^[ \t]*\[\[?[ \t]*(?:model_providers|[\"']model_providers[\"'])"
@@ -298,6 +307,89 @@ def _edit_enabled_reasoning_efforts(text: str, *, enabled: bool) -> str:
     return "".join(rebuilt)
 
 
+def _edit_memory_model_settings(
+    text: str,
+    *,
+    extract_model: str | None,
+    consolidation_model: str | None,
+) -> str:
+    """Replace the two Rosetta-managed model fields in ``[memories]``."""
+    lines = text.splitlines(keepends=True)
+    memories_sections, removed = _memory_model_sections(text, lines)
+    settings = _memory_model_settings(extract_model, consolidation_model)
+    if not settings:
+        return "".join(line for index, line in enumerate(lines) if index not in removed)
+
+    newline = "\r\n" if "\r\n" in text else "\n"
+    if not memories_sections:
+        cleaned = "".join(
+            line for index, line in enumerate(lines) if index not in removed
+        ).rstrip(" \t\r\n")
+        prefix = cleaned + newline * 2 if cleaned else ""
+        return prefix + f"[memories]{newline}" + newline.join(settings) + newline
+
+    start, end = memories_sections[0]
+    insert_at = _memory_model_insert_index(lines, removed, start, end)
+    setting_block = newline.join(settings) + newline
+    if end < len(lines):
+        setting_block += newline
+
+    rebuilt: list[str] = []
+    for index, line in enumerate(lines):
+        if index == insert_at:
+            rebuilt.append(setting_block)
+        if index not in removed:
+            rebuilt.append(line)
+    if insert_at == len(lines):
+        rebuilt.append(setting_block)
+    return "".join(rebuilt)
+
+
+def _memory_model_sections(
+    text: str, lines: list[str]
+) -> tuple[list[tuple[int, int]], set[int]]:
+    """Locate exact ``[memories]`` sections and their managed assignments."""
+    headers = _active_table_headers(text)
+    sections: list[tuple[int, int]] = []
+    assignments: set[int] = set()
+    for position, start in enumerate(headers):
+        if not _MEMORIES_TABLE_RE.match(lines[start]):
+            continue
+        end = headers[position + 1] if position + 1 < len(headers) else len(lines)
+        sections.append((start, end))
+        multiline_state: str | None = None
+        for index in range(start + 1, end):
+            line = lines[index]
+            if multiline_state is None and _MEMORY_MODEL_ASSIGNMENT_RE.match(line):
+                assignments.add(index)
+            multiline_state = _multiline_state_after_line(line, multiline_state)
+    return sections, assignments
+
+
+def _memory_model_settings(
+    extract_model: str | None, consolidation_model: str | None
+) -> list[str]:
+    """Serialize configured memory model assignments in stable field order."""
+    settings = []
+    if extract_model is not None:
+        settings.append(f"extract_model = {json.dumps(extract_model)}")
+    if consolidation_model is not None:
+        settings.append(f"consolidation_model = {json.dumps(consolidation_model)}")
+    return settings
+
+
+def _memory_model_insert_index(
+    lines: list[str], removed: set[int], start: int, end: int
+) -> int:
+    """Return the insertion point before removed assignments and trailing blanks."""
+    insert_at = end
+    while insert_at > start + 1 and (
+        insert_at - 1 in removed or not lines[insert_at - 1].strip()
+    ):
+        insert_at -= 1
+    return insert_at
+
+
 def _commented_root_assignment_lines(text: str) -> dict[str, int]:
     """Return the first reusable commented local-mode assignment per field."""
     lines = text.splitlines(keepends=True)
@@ -344,17 +436,6 @@ def _catalog_resource() -> dict[str, Any]:
     if not isinstance(models, list) or not models:
         raise ValueError("bundled Codex model catalog is empty or invalid")
     return catalog
-
-
-def _preset_resource() -> dict[str, Any]:
-    presets = _json_resource(PRESET_RESOURCE)
-    if not isinstance(presets, dict):
-        raise ValueError("bundled Codex model presets must be an object")
-    if not isinstance(presets.get("shared_overrides"), dict):
-        raise ValueError("bundled Codex model presets have invalid shared overrides")
-    if not isinstance(presets.get("models"), list):
-        raise ValueError("bundled Codex model presets have invalid models")
-    return presets
 
 
 def _replace_identity(value: Any, source: str, identity: str) -> Any:
@@ -432,7 +513,7 @@ def _materialize_model_preset(
 
 
 def _model_presets(terra: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    resource = _preset_resource()
+    resource = load_model_preset_resource()
     template_slug = resource.get("template_slug")
     identity_source = resource.get("identity_source")
     if template_slug != terra.get("slug") or not isinstance(identity_source, str):
@@ -452,8 +533,8 @@ def _model_presets(terra: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return presets
 
 
-def _configured_model_upstreams(raw_config: dict[str, Any]) -> dict[str, str | None]:
-    configured: dict[str, str | None] = {}
+def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    configured: dict[str, dict[str, Any]] = {}
     model_groups = raw_config.get("model_groups", {})
     if not isinstance(model_groups, dict):
         return configured
@@ -472,11 +553,19 @@ def _configured_model_upstreams(raw_config: dict[str, Any]) -> dict[str, str | N
                 if isinstance(raw_model, dict)
                 else raw_model
             )
-            configured[name] = (
-                raw_upstream.strip()
-                if isinstance(raw_upstream, str) and raw_upstream.strip()
-                else None
-            )
+            spec: dict[str, Any] = {
+                "upstream_model": (
+                    raw_upstream.strip()
+                    if isinstance(raw_upstream, str) and raw_upstream.strip()
+                    else None
+                )
+            }
+            if isinstance(raw_model, dict) and "model_info" in raw_model:
+                spec["model_info"] = normalize_model_info(
+                    raw_model["model_info"],
+                    field=f"model_groups model {name!r}.model_info",
+                )
+            configured[name] = spec
     return configured
 
 
@@ -527,6 +616,16 @@ def _apply_compaction_hash_overlay(
     return models
 
 
+def _apply_auto_review_model_override(
+    models: list[dict[str, Any]], model_override: str | None
+) -> list[dict[str, Any]]:
+    """Apply one Guardian override to every current-turn catalog candidate."""
+    if model_override is not None:
+        for model in models:
+            model["auto_review_model_override"] = model_override
+    return models
+
+
 def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
     """Build a Codex catalog from configured models or the bundled defaults."""
     bundled = _catalog_resource()
@@ -541,24 +640,49 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("bundled Codex model catalog has no gpt-5.6-terra preset")
     presets = _model_presets(terra)
 
-    configured_upstream_names = _configured_model_upstreams(raw_config)
-    if not configured_upstream_names:
-        return {"models": _apply_compaction_hash_overlay(base_models)}
+    codex_settings = normalize_codex_settings(raw_config.get("codex"))
+    auto_review_model = codex_settings.get("auto_review_model_override")
+    configured_specs = _configured_model_specs(raw_config)
+    if not configured_specs:
+        models = _apply_auto_review_model_override(base_models, auto_review_model)
+        return {"models": _apply_compaction_hash_overlay(models)}
 
     selected_models: list[dict[str, Any]] = []
-    for name in sorted(configured_upstream_names):
-        model = copy.deepcopy(by_slug.get(name) or presets.get(name) or terra)
-        if name not in by_slug and name not in presets:
+    preset_resource = load_model_preset_resource()
+    for name in sorted(configured_specs):
+        spec = configured_specs[name]
+        upstream_name = spec.get("upstream_model")
+        detected_slug = upstream_name or name
+        raw_model_info = spec.get("model_info")
+        if isinstance(raw_model_info, dict):
+            raw_model_info = dict(raw_model_info, slug=name)
+            model = _materialize_model_preset(
+                terra,
+                preset_resource["shared_overrides"],
+                raw_model_info,
+                preset_resource["identity_source"],
+            )
+        else:
+            model = copy.deepcopy(
+                by_slug.get(name) or presets.get(detected_slug) or terra
+            )
+            if detected_slug in presets:
+                model["slug"] = name
+        if (
+            not isinstance(raw_model_info, dict)
+            and name not in by_slug
+            and detected_slug not in presets
+        ):
             model["slug"] = name
             model["display_name"] = name
             model["description"] = name
         if name == "codex-auto-review":
-            upstream_name = configured_upstream_names.get(name)
             if upstream_name is not None and upstream_name != name:
                 model["tool_mode"] = "code_mode_only"
         selected_models.append(model)
 
-    return {"models": _apply_compaction_hash_overlay(selected_models)}
+    models = _apply_auto_review_model_override(selected_models, auto_review_model)
+    return {"models": _apply_compaction_hash_overlay(models)}
 
 
 def catalog_path(codex_home: str) -> str:
@@ -651,8 +775,15 @@ def _edit_config_toml(
     *,
     gateway_port: int | None = None,
     api_key: str | None = None,
+    memory_extract_model: str | None = None,
+    memory_consolidation_model: str | None = None,
 ) -> str:
     """Replace Rosetta-managed catalog and provider settings in Codex TOML."""
+    text = _edit_memory_model_settings(
+        text,
+        extract_model=memory_extract_model,
+        consolidation_model=memory_consolidation_model,
+    )
     text = _edit_enabled_reasoning_efforts(text, enabled=model_catalog_path is not None)
     assignments = _active_catalog_assignment_lines(text)
     assignments.update(
@@ -755,11 +886,15 @@ class CodexLocalModeTransaction:
         catalog: dict[str, Any] | None,
         gateway_port: int | None = None,
         api_key: str | None = None,
+        memory_extract_model: str | None = None,
+        memory_consolidation_model: str | None = None,
     ) -> None:
         self.codex_home = codex_home
         self.catalog = catalog
         self.gateway_port = gateway_port
         self.api_key = api_key
+        self.memory_extract_model = memory_extract_model
+        self.memory_consolidation_model = memory_consolidation_model
         self._snapshots: tuple[_FileSnapshot, _FileSnapshot] | None = None
 
     @classmethod
@@ -771,11 +906,15 @@ class CodexLocalModeTransaction:
         gateway_port: int,
         api_key: str,
     ) -> CodexLocalModeTransaction:
+        codex_settings = normalize_codex_settings(raw_config.get("codex"))
+        memories = codex_settings.get("memories", {})
         return cls(
             codex_home,
             catalog=build_model_catalog(raw_config),
             gateway_port=gateway_port,
             api_key=api_key,
+            memory_extract_model=memories.get("extract_model"),
+            memory_consolidation_model=memories.get("consolidation_model"),
         )
 
     @classmethod
@@ -819,6 +958,8 @@ class CodexLocalModeTransaction:
                 os.path.abspath(catalog_file),
                 gateway_port=self.gateway_port,
                 api_key=self.api_key,
+                memory_extract_model=self.memory_extract_model,
+                memory_consolidation_model=self.memory_consolidation_model,
             )
             _atomic_write_bytes(config_file, updated.encode("utf-8"))
         except BaseException:

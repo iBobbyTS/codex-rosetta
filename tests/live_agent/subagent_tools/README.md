@@ -62,7 +62,7 @@ Run every provider/model/task combination:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
-| `gpt-5.6-terra` | `GPT中转站` | Responses Tool Mapping only |
+| `gpt-5.6-terra` | `GPT中转站` | direct OpenAI Responses |
 | `deepseek-v4-flash` | `DeepSeek` | Responses-to-Chat conversion |
 
 Every provider/model/task cell requires its own timestamp run root, Codex home,

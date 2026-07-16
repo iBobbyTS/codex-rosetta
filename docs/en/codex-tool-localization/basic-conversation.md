@@ -2,26 +2,25 @@
 
 Codex talks to models through the OpenAI Responses API surface. Many third-party providers only expose an OpenAI Chat Completions-compatible endpoint. Codex-Rosetta bridges that gap in different ways depending on the route:
 
-- Responses to Responses providers configured as **OpenAI Responses (Tool Mapping only)** apply the selected Tool Profile, then pass the Responses payload through directly.
-- Responses to Responses providers configured as **OpenAI Responses (Rosetta)** are decoded through Codex-Rosetta's IR and encoded back to the Responses format.
+- The Admin UI exposes one **OpenAI Responses** protocol. Official OpenAI and custom relay selections keep the direct Responses path; listed third-party providers use Responses → IR → Responses normalization.
 - Responses to Chat routes are converted through Codex-Rosetta's IR, then converted back to Responses events for Codex.
 
 The goal is to preserve Codex runtime semantics, not just make the upstream request syntactically valid.
 
-## The Two Responses Options Are Not New Protocols
+## One Responses Protocol, Provider-Aware Defaults
 
-**OpenAI Responses (Tool Mapping only)** and **OpenAI Responses (Rosetta)** use the same OpenAI Responses wire protocol and endpoint shape. They are separate Admin UI choices only because the gateway handles them differently internally:
+Provider configuration stores `api_type: "responses"`. The model-group default Profile and internal handling are selected from the Provider choice:
 
-- **Tool Mapping only** applies the selected Tool Profile without running the complete Responses body through IR, then forwards the response JSON and streaming SSE bytes directly. Use it for official OpenAI or GPT proxy services that preserve OpenAI's Responses behavior.
-- **Rosetta** runs the request and response through the Responses → IR → Responses pipeline. Use it for other model providers that support the Responses protocol but need Rosetta's normalization, such as Qwen.
+- OpenAI Official selects **透传（适用于OpenAI官方API）** and keeps the request, tool declarations, response JSON, and SSE bytes on the direct path.
+- OpenAI Custom and Custom + Custom select **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**. This keeps every original tool shape except `web.run`, which is Modified and handled by Rosetta.
+- A listed third-party provider with Responses selects **工具映射（适用于第三方模型提供的Responses接口）** and uses Responses → IR → Responses normalization.
+- Any Chat protocol selects **Chat Default（适用于第三方仅提供chat api的模型）**. Other protocols currently use the same fallback through a separate branch reserved for future protocol defaults.
 
-The configured `api_type` values are `responses_passthrough` and `responses_rosetta`. Both resolve to the internal `openai_responses` provider type; they do not add public gateway endpoints or API standards.
+The only supported Responses protocol value is `responses`; the former `responses_passthrough` and `responses_rosetta` values are no longer accepted and must be replaced before loading the configuration.
 
-Only the direct transport used by Tool Mapping only and Responses-to-Chat conversion are currently guaranteed. Responses (Rosetta), Anthropic conversion, and Google conversion remain unguaranteed; this mode-selection work does not expand Responses field or event unpacking.
+## Direct Responses Transport
 
-## Responses Tool Mapping Only
-
-For same-protocol OpenAI Responses routes configured as **Tool Mapping only**, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, forwards the resulting request, and streams raw upstream SSE bytes back to Codex. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
+For a direct same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, forwards the resulting request, and streams raw upstream SSE bytes back to Codex. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
 
 This is important because Codex relies on fields that are not part of a minimal cross-provider IR, including:
 
@@ -30,7 +29,7 @@ This is important because Codex relies on fields that are not part of a minimal 
 - Native Responses tool item structure.
 - Provider-specific request fields such as `include`.
 
-Tool Profiles are selectable for this mode. Tool Mapping only now defaults to the bundled **OpenAI Responses Tool Mapping Only** profile: every native function, custom, hosted, and Namespace tool is Passthrough, so Rosetta does not replace, disable, inject, or locally map them. Its only disabled catalog entries are synthetic tool injections, which prevents Rosetta from adding tools that Codex did not send. Select **Chat Default** or a copied Profile with `web.run` set to Modified explicitly if you want Rosetta's local `web.run` mapping or other Chat-oriented tool behavior. For Modified `web.run`, Rosetta rewrites only the live `web__run` section nested in the custom `exec` description; other Responses fields and upstream response bytes remain on the direct path.
+The bundled **透传** Profile leaves every native function, custom, hosted, and Namespace tool Passthrough. Its only Disabled entries are synthetic Rosetta injections, so it cannot add a tool Codex did not send. The bundled **web.run 注入** Profile differs in exactly one state: `web.run` is Modified. Rosetta then rewrites only the live `web__run` section nested in the custom `exec` description; other Responses fields and upstream response bytes remain on the direct path. **工具映射** inherits the established Chat Default mapping policy for listed third-party Responses implementations.
 
 Codex's standalone Search and Images clients use three additional JSON endpoints:
 
@@ -41,10 +40,10 @@ Codex's standalone Search and Images clients use three additional JSON endpoints
 Images use the selected Profile's `image_gen.imagegen` state:
 
 - **Passthrough** forwards the endpoint only when the request model resolves to
-  an **OpenAI Responses (Tool Mapping only)** provider.
+  a direct OpenAI Responses provider.
 - **Modified** sends generation and edit requests to the OpenAI Images API Base
   URL configured on the Function card, using its Token as a Bearer credential.
-  This path is available to Tool Mapping only, Responses Rosetta, Chat,
+  This path is available to Responses, Chat,
   Anthropic, and Google model groups.
 - **Disabled** rejects the Images endpoint.
 

@@ -28,6 +28,7 @@ from .tool_profiles import (
     resolve_tool_profile_inputs,
     validate_tool_profile_reference,
 )
+from .model_presets import model_capabilities, normalize_model_info
 from .web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from .transport import ProviderInfo
 
@@ -44,8 +45,7 @@ CODEX_HOME_ENV = "CODEX_HOME"
 DEFAULT_CODEX_HOME = os.path.expanduser("~/.codex")
 
 API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
-    "responses_passthrough": "openai_responses",
-    "responses_rosetta": "openai_responses",
+    "responses": "openai_responses",
     "chat": "openai_chat",
     "anthropic": "anthropic",
     "google": "google",
@@ -62,13 +62,18 @@ PROVIDER_API_TYPE_SHIMS: dict[tuple[str, str], str] = {
     ("moonshot_china", "chat"): "moonshot",
     ("moonshot_international", "chat"): "moonshot",
     ("openai", "chat"): "openai",
-    ("openai", "responses_passthrough"): "openai_responses",
-    ("openai", "responses_rosetta"): "openai_responses",
+    ("openai", "responses"): "openai_responses",
     ("openrouter", "anthropic"): "openrouter--anthropic",
     ("openrouter", "chat"): "openrouter--openai_chat",
     ("qwen", "chat"): "qwen",
     ("zhipu", "chat"): "zhipu",
 }
+
+CHAT_DEFAULT_TOOL_PROFILE = BUILTIN_TOOL_PROFILE
+RESPONSES_PASSTHROUGH_TOOL_PROFILE = "openai-responses-tool-mapping-only"
+WEB_RUN_INJECTION_TOOL_PROFILE = "web-run-injection"
+RESPONSES_TOOL_MAPPING_PROFILE = "responses-tool-mapping"
+OPENAI_OFFICIAL_RESPONSES_BASE_URL = "https://api.openai.com/v1"
 
 MAX_API_KEY_LABEL_LENGTH = 128
 REQUEST_BODY_LIMIT_OPTIONS_MB = (64, 128, 256, 512, 1024)
@@ -77,6 +82,7 @@ UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
 WEB_RUN_SIDECAR_URL_ENV = "CODEX_ROSETTA_WEB_RUN_URL"
 WEB_RUN_SIDECAR_TOKEN_ENV = "CODEX_ROSETTA_WEB_RUN_TOKEN"
 WEB_SEARCH_PROVIDERS = frozenset({"tavily"})
+CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -89,6 +95,53 @@ def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
     if not isinstance(confirmed, bool):
         raise ValueError("config: server.local_mode_confirmed must be a boolean")
     return enabled, confirmed
+
+
+def normalize_codex_settings(value: Any) -> dict[str, Any]:
+    """Validate model overrides managed by the Codex local-mode integration."""
+    if value is None:
+        mapping: dict[str, Any] = {}
+    elif isinstance(value, dict):
+        mapping = value
+    else:
+        raise ValueError("config: codex must be an object")
+
+    unsupported = set(mapping) - {"auto_review_model_override", "memories"}
+    if unsupported:
+        raise ValueError(f"config: codex has unsupported fields: {sorted(unsupported)}")
+
+    normalized: dict[str, Any] = {}
+    auto_review_model = mapping.get("auto_review_model_override")
+    if auto_review_model is not None:
+        if not isinstance(auto_review_model, str) or not auto_review_model.strip():
+            raise ValueError(
+                "config: codex.auto_review_model_override must be a non-empty string"
+            )
+        normalized["auto_review_model_override"] = auto_review_model.strip()
+
+    raw_memories = mapping.get("memories")
+    if raw_memories is not None and not isinstance(raw_memories, dict):
+        raise ValueError("config: codex.memories must be an object")
+    memories = raw_memories if isinstance(raw_memories, dict) else {}
+    unsupported_memories = set(memories) - set(CODEX_MEMORY_MODEL_FIELDS)
+    if unsupported_memories:
+        raise ValueError(
+            "config: codex.memories has unsupported fields: "
+            f"{sorted(unsupported_memories)}"
+        )
+    normalized_memories: dict[str, str] = {}
+    for field in CODEX_MEMORY_MODEL_FIELDS:
+        model = memories.get(field)
+        if model is None:
+            continue
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError(
+                f"config: codex.memories.{field} must be a non-empty string"
+            )
+        normalized_memories[field] = model.strip()
+    if normalized_memories:
+        normalized["memories"] = normalized_memories
+    return normalized
 
 
 def normalize_request_body_limit_mb(value: Any) -> int | None:
@@ -273,7 +326,11 @@ def provider_responses_processing(
     """Return the internal handling mode for an OpenAI Responses provider."""
     if provider_type not in {"openai_responses", "open_responses"}:
         return "rosetta"
-    return "rosetta" if cfg.get("api_type") == "responses_rosetta" else "passthrough"
+    return (
+        "rosetta"
+        if default_tool_profile_for_provider(cfg) == RESPONSES_TOOL_MAPPING_PROFILE
+        else "passthrough"
+    )
 
 
 def provider_supports_tool_profiles(cfg: Any) -> bool:
@@ -282,10 +339,28 @@ def provider_supports_tool_profiles(cfg: Any) -> bool:
 
 
 def default_tool_profile_for_provider(cfg: Any) -> str:
-    """Return the bundled default Profile for one provider handling mode."""
-    if isinstance(cfg, dict) and cfg.get("api_type") == "responses_passthrough":
-        return "openai-responses-tool-mapping-only"
-    return BUILTIN_TOOL_PROFILE
+    """Return the bundled default Profile for one provider selection."""
+    if not isinstance(cfg, dict):
+        return CHAT_DEFAULT_TOOL_PROFILE
+
+    api_type = cfg.get("api_type")
+    provider = cfg.get("provider")
+    if api_type == "responses":
+        normalized_base_url = str(cfg.get("base_url") or "").rstrip("/")
+        if (
+            provider == "openai"
+            and normalized_base_url == OPENAI_OFFICIAL_RESPONSES_BASE_URL
+        ):
+            return RESPONSES_PASSTHROUGH_TOOL_PROFILE
+        if provider in {"openai", "custom"}:
+            return WEB_RUN_INJECTION_TOOL_PROFILE
+        return RESPONSES_TOOL_MAPPING_PROFILE
+    if api_type == "chat":
+        return CHAT_DEFAULT_TOOL_PROFILE
+
+    # Keep this fallback separate from the Chat branch so future protocols can
+    # receive their own default without changing established Chat behavior.
+    return CHAT_DEFAULT_TOOL_PROFILE
 
 
 def resolve_model_tool_profile_names(
@@ -340,6 +415,8 @@ def resolve_provider_config_type_and_shim(
     """Resolve a provider config entry to its base API type and optional shim."""
     api_type = cfg.get("api_type")
     if api_type:
+        if str(api_type) not in API_TYPE_TO_PROVIDER_TYPE:
+            raise ValueError(f"config: unsupported provider api_type {api_type!r}")
         provider_type = api_type_to_provider_type(api_type) or str(api_type)
         return provider_type, derive_provider_shim_name(cfg.get("provider"), api_type)
 
@@ -593,6 +670,7 @@ class GatewayConfig:
 
     def __init__(self, raw: dict[str, Any]) -> None:
         self.token_values = collect_token_values(raw)
+        self.codex = normalize_codex_settings(raw.get("codex"))
         all_providers: dict[str, dict[str, str]] = raw.get("providers", {})
 
         # Filter out disabled providers (enabled defaults to True)
@@ -838,13 +916,25 @@ class GatewayConfig:
                 f"in model group '{group_name}'"
             )
 
+        model_info = entry.pop("model_info", None)
+        if model_info is not None:
+            model_info = normalize_model_info(
+                model_info,
+                field=(
+                    f"config: model '{model_name}' in model group "
+                    f"'{group_name}'.model_info"
+                ),
+            )
         unsupported = set(entry) - {"provider", "upstream_model", "capabilities"}
         if unsupported:
             raise ValueError(
                 f"config: model '{model_name}' in model group "
                 f"'{group_name}' has unsupported fields: {sorted(unsupported)}"
             )
-        capabilities = entry.get("capabilities", ["text"])
+        capability_source = dict(entry)
+        if model_info is not None:
+            capability_source["model_info"] = model_info
+        capabilities = model_capabilities(model_name, capability_source)
         if not isinstance(capabilities, list) or not capabilities:
             capabilities = ["text"]
         invalid_capabilities = set(capabilities) - {"text", "vision"}
