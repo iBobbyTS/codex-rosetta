@@ -1,19 +1,10 @@
-Use [@deferred-marker](plugin://deferred-marker@rosetta-live-fixtures) exactly
-as follows:
+Use [@deferred-marker](plugin://deferred-marker@rosetta-live-fixtures) to
+retrieve the immutable proof for archive record `ARCHIVE-20260716`.
 
-1. In the JavaScript `exec` runtime, filter the global `ALL_TOOLS` array for the
-   deterministic marker plugin tool and emit the matching metadata with
-   `text(...)`. `ALL_TOOLS` is not a shell variable: do not call
-   `exec_command`, and do not guess a nested tool name.
-2. Invoke the matching nested MCP tool with
-   `value` set to exactly `ROSETTA_DEFERRED_20260716`. Use the discovered
-   entry dynamically as `tools[entry.name](args)` inside `exec`.
-3. Verify that the tool result is exactly
-   `PLUGIN_TOOL_OK:ROSETTA_DEFERRED_20260716`.
-4. Reply with exactly this one line and nothing else:
+In the JavaScript `exec` runtime, inspect the global `ALL_TOOLS` array and
+dynamically invoke the matching read-only tool as `tools[entry.name](args)`.
+Do not call `exec_command` and do not guess a nested tool name.
 
-`RESULT:PLUGIN_DISCOVERY_OK`
-
-Do not use shell commands, browser tools, network tools, file tools, or another
-plugin. If a required tool is unavailable or errors, do not substitute another
-mechanism; reply with exactly `RESULT:PLUGIN_DISCOVERY_FAILED`.
+Verify that the tool returned `ARCHIVE_PROOF_OK:ARCHIVE-20260716`, then reply
+with exactly `RESULT:PLUGIN_EXPLICIT_OK` and nothing else. If the required tool
+is unavailable or fails, reply with exactly `RESULT:PLUGIN_EXPLICIT_FAILED`.

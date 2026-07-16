@@ -340,12 +340,20 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - Run `tests/agent_workspace/builtin_tools/01` through `06` with provider display name `OpenAI` and a model catalog exactly equivalent to `gpt-5.6-sol`; verify Code Mode `wait`, two Plan updates, model-hidden `apply_patch` with localized `Edit`/`Write` execution, `view_image`, the grouped Goal lifecycle, and real upstream visual recognition with a vision-capable model;
 - After `view_image` transport and deterministic visual recognition pass, run `tests/agent_workspace/image_generation/01` with a vision-capable model; verify that the current Codex auth path exposes `image_gen.imagegen`, the configured Images endpoint saves an artifact, projected `view_image` opens that exact path, and the outer evaluator confirms the returned description includes the requested dog, grass/lawn, and running concepts. If the tool is absent from the Codex source request, classify it as an exposure/auth-path failure before evaluating model capability;
 - Test `request_user_input` through an app-server JSON-RPC client that answers `ToolRequestUserInput`; `codex exec` explicitly rejects this request and cannot provide valid real-agent coverage;
-- Run `tests/live_agent/deferred_tool_search/01` in a fresh isolated Codex home
-  with its local marketplace and structured plugin mention; require the
-  plugin/MCP namespace to enter the model request, find the tool through
-  `tool_search`, actually call it, and consume the fixed marker result. A
-  successful `codex plugin add` or `codex mcp list` alone does not pass this
-  gate, and a manual top-level MCP registration is not an acceptable fallback;
+- Run `tests/live_agent/deferred_tool_search/01` through `07`, each in a fresh
+  isolated Codex home. Require all three explicit controls to pass before
+  interpreting the four natural-language discovery tasks. Verify the ordered
+  three-candidate skill/plugin metadata, explicit skill and plugin guidance,
+  implicit selected-skill reads, the code-mode `exec` discovery contract,
+  runtime `ALL_TOOLS` catalogs, plugin call provenance, actual archive-tool
+  calls, and consumed fixed results in rollout plus source/target Gateway Logs.
+  Installation/list output alone does not pass. Run all Terra cells before
+  starting the DeepSeek matrix;
+- On a Responses-to-Chat profile route with deferred nested tool guidance,
+  verify the target request still declares `exec(input: string)` and a Chat
+  call round-trips to a Codex `custom_tool_call` with raw JavaScript. Without
+  deferred guidance, the existing internal exec-container projection behavior
+  must remain unchanged;
 - `multi_agent_v1` and `multi_agent_v2/collaboration` provided by the version can spawn, communicate, wait and return results, and parent/window/thread does not cross talk;
 - For a new third-party alias, test collaboration v2 before retaining legacy `multi_agent_v1`; use v1 only when the newer lifecycle is demonstrably unreliable for that model;
 - When model catalog enables code mode, actually verify `exec/wait` and nested tool continuation; especially check that the payload received by `exec` is custom/raw-source, not function/JSON payload, and confirm that third-party models will recover with visible tool errors when they misuse the freeform tool and will not be fatal;

@@ -55,14 +55,28 @@ planning quality. The suite enables `current_time_reminder` and `memories`,
 seeds an isolated memory root, and treats an unavailable app-server
 orchestrator skill provider as a real `skills` Namespace failure.
 
-The deferred-plugin suite is
+The capability-exposure suite is
 [`tests/live_agent/deferred_tool_search`](../../tests/live_agent/deferred_tool_search/README.md).
-It provisions a local marketplace and a deterministic, read-only STDIO MCP
-plugin inside each isolated Codex home. The exact task includes a structured
-`plugin://` mention because installation does not activate a plugin's MCP bundle
-for a turn. Evaluation requires a native `tool_search` call, the loaded marker
-tool call and result, and Gateway Logs evidence for the actual upstream route.
-Browser and authenticated app connectors are deliberately outside this suite.
+It provisions exactly three unrelated local candidates (archive proof, integer
+addition, and color normalization) for each standalone-skill, standalone-MCP,
+plugin-skill, or plugin-MCP surface. Tasks `01` through `03` are explicit
+controls; tasks `04` through `07` use only natural-language intent and never
+name the target capability. Evaluation separately records catalog exposure,
+selection, skill-body access, deferred tool exposure, call, and consumed result
+across the Codex rollout, source Responses request, and converted Chat request.
+For code-mode models the deferred discovery surface is runtime `ALL_TOOLS`, not
+a required top-level `tool_search`. The Responses/Chat request carries the
+`exec` description and discovery contract; Codex injects candidate metadata
+into the V8 runtime, so live evidence covers both boundaries. Browser,
+authenticated apps, and real user or third-party capabilities are deliberately
+outside this suite.
+
+For Responses-to-Chat profile routes, the converted `exec(input: string)`
+function must remain model-callable whenever the Codex description advertises
+runtime-only deferred nested tools. Static exec projections alone are not a
+replacement for `ALL_TOOLS`, because those candidates do not exist in the
+source request. Chat `exec` calls must round-trip back to Codex custom-tool raw
+JavaScript input.
 
 The Subagent-tools suite is
 [`tests/live_agent/subagent_tools`](../../tests/live_agent/subagent_tools/README.md).

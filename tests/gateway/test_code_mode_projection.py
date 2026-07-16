@@ -229,6 +229,17 @@ def _exec_description() -> str:
     return "Run JavaScript.\n\n" + "\n\n".join(sections)
 
 
+def _deferred_exec_description() -> str:
+    return (
+        _exec_description()
+        + "\n\n"
+        + (
+            "Some deferred nested tools may be omitted from this description. "
+            "They remain available through the ALL_TOOLS runtime catalog."
+        )
+    )
+
+
 def test_modified_web_run_projects_only_rosetta_supported_capabilities():
     route = _route(
         tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
@@ -764,6 +775,101 @@ def test_disabled_exec_container_is_hidden_when_no_child_can_be_parsed():
     assert adapted["tools"] == []
     assert adapted["tool_choice"] == "auto"
     assert adapted[LOCALIZATION_CAPABILITIES_KEY]["has_custom_exec"] is True
+
+
+def test_gateway_preserves_deferred_exec_container_and_custom_round_trip():
+    captured_body: dict = {}
+    script = (
+        "const entry = ALL_TOOLS.find(({ name }) => "
+        'name.includes("get_archive_proof"));\n'
+        "const result = await tools[entry.name]({ record_id: "
+        '"ARCHIVE-20260716" });\ntext(result);'
+    )
+    upstream_response = {
+        "id": "chatcmpl-deferred-exec",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_exec",
+                            "type": "function",
+                            "function": {
+                                "name": "exec",
+                                "arguments": json.dumps({"input": script}),
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_response,
+            raw_content=json.dumps(upstream_response).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    provider_info = MagicMock()
+    provider_info.base_url = "https://example.test"
+    body = {
+        "model": "deepseek-v4-flash",
+        "input": [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {
+                        "type": "custom",
+                        "name": "exec",
+                        "description": _deferred_exec_description(),
+                    }
+                ],
+            },
+            {"role": "user", "content": "retrieve the archive proof"},
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            provider_info,
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+        )
+
+    response, _ = asyncio.run(run())
+
+    assert response.status_code == 200
+    target_exec = next(
+        tool["function"]
+        for tool in captured_body["tools"]
+        if tool.get("function", {}).get("name") == "exec"
+    )
+    assert target_exec["parameters"] == {
+        "type": "object",
+        "properties": {"input": {"type": "string"}},
+        "required": ["input"],
+    }
+    output = json.loads(response.body)["output"][0]
+    assert output["type"] == "custom_tool_call"
+    assert output["name"] == "exec"
+    assert output["input"] == script
 
 
 def test_projected_call_translates_to_custom_exec_and_round_trips_mapping():

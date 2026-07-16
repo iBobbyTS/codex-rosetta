@@ -1,5 +1,6 @@
-Use $isolated-skill-marker and follow its complete `SKILL.md` instructions.
+Use $isolated-skill-marker and follow its complete `SKILL.md` instructions for
+archive record `ARCHIVE-20260716`.
 
-The final response must come from the skill body, not from its description or
-from reading fixture files with shell/file tools. If the skill is unavailable,
-reply with exactly `RESULT:SKILL_DISCOVERY_FAILED`.
+The final response must come from the injected skill body, not its catalog
+description and not a shell or file fallback. If the skill is unavailable,
+reply with exactly `RESULT:SKILL_EXPLICIT_FAILED`.

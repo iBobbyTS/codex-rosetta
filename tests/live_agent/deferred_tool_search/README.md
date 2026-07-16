@@ -1,37 +1,49 @@
-# Isolated Plugin, MCP, And Skill Discovery Test
+# Isolated Capability Exposure And Discovery Test
 
-This suite verifies three independently provisioned Codex capabilities in a
-fresh isolated home: a local plugin, a standalone MCP server, and a standalone
-skill. It uses the discovery surface selected by the Codex 0.144.4 model
-catalog.
+This suite verifies that Codex-Rosetta preserves the model-visible information
+needed to use standalone skills, standalone MCP tools, plugin skills, and plugin
+MCP tools. It pairs explicit controls with natural-language discovery tasks so
+installation/exposure failures are not confused with active-discovery failures.
 
-It intentionally does not use Browser, an app connector, user authentication,
-or the user's normal `CODEX_HOME`.
+It intentionally uses only local deterministic fixtures. It does not copy real
+user skills, install third-party plugins, use Browser/apps, or reuse the user's
+normal `CODEX_HOME`.
 
-## Scenario
+## Candidate catalog
 
-- `01`: install and mention the local `deferred-marker` plugin, discover its
-  deferred MCP tool through code mode `ALL_TOOLS`, and invoke it.
-- `02`: install the same deterministic server with `codex mcp add`, without a
-  plugin, then discover and invoke it through code mode `ALL_TOOLS`.
-- `03`: copy a standalone skill into the isolated Codex home, explicitly invoke
-  it, and prove that its complete body was injected.
+Every task receives exactly three clearly unrelated candidates in stable order:
 
-Task `01` contains the structured plugin mention
-`plugin://deferred-marker@rosetta-live-fixtures`. Installation alone does not
-activate a plugin's MCP bundle for a turn; the mention is part of the real
-Codex plugin contract and must remain in the exact prompt.
+1. archive record proof (the target);
+2. integer addition;
+3. color-label normalization.
 
-The MCP server is deterministic and read-only. Its only successful tool result
-is `PLUGIN_TOOL_OK:ROSETTA_DEFERRED_20260716`.
+Implicit prompts mention only the archive-record goal and record id. They do
+not contain a skill/plugin/tool name, plugin URI, private body marker, or tool
+result prefix. This is a narrow exposure regression, not a model-selection
+benchmark.
+
+## Task matrix
+
+| Task | Mode | Surface | Required behavior |
+|---|---|---|---|
+| `01` | explicit | plugin MCP | structured plugin mention, plugin guidance, `ALL_TOOLS`, call |
+| `02` | explicit | standalone MCP | named MCP class, `ALL_TOOLS`, call |
+| `03` | explicit | standalone skill | `$skill` mention and host-injected `<skill>` body |
+| `04` | implicit | standalone skill | catalog match, selected `SKILL.md` read, body marker |
+| `05` | implicit | standalone MCP | semantic `ALL_TOOLS` match and call |
+| `06` | implicit | plugin skill | prefixed skill metadata, selected body read, no explicit guidance |
+| `07` | implicit | plugin MCP | plugin provenance in deferred tool metadata and call, no mention |
+
+The explicit controls are paired with implicit tasks as `03/04`, `02/05`, and
+`01/06/07`. If a control passes but its implicit counterpart fails, classify
+the matrix result as `active_discovery_failed`; do not report an installation or
+Rosetta conversion failure without evidence for that earlier stage.
 
 ## Isolated provisioning
 
-Copy `common/` and exactly one selected task into the run worktree as required
-by the live-agent runner. The copied local marketplace root is `marketplace`.
-
-After copying the user's gateway configuration, prepare only the isolated copy
-and Codex home:
+Copy `common/` and exactly one selected task into a fresh timestamp-only run
+root. After copying the user's gateway configuration, prepare only that isolated
+copy and Codex home:
 
 ```bash
 conda run -n llm-rosetta python "$SUITE/prepare_run.py" \
@@ -42,42 +54,36 @@ conda run -n llm-rosetta python "$SUITE/prepare_run.py" \
   --task-id 01
 ```
 
-`prepare_run.py` provisions exactly the selected task after writing the
-isolated config. Start a new `codex exec` only after it succeeds. Preserve its
-installation/list outputs under `artifacts/`; they are evidence, not a runtime
-success signal. For third-party aliases it also writes the copied gateway's
-Terra-derived `model_catalog.json`; an unknown-model fallback is a setup
-failure, not valid Responses-to-Chat/code-mode evidence.
+`prepare_run.py` installs only the surfaces required by the selected task:
 
+- plugin MCP tasks remove plugin skills from the copied worktree;
+- the plugin skill task removes plugin MCP declarations;
+- standalone skill tasks copy all three simple skills;
+- standalone MCP tasks register one server exposing all three tools.
 
-## Required Codex configuration
+The three plugins share `fixtures/deterministic_mcp_server.py`. Placeholder
+paths in copied plugin MCP manifests are resolved only inside the disposable
+worktree before installation. Installation/list outputs stay under `artifacts/`
+as evidence, not as proof that a model saw or used a capability.
 
-Use a custom provider ID such as `deferred-tool-test` with provider display
-name `openai` and the isolated Rosetta localhost `base_url`. The display name
-enables Codex Namespace tool support for the custom provider.
-
-Explicitly enable plugins:
-
-```toml
-[features]
-plugins = true
-```
+For third-party aliases the script writes a gateway-derived
+`model_catalog.json`; an unknown-model fallback is a setup failure.
 
 ## Model order and stop gate
 
-Run `01`, `02`, and `03` with `gpt-5.6-terra` first, using a separate timestamp
-root and gateway for every task. Do not start any `deepseek-v4-flash` cell
-until all three Terra cells pass.
+Run tasks `01` through `07` with `gpt-5.6-terra` first, using a separate run
+root, gateway, Codex home, and trace for every cell. Stop and repair the first
+failing Terra task. Do not start `deepseek-v4-flash` until every Terra task
+passes.
 
-| Model | Gateway model group | Expected route |
-|---|---|---|
-| `gpt-5.6-terra` | `GPT中转站` | direct OpenAI Responses Lite/code-mode baseline |
-| `deepseek-v4-flash` | `DeepSeek` | Responses-to-Chat with Tool Profile |
+| Model | Expected route |
+|---|---|
+| `gpt-5.6-terra` | direct OpenAI Responses Lite/code-mode baseline |
+| `deepseek-v4-flash` | Responses-to-Chat with generated 0.144.4 model catalog |
 
-## Result interpretation
-
-Follow [`EVALUATION.md`](EVALUATION.md). For the 0.144.4 Terra catalog, a success
-uses `exec`, discovers the deferred nested MCP tool from `ALL_TOOLS`, and calls
-it in the same or a later code cell. A top-level `tool_search` call is not
-required for a `code_mode_only` model. The standalone skill task instead
-requires the full skill-body marker in the isolated rollout.
+For code-mode models, deferred MCP discovery is `exec -> runtime ALL_TOOLS ->
+nested tool`; a top-level `tool_search` call is not required. Codex 0.144.4
+places only the `ALL_TOOLS` contract in the model request; candidate metadata is
+injected into the V8 runtime and is captured by the fixture's compact catalog
+output. Follow
+[`EVALUATION.md`](EVALUATION.md) for structural evidence and result fields.
