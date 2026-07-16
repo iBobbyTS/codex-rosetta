@@ -308,6 +308,9 @@ canvas { width: 100%; height: 160px; }
 .checkbox-group { display: flex; gap: 14px; flex-wrap: wrap; }
 .checkbox-group label { font-size: 13px; color: var(--text); display: flex; align-items: center; gap: 5px; cursor: pointer; text-transform: none; letter-spacing: 0; }
 .checkbox-group input[type="checkbox"] { width:auto;accent-color:var(--accent); }
+.tool-profile-checkbox-group { display:flex;gap:12px;flex-wrap:wrap; }
+.tool-profile-checkbox { display:flex;align-items:center;gap:5px;cursor:pointer;font-size:13px;color:var(--text);text-transform:none;letter-spacing:0; }
+.tool-profile-checkbox input[type="checkbox"] { width:auto;accent-color:var(--accent); }
 .model-info-checkbox-group { min-height:38px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius); }
 .model-group-list { display:flex;flex-direction:column;gap:12px;margin-bottom:14px; }
 .model-group-card { border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);overflow:hidden; }
@@ -1885,6 +1888,12 @@ function updateToolProfileInput(itemId, inputId, value) {
   renderToolProfileControls();
 }
 
+function updateToolProfileCheckboxGroup(itemId, inputId, container) {
+  const value = [...container.querySelectorAll('input[type="checkbox"]:checked')]
+    .map(input => input.value).join(',');
+  updateToolProfileInput(itemId, inputId, value);
+}
+
 function resetToolProfileDraft() {
   const profile = currentToolProfile();
   if (!profile) return;
@@ -2046,6 +2055,13 @@ function renderToolProfileInputs(item) {
       const readonly = input.readonly ? ' readonly' : '';
       const oninput = input.readonly ? '' : ` oninput="updateToolProfileInput(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.value)"`;
       return `<label class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><textarea class="tool-profile-input tool-profile-textarea" maxlength="16384"${readonly}${oninput}>${esc(value)}</textarea></label>`;
+    }
+    if (input.type === 'checkbox_group') {
+      const selected = new Set(String(value).split(',').filter(Boolean));
+      const options = (input.options || []).map(option =>
+        `<label class="tool-profile-checkbox"><input type="checkbox" value="${escAttr(option.value)}"${selected.has(option.value) ? ' checked' : ''} onchange="updateToolProfileCheckboxGroup(${handlerArg(item.id)}, ${handlerArg(input.id)}, this.closest('.tool-profile-checkbox-group'))">${esc(option.label)}</label>`
+      ).join('');
+      return `<div class="tool-profile-input-group"><span class="tool-profile-input-label">${esc(t(input.label_i18n))}</span><div class="tool-profile-checkbox-group">${options}</div></div>`;
     }
     const inputType = input.type === 'password' ? 'password' : 'text';
     const placeholder = input.placeholder_i18n ? ` placeholder="${escAttr(t(input.placeholder_i18n))}"` : '';

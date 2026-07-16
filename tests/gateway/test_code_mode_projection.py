@@ -864,6 +864,36 @@ def test_view_image_projection_uses_image_output_helper():
     )
 
 
+def test_modified_view_image_limits_detail_values_in_schema_and_exec_script():
+    route = _route()
+    route.tool_profile["function.view_image"] = "modified"
+    route.tool_profile_inputs["function.view_image"] = {
+        "supported_details": "auto,original"
+    }
+    projections = exec_tool_projections_for_route(route)
+    definitions = project_exec_tool_definitions(
+        _section(
+            "view_image",
+            "args",
+            '{ path: string; detail?: "auto" | "low" | "high" | "original"; }',
+        ),
+        projections,
+        profile_route=route,
+    )
+
+    detail = definitions["view_image"]["function"]["parameters"]["properties"]["detail"]
+    assert detail["enum"] == ["auto", "original"]
+    assert detail["default"] == "auto"
+    assert build_exec_script(
+        projections["view_image"], {"path": "/tmp/test.png", "detail": "original"}
+    ).startswith("const result = await tools.view_image(")
+    with pytest.raises(ValueError, match="detail must be one of"):
+        build_exec_script(
+            projections["view_image"],
+            {"path": "/tmp/test.png", "detail": "high"},
+        )
+
+
 def test_image_generation_projection_uses_generated_image_output_helper():
     route = _route()
     route.tool_profile["namespace.image_gen.imagegen"] = "modified"

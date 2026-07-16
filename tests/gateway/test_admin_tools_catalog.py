@@ -383,6 +383,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "custom.apply_patch": "disabled",
         "custom.exec": "disabled",
         "function.test_sync_tool": "disabled",
+        "function.view_image": "modified",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
     assert catalog["preset_profiles"] == [
@@ -578,7 +579,6 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.get_context_remaining",
         "function.list_available_plugins_to_install",
         "function.request_plugin_install",
-        "function.view_image",
         "function.list_mcp_resources",
         "function.list_mcp_resource_templates",
         "function.read_mcp_resource",
@@ -597,6 +597,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         assert builtin[item_id] == "passthrough"
         assert "description_i18n" not in items[item_id]
         assert "description_visible_when" not in items[item_id]
+    assert builtin["function.view_image"] == "modified"
     for item_id in (
         "function.exec_command",
         "function.write_stdin",
@@ -721,7 +722,7 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert 'id="saveToolProfileBtn"' in page
     assert 'onclick="openToolProfileCloneModal()"' in page
     assert "updateToolProfileState" in html
-    assert 'type="checkbox"' not in page
+    assert "checkbox_group" in html
     assert "tools.disabledHint" in page
     assert "item.description_i18n" in html
     assert "item.note_i18n" in html
@@ -772,6 +773,8 @@ def test_admin_tools_view_has_profile_editor_and_all_filters():
     assert "if (toolProfileDraft[namespaceId] === 'disabled')" in html
     assert "input.type === 'password'" in html
     assert "input.type === 'select'" in html
+    assert "input.type === 'checkbox_group'" in html
+    assert "updateToolProfileCheckboxGroup" in html
     assert "input.type === 'textarea'" in html
     assert '<textarea class="tool-profile-input tool-profile-textarea"' in html
     assert "input.readonly ? ' readonly' : ''" in html
