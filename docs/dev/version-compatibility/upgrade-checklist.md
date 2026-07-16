@@ -220,7 +220,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Captured wire fixtures for `multi_agent_v1`, `multi_agent_v2/collaboration`;
 - Captured wire fixtures for code mode `exec/wait`, nested call and wait continuation;
 - web search multi-round event reconstruction, downgrade paths for disabled/missing keys, bounded identity-encoded auxiliary HTTP responses, and standalone Search `turnXsearchY` allocation/open scoped by authenticated principal plus `SearchRequest.id`, including retry stability, concurrent allocation, cross-session failure, TTL/capacity cleanup, and app shutdown cleanup;
-- Cross-format round trip of reasoning effort/summary/content/encrypted state, including exact OpenAI Responses `max` preservation without inheriting Chat-specific degradation;
+- Cross-format round trip of reasoning effort/summary/content/encrypted state, including exact OpenAI Responses and Chat `max` preservation, immediate Codex `light` to backend `low` normalization with no downstream `light`, and no historical `model_capabilities` reasoning/tool gates;
 - orphan call/result, residual tool choice/config and history trimming after compact;
 - Concurrency windows, cache expiration, normal EOF, abnormal EOF,
   huge peer-declared HTTP chunks, oversized no-newline SSE lines, accumulated

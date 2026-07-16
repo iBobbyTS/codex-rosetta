@@ -309,7 +309,7 @@ Currently `ResponsesPhaseBuffer` treats function/custom/MCP/shell/computer/tool_
 
 ## 5. Reasoning state
 
-Codex will request `reasoning.encrypted_content` when reasoning is turned on, and consume summary part, summary text delta/done and raw reasoning delta. Rosetta currently retains Responses summary/content/encrypted state through IR metadata, and uses provider extension fields such as `reasoning_content` in Chat upstream to maintain tool continuation. OpenAI Responses reasoning effort is forwarded without degrading `max` to `xhigh`; Chat compatibility remains a separate mapping because endpoint-level accepted values do not guarantee that every upstream model supports every effort.
+Codex will request `reasoning.encrypted_content` when reasoning is turned on, and consume summary part, summary text delta/done and raw reasoning delta. Rosetta currently retains Responses summary/content/encrypted state through IR metadata, and uses provider extension fields such as `reasoning_content` in Chat upstream to maintain tool continuation. Codex's inbound `light` display value is normalized immediately to the backend value `low`; no provider request or mapping metadata should contain `light`. OpenAI Responses and Chat preserve `max`. Gateway reasoning mapping assumes every routed LLM supports reasoning; historical `model_capabilities` values for `reasoning` and `tools` do not gate request adaptation, while text/vision capabilities remain relevant to image handling.
 
 Must check when upgrading:
 

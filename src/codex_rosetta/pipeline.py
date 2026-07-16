@@ -407,7 +407,6 @@ class ConversionPipeline:
             ),
             upstream_model=self._upstream_model,
             model_name=body.get("model"),
-            model_capabilities=self._model_capabilities,
             context=ctx,
         )
 

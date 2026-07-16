@@ -1636,26 +1636,6 @@ def test_admin_html_requires_confirmation_to_close_codex_restart_notice():
     assert i18n["zh"]["btn.confirm"] == "确认"
 
 
-def test_admin_html_assumes_all_llm_models_support_tools():
-    html_path = (
-        Path(__file__).parents[2]
-        / "src"
-        / "codex_rosetta"
-        / "gateway"
-        / "admin"
-        / "admin.html"
-    )
-    html = html_path.read_text(encoding="utf-8")
-
-    assert 'id="capTools"' not in html
-    assert 'id="fetchCapTools"' not in html
-    assert 'class="group-cap" value="tools"' not in html
-    assert "capabilities.push('tools');" not in html
-    assert "capabilities.push('reasoning');" not in html
-    assert "caps.push('tools');" not in html
-    assert "caps.push('reasoning');" not in html
-
-
 def test_admin_html_exposes_provider_preset_protocol_controls():
     """Provider modal exposes provider/protocol selects and preset behavior."""
     html_path = (

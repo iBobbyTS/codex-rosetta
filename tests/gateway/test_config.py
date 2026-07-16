@@ -848,7 +848,7 @@ class TestModelGroups:
     def test_rejects_non_text_vision_llm_capabilities(self):
         raw = _minimal_raw()
         raw["model_groups"]["test-llm"]["models"]["gpt-test"] = {
-            "capabilities": ["text", "tools"]
+            "capabilities": ["text", "audio"]
         }
         with pytest.raises(ValueError, match="unsupported capabilities"):
             GatewayConfig(raw)
