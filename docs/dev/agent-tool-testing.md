@@ -55,6 +55,15 @@ planning quality. The suite enables `current_time_reminder` and `memories`,
 seeds an isolated memory root, and treats an unavailable app-server
 orchestrator skill provider as a real `skills` Namespace failure.
 
+The deferred-plugin suite is
+[`tests/live_agent/deferred_tool_search`](../../tests/live_agent/deferred_tool_search/README.md).
+It provisions a local marketplace and a deterministic, read-only STDIO MCP
+plugin inside each isolated Codex home. The exact task includes a structured
+`plugin://` mention because installation does not activate a plugin's MCP bundle
+for a turn. Evaluation requires a native `tool_search` call, the loaded marker
+tool call and result, and Gateway Logs evidence for the actual upstream route.
+Browser and authenticated app connectors are deliberately outside this suite.
+
 The Subagent-tools suite is
 [`tests/live_agent/subagent_tools`](../../tests/live_agent/subagent_tools/README.md).
 It isolates all six `collaboration` Functions into separate tasks for
@@ -186,6 +195,13 @@ Responses-to-Chat routes expose unique flattened names such as
 `memories.list` and Rosetta must reconstruct the original Namespace before
 Codex executes it. A textual mention, a shell substitute, or a local file read
 does not count.
+
+For deferred-plugin tasks, preserve the marketplace-add, plugin-add, plugin-list,
+and MCP-list JSON artifacts, but do not treat provisioning as execution proof.
+The rollout must show `tool_search`, the loaded plugin MCP call, and its marker
+result. If installation succeeds but no plugin MCP tool enters the request,
+classify it as `not_exposed`; do not replace the plugin with a top-level manual
+MCP registration because that would bypass the contract under test.
 
 For Subagent-tool tasks, evaluate the one core `collaboration` Function named
 by `expected.json` plus the scenario-specific lifecycle proof. Spawn and wait

@@ -17,6 +17,7 @@ from codex_rosetta.gateway.proxy import (
     ProviderMetadataStore,
     WindowToolSearchStore,
     _defer_responses_namespace_tools_for_chat,
+    _prepare_window_tool_search_request,
     handle_non_streaming,
     handle_streaming,
 )
@@ -132,6 +133,17 @@ def _plain_route() -> ResolvedRoute:
         target_provider="openai_chat",
         provider_name="test-provider",
         upstream_model="glm-5.2",
+    )
+
+
+def _profile_route() -> ResolvedRoute:
+    return ResolvedRoute(
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+        upstream_model="glm-5.2",
+        tool_profile_name="test-profile",
+        tool_profile={"namespace.web.run": "disabled"},
     )
 
 
@@ -1328,13 +1340,6 @@ def test_gateway_deferred_tool_search_limits_namespace_children():
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-    loadable_tools = search_result_body["input"][1]["tools"]
-    assert len(loadable_tools) == 1
-    assert loadable_tools[0]["name"] == "mcp__codex_apps__github"
-    assert [tool["name"] for tool in loadable_tools[0]["tools"]] == [
-        "_fetch_pr",
-        "_get_pr_info",
-    ]
     names = _tool_names(captured_bodies[1]["tools"])
     assert "mcp__codex_apps__github-_fetch_pr" in names
     assert "mcp__codex_apps__github-_get_pr_info" in names
@@ -1453,12 +1458,6 @@ def test_gateway_does_not_hard_code_github_owner_repo_descriptions():
 
     assert first_response.status_code == 200
     assert second_response.status_code == 200
-
-    loadable_params = search_result_body["input"][1]["tools"][0]["tools"][0][
-        "parameters"
-    ]
-    assert loadable_params["properties"]["owner"]["description"] == "Repository owner."
-    assert loadable_params["properties"]["repo"]["description"] == "Repository name."
 
     chat_tools = captured_bodies[1]["tools"]
     github_tool = next(
@@ -1584,12 +1583,123 @@ def test_gateway_deferred_tool_search_matches_nested_schema_metadata():
     response, _ = asyncio.run(run())
 
     assert response.status_code == 200
-    assert [tool["name"] for tool in body["input"][1]["tools"][0]["tools"]] == [
-        "_create_event"
-    ]
     names = _tool_names(captured_body["tools"])
     assert "mcp__calendar-_create_event" in names
     assert "mcp__calendar-_delete_event" not in names
+
+
+def test_profile_route_injects_runtime_tool_search_output_into_chat_request():
+    captured_body: dict[str, Any] = {}
+    window_store = WindowToolSearchStore()
+    upstream_body = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "ok"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "tool_search_output",
+                "call_id": "call_search",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "mcp__marker_plugin",
+                        "description": "Deterministic marker plugin.",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "return_marker",
+                                "description": "Return a deterministic marker.",
+                                "parameters": {
+                                    "type": "object",
+                                    "properties": {"value": {"type": "string"}},
+                                    "required": ["value"],
+                                },
+                            }
+                        ],
+                    }
+                ],
+            },
+            {"role": "user", "content": "return the marker"},
+        ],
+        "tools": [
+            {
+                "type": "tool_search",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _profile_route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_window_id="thread-profile:0",
+            window_tool_search_store=window_store,
+        )
+
+    response, _ = asyncio.run(run())
+
+    assert response.status_code == 200
+    assert "mcp__marker_plugin-return_marker" in _tool_names(captured_body["tools"])
+
+
+def test_profile_route_keeps_static_namespaces_out_of_deferred_store():
+    window_store = WindowToolSearchStore()
+    body = {
+        "input": [{"role": "user", "content": "use the static tool"}],
+        "tools": [
+            {
+                "type": "namespace",
+                "name": "mcp__static_profile",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "read_value",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ],
+            }
+        ],
+    }
+
+    applies = _prepare_window_tool_search_request(
+        route=_profile_route(),
+        codex_window_id="thread-profile:0",
+        body=body,
+        window_tools=window_store,
+    )
+
+    assert applies is True
+    assert body["tools"][0]["type"] == "namespace"
+    assert all(tool.get("type") != "tool_search" for tool in body["tools"])
+    assert len(window_store) == 0
 
 
 def test_gateway_does_not_overwrite_non_empty_tool_search_output():

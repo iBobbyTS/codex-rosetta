@@ -1,0 +1,6 @@
+{
+  "final_response": "RESULT:SKILL_DISCOVERY_OK",
+  "skill_name": "isolated-skill-marker",
+  "skill_body_marker": "SKILL_BODY_OK:ROSETTA_SKILL_20260716",
+  "prohibited_fallbacks": ["shell", "browser", "network", "file"]
+}

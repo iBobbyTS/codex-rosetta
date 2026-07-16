@@ -2475,11 +2475,15 @@ def _prepare_window_tool_search_request(
     if getattr(route, "tool_profile", None):
         # Profile-managed namespaces are either removed or eagerly expanded by
         # the Responses converter; Chat has no native namespace wire shape.
-        return False
-    deferred_tools = _defer_responses_namespace_tools_for_chat(
-        body,
-        optimize_tool_descriptions=True,
-    )
+        # Runtime plugin/MCP tools returned by Codex in tool_search_output are
+        # not part of that static catalog, so the window store must still own
+        # their discovery and injection into this and subsequent requests.
+        deferred_tools: list[dict[str, Any]] = []
+    else:
+        deferred_tools = _defer_responses_namespace_tools_for_chat(
+            body,
+            optimize_tool_descriptions=True,
+        )
     window_tools.prepare_request(codex_window_id, deferred_tools, body)
     return True
 

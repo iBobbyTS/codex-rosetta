@@ -1,0 +1,16 @@
+{
+  "final_response": "RESULT:PLUGIN_DISCOVERY_OK",
+  "discovery_surface": "exec.ALL_TOOLS",
+  "plugin_id": "deferred-marker@rosetta-live-fixtures",
+  "loaded_tool_description_contains": ["deterministic", "marker"],
+  "tool_arguments": {
+    "value": "ROSETTA_DEFERRED_20260716"
+  },
+  "tool_result": "PLUGIN_TOOL_OK:ROSETTA_DEFERRED_20260716",
+  "prohibited_fallbacks": [
+    "shell",
+    "browser",
+    "network",
+    "file"
+  ]
+}
