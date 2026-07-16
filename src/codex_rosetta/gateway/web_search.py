@@ -55,8 +55,8 @@ class WebSearchExecutionResult:
     error: str | None = None
 
 
-class TavilySearchClient(Protocol):
-    """Minimal protocol used by the gateway web-search runtime."""
+class WebSearchClient(Protocol):
+    """Provider-neutral search client used by gateway search runtimes."""
 
     async def search(
         self,
@@ -64,7 +64,11 @@ class TavilySearchClient(Protocol):
         *,
         settings: WebSearchSettings,
     ) -> dict[str, Any]:
-        """Run a Tavily search and return the parsed JSON body."""
+        """Run a search and return the normalized result object."""
+
+
+# Backward-compatible type name for callers that inject a Tavily-shaped fake.
+TavilySearchClient = WebSearchClient
 
 
 class TavilyHTTPClient:
@@ -123,7 +127,7 @@ class WebSearchRuntime:
     def __init__(
         self,
         *,
-        client: TavilySearchClient,
+        client: WebSearchClient,
         settings: WebSearchSettings,
     ) -> None:
         self.client = client
@@ -147,7 +151,7 @@ class WebSearchRuntime:
         return WebSearchExecutionResult(
             call=call,
             raw=raw,
-            model_text=format_tavily_result_for_model(call.query, raw),
+            model_text=format_web_search_result_for_model(call.query, raw),
         )
 
     async def execute_many(
@@ -414,8 +418,8 @@ def extract_web_search_settings(body: dict[str, Any]) -> WebSearchSettings:
     )
 
 
-def format_tavily_result_for_model(query: str, raw: dict[str, Any]) -> str:
-    """Render Tavily JSON into concise model-visible tool output."""
+def format_web_search_result_for_model(query: str, raw: dict[str, Any]) -> str:
+    """Render normalized provider JSON into concise model-visible tool output."""
     lines = [f"Web search query: {query}"]
     answer = raw.get("answer")
     if isinstance(answer, str) and answer.strip():
@@ -444,6 +448,10 @@ def format_tavily_result_for_model(query: str, raw: dict[str, Any]) -> str:
             lines.append(f"Score: {score}")
         lines.append("")
     return "\n".join(lines).rstrip()
+
+
+# Retained for integrations that imported the old provider-specific helper.
+format_tavily_result_for_model = format_web_search_result_for_model
 
 
 def web_search_trace_summary(result: WebSearchExecutionResult) -> dict[str, Any]:

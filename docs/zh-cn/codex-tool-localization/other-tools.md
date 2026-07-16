@@ -51,11 +51,12 @@ Rosetta 从实际 Codex `exec` 声明中读取每项工具的 schema 和 descrip
 
 Chat Default 会把父级 `exec` 设为“禁用”，禁止向模型暴露。对于 Responses 到 Chat 的路由，Rosetta 仍会让这个容器通过源请求的 Profile 过滤，在内部读取并展开子工具，随后在发给 Chat 上游之前移除父级。这个移除过程 fail-closed：即使没有任何模型可见声明能够成功解析，也不会把已禁用的父级 `exec` 当作回退暴露。只有复制出的 Profile 明确把父级设为“直通”或“修改”时，才允许有意暴露原始 `exec`。
 
-对 exec 展开卡片而言，**直通**只做形态适配：把当前声明暴露为普通 Chat Function，再把调用翻译回 `exec`，不会追加任何 catalog 文本。Chat Default 中的 `exec_command`、`write_stdin`、`update_plan`、`view_image`、`get_goal`、Clock、Memories 和 Skills 都使用该状态。只有 Profile 会改变模型可见指导或工具行为时才保留**修改**：`create_goal` 和 `update_goal` 会追加指导，`web.run` 则使用所选的 Tavily Rosetta 搜索映射。
+对 exec 展开卡片而言，**直通**只做形态适配：把当前声明暴露为普通 Chat Function，再把调用翻译回 `exec`，不会追加任何 catalog 文本。Chat Default 中的 `exec_command`、`write_stdin`、`update_plan`、`view_image`、`get_goal`、Clock、Memories 和 Skills 都使用该状态。只有 Profile 会改变模型可见指导或工具行为时才保留**修改**：`create_goal` 和 `update_goal` 会追加指导，`web.run` 则使用所选的 Tavily 或自托管 Google Rosetta 搜索映射。
 
 当 `web.run` 为“修改”时，即使直接 Responses 路由仍把 `web__run` 放在 custom
 `exec` 内，Rosetta 也会改写这段实时声明。模型始终看到有界 `open`、固定时区 `time`
-和 `response_length`；只有配置全局 Tavily Key 后才显示 `search_query`。配置健康且
+和 `response_length`；配置全局 Tavily Key，或选择 Self-hosted (Google) 且 sidecar
+就绪后，才显示 `search_query`。配置健康且
 通过认证的 `web-run` sidecar 后，只有共享的五秒健康缓存报告 `browser_ready=true`
 时才额外暴露浏览器 `open`、`find`、`click` 和 PDF `screenshot`；必须通过提供的 Compose profile 启动 sidecar，才能让 Chromium 获得必需的
 seccomp 配置。2026-07-14 的隔离测试中，`gpt-5.6-sol → deepseek-v4-flash` 已成功使用静态
@@ -138,7 +139,7 @@ Function 的 Passthrough 状态在中文界面显示为**直通**。对 exec 展
 
 对于 Codex 按条件装配的工具，详情面板会分别显示普通模式位置、Code Mode Only 位置、开发状态和源码侧可用条件。这些标签解释 Codex 的装配规则，不表示 Gateway 能提前预测下一次请求的精确工具集合；实际 `exec` 声明仍是唯一依据。
 
-Function、Hosted 或 Namespace 目录项可以声明多组 `profile_inputs`。每组包含稳定 ID、本地化小标题、默认值，以及 `text`、`password`、`select` 或 `textarea` 输入类型。Select 使用有序的 `{value, label}` 选项：工具页面显示 label，并将 value 保存进 Profile。Textarea 可以由 catalog 声明为只读，让用户查看和复制当前 Profile 值但不能编辑。工具页面会按照目录中的声明顺序，在工具状态选择器下方渲染这些输入项。Hosted `web_search` 的 Provider、Token 和 guidance 归各 Profile 所有。`web.run` 不再包含 Profile 凭据：“修改”使用 Admin **联网搜索**页面中的全局 Tavily 配置，“直通”则把 `/v1/alpha/search` 直接发往上游模型 API。
+Function、Hosted 或 Namespace 目录项可以声明多组 `profile_inputs`。每组包含稳定 ID、本地化小标题、默认值，以及 `text`、`password`、`select` 或 `textarea` 输入类型。Select 使用有序的 `{value, label}` 选项：工具页面显示 label，并将 value 保存进 Profile。Textarea 可以由 catalog 声明为只读，让用户查看和复制当前 Profile 值但不能编辑。工具页面会按照目录中的声明顺序，在工具状态选择器下方渲染这些输入项。Hosted `web_search` 的 Provider、Token 和 guidance 归各 Profile 所有。`web.run` 不再包含 Profile 凭据：“修改”使用 Admin **联网搜索**页面中的全局搜索 Provider，“直通”则把 `/v1/alpha/search` 直接发往上游模型 API。
 
 输入项可以通过 `visible_when` 声明需要显示的工具状态，例如 `["modified"]`。输入项隐藏后，其已保存的 Profile 值不会被清除。目录也可以把运行时仍需使用的输入项完全从 UI 隐藏。卡片 description 默认在该工具支持的所有状态下显示；条目可以使用相同状态列表格式的 `description_visible_when` 自定义显示条件。“修改”状态的 Function 通常只显示如何修改工具描述的本地化摘要；`create_goal` 和 `update_goal` 则通过上述只读 textarea 显示实际的 Profile guidance。目录项还可声明 `profile_mutations`：通用 Profile 处理在 Modified 状态执行对应的 description 或 parameter description 追加操作，Namespace 则可在 Expanded 状态执行。Chat Default 中 `request_user_input`、Goal 工具和部分 `collaboration` Function 的工具使用指导都使用此机制；Converter 不再按 Function 名称写死指导文本。Chat Default 默认禁用旧 Hosted `web_search`，并保留 `web.run` 作为已配置的搜索工具面。复制 Profile 后可以重新启用 Hosted `web_search`；它在直通或修改状态下都会进行协议转换，但只有修改状态会追加 Profile guidance。
 

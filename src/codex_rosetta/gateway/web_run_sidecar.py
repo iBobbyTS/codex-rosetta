@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from codex_rosetta._vendor.httpclient import AsyncClient
 
 from .transport.http.transport import request_bounded_response
+from .web_search import WebSearchSettings
 
 _MAX_SIDECAR_RESPONSE_BYTES = 1_000_000
 
@@ -36,11 +37,25 @@ class WebRunBrowserClient(Protocol):
         """Execute one scoped operation and return model-visible text."""
 
 
+class WebRunSearchClient(Protocol):
+    """Minimal self-hosted search executor exposed by the sidecar."""
+
+    async def search(
+        self,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        """Return a normalized search result object."""
+
+
 class WebRunSidecarHTTPClient:
     """Bounded bearer-authenticated HTTP client for the optional sidecar."""
 
     def __init__(self, base_url: str, token: str, *, timeout: float = 45.0) -> None:
-        self._url = f"{base_url.rstrip('/')}/v1/execute"
+        root = base_url.rstrip("/")
+        self._execute_url = f"{root}/v1/execute"
+        self._search_url = f"{root}/v1/search"
         self._token = token
         self._timeout = timeout
 
@@ -65,7 +80,7 @@ class WebRunSidecarHTTPClient:
                 response = await request_bounded_response(
                     client,
                     "POST",
-                    self._url,
+                    self._execute_url,
                     json=payload,
                     headers=headers,
                     max_success_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
@@ -96,6 +111,58 @@ class WebRunSidecarHTTPClient:
             )
         return output
 
+    async def search(
+        self,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        """Run a bounded Google search inside the authenticated sidecar."""
+        payload = {
+            "query": query,
+            "max_results": settings.max_results,
+            "include_domains": list(settings.include_domains),
+        }
+        headers = {
+            "Authorization": f"Bearer {self._token}",
+            "Content-Type": "application/json",
+        }
+        async with AsyncClient(timeout=self._timeout) as client:
+            try:
+                response = await request_bounded_response(
+                    client,
+                    "POST",
+                    self._search_url,
+                    json=payload,
+                    headers=headers,
+                    max_success_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
+                    max_error_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
+                )
+            except Exception as exc:
+                raise WebRunSidecarError(
+                    f"web-run sidecar search failed: {exc}"
+                ) from exc
+
+        try:
+            body = response.json()
+        except Exception as exc:
+            raise WebRunSidecarError("web-run sidecar returned invalid JSON") from exc
+        if not isinstance(body, dict):
+            raise WebRunSidecarError("web-run sidecar returned a non-object response")
+        if response.status_code >= 400:
+            message = _sidecar_error_message(body, response.status_code)
+            if response.status_code in {400, 404, 422}:
+                raise WebRunSidecarInvalidRequest(message)
+            if response.status_code == 501:
+                raise WebRunSidecarNotImplemented(message)
+            raise WebRunSidecarError(message)
+        results = body.get("results")
+        if not isinstance(results, list):
+            raise WebRunSidecarError(
+                "web-run sidecar search response is missing array 'results'"
+            )
+        return body
+
 
 def _sidecar_error_message(body: dict[str, Any], status_code: int) -> str:
     detail = body.get("detail")
@@ -110,6 +177,7 @@ def _sidecar_error_message(body: dict[str, Any], status_code: int) -> str:
 
 __all__ = [
     "WebRunBrowserClient",
+    "WebRunSearchClient",
     "WebRunSidecarError",
     "WebRunSidecarHTTPClient",
     "WebRunSidecarInvalidRequest",

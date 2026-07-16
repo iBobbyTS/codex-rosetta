@@ -818,11 +818,12 @@ body { padding-bottom: 26px; }
       <div class="provider-card" style="max-width:560px">
         <div class="form-group">
           <label data-i18n="label.searchProvider">Search Provider</label>
-          <select id="networkSearchProvider">
+          <select id="networkSearchProvider" onchange="renderNetworkSearchProviderFields()">
             <option value="tavily">Tavily</option>
+            <option value="self_hosted_google">Self-hosted (Google)</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="networkSearchApiKeyGroup">
           <label data-i18n="label.searchApiKey">API Key</label>
           <input id="networkSearchApiKey" type="password" autocomplete="new-password" data-i18n-placeholder="label.searchApiKeyPlaceholder" placeholder="Enter the Tavily API key">
         </div>
@@ -2808,6 +2809,14 @@ function renderNetworkSearchSettings() {
   if (!provider || !apiKey) return;
   provider.value = settings.provider || 'tavily';
   apiKey.value = settings.tavily_api_key || '';
+  renderNetworkSearchProviderFields();
+}
+
+function renderNetworkSearchProviderFields() {
+  const provider = document.getElementById('networkSearchProvider');
+  const apiKeyGroup = document.getElementById('networkSearchApiKeyGroup');
+  if (!provider || !apiKeyGroup) return;
+  apiKeyGroup.hidden = provider.value !== 'tavily';
 }
 
 async function saveNetworkSearchSettings() {

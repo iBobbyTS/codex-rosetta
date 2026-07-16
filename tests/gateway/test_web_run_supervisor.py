@@ -174,3 +174,24 @@ def test_repository_compose_reuses_packaged_build_context() -> None:
 
     assert "../src/codex_rosetta/gateway/resources/web_run" in contents
     assert "container_name: web-run" not in contents
+
+
+def test_web_run_container_uses_patchright_without_playwright_runtime() -> None:
+    resource_dir = (
+        Path(__file__).parents[2]
+        / "src"
+        / "codex_rosetta"
+        / "gateway"
+        / "resources"
+        / "web_run"
+    )
+    requirements = (resource_dir / "requirements.txt").read_text(encoding="utf-8")
+    dockerfile = (resource_dir / "Dockerfile").read_text(encoding="utf-8")
+    app_source = (resource_dir / "app.py").read_text(encoding="utf-8")
+
+    assert "patchright==1.61.2" in requirements
+    assert "playwright==" not in requirements
+    assert "mcr.microsoft.com/playwright" not in dockerfile
+    assert "patchright install --with-deps chromium" in dockerfile
+    assert "from patchright.async_api import" in app_source
+    assert "from playwright." not in app_source
