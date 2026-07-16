@@ -1,0 +1,127 @@
+{
+  "task_id": "01",
+  "suite": "browser_use",
+  "role_contract": {
+    "executor_role": "execute_and_report_observations_only",
+    "executor_must_not_judge": true,
+    "judge_role": "separate_user_created_session",
+    "user_handoff_required": true,
+    "executor_forbidden_evidence_sources": [
+      "gateway_admin_logs",
+      "gateway_log_files",
+      "gateway_stream_trace",
+      "gateway_database",
+      "gateway_request_log",
+      "session_jsonl",
+      "rollout_jsonl",
+      "archived_session_metadata",
+      "raw_model_traces"
+    ]
+  },
+  "execution_contract": {
+    "host_surface": "codex_gui_app",
+    "agent_scope": "main_task_only",
+    "required_plugin": "Browser",
+    "required_skill": "browser:control-in-app-browser",
+    "required_browser": "iab",
+    "required_backend": "iab",
+    "prohibited_surfaces": [
+      "codex_cli",
+      "codex_exec",
+      "subagent",
+      "chrome",
+      "chrome_extension_backend",
+      "standalone_playwright",
+      "selenium",
+      "computer_use",
+      "web.run",
+      "external_browser_mcp",
+      "raw_http_browser_proof"
+    ]
+  },
+  "continuation_policy": {
+    "fail_fast": false,
+    "record_every_capability_group": true,
+    "continue_after_observations": [
+      "call_error",
+      "expected_postcondition_absent",
+      "unsupported_operation",
+      "policy_skipped_operation"
+    ],
+    "recovery_order": [
+      "reload_fixture",
+      "verify_title_and_ready_marker",
+      "fresh_tab_from_existing_iab_binding"
+    ],
+    "prohibited_recovery": [
+      "reinitialize_browser_runtime_for_tab_failure",
+      "reselect_browser_for_tab_failure",
+      "switch_backend",
+      "use_prohibited_fallback"
+    ],
+    "early_stop_conditions": [
+      "execution_gate_unmet",
+      "iab_browser_disconnected_or_unavailable"
+    ]
+  },
+  "fixture": {
+    "origin": "http://127.0.0.1:8876",
+    "entry_url": "http://127.0.0.1:8876/",
+    "title": "Browser Use Live Fixture",
+    "ready_marker": "ready"
+  },
+  "capability_groups": [
+    "binding_identity",
+    "tab_lifecycle",
+    "dom_snapshot_and_semantic_locators",
+    "form_controls",
+    "click_double_click_and_keyboard",
+    "iframe",
+    "navigation_history_reload",
+    "popup_claim",
+    "screenshots",
+    "dialogs",
+    "console_logs",
+    "download",
+    "browser_clipboard_synthetic_only",
+    "visibility",
+    "viewport_override_and_reset",
+    "page_assets",
+    "cdp_command_and_filtered_event",
+    "dom_cua",
+    "coordinate_cua",
+    "coordinate_drag_postcondition",
+    "locator_state_and_collections",
+    "stale_tab_recovery",
+    "cleanup"
+  ],
+  "judge_only_checks": [
+    "execution_provenance",
+    "capability_status_classification",
+    "gateway_and_rollout_correlation",
+    "overall_classification"
+  ],
+  "required_postconditions": {
+    "form_status": "{\"name\":\"browser-live\",\"enabled\":true,\"color\":\"blue\"}",
+    "counter": "2",
+    "double_click": "1",
+    "keyboard_value": "shortcut-ok",
+    "frame_output": "clicked",
+    "target_marker": "navigation-ok",
+    "download_body": "fixture-download-ok",
+    "asset_path": "/asset.svg",
+    "coordinate_click_status": "coordinate-clicked",
+    "bottom_marker": "Bottom marker"
+  },
+  "forbidden_inspection": [
+    "history",
+    "cookies",
+    "local_storage",
+    "profiles",
+    "passwords",
+    "session_stores",
+    "preexisting_system_clipboard"
+  ],
+  "executor_result_path": "artifacts/browser_use/01/execution.json",
+  "judge_result_path": "artifacts/browser_use/01/evaluation.json"
+}

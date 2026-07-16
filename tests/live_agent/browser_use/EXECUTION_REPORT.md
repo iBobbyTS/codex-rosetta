@@ -1,0 +1,74 @@
+# Browser Live Test Execution Report
+
+This contract is for the GUI **test executor only**. It records Browser actions
+and observable fixture outcomes without judging them.
+
+The executor must not inspect Gateway Logs, Gateway traces/databases, Request
+Log rows, session JSONL, rollout JSONL, or archived session metadata. It must
+not read `EVALUATION.md`, assign capability statuses, or produce an overall
+verdict.
+
+Write `artifacts/browser_use/01/execution.json` with this shape:
+
+```json
+{
+  "schema_version": 1,
+  "task_id": "01",
+  "role": "executor",
+  "host_surface": "codex_gui_app",
+  "plugin": "Browser",
+  "skill": "browser:control-in-app-browser",
+  "browser": "iab",
+  "backend": "iab",
+  "fixture_url": "http://127.0.0.1:8876/",
+  "run_started_at": "ISO-8601 timestamp",
+  "run_finished_at": "ISO-8601 timestamp",
+  "execution_constraints_observed": {
+    "main_task_only": true,
+    "codex_cli_calls": 0,
+    "subagent_calls": 0,
+    "chrome_calls": 0,
+    "substitute_browser_calls": 0
+  },
+  "forbidden_evidence_access": {
+    "gateway_admin_logs_opened": false,
+    "gateway_log_or_trace_read": false,
+    "gateway_database_or_request_log_read": false,
+    "session_or_rollout_jsonl_read": false,
+    "archived_session_metadata_read": false
+  },
+  "matrix_completed": true,
+  "expected_capability_count": 23,
+  "recorded_capability_count": 23,
+  "missing_capability_ids": [],
+  "recovery_events": [
+    {
+      "after_capability": "capability id",
+      "method": "reload_fixture | fresh_iab_tab",
+      "ready_marker_observed": true,
+      "note": "short observation"
+    }
+  ],
+  "capability_observations": [
+    {
+      "id": "stable capability id",
+      "browser_operations": ["short operation names"],
+      "call_returned": true,
+      "observed_postcondition": "exact short synthetic observation or null",
+      "error": null,
+      "note": null
+    }
+  ],
+  "cleanup": {
+    "viewport_reset": true,
+    "test_tabs_finalized": true,
+    "fixture_server_stopped": true
+  },
+  "judge_handoff_required": true
+}
+```
+
+Use `null` when no postcondition was observed; do not replace it with an
+interpretive status. Keep observations short and synthetic. Do not include DOM
+dumps, screenshots, Browser source, credentials, headers, clipboard contents,
+data URLs, model payloads, raw logs, or raw JSONL records.

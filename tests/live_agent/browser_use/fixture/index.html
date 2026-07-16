@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Browser Use Live Fixture</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; min-height: 1800px; }
+    section { margin: 16px 0; padding: 12px; border: 1px solid #bbb; }
+    #fixedCuaButton { position: absolute; left: 24px; top: 560px; width: 180px; height: 48px; }
+    #dragTarget { position: absolute; left: 24px; top: 660px; width: 80px; height: 80px; background: #4b8; color: white; display: grid; place-items: center; }
+    #bottomMarker { position: absolute; top: 1650px; }
+  </style>
+</head>
+<body>
+  <h1>Browser Use Live Fixture</h1>
+  <p id="status" data-testid="fixture-status" aria-live="polite">ready</p>
+
+  <section aria-label="Form controls">
+    <label for="nameInput">Test name</label>
+    <input id="nameInput" placeholder="Type a test value">
+    <label><input id="featureCheckbox" type="checkbox"> Enable fixture feature</label>
+    <label for="colorSelect">Fixture color</label>
+    <select id="colorSelect">
+      <option value="red">Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+    </select>
+    <button id="applyForm" type="button">Apply form</button>
+  </section>
+
+  <section aria-label="Pointer controls">
+    <button id="counterButton" type="button">Increment counter</button>
+    <output id="counterOutput">0</output>
+    <button id="doubleButton" type="button">Double-click target</button>
+    <output id="doubleOutput">0</output>
+  </section>
+
+  <section aria-label="Navigation and dialogs">
+    <a id="targetLink" href="/target.html">Open target page</a>
+    <a id="newTabLink" href="/target.html?new=1" target="_blank">Open target in new tab</a>
+    <button id="alertButton" type="button">Show alert</button>
+    <button id="confirmButton" type="button">Show confirm</button>
+    <button id="promptButton" type="button">Show prompt</button>
+    <a id="downloadLink" download="fixture.txt" href="/fixture.txt">Download fixture</a>
+  </section>
+
+  <section aria-label="Embedded content">
+    <img src="/asset.svg" alt="Fixture asset" width="120" height="60">
+    <iframe id="fixtureFrame" title="Fixture frame" src="/frame.html"></iframe>
+  </section>
+
+  <button id="fixedCuaButton" type="button">Coordinate click target</button>
+  <div id="dragTarget" draggable="true">Drag me</div>
+  <p id="bottomMarker">Bottom marker</p>
+
+  <script>
+    const status = document.getElementById('status');
+    document.getElementById('applyForm').addEventListener('click', () => {
+      status.textContent = JSON.stringify({
+        name: document.getElementById('nameInput').value,
+        enabled: document.getElementById('featureCheckbox').checked,
+        color: document.getElementById('colorSelect').value
+      });
+      console.log('fixture-form-applied');
+    });
+    document.getElementById('counterButton').addEventListener('click', () => {
+      const output = document.getElementById('counterOutput');
+      output.value = String(Number(output.value) + 1);
+    });
+    document.getElementById('doubleButton').addEventListener('dblclick', () => {
+      const output = document.getElementById('doubleOutput');
+      output.value = String(Number(output.value) + 1);
+    });
+    document.getElementById('fixedCuaButton').addEventListener('click', () => {
+      status.textContent = 'coordinate-clicked';
+    });
+    const dragTarget = document.getElementById('dragTarget');
+    dragTarget.addEventListener('dragend', event => {
+      status.textContent = `dragged:${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+    });
+    dragTarget.addEventListener('pointerdown', event => {
+      dragTarget.setPointerCapture(event.pointerId);
+      status.textContent = 'drag-started';
+    });
+    dragTarget.addEventListener('pointermove', event => {
+      if (dragTarget.hasPointerCapture(event.pointerId)) {
+        status.textContent = `drag-moving:${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+      }
+    });
+    dragTarget.addEventListener('pointerup', event => {
+      status.textContent = `drag-ended:${Math.round(event.clientX)},${Math.round(event.clientY)}`;
+      dragTarget.releasePointerCapture(event.pointerId);
+    });
+    document.getElementById('alertButton').onclick = () => {
+      setTimeout(() => {
+        alert('fixture-alert');
+        status.textContent = 'alert-dismissed';
+      }, 300);
+    };
+    document.getElementById('confirmButton').onclick = () => {
+      setTimeout(() => {
+        status.textContent = confirm('fixture-confirm') ? 'confirm-accepted' : 'confirm-dismissed';
+      }, 300);
+    };
+    document.getElementById('promptButton').onclick = () => {
+      setTimeout(() => {
+        status.textContent = `prompt:${prompt('fixture-prompt', 'default')}`;
+      }, 300);
+    };
+  </script>
+</body>
+</html>

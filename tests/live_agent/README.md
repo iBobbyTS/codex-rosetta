@@ -42,10 +42,20 @@ handling rather than prose quality.
   scenario that generates an image, opens the saved artifact through projected
   `view_image`, and leaves semantic agreement with the requested scene to the
   outer developer or agent evaluator.
+- [`browser_use`](browser_use/README.md): a Codex GUI app-only, main-task-only
+  live test for the bundled in-app Browser. It must use the `Browser` plugin and
+  its `browser:control-in-app-browser` skill; Codex CLI, subagents, Chrome, and
+  substitute browser-control surfaces are prohibited.
 
 When no suite is specified, start with `command_execution/01`. Suite README
 and EVALUATION files, rather than the runner skill, define task order, Codex
 configuration, feature flags, and pass criteria.
+
+`browser_use` is an explicit exception to the CLI-oriented execution model
+below. Run it only in the Codex GUI app by following its own README; never pass
+it to the repository `rosetta-codex-readme-test` runner. Its GUI executor writes
+only `execution.json` and must not read Gateway/session logs or judge itself;
+the user hands the result to a new judge-agent session for `evaluation.json`.
 
 ## Real-provider defaults
 

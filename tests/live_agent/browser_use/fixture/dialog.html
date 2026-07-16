@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Browser Fixture Dialog</title></head>
+<body>
+  <h1>Dialog Fixture</h1>
+  <p id="dialogStatus">waiting</p>
+  <script>
+    const kind = new URLSearchParams(location.search).get('kind') || 'alert';
+    const status = document.getElementById('dialogStatus');
+    setTimeout(() => {
+      if (kind === 'confirm') {
+        status.textContent = confirm('fixture-confirm') ? 'confirm-accepted' : 'confirm-dismissed';
+      } else if (kind === 'prompt') {
+        status.textContent = `prompt:${prompt('fixture-prompt', 'default')}`;
+      } else {
+        alert('fixture-alert');
+        status.textContent = 'alert-dismissed';
+      }
+    }, 500);
+  </script>
+</body>
+</html>
