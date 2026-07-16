@@ -1,9 +1,9 @@
 """Provider-specific reasoning request mapping.
 
 The gateway-facing reasoning configuration is intentionally separate from the
-older shim ``ReasoningCapability`` helper.  Codex-style requests should keep
-thinking enabled for reasoning-capable coding models, then map the requested
-effort onto each upstream provider's public control fields.
+older shim ``ReasoningCapability`` helper.  Codex-style requests keep thinking
+enabled, then map the requested effort onto each upstream provider's public
+control fields.
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ ResolvedReasoningMapping = Literal[
     "minimax_m3",
     "mimo_v2_5",
 ]
-ReasoningEffort = Literal["light", "medium", "high", "xhigh", "max"]
+ReasoningEffort = Literal["low", "medium", "high", "xhigh", "max"]
 ReasoningMappingSource = Literal["config", "model", "target_api"]
 
 VALID_REASONING_MAPPINGS: tuple[ReasoningMapping, ...] = (
@@ -57,7 +57,7 @@ VALID_REASONING_MAPPINGS: tuple[ReasoningMapping, ...] = (
 )
 
 _QWEN_BUDGETS: dict[ReasoningEffort, int] = {
-    "light": 2048,
+    "low": 2048,
     "medium": 4096,
     "high": 8192,
     "xhigh": 16384,
@@ -144,16 +144,16 @@ def normalize_reasoning_effort(
     if mode_key == "disabled" or effort_key in {"none", "disabled", "off", "false"}:
         _warn(
             warnings,
-            "Reasoning disable request ignored; using light effort because "
+            "Reasoning disable request ignored; using low effort because "
             "reasoning-capable coding models keep thinking enabled.",
         )
-        return "light"
+        return "low"
 
     if not effort_key:
         return "high"
 
     if effort_key in {"minimal", "low", "light"}:
-        return "light"
+        return "low"
     if effort_key == "ultra":
         normalized = normalize_reasoning_input(
             cast(ReasoningConfig, {"effort": effort_key})
@@ -179,17 +179,9 @@ def apply_reasoning_mapping_to_provider_request(
     shim_name: str | None = None,
     upstream_model: str | None = None,
     model_name: str | None = None,
-    model_capabilities: list[str] | None = None,
     context: ConversionContext | None = None,
 ) -> dict[str, Any]:
-    """Apply reasoning mapping to a final provider request body.
-
-    The mapping is only active when the resolved model declares the
-    ``reasoning`` capability.  This keeps generic library conversions stable
-    while allowing gateway models to opt into always-on thinking semantics.
-    """
-    if model_capabilities is None or "reasoning" not in model_capabilities:
-        return target_body
+    """Apply reasoning mapping to a final provider request body."""
 
     warnings = context.warnings if context is not None else None
     reasoning = ir_request.get("reasoning")
@@ -240,7 +232,7 @@ def _write_mapping_fields(
     if mapping == "openai_responses":
         body["reasoning"] = {"effort": effort}
     elif mapping == "openai_chat":
-        body["reasoning_effort"] = _openai_chat_effort(effort)
+        body["reasoning_effort"] = effort
     elif mapping == "anthropic":
         body["thinking"] = {"type": "adaptive"}
         output_config = dict(body.get("output_config") or {})
@@ -305,10 +297,6 @@ def _remove_reasoning_controls(body: dict[str, Any]) -> dict[str, Any]:
         else:
             result.pop("output_config", None)
     return result
-
-
-def _openai_chat_effort(effort: ReasoningEffort) -> str:
-    return "xhigh" if effort == "max" else effort
 
 
 def _fallback_mapping(target_provider: str | None) -> ResolvedReasoningMapping:

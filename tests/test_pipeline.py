@@ -476,7 +476,6 @@ class TestConversionPipeline:
             "openai_responses",
             "openai_chat",
             upstream_model="deepseek-v4-flash",
-            model_capabilities=["text", "reasoning"],
             reasoning_mapping="deepseek_v4",
         )
         target = pipeline.convert_request(
@@ -498,7 +497,6 @@ class TestConversionPipeline:
             "openai_responses",
             "openai_chat",
             upstream_model="qwen3.7-plus",
-            model_capabilities=["text", "reasoning"],
             reasoning_mapping="auto",
         )
         target = pipeline.convert_request(
@@ -521,7 +519,6 @@ class TestConversionPipeline:
             "openai_chat",
             "anthropic",
             upstream_model="unknown-model",
-            model_capabilities=["text", "reasoning"],
             reasoning_mapping="auto",
         )
         target = pipeline.convert_request(
@@ -543,7 +540,6 @@ class TestConversionPipeline:
             "openai_chat",
             "openai_chat",
             upstream_model="kimi-k2.7-code",
-            model_capabilities=["text", "reasoning"],
             reasoning_mapping="kimi_k2_7_code",
         )
         target = pipeline.convert_request(
@@ -727,7 +723,7 @@ class TestConversionPipeline:
             }
         )
 
-        assert target["reasoning_effort"] == "medium"
+        assert target["reasoning_effort"] == "high"
         assert "context" not in target
         assert "reasoning" not in target
 

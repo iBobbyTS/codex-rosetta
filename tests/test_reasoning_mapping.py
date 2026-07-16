@@ -20,7 +20,6 @@ def _apply(mapping: str, effort: str, target_provider: str = "openai_chat") -> d
         target_provider=target_provider,
         reasoning_mapping=mapping,
         upstream_model="test",
-        model_capabilities=["text", "reasoning"],
         context=ctx,
     )
 
@@ -28,18 +27,18 @@ def _apply(mapping: str, effort: str, target_provider: str = "openai_chat") -> d
 @pytest.mark.parametrize(
     ("raw", "mode", "expected"),
     [
-        ("minimal", None, "light"),
-        ("low", None, "light"),
-        ("light", None, "light"),
+        ("minimal", None, "low"),
+        ("low", None, "low"),
+        ("light", None, "low"),
         ("medium", None, "medium"),
         ("high", None, "high"),
         ("xhigh", None, "xhigh"),
         ("max", None, "max"),
         ("ultra", None, "max"),
         (None, None, "high"),
-        ("none", None, "light"),
-        ("disabled", None, "light"),
-        ("high", "disabled", "light"),
+        ("none", None, "low"),
+        ("disabled", None, "low"),
+        ("high", "disabled", "low"),
     ],
 )
 def test_normalize_reasoning_effort(raw, mode, expected):
@@ -47,7 +46,7 @@ def test_normalize_reasoning_effort(raw, mode, expected):
 
     assert normalize_reasoning_effort(raw, mode=mode, warnings=warnings) == expected
     assert bool(warnings) is (
-        expected == "light" and (raw in {"none", "disabled"} or mode == "disabled")
+        expected == "low" and (raw in {"none", "disabled"} or mode == "disabled")
     )
 
 
@@ -109,7 +108,7 @@ def test_resolve_reasoning_mapping_falls_back_to_target_api(target_provider, exp
 @pytest.mark.parametrize(
     ("effort", "expected"),
     [
-        ("light", "light"),
+        ("light", "low"),
         ("medium", "medium"),
         ("high", "high"),
         ("xhigh", "xhigh"),
@@ -125,11 +124,11 @@ def test_openai_responses_mapping_efforts(effort, expected):
 @pytest.mark.parametrize(
     ("effort", "expected"),
     [
-        ("light", "light"),
+        ("light", "low"),
         ("medium", "medium"),
         ("high", "high"),
         ("xhigh", "xhigh"),
-        ("max", "xhigh"),
+        ("max", "max"),
     ],
 )
 def test_openai_chat_mapping_efforts(effort, expected):
@@ -138,18 +137,43 @@ def test_openai_chat_mapping_efforts(effort, expected):
     assert result["reasoning_effort"] == expected
 
 
-@pytest.mark.parametrize("effort", ["light", "medium", "high", "xhigh", "max"])
-def test_anthropic_mapping_efforts(effort):
+def test_light_alias_is_normalized_before_mapping_metadata_and_output():
+    ctx = ConversionContext()
+    result = apply_reasoning_mapping_to_provider_request(
+        {"model": "test", "messages": []},
+        ir_request={"reasoning": {"effort": "light"}},
+        target_provider="openai_chat",
+        reasoning_mapping="openai_chat",
+        context=ctx,
+    )
+
+    assert result["reasoning_effort"] == "low"
+    assert ctx.metadata["reasoning_mapping"]["effort"] == "low"
+
+
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        ("light", "low"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "xhigh"),
+        ("max", "max"),
+    ],
+)
+def test_anthropic_mapping_efforts(effort, expected):
     result = _apply("anthropic", effort, "anthropic")
 
     assert result["thinking"] == {"type": "adaptive"}
-    assert result["output_config"] == {"effort": effort}
+    assert result["output_config"] == {"effort": expected}
 
 
 @pytest.mark.parametrize(
     ("effort", "expected"),
     [
         ("light", "high"),
+        ("low", "high"),
         ("medium", "high"),
         ("high", "high"),
         ("xhigh", "max"),
@@ -164,18 +188,29 @@ def test_deepseek_v4_mapping_efforts(effort, expected):
     assert result["reasoning_effort"] == expected
 
 
-@pytest.mark.parametrize("effort", ["light", "medium", "high", "xhigh", "max"])
-def test_glm_5_2_mapping_efforts(effort):
+@pytest.mark.parametrize(
+    ("effort", "expected"),
+    [
+        ("light", "low"),
+        ("low", "low"),
+        ("medium", "medium"),
+        ("high", "high"),
+        ("xhigh", "xhigh"),
+        ("max", "max"),
+    ],
+)
+def test_glm_5_2_mapping_efforts(effort, expected):
     result = _apply("glm_5_2", effort)
 
     assert result["thinking"] == {"type": "enabled"}
-    assert result["reasoning_effort"] == effort
+    assert result["reasoning_effort"] == expected
 
 
 @pytest.mark.parametrize(
     ("effort", "expected_budget"),
     [
         ("light", 2048),
+        ("low", 2048),
         ("medium", 4096),
         ("high", 8192),
         ("xhigh", 16384),
@@ -201,7 +236,6 @@ def test_kimi_k2_7_code_mapping_efforts_are_noop(effort):
         ir_request={"reasoning": {"effort": effort}},
         target_provider="openai_chat",
         reasoning_mapping="kimi_k2_7_code",
-        model_capabilities=["text", "reasoning"],
         context=ctx,
     )
 
@@ -217,7 +251,6 @@ def test_minimax_m3_mapping_efforts_are_adaptive_with_split_for_chat(effort):
         ir_request={"reasoning": {"effort": effort}},
         target_provider="openai_chat",
         reasoning_mapping="minimax_m3",
-        model_capabilities=["text", "reasoning"],
         context=ctx,
     )
 
@@ -241,7 +274,6 @@ def test_mimo_v2_5_mapping_efforts_enable_thinking(effort):
         ir_request={"reasoning": {"effort": effort}},
         target_provider="openai_chat",
         reasoning_mapping="mimo_v2_5",
-        model_capabilities=["text", "reasoning"],
         context=ctx,
     )
 
@@ -249,14 +281,13 @@ def test_mimo_v2_5_mapping_efforts_enable_thinking(effort):
     assert ctx.warnings
 
 
-def test_disabled_input_promotes_to_light_without_disable_field():
+def test_disabled_input_promotes_to_low_without_disable_field():
     ctx = ConversionContext()
     result = apply_reasoning_mapping_to_provider_request(
         {"model": "qwen", "messages": []},
         ir_request={"reasoning": {"mode": "disabled", "effort": "none"}},
         target_provider="openai_chat",
         reasoning_mapping="qwen_3_7",
-        model_capabilities=["text", "reasoning"],
         context=ctx,
     )
 
@@ -279,19 +310,20 @@ def test_glm_preserves_reasoning_history_signal():
         ir_request={"reasoning": {"effort": "high"}},
         target_provider="openai_chat",
         reasoning_mapping="glm_5_2",
-        model_capabilities=["text", "reasoning"],
     )
 
     assert result["thinking"] == {"type": "enabled", "clear_thinking": False}
 
 
-def test_models_without_reasoning_capability_are_unchanged():
+def test_reasoning_mapping_does_not_require_capability_declaration():
     result = apply_reasoning_mapping_to_provider_request(
         {"model": "qwen", "messages": [], "reasoning_effort": "none"},
         ir_request={"reasoning": {"effort": "high"}},
         target_provider="openai_chat",
         reasoning_mapping="qwen_3_7",
-        model_capabilities=["text"],
     )
 
-    assert result == {"model": "qwen", "messages": [], "reasoning_effort": "none"}
+    assert result["enable_thinking"] is True
+    assert result["thinking_budget"] == 8192
+    assert result["preserve_thinking"] is True
+    assert "reasoning_effort" not in result
