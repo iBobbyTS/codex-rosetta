@@ -1,10 +1,10 @@
 {
-  "task_id": "01",
+  "task_id": "07",
   "capability_kind": "plugin_mcp",
-  "invocation_mode": "explicit",
+  "invocation_mode": "implicit",
   "candidate_count": 3,
-  "prompt_mentions_capability": true,
-  "final_response": "RESULT:PLUGIN_EXPLICIT_OK",
+  "prompt_mentions_capability": false,
+  "final_response": "ARCHIVE_PROOF_OK:ARCHIVE-20260716",
   "catalog_exposure": {
     "context_sections": [
       "plugins_instructions",
@@ -24,6 +24,6 @@
     "arguments": {"record_id": "ARCHIVE-20260716"},
     "result": "ARCHIVE_PROOF_OK:ARCHIVE-20260716"
   },
-  "plugin_guidance_expected": true,
+  "plugin_guidance_expected": false,
   "prohibited_fallbacks": ["shell", "browser", "network", "file"]
 }

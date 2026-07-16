@@ -1,0 +1,21 @@
+{
+  "name": "palette-helper",
+  "version": "1.0.0",
+  "description": "Deterministic color-normalization fixture for capability discovery tests.",
+  "author": {
+    "name": "Codex-Rosetta"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Palette Helper",
+    "shortDescription": "Deterministic color normalization",
+    "longDescription": "Provides a read-only color normalization tool and matching skill for isolated live-agent tests.",
+    "developerName": "Codex-Rosetta",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Normalize a color label with the fixture."
+    ]
+  }
+}

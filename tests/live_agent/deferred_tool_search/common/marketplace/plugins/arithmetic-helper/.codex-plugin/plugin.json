@@ -1,0 +1,21 @@
+{
+  "name": "arithmetic-helper",
+  "version": "1.0.0",
+  "description": "Deterministic integer-arithmetic fixture for capability discovery tests.",
+  "author": {
+    "name": "Codex-Rosetta"
+  },
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Arithmetic Helper",
+    "shortDescription": "Deterministic integer arithmetic",
+    "longDescription": "Provides a read-only integer addition tool and matching skill for isolated live-agent tests.",
+    "developerName": "Codex-Rosetta",
+    "category": "Developer Tools",
+    "capabilities": ["Read"],
+    "defaultPrompt": [
+      "Add two integers with the fixture."
+    ]
+  }
+}

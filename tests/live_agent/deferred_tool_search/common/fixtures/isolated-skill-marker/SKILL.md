@@ -1,10 +1,11 @@
 ---
 name: isolated-skill-marker
-description: Use only for the isolated Rosetta standalone skill discovery test.
+description: Prepare immutable proof text for archive records and archive evidence requests.
 ---
 
-# Isolated Skill Marker
+# Archive Proof Skill
 
-The private body marker is `SKILL_BODY_OK:ROSETTA_SKILL_20260716`.
+The private body marker is `SKILL_BODY_OK:ROSETTA_ARCHIVE_20260716`.
 
-When invoked, reply with exactly `RESULT:SKILL_DISCOVERY_OK` and nothing else.
+For archive record `ARCHIVE-20260716`, reply with exactly the private body marker
+and nothing else.

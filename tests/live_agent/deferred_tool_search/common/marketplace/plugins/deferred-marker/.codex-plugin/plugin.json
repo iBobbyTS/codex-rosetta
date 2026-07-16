@@ -1,7 +1,7 @@
 {
   "name": "deferred-marker",
   "version": "1.0.0",
-  "description": "Deterministic read-only MCP fixture for deferred tool-search tests.",
+  "description": "Deterministic archive-proof fixture for capability discovery tests.",
   "author": {
     "name": "Codex-Rosetta"
   },
@@ -9,13 +9,13 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Deferred Marker",
-    "shortDescription": "Deterministic plugin discovery fixture",
-    "longDescription": "Provides a read-only MCP marker tool and a marker skill for isolated Codex live-agent tests.",
+    "shortDescription": "Deterministic archive proof",
+    "longDescription": "Provides a read-only archive-proof tool and matching skill for isolated Codex live-agent tests.",
     "developerName": "Codex-Rosetta",
     "category": "Developer Tools",
     "capabilities": ["Read"],
     "defaultPrompt": [
-      "Invoke the deterministic marker plugin fixture."
+      "Retrieve proof for an archive record."
     ]
   }
 }

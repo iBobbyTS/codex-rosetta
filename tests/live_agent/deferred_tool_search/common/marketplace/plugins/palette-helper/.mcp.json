@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "deferred-marker": {
+    "palette-helper": {
       "command": "python3",
       "args": [
         "__ROSETTA_FIXTURE_SERVER__",
         "--capability",
-        "archive",
+        "palette",
         "--server-name",
-        "deferred-marker"
+        "palette-helper"
       ],
       "cwd": "."
     }

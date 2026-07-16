@@ -38,6 +38,9 @@ NATIVE_CODE_TOOL_NAMES = frozenset(
 LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
 READ_OUTPUT_CACHE_KEY = "_codex_read_output_cache"
 EXEC_PROJECTIONS_KEY = "_codex_exec_tool_projections"
+DEFERRED_EXEC_GUIDANCE = (
+    "Some deferred nested tools may be omitted from this description."
+)
 
 
 @dataclass(frozen=True)
@@ -459,13 +462,29 @@ def _hide_exec_projection_container(
     hide_when_empty: bool,
 ) -> tuple[list[Any], frozenset[str]]:
     """Hide an internal exec container after projection or by Profile contract."""
-    has_exec = any(_chat_tool_name(tool) == "exec" for tool in preserved_tools)
+    exec_tool = next(
+        (tool for tool in preserved_tools if _chat_tool_name(tool) == "exec"), None
+    )
+    has_exec = exec_tool is not None
     if not has_exec or (not projected_tools and not hide_when_empty):
+        return preserved_tools, frozenset()
+    if _exec_has_deferred_nested_tools(exec_tool):
         return preserved_tools, frozenset()
     return (
         [tool for tool in preserved_tools if _chat_tool_name(tool) != "exec"],
         frozenset({"exec"}),
     )
+
+
+def _exec_has_deferred_nested_tools(tool: Any) -> bool:
+    """Return whether an exec definition owns runtime-only deferred tools."""
+    if not isinstance(tool, dict):
+        return False
+    function = tool.get("function")
+    if not isinstance(function, dict):
+        return False
+    description = function.get("description")
+    return isinstance(description, str) and DEFERRED_EXEC_GUIDANCE in description
 
 
 def _project_exec_chat_tools(

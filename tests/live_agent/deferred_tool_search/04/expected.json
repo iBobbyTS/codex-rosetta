@@ -1,18 +1,18 @@
 {
-  "task_id": "03",
+  "task_id": "04",
   "capability_kind": "skill",
-  "invocation_mode": "explicit",
+  "invocation_mode": "implicit",
   "candidate_count": 3,
-  "prompt_mentions_capability": true,
+  "prompt_mentions_capability": false,
   "final_response": "SKILL_BODY_OK:ROSETTA_ARCHIVE_20260716",
   "catalog_exposure": {
-    "context_sections": ["skills_instructions", "skill"],
+    "context_sections": ["skills_instructions"],
     "candidate_order": ["isolated-arithmetic-helper", "isolated-palette-helper", "isolated-skill-marker"],
     "target_description_contains": ["archive", "proof"]
   },
-  "body_access": "host_injection",
+  "body_access": "agent_read",
   "tool_discovery": null,
   "tool_invocation": null,
   "plugin_guidance_expected": false,
-  "prohibited_fallbacks": ["shell", "browser", "network", "file"]
+  "prohibited_fallbacks": ["browser", "network", "fixture_source"]
 }

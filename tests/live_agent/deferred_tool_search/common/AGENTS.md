@@ -1,16 +1,35 @@
-# Deferred Plugin Tool Search Workspace
+# Isolated Capability Discovery Workspace
 
 This workspace tests isolated discovery of a plugin, standalone MCP server, or
 standalone skill.
 
 - Follow `TASK.md` exactly and perform the operations in its stated order.
-- For MCP tasks, `ALL_TOOLS` is a JavaScript global array inside the `exec`
-  runtime. It is not a shell environment variable and must not be inspected by
-  calling `exec_command`. Filter that array inside `exec`, then invoke the
-  discovered entry through `tools[entry.name](args)`.
-- For the skill task, use the explicitly named skill and follow its complete
-  injected body.
+- The task prompt is already present in the conversation. Do not reopen or
+  reread `TASK.md` from disk.
+- Choose capabilities from their model-visible names and descriptions. The
+  archive, arithmetic, and palette candidates intentionally have unrelated
+  purposes; do not inspect fixture source to identify an answer.
+- `ALL_TOOLS` is a JavaScript global array inside the `exec` runtime. It is not
+  a shell environment variable. For a matching deferred tool, filter that array
+  inside `exec`, then invoke the discovered entry through
+  `tools[entry.name](args)`; do not launch Node or a shell through
+  `exec_command` as a substitute.
+- For an MCP task, include a compact `catalog` array in the same `text()` output
+  as the nested result. Build it by selecting every `{name, description}` entry
+  whose description contains `Rosetta live candidate`, preserving runtime
+  order. It must contain the archive-proof, integer-addition, and
+  color-normalization candidates. Emit the catalog and nested return value with
+  exactly one argument: `text(JSON.stringify({ catalog, result }))`. The
+  `text()` helper does not accept multiple output arguments. This is diagnostic
+  evidence only; do not mention it in the final response.
+- When a request matches a skill, first check whether its complete body is
+  already present in a turn-scoped `<skill>` fragment. Use that injected body
+  directly when present. Otherwise read only the selected skill's complete
+  `SKILL.md`. Do not read other fixture or marketplace files.
 - Do not use shell commands, browser tools, network tools, file tools, or other
-  plugins as substitutes.
+  plugins as substitutes for an MCP tool result.
+- If runtime discovery, invocation, or result serialization fails, use the
+  task's failure response. Do not inspect fixture, config, session, artifact,
+  cache, or server source files to recover an answer.
 - Do not modify files.
-- Keep the final response to the exact result line requested by the task.
+- Keep the final response to the proof or result requested by the task.

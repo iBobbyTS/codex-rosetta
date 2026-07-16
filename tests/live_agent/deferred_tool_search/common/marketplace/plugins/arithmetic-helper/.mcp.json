@@ -1,13 +1,13 @@
 {
   "mcpServers": {
-    "deferred-marker": {
+    "arithmetic-helper": {
       "command": "python3",
       "args": [
         "__ROSETTA_FIXTURE_SERVER__",
         "--capability",
-        "archive",
+        "arithmetic",
         "--server-name",
-        "deferred-marker"
+        "arithmetic-helper"
       ],
       "cwd": "."
     }

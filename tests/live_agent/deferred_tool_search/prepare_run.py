@@ -9,9 +9,25 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from codex_rosetta.gateway.config import _strip_jsonc_comments
 from codex_rosetta.gateway.local_mode import build_model_catalog
+
+
+TASK_IDS = ("01", "02", "03", "04", "05", "06", "07")
+PLUGIN_NAMES = ("deferred-marker", "arithmetic-helper", "palette-helper")
+SKILL_DIR_NAMES = (
+    "isolated-skill-marker",
+    "isolated-arithmetic-helper",
+    "isolated-palette-helper",
+)
+PLUGIN_TASKS = frozenset({"01", "06", "07"})
+MCP_TASKS = frozenset({"01", "02", "05", "07"})
+SKILL_TASKS = frozenset({"03", "04"})
+MCP_ONLY_PLUGIN_TASKS = frozenset({"01", "07"})
+SKILL_ONLY_PLUGIN_TASKS = frozenset({"06"})
+SERVER_PATH_TOKEN = "__ROSETTA_FIXTURE_SERVER__"
 
 
 def _toml_string(value: str) -> str:
@@ -44,64 +60,111 @@ def _run_codex(
         json.loads(completed.stdout)
 
 
+def _write_json(path: Path, value: Any) -> None:
+    path.write_text(
+        json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _materialize_plugin_surfaces(worktree: Path, task_id: str) -> None:
+    """Keep only the plugin surface exercised by one isolated task."""
+    server = (worktree / "fixtures" / "deterministic_mcp_server.py").resolve()
+    for plugin_name in PLUGIN_NAMES:
+        plugin = worktree / "marketplace" / "plugins" / plugin_name
+        manifest_path = plugin / ".codex-plugin" / "plugin.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if task_id in MCP_ONLY_PLUGIN_TASKS:
+            shutil.rmtree(plugin / "skills")
+            manifest.pop("skills", None)
+            mcp_path = plugin / ".mcp.json"
+            mcp_text = mcp_path.read_text(encoding="utf-8")
+            if SERVER_PATH_TOKEN not in mcp_text:
+                raise ValueError(f"missing server placeholder in {mcp_path}")
+            mcp_path.write_text(
+                mcp_text.replace(SERVER_PATH_TOKEN, str(server)), encoding="utf-8"
+            )
+        elif task_id in SKILL_ONLY_PLUGIN_TASKS:
+            (plugin / ".mcp.json").unlink()
+            manifest.pop("mcpServers", None)
+        else:
+            raise ValueError(f"unsupported plugin task id: {task_id}")
+        _write_json(manifest_path, manifest)
+
+
+def _install_plugins(run_root: Path) -> None:
+    worktree = run_root / "worktree"
+    _run_codex(
+        run_root,
+        "marketplace-add.json",
+        "plugin",
+        "marketplace",
+        "add",
+        str(worktree / "marketplace"),
+        "--json",
+        expect_json=True,
+    )
+    for plugin_name in PLUGIN_NAMES:
+        _run_codex(
+            run_root,
+            f"plugin-add-{plugin_name}.json",
+            "plugin",
+            "add",
+            f"{plugin_name}@rosetta-live-fixtures",
+            "--json",
+            expect_json=True,
+        )
+    _run_codex(
+        run_root,
+        "plugin-list.json",
+        "plugin",
+        "list",
+        "--json",
+        expect_json=True,
+    )
+
+
+def _install_standalone_skills(run_root: Path) -> None:
+    worktree = run_root / "worktree"
+    installed = []
+    for skill_dir_name in SKILL_DIR_NAMES:
+        source = worktree / "fixtures" / skill_dir_name
+        destination = run_root / "codex_home" / "skills" / source.name
+        shutil.copytree(source, destination)
+        installed.append({"name": source.name, "installedPath": str(destination)})
+    _write_json(run_root / "artifacts" / "skill-install.json", installed)
+
+
+def _install_standalone_mcp(run_root: Path) -> None:
+    server = run_root / "worktree" / "fixtures" / "deterministic_mcp_server.py"
+    _run_codex(
+        run_root,
+        "mcp-add.txt",
+        "mcp",
+        "add",
+        "standalone-capabilities",
+        "--",
+        "python3",
+        str(server),
+        "--capability",
+        "all",
+        "--server-name",
+        "standalone-capabilities",
+    )
+
+
 def _provision_capability(run_root: Path, task_id: str) -> None:
     worktree = run_root / "worktree"
-    if task_id == "01":
-        _run_codex(
-            run_root,
-            "marketplace-add.json",
-            "plugin",
-            "marketplace",
-            "add",
-            str(worktree / "marketplace"),
-            "--json",
-            expect_json=True,
-        )
-        _run_codex(
-            run_root,
-            "plugin-add.json",
-            "plugin",
-            "add",
-            "deferred-marker@rosetta-live-fixtures",
-            "--json",
-            expect_json=True,
-        )
-        _run_codex(
-            run_root,
-            "plugin-list.json",
-            "plugin",
-            "list",
-            "--json",
-            expect_json=True,
-        )
-    elif task_id == "02":
-        server = worktree / "marketplace" / "plugins" / "deferred-marker" / "server.py"
-        _run_codex(
-            run_root,
-            "mcp-add.txt",
-            "mcp",
-            "add",
-            "standalone-marker",
-            "--",
-            "python3",
-            str(server),
-        )
-    elif task_id == "03":
-        source = worktree / "fixtures" / "isolated-skill-marker"
-        destination = run_root / "codex_home" / "skills" / "isolated-skill-marker"
-        shutil.copytree(source, destination)
-        (run_root / "artifacts" / "skill-install.json").write_text(
-            json.dumps(
-                {"name": "isolated-skill-marker", "installedPath": str(destination)},
-                indent=2,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
+    if task_id in PLUGIN_TASKS:
+        _materialize_plugin_surfaces(worktree, task_id)
+        _install_plugins(run_root)
+    elif task_id in MCP_TASKS:
+        _install_standalone_mcp(run_root)
+    elif task_id in SKILL_TASKS:
+        _install_standalone_skills(run_root)
     else:
         raise ValueError(f"unsupported task id: {task_id}")
 
-    if task_id in {"01", "02"}:
+    if task_id in MCP_TASKS:
         _run_codex(
             run_root,
             "mcp-list.json",
@@ -118,7 +181,7 @@ def main() -> None:
     parser.add_argument("--gateway-log-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--model", required=True)
-    parser.add_argument("--task-id", choices=("01", "02", "03"), required=True)
+    parser.add_argument("--task-id", choices=TASK_IDS, required=True)
     args = parser.parse_args()
 
     run_root = args.run_root.resolve()
@@ -151,26 +214,33 @@ def main() -> None:
 
     provider_id = "deferred-tool-test"
     config_lines = [
-            f"model_provider = {_toml_string(provider_id)}",
-            f"model = {_toml_string(args.model)}",
-            'sandbox_mode = "danger-full-access"',
-            'approval_policy = "never"',
-            'model_reasoning_effort = "medium"',
+        f"model_provider = {_toml_string(provider_id)}",
+        f"model = {_toml_string(args.model)}",
+        'sandbox_mode = "danger-full-access"',
+        'approval_policy = "never"',
+        'model_reasoning_effort = "medium"',
     ]
     if args.model != "gpt-5.6-terra":
         model_catalog_path = run_root / "codex_home" / "model_catalog.json"
         model_catalog_path.write_text(
-            json.dumps(build_model_catalog(gateway_config), ensure_ascii=False, indent=2)
+            json.dumps(
+                build_model_catalog(gateway_config), ensure_ascii=False, indent=2
+            )
             + "\n",
             encoding="utf-8",
         )
-        config_lines.append(f"model_catalog_json = {_toml_string(str(model_catalog_path))}")
+        config_lines.append(
+            f"model_catalog_json = {_toml_string(str(model_catalog_path))}"
+        )
 
     config_lines.extend(
         [
             "",
             "[features]",
             "plugins = true",
+            "",
+            "[skills]",
+            "include_instructions = true",
             "",
             f"[model_providers.{provider_id}]",
             'name = "openai"',

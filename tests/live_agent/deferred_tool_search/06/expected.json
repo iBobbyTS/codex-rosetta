@@ -1,0 +1,18 @@
+{
+  "task_id": "06",
+  "capability_kind": "plugin_skill",
+  "invocation_mode": "implicit",
+  "candidate_count": 3,
+  "prompt_mentions_capability": false,
+  "final_response": "PLUGIN_SKILL_BODY:ROSETTA_ARCHIVE_20260716",
+  "catalog_exposure": {
+    "context_sections": ["skills_instructions", "plugins_instructions"],
+    "candidate_order": ["arithmetic-helper:integer-sum", "deferred-marker:plugin-marker", "palette-helper:color-normalizer"],
+    "target_description_contains": ["archive", "proof"]
+  },
+  "body_access": "agent_read",
+  "tool_discovery": null,
+  "tool_invocation": null,
+  "plugin_guidance_expected": false,
+  "prohibited_fallbacks": ["browser", "network", "fixture_source"]
+}
