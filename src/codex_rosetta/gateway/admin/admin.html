@@ -254,11 +254,21 @@ code.copyable:hover { background: var(--bg-hover); }
 .toast {
   position: fixed; bottom: 24px; right: 24px;
   padding: 12px 20px; border-radius: var(--radius); font-size: 13px;
-  z-index: 200; opacity: 0; transition: opacity 0.3s;
+  z-index: 200; opacity: 0; transition: opacity 0.3s, bottom 0.2s;
 }
+.toast.above-restart { bottom: 116px; }
 .toast.show { opacity: 1; }
 .toast.success { background: var(--green); color: #fff; }
 .toast.error { background: var(--red); color: #fff; }
+.restart-notice {
+  position: fixed; right: 24px; bottom: 24px; width: min(380px, calc(100vw - 48px));
+  display: flex; align-items: center; gap: 16px; padding: 14px 16px;
+  background: var(--bg-card); border: 1px solid var(--orange);
+  border-radius: var(--radius); box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  color: var(--text); font-size: 13px; line-height: 1.5; z-index: 210;
+}
+.restart-notice[hidden] { display: none; }
+.restart-notice .btn { flex-shrink: 0; }
 
 /* Charts */
 .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
@@ -1197,6 +1207,10 @@ body { padding-bottom: 26px; }
 
 <!-- Toast -->
 <div class="toast" id="toast"></div>
+<div class="restart-notice" id="codexRestartNotice" role="alertdialog" aria-live="assertive" aria-labelledby="codexRestartNoticeText" hidden>
+  <div id="codexRestartNoticeText" data-i18n="notice.codexRestart">Codex configuration changed. Restart Codex for the changes to take effect.</div>
+  <button class="btn btn-primary btn-sm" type="button" onclick="confirmCodexRestartNotice()" data-i18n="btn.confirm">Confirm</button>
+</div>
 
 <script>
 // ===================== Themes =====================
@@ -1699,6 +1713,15 @@ function _adminHeaders(extra) {
   return h;
 }
 
+async function _adminMutationResult(r) {
+  if (r.status === 401) { showLoginOverlay(); throw new Error('Unauthorized'); }
+  const data = await r.json();
+  if (r.ok && r.headers.get('X-Codex-Restart-Required') === 'true') {
+    showCodexRestartNotice();
+  }
+  return data;
+}
+
 const api = {
   async get(url) {
     const r = await fetch(url, {headers: _adminHeaders(), cache: 'no-store'});
@@ -1710,21 +1733,18 @@ const api = {
   },
   async put(url, body) {
     const r = await fetch(url, {method:'PUT', headers:_adminHeaders({'Content-Type':'application/json'}), body:JSON.stringify(body)});
-    if (r.status === 401) { showLoginOverlay(); throw new Error('Unauthorized'); }
-    return r.json();
+    return _adminMutationResult(r);
   },
   async del(url) {
     const r = await fetch(url, {method:'DELETE', headers: _adminHeaders()});
-    if (r.status === 401) { showLoginOverlay(); throw new Error('Unauthorized'); }
-    return r.json();
+    return _adminMutationResult(r);
   },
   async post(url, body) {
     const h = body !== undefined ? _adminHeaders({'Content-Type':'application/json'}) : _adminHeaders();
     const opts = {method:'POST', headers: h};
     if (body !== undefined) opts.body = JSON.stringify(body);
     const r = await fetch(url, opts);
-    if (r.status === 401) { showLoginOverlay(); throw new Error('Unauthorized'); }
-    return r.json();
+    return _adminMutationResult(r);
   }
 };
 
@@ -2290,10 +2310,20 @@ function copyProviderEntry(name) {
 }
 
 function showToast(msg, type='success') {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast show ' + type;
-  setTimeout(() => t.className = 'toast', 3000);
+  const toast = document.getElementById('toast');
+  const restartVisible = !document.getElementById('codexRestartNotice').hidden;
+  toast.textContent = msg;
+  toast.className = 'toast show ' + type + (restartVisible ? ' above-restart' : '');
+  setTimeout(() => toast.className = 'toast', 3000);
+}
+
+function showCodexRestartNotice() {
+  document.getElementById('codexRestartNotice').hidden = false;
+}
+
+function confirmCodexRestartNotice() {
+  document.getElementById('codexRestartNotice').hidden = true;
+  document.getElementById('toast').classList.remove('above-restart');
 }
 
 // ===================== Modal =====================

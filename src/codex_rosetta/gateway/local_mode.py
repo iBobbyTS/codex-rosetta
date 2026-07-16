@@ -331,7 +331,11 @@ def _edit_memory_model_settings(
     start, end = memories_sections[0]
     insert_at = _memory_model_insert_index(lines, removed, start, end)
     setting_block = newline.join(settings) + newline
-    if end < len(lines):
+    has_retained_separator = any(
+        index not in removed and not lines[index].strip()
+        for index in range(insert_at, end)
+    )
+    if end < len(lines) and not has_retained_separator:
         setting_block += newline
 
     rebuilt: list[str] = []
@@ -571,10 +575,13 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
 
 def _apply_compaction_hash_overlay(
     models: list[dict[str, Any]],
+    *,
+    upstream_model_names: dict[str, str] | None = None,
+    upstream_catalog: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply Rosetta-owned compaction groups without mutating catalog assets."""
     upstream_values: dict[str, str] = {}
-    for model in models:
+    for model in upstream_catalog or models:
         slug = model.get("slug")
         if not isinstance(slug, str):
             raise ValueError("Codex catalog model has no valid slug")
@@ -591,20 +598,22 @@ def _apply_compaction_hash_overlay(
     seen: dict[str, str] = {}
     for model in models:
         slug = model["slug"]
-        if slug in _UPSTREAM_COMPACTION_GROUPS:
-            comp_hash = upstream_values[_UPSTREAM_COMPACTION_GROUPS[slug]]
+        upstream_name = (upstream_model_names or {}).get(slug, slug)
+        if upstream_name in _UPSTREAM_COMPACTION_GROUPS:
+            comp_hash = upstream_values[_UPSTREAM_COMPACTION_GROUPS[upstream_name]]
         else:
-            comp_hash = _ROSETTA_COMPACTION_GROUPS.get(slug)
+            comp_hash = _ROSETTA_COMPACTION_GROUPS.get(upstream_name)
             if comp_hash is None:
-                digest = hashlib.sha256(slug.encode("utf-8")).hexdigest()
+                digest = hashlib.sha256(upstream_name.encode("utf-8")).hexdigest()
                 comp_hash = f"rosetta-comp-v1:custom:{digest}"
         prior_slug = seen.get(comp_hash)
         if prior_slug is not None:
+            prior_upstream = (upstream_model_names or {}).get(prior_slug, prior_slug)
             prior_group = _UPSTREAM_COMPACTION_GROUPS.get(
-                prior_slug, _ROSETTA_COMPACTION_GROUPS.get(prior_slug)
+                prior_upstream, _ROSETTA_COMPACTION_GROUPS.get(prior_upstream)
             )
             this_group = _UPSTREAM_COMPACTION_GROUPS.get(
-                slug, _ROSETTA_COMPACTION_GROUPS.get(slug)
+                upstream_name, _ROSETTA_COMPACTION_GROUPS.get(upstream_name)
             )
             if prior_group != this_group:
                 raise ValueError(
@@ -647,6 +656,11 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
         models = _apply_auto_review_model_override(base_models, auto_review_model)
         return {"models": _apply_compaction_hash_overlay(models)}
 
+    upstream_model_names = {
+        name: spec.get("upstream_model") or name
+        for name, spec in configured_specs.items()
+    }
+
     selected_models: list[dict[str, Any]] = []
     preset_resource = load_model_preset_resource()
     for name in sorted(configured_specs):
@@ -682,7 +696,13 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
         selected_models.append(model)
 
     models = _apply_auto_review_model_override(selected_models, auto_review_model)
-    return {"models": _apply_compaction_hash_overlay(models)}
+    return {
+        "models": _apply_compaction_hash_overlay(
+            models,
+            upstream_model_names=upstream_model_names,
+            upstream_catalog=base_models,
+        )
+    }
 
 
 def catalog_path(codex_home: str) -> str:
@@ -896,6 +916,12 @@ class CodexLocalModeTransaction:
         self.memory_extract_model = memory_extract_model
         self.memory_consolidation_model = memory_consolidation_model
         self._snapshots: tuple[_FileSnapshot, _FileSnapshot] | None = None
+        self._changed = False
+
+    @property
+    def changed(self) -> bool:
+        """Return whether applying this transaction changed a managed Codex file."""
+        return self._changed
 
     @classmethod
     def sync(
@@ -924,6 +950,7 @@ class CodexLocalModeTransaction:
     def apply(self) -> None:
         if self._snapshots is not None:
             raise RuntimeError("Codex local-mode transaction was already applied")
+        self._changed = False
         os.makedirs(self.codex_home, mode=0o700, exist_ok=True)
         catalog_file = catalog_path(self.codex_home)
         config_file = codex_config_path(self.codex_home)
@@ -935,6 +962,7 @@ class CodexLocalModeTransaction:
             if self.catalog is None:
                 try:
                     os.unlink(catalog_file)
+                    self._changed = True
                 except FileNotFoundError:
                     pass
                 if self._snapshots[1].content is not None:
@@ -942,12 +970,15 @@ class CodexLocalModeTransaction:
                     updated = _edit_config_toml(current, None)
                     if updated != current:
                         _atomic_write_bytes(config_file, updated.encode("utf-8"))
+                        self._changed = True
                 return
 
             serialized = (
                 json.dumps(self.catalog, indent=2, ensure_ascii=False) + "\n"
             ).encode("utf-8")
-            _atomic_write_bytes(catalog_file, serialized)
+            if self._snapshots[0].content != serialized:
+                _atomic_write_bytes(catalog_file, serialized)
+                self._changed = True
             current = (
                 self._snapshots[1].content.decode("utf-8")
                 if self._snapshots[1].content is not None
@@ -961,7 +992,10 @@ class CodexLocalModeTransaction:
                 memory_extract_model=self.memory_extract_model,
                 memory_consolidation_model=self.memory_consolidation_model,
             )
-            _atomic_write_bytes(config_file, updated.encode("utf-8"))
+            updated_bytes = updated.encode("utf-8")
+            if self._snapshots[1].content != updated_bytes:
+                _atomic_write_bytes(config_file, updated_bytes)
+                self._changed = True
         except BaseException:
             self.rollback()
             raise
@@ -971,6 +1005,7 @@ class CodexLocalModeTransaction:
             return
         snapshots = self._snapshots
         self._snapshots = None
+        self._changed = False
         errors: list[BaseException] = []
         for snapshot in snapshots:
             try:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tomllib
 from pathlib import Path
@@ -165,7 +166,11 @@ def test_catalog_forces_code_mode_for_mapped_auto_review_model(
         for model in build_model_catalog({})["models"]
         if model["slug"] == "codex-auto-review"
     )
-    expected = dict(default, tool_mode="code_mode_only")
+    expected = dict(
+        default,
+        tool_mode="code_mode_only",
+        comp_hash="rosetta-comp-v1:deepseek-v4",
+    )
 
     assert build_model_catalog(raw)["models"] == [expected]
 
@@ -306,6 +311,35 @@ def test_catalog_detects_preset_from_upstream_model_for_an_exposed_alias() -> No
     assert model["display_name"] == "DeepSeek V4 Pro"
     assert model["context_window"] == 1_000_000
     assert model["input_modalities"] == ["text"]
+    assert model["comp_hash"] == "rosetta-comp-v1:deepseek-v4"
+
+
+def test_catalog_compaction_hash_depends_only_on_upstream_model_name() -> None:
+    def comp_hash(alias: str, upstream: str, provider: str) -> str:
+        raw = {
+            "model_groups": {
+                "models": {
+                    "provider": provider,
+                    "type": "llm",
+                    "models": {alias: {"upstream_model": upstream}},
+                }
+            }
+        }
+        [model] = build_model_catalog(raw)["models"]
+        return model["comp_hash"]
+
+    expected = (
+        "rosetta-comp-v1:custom:" + hashlib.sha256(b"shared-upstream-model").hexdigest()
+    )
+    assert comp_hash("first-alias", "shared-upstream-model", "provider-a") == expected
+    assert comp_hash("second-alias", "shared-upstream-model", "provider-b") == expected
+    assert comp_hash("first-alias", "different-upstream", "provider-a") != expected
+
+    defaults = {model["slug"]: model for model in build_model_catalog({})["models"]}
+    assert (
+        comp_hash("official-alias", "gpt-5.5", "provider-a")
+        == defaults["gpt-5.5"]["comp_hash"]
+    )
 
 
 def test_catalog_applies_complete_manual_model_info_to_an_exposed_alias() -> None:
@@ -816,6 +850,47 @@ def test_toml_editor_removes_a_multiline_catalog_assignment(tmp_path: Path) -> N
     transaction.apply()
 
     assert config_toml.read_text(encoding="utf-8") == 'model = "keep"\n'
+
+
+def test_sync_skips_writes_when_managed_file_contents_are_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from codex_rosetta.gateway import local_mode
+
+    codex_home = tmp_path / "codex"
+    raw = {
+        "codex": {
+            "memories": {
+                "extract_model": "gpt-5.4-mini",
+                "consolidation_model": "gpt-5.4",
+            }
+        }
+    }
+    first = _sync_transaction(codex_home, raw)
+    first.apply()
+    assert first.changed is True
+
+    catalog_file = codex_home / "model_catalog.json"
+    config_file = codex_home / "config.toml"
+    before = {
+        path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in (catalog_file, config_file)
+    }
+    writes: list[str] = []
+
+    def record_write(path: str, _content: bytes) -> None:
+        writes.append(path)
+
+    monkeypatch.setattr(local_mode, "_atomic_write_bytes", record_write)
+    second = _sync_transaction(codex_home, raw)
+    second.apply()
+
+    assert second.changed is False
+    assert writes == []
+    assert {
+        path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in (catalog_file, config_file)
+    } == before
 
 
 def test_sync_rolls_back_both_files_when_toml_write_fails(

@@ -19,6 +19,10 @@ from ...local_mode import (
     codex_api_key_value,
     ensure_codex_api_key,
 )
+from ..restart_notice import (
+    mark_codex_restart_required,
+    reset_codex_restart_required,
+)
 
 _ENV_VAR_RE = re.compile(r"^\$\{.+\}$")
 
@@ -394,6 +398,13 @@ def _rollback_config_updates(
     return errors
 
 
+def _mark_codex_restart_if_changed(
+    transaction: CodexLocalModeTransaction | None,
+) -> None:
+    if transaction is not None and transaction.changed:
+        mark_codex_restart_required()
+
+
 def _commit_gateway_config(
     request: Any,
     config_path: str,
@@ -405,6 +416,7 @@ def _commit_gateway_config(
     concurrent file changes return 409, and the config file is never left on a
     candidate that failed validation or runtime activation.
     """
+    reset_codex_restart_required()
     try:
         server = data.get("server")
         if (
@@ -485,6 +497,7 @@ def _commit_gateway_config(
             {"error": f"Failed to {action} config: {exc}"}, status_code=500
         )
 
+    _mark_codex_restart_if_changed(local_mode_transaction)
     return new_config, None
 
 

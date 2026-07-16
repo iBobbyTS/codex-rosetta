@@ -20,6 +20,10 @@ from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.error_dump import dump_error
 from codex_rosetta.routing import ResolvedRoute
 
+from .admin.restart_notice import (
+    consume_codex_restart_required,
+    reset_codex_restart_required,
+)
 from .admin_session import load_or_create_admin_session_secret
 from .auth import (
     AuthState,
@@ -1091,7 +1095,13 @@ def create_app(
         token_values={*config.token_values, internal_token},
     )
     auth_hook = create_auth_hook(auth_state)
+
+    async def reset_admin_restart_notice(_request: Any) -> None:
+        reset_codex_restart_required()
+
+    app.before_body(reset_admin_restart_notice)
     app.before_body(auth_hook)
+    app.before_request(reset_admin_restart_notice)
     app.before_request(auth_hook)
 
     # Decode Codex's optional request compression only after authentication.
@@ -1109,6 +1119,9 @@ def create_app(
     @app.after_request
     async def add_cors_headers(request: Any, response: Any) -> Any:
         apply_cors_headers(request, response)
+        restart_required = consume_codex_restart_required()
+        if restart_required and response.status_code < 400:
+            response.headers["X-Codex-Restart-Required"] = "true"
         if is_admin_path(request.path):
             # Restricted CORS for admin endpoints: same-origin only by default,
             # or explicit allow-list via server.admin_cors_origins.

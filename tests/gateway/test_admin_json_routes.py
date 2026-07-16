@@ -13,6 +13,7 @@ import pytest
 from codex_rosetta._vendor.httpserver import JSONResponse, Request, Response
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.local_mode import CodexLocalModeTransaction
 from codex_rosetta.observability.request_log import RequestLogEntry
 
 
@@ -114,6 +115,130 @@ def test_profiling_rejects_non_integer_request_count(tmp_path):
         assert response.status_code == 400
         assert isinstance(response, JSONResponse)
         assert json.loads(response.body) == {"error": "'requests' must be an integer"}
+    finally:
+        persistence = getattr(app, "persistence", None)
+        if persistence is not None:
+            persistence.close()
+
+
+@pytest.mark.parametrize(
+    ("local_mode", "local_mode_confirmed", "restart_required"),
+    [(True, False, False), (True, True, True), (False, False, False)],
+)
+def test_admin_mutation_marks_successful_codex_local_mode_sync_for_restart(
+    tmp_path,
+    local_mode: bool,
+    local_mode_confirmed: bool,
+    restart_required: bool,
+):
+    config_data = _config_data()
+    config_data["server"].update(
+        {
+            "local_mode": local_mode,
+            "local_mode_confirmed": local_mode_confirmed,
+        }
+    )
+    config_path = tmp_path / "config.jsonc"
+    codex_home = tmp_path / "codex"
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
+    app = create_app(
+        GatewayConfig(config_data),
+        config_path=str(config_path),
+        codex_home=str(codex_home),
+    )
+    request = Request(
+        method="PUT",
+        path="/admin/api/config/server",
+        query_string="",
+        headers={"x-admin-token": getattr(app, "auth_state").admin_token},
+        body=json.dumps({"proxy": "http://127.0.0.1:7890"}).encode("utf-8"),
+        client_addr=("198.51.100.10", 12345),
+        app=app,
+    )
+
+    try:
+        response = asyncio.run(app._dispatch(request))
+
+        assert response.status_code == 200
+        if restart_required:
+            assert response.headers["X-Codex-Restart-Required"] == "true"
+            assert (codex_home / "model_catalog.json").is_file()
+            assert (codex_home / "config.toml").is_file()
+        else:
+            assert "X-Codex-Restart-Required" not in response.headers
+    finally:
+        persistence = getattr(app, "persistence", None)
+        if persistence is not None:
+            persistence.close()
+
+
+def test_model_group_provider_change_does_not_rewrite_codex_files_or_require_restart(
+    tmp_path,
+):
+    config_data = _config_data()
+    config_data["providers"]["second-provider"] = dict(
+        config_data["providers"]["test-provider"]
+    )
+    config_data["server"].update({"local_mode": True, "local_mode_confirmed": True})
+    config_data["server"]["api_keys"].append(
+        {"id": "codex", "label": "codex", "key": "test-codex-key"}
+    )
+    config_data["codex"] = {
+        "memories": {
+            "extract_model": "gpt-5.4-mini",
+            "consolidation_model": "gpt-5.4",
+        }
+    }
+    config_path = tmp_path / "config.jsonc"
+    codex_home = tmp_path / "codex"
+    config_path.write_text(json.dumps(config_data), encoding="utf-8")
+    app = create_app(
+        GatewayConfig(config_data),
+        config_path=str(config_path),
+        codex_home=str(codex_home),
+    )
+    transaction = CodexLocalModeTransaction.sync(
+        str(codex_home),
+        config_data,
+        gateway_port=getattr(app, "gateway_port"),
+        api_key="test-codex-key",
+    )
+    transaction.apply()
+    managed_files = (
+        codex_home / "model_catalog.json",
+        codex_home / "config.toml",
+    )
+    before = {
+        path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+        for path in managed_files
+    }
+    request = Request(
+        method="PUT",
+        path="/admin/api/config/model-groups/test",
+        query_string="",
+        headers={"x-admin-token": getattr(app, "auth_state").admin_token},
+        body=json.dumps(
+            {
+                "provider": "second-provider",
+                "type": "llm",
+                "models": {"gpt-test": {}},
+            }
+        ).encode("utf-8"),
+        client_addr=("198.51.100.10", 12345),
+        app=app,
+    )
+
+    try:
+        response = asyncio.run(app._dispatch(request))
+
+        assert response.status_code == 200
+        assert "X-Codex-Restart-Required" not in response.headers
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert saved["model_groups"]["test"]["provider"] == "second-provider"
+        assert {
+            path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
+            for path in managed_files
+        } == before
     finally:
         persistence = getattr(app, "persistence", None)
         if persistence is not None:

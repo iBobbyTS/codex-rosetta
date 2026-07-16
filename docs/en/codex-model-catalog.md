@@ -40,7 +40,10 @@ retain their reviewed upstream group value (currently `3000`), as do
 `gpt-5.2`, `codex-auto-review`, DeepSeek V4, GLM 5.2, each Qwen 3.7 variant,
 MiMo V2.5, MiniMax M3, and Kimi K2.7 Code. Every group is non-empty; equal
 groups share a value and different groups must not collide. Unknown aliases get
-the deterministic `rosetta-comp-v1:custom:<sha256(slug)>` value. An upstream
+the deterministic `rosetta-comp-v1:custom:<sha256(upstream_model)>` value. The
+configured upstream model name, falling back to the exposed alias when omitted,
+is the only routing input to this overlay: Provider identity never changes the
+hash, and two aliases mapped to the same upstream model share it. An upstream
 missing hash or an unreviewed collision fails compatibility checks instead of
 silently disabling model-switch compaction.
 
@@ -51,6 +54,9 @@ selects the custom Provider ID `codex_rosetta`, while the generated provider's
 provider's case-sensitive `name`. The managed provider uses Responses, the
 gateway's stable `codex` API key, and the effective local listening port.
 Existing non-Rosetta provider tables and their parameters remain untouched.
+Local-mode synchronization compares the complete target bytes before each
+managed write, so a Provider-only model-group change hot-reloads gateway routing
+without rewriting Codex files or asking for a Codex restart.
 
 The Admin Models page also owns three Codex task-model selections while
 confirmed local mode is active. The gateway persists them under `codex` in its
