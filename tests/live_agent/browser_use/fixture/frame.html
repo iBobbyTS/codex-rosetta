@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Fixture Frame</title></head>
+<body>
+  <button id="frameButton" type="button">Frame action</button>
+  <output id="frameOutput">idle</output>
+  <script>
+    document.getElementById('frameButton').addEventListener('click', () => {
+      document.getElementById('frameOutput').value = 'clicked';
+    });
+  </script>
+</body>
+</html>
