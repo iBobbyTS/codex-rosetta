@@ -6,6 +6,7 @@ import importlib.util
 import json
 import shutil
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType
 
@@ -53,6 +54,25 @@ def test_expected_contract_is_uniform_for_all_tasks() -> None:
         }
         assert isinstance(expected["plugin_guidance_expected"], bool)
         assert isinstance(expected["prohibited_fallbacks"], list)
+
+
+def test_isolated_config_uses_selected_default_without_catalog_override(
+    prepare_module: ModuleType, tmp_path: Path
+) -> None:
+    content = prepare_module._build_codex_config(
+        model="deepseek-v4-flash",
+        provider_id="deferred-tool-test",
+        client_key="test-key",
+        port=18765,
+        worktree=tmp_path / "worktree",
+    )
+
+    parsed = tomllib.loads(content)
+    assert parsed["model"] == "deepseek-v4-flash"
+    assert "model_catalog_json" not in parsed
+    assert parsed["model_providers"]["deferred-tool-test"]["base_url"] == (
+        "http://127.0.0.1:18765/v1"
+    )
 
 
 @pytest.mark.parametrize("task_id", ["04", "05", "06", "07"])

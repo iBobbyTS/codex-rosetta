@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from codex_rosetta.gateway.config import _strip_jsonc_comments
-from codex_rosetta.gateway.local_mode import build_model_catalog
 
 
 TASK_IDS = ("01", "02", "03", "04", "05", "06", "07")
@@ -64,6 +63,37 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(
         json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
+
+
+def _build_codex_config(
+    *, model: str, provider_id: str, client_key: str, port: int, worktree: Path
+) -> str:
+    """Build an isolated config without forcing a custom model catalog."""
+    config_lines = [
+        f"model_provider = {_toml_string(provider_id)}",
+        f"model = {_toml_string(model)}",
+        'sandbox_mode = "danger-full-access"',
+        'approval_policy = "never"',
+        'model_reasoning_effort = "medium"',
+        "",
+        "[features]",
+        "plugins = true",
+        "",
+        "[skills]",
+        "include_instructions = true",
+        "",
+        f"[model_providers.{provider_id}]",
+        'name = "openai"',
+        'wire_api = "responses"',
+        "requires_openai_auth = true",
+        f'base_url = "http://127.0.0.1:{port}/v1"',
+        f"experimental_bearer_token = {_toml_string(client_key)}",
+        "",
+        f"[projects.{_toml_string(str(worktree))}]",
+        'trust_level = "trusted"',
+        "",
+    ]
+    return "\n".join(config_lines)
 
 
 def _materialize_plugin_surfaces(worktree: Path, task_id: str) -> None:
@@ -180,7 +210,7 @@ def main() -> None:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--gateway-log-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model", default="gpt-5.6-sol")
     parser.add_argument("--task-id", choices=TASK_IDS, required=True)
     args = parser.parse_args()
 
@@ -213,48 +243,13 @@ def main() -> None:
         raise ValueError("copied gateway config has no usable client key")
 
     provider_id = "deferred-tool-test"
-    config_lines = [
-        f"model_provider = {_toml_string(provider_id)}",
-        f"model = {_toml_string(args.model)}",
-        'sandbox_mode = "danger-full-access"',
-        'approval_policy = "never"',
-        'model_reasoning_effort = "medium"',
-    ]
-    if args.model != "gpt-5.6-terra":
-        model_catalog_path = run_root / "codex_home" / "model_catalog.json"
-        model_catalog_path.write_text(
-            json.dumps(
-                build_model_catalog(gateway_config), ensure_ascii=False, indent=2
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        config_lines.append(
-            f"model_catalog_json = {_toml_string(str(model_catalog_path))}"
-        )
-
-    config_lines.extend(
-        [
-            "",
-            "[features]",
-            "plugins = true",
-            "",
-            "[skills]",
-            "include_instructions = true",
-            "",
-            f"[model_providers.{provider_id}]",
-            'name = "openai"',
-            'wire_api = "responses"',
-            "requires_openai_auth = true",
-            f'base_url = "http://127.0.0.1:{args.port}/v1"',
-            f"experimental_bearer_token = {_toml_string(client_key)}",
-            "",
-            f"[projects.{_toml_string(str(run_root / 'worktree'))}]",
-            'trust_level = "trusted"',
-            "",
-        ]
+    codex_config = _build_codex_config(
+        model=args.model,
+        provider_id=provider_id,
+        client_key=client_key,
+        port=args.port,
+        worktree=run_root / "worktree",
     )
-    codex_config = "\n".join(config_lines)
     (run_root / "codex_home" / "config.toml").write_text(codex_config, encoding="utf-8")
     (run_root / "artifacts" / "gateway-log-root.txt").write_text(
         str(gateway_log_root) + "\n", encoding="utf-8"

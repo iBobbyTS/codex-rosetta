@@ -338,7 +338,8 @@ def test_live_quality_matrix_uses_identical_input_and_locked_provider_routes() -
     gpt = json.loads((quality / "01" / "expected.json").read_text())
     deepseek = json.loads((quality / "02" / "expected.json").read_text())
     assert gpt["gateway_provider"] == "Pixel (K12)"
-    assert deepseek["model"] == "deepseek-v4-flash"
+    assert gpt["default_model"] == "gpt-5.6-sol"
+    assert deepseek["default_model"] == "deepseek-v4-flash"
     assert gpt["model_auto_compact_token_limit"] == 15000
     assert deepseek["model_auto_compact_token_limit"] == 15000
     assert gpt["expected_compaction_count"] == 1

@@ -3,7 +3,7 @@
   "timeout_seconds": 300,
   "result_prefix": "RESULT:IMAGE_GENERATION_DESCRIPTION|",
   "failure_marker": "RESULT:IMAGE_GENERATION_FAILED",
-  "required_upstream_model": "qwen3.7-plus",
+  "default_upstream_model": "mimo-v2.5",
   "mandatory_prerequisites": {
     "view_image_transport": "passed",
     "visual_recognition": "passed",

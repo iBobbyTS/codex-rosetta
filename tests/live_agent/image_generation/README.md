@@ -16,8 +16,8 @@ tool-mode and image-input path are equivalent:
 
 - projected `view_image` has passed a dedicated transport test such as
   `builtin_tools/04`;
-- the actual upstream model supports visual input and is declared with image
-  input capability in the Codex model catalog;
+- the actual upstream model supports visual input and exposes working image
+  input behavior without a suite-injected Codex model catalog;
 - the upstream model has passed a deterministic visual-recognition check such
   as `builtin_tools/06`, or equivalent evidence proves that it can interpret
   the image returned by `view_image`;
@@ -43,8 +43,9 @@ failure.
 ## Required Codex configuration
 
 Use a provider whose display name is exactly `OpenAI`, the bundled `Chat
-Default` Tool Profile, and a Codex-facing catalog entry with the same tool mode
-and image-input capability as the tested visual model. Gateway Logs must prove
-the actual upstream model and the separate OpenAI-compatible Images executor.
+Default` Tool Profile, and `mimo-v2.5` as the default multimodal third-party
+model. Do not inject a custom catalog. Gateway Logs must prove the actual
+upstream model, working image-input path, and the separate OpenAI-compatible
+Images executor.
 
 Follow `EVALUATION.md` and write `artifacts/evaluation.json` for every run.

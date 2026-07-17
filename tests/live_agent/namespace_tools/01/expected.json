@@ -3,8 +3,8 @@
   "timeout_seconds": 180,
   "success_marker": "RESULT:NAMESPACE_TOOLS_OK",
   "failure_marker": "RESULT:NAMESPACE_TOOLS_FAILED",
-  "models": [
-    "gpt-5.6-terra",
+  "default_models": [
+    "gpt-5.6-sol",
     "deepseek-v4-flash"
   ],
   "provider_identity": "namespace-test",

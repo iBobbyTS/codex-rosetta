@@ -1,8 +1,8 @@
 # Built-in Code Mode Tool Test
 
 This suite covers the built-in tools that Codex 0.144.1 exposes for an
-OpenAI-identified provider when the selected model has exactly the
-`gpt-5.6-sol` catalog configuration. It tests tool exposure, Code Mode
+OpenAI-identified provider, using `gpt-5.6-sol` as the default model-shape
+reference without injecting a catalog override. It tests tool exposure, Code Mode
 projection, Rosetta reconstruction, native execution, and result delivery. It
 does not measure general coding, planning, visual, or agent quality.
 
@@ -11,14 +11,15 @@ does not measure general coding, planning, visual, or agent quality.
 Every run in this suite must use:
 
 - a provider whose display name is exactly `OpenAI`;
-- a model entry whose complete catalog configuration equals `gpt-5.6-sol`;
+- the normal bundled/fallback model metadata, with `gpt-5.6-sol` used only as
+  the reference shape;
 - the bundled `Chat Default` Tool Profile;
 - a local environment and the platform's normal Codex shell configuration;
 - one isolated task and Codex home per timestamp run.
 
 The Codex-facing model alias and actual upstream model may differ, but Gateway
-Logs must prove both. Do not use another model catalog shape as equivalent
-evidence.
+Logs must prove both. Do not generate or inject a custom model catalog for the
+suite.
 
 ## Scenarios
 
@@ -36,9 +37,8 @@ evidence.
 - `05`: call `get_goal`, `create_goal`, and `update_goal` in one fresh-thread
   lifecycle.
 - `06`: call projected `view_image` on a deterministic four-quadrant PNG and
-  verify that the actual `qwen3.7-plus` upstream identifies all four colors and
-  positions. Use the `gpt-5.6-sol`-equivalent Codex-facing catalog entry while
-  Gateway Logs prove the Qwen upstream.
+  verify that the default multimodal third-party model `mimo-v2.5` identifies
+  all four colors and positions. Gateway Logs must prove the actual upstream.
 
 Run every task separately. State created by the plan, file-editing, or Goal
 scenario must not leak into another run.

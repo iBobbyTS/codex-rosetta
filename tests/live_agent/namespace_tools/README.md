@@ -10,7 +10,7 @@ research, coding, prose, or general agent quality.
   and `skills`.
 
 All three Namespace checks live in one short task so a normal two-model matrix
-needs only one isolated run for `gpt-5.6-terra` and one for
+needs only one isolated run for the default `gpt-5.6-sol` cell and one for
 `deepseek-v4-flash`. Evaluation remains per Namespace: one missing or failed
 Namespace does not erase evidence collected for the others.
 
@@ -60,8 +60,8 @@ Run task `01` once with each model:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
-| `gpt-5.6-terra` | `GPT中转站` | direct OpenAI Responses |
-| `deepseek-v4-flash` | `DeepSeek` | Responses-to-Chat conversion |
+| `gpt-5.6-sol` (default GPT) | `GPT中转站` | direct OpenAI Responses |
+| `deepseek-v4-flash` (default third-party text) | `DeepSeek` | Responses-to-Chat conversion |
 
 Use a separate timestamp run root, Codex home, copied Gateway config, port, and
 Gateway Logs trace for each row. Confirm the actual upstream model from Gateway

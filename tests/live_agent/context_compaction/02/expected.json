@@ -1,7 +1,7 @@
 {
   "id": "02",
   "timeout_seconds": 120,
-  "model": "gpt-5.6-terra",
+  "default_model": "gpt-5.6-sol",
   "gateway_provider": "Pixel (K12)",
   "codex_model_provider": "openai",
   "model_auto_compact_token_limit": 17000,

@@ -1,15 +1,15 @@
 {
   "id": "04",
   "timeout_seconds": 120,
-  "first_model": "deepseek-v4-flash",
+  "default_first_model": "deepseek-v4-flash",
   "first_gateway_provider": "Deepseek (Official)",
-  "resume_model": "gpt-5.6-terra",
+  "default_resume_model": "gpt-5.6-sol",
   "resume_gateway_provider": "Pixel (K12)",
   "expected_reason": "comp_hash_changed",
   "expected_mode": "rosetta",
   "expected_compaction_count": 1,
   "expected_rosetta_mapping_rows": 1,
   "phase1_marker": "FIRST:SWITCH-NONCE-7Q4M",
-  "success_marker": "RESUMED:DEEPSEEK_TO_TERRA:SWITCH-NONCE-7Q4M",
+  "success_marker": "RESUMED:DEEPSEEK_TO_GPT:SWITCH-NONCE-7Q4M",
   "evaluation_artifact": "artifacts/evaluation.json"
 }

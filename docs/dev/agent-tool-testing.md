@@ -43,7 +43,8 @@ Its GPT and DeepSeek cells use byte-identical `TASK.md`, `scenario.py`, and
 `QUERY.md` files. Phase 1 hides the eventual question, then the same thread and
 model resumes with `QUERY.md` only after compaction. The test executor scores
 only the fixed post-compaction values. GPT is routed to `Pixel (K12)` in the
-copied test config, while DeepSeek remains `deepseek-v4-flash` on its sole
+copied test config, using `gpt-5.6-sol` as the default GPT cell, while DeepSeek
+remains `deepseek-v4-flash` on its sole
 provider.
 
 The Namespace-tools suite is
@@ -103,9 +104,10 @@ does not satisfy the OpenAI identity cell.
 
 The built-in Code Mode suite is
 [`tests/live_agent/builtin_tools`](../../tests/live_agent/builtin_tools/README.md).
-It fixes the provider display name to `OpenAI` and the model catalog shape to
-`gpt-5.6-sol`, then exercises a yielded `exec` cell through top-level `wait`,
-two projected `update_plan` calls, one grouped localized file workflow
+It fixes the provider display name to `OpenAI`, uses `gpt-5.6-sol` as the
+reference model shape without injecting a catalog, then exercises a yielded
+`exec` cell through top-level `wait`, two projected `update_plan` calls, one
+grouped localized file workflow
 (`Glob`, `Grep`, `Read`, two `Edit` calls, and create-file `Write`) where
 `apply_patch` remains model-hidden, projected `view_image`, and one grouped
 `get_goal`/`create_goal`/`update_goal` lifecycle. A separate visual-recognition
@@ -123,6 +125,15 @@ description. The outer developer or development agent, not the tested model,
 decides whether that description contains a dog, grass or a lawn, and running.
 The suite also requires a Profile-configured OpenAI-compatible Images endpoint;
 it does not measure artistic quality.
+
+Across these live suites, the defaults are `gpt-5.6-sol` for native GPT and
+shape reference, `deepseek-v4-flash` for third-party text/tool tests, and
+`mimo-v2.5` for third-party multimodal tests. The isolated `config.toml` owns
+the selected default. Ordinary runs do not pass `codex exec -m` and do not
+generate or inject `model_catalog.json`; only a deliberate model-switch
+protocol cell selects a resume target explicitly. Gateway Logs remain the
+source of truth for the actual upstream model and request shape.
+
 The network-search suite records Tesseract fallback as container-test coverage
 rather than an agent fixture because the deterministic public PDF contains
 embedded text. The agent PDF task still exercises the complete model-facing
