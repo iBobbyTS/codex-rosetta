@@ -54,8 +54,10 @@ model name, counter, seconds, or another suffix. Retain the exact absolute
 
 Through the main GUI task's ordinary shell tool, start
 `python3 tests/live_agent/browser_use/serve_fixture.py --port 8876`, retain its
-process handle, and write bounded server output to `<run_root>/fixture-server.log`.
-Verify only that the server reports its ready marker. Open
+exact operating-system PID and port, and write bounded server output to
+`<run_root>/fixture-server.log`. Record the PID and port in `execution.json` as
+soon as the ready marker is observed; do not infer the PID later by searching
+for a process name. Verify only that the server reports its ready marker. Open
 `http://127.0.0.1:8876/` in the selected in-app Browser.
 
 Exercise each executor capability group in `expected.json` in order. Before
@@ -102,6 +104,8 @@ Report only:
 - a concise list of observed errors or missing postconditions, without judging
   them;
 - cleanup state;
+- the exact fixture server port and operating-system PID used for this run,
+  even when cleanup reports that the server stopped;
 - the exact absolute run-root path;
 - the clickable path to `execution.json`.
 
@@ -112,6 +116,7 @@ End by telling the user exactly this:
 
 > 请把本回复完整复制到一个新的 judge agent session，并同时提供
 > 本次 `.agent-work/live-agent-test/{YYYYMMDD-HHMM}` 运行目录、其中
-> `execution.json` 的路径和本测试 session/thread id。
+> `execution.json` 的路径、本次 fixture 的端口和 PID，以及本测试
+> session/thread id。
 > 由 judge agent 按 `tests/live_agent/browser_use/JUDGE_TASK.md` 独立检查日志并
 > 给出最终分类；当前测试 agent 不负责判定结果。

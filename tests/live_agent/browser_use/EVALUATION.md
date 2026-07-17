@@ -29,6 +29,36 @@ The judge must verify that `execution.json`'s absolute `run_root` and
 Write only `<run_root>/evaluation.json`; do not overwrite another run or use a
 shared `artifacts/browser_use/01` destination.
 
+## Fixture process and listener cleanup verification
+
+After reading the immutable reported `fixture_server.host`,
+`fixture_server.port`, and `fixture_server.pid`, the judge must perform this
+bounded check even when the executor reports `fixture_server_stopped: true`:
+
+1. Validate that the host is exactly `127.0.0.1`, the port is exactly `8876`,
+   and the PID is a positive integer. Invalid or missing fields fail closed and
+   prohibit termination.
+2. Check whether that exact PID currently exists. Do not replace it with a PID
+   found by process-name search.
+3. Check whether the exact TCP port is listening and identify all listener
+   PIDs. Zero listeners means the port is closed; more than one or an
+   unavailable PID mapping is ambiguous.
+4. Only when the port is open, make one bounded localhost `GET /` request for
+   cleanup identity verification. It identifies this fixture only when the
+   response is HTTP 200 and contains both the exact title
+   `Browser Use Live Fixture` and the exact ready marker `ready`. This request
+   is cleanup evidence, not Browser capability evidence.
+5. Only if the reported PID exists, the fixture identity matches, and the port
+   has exactly one listener whose PID equals the reported PID, send `SIGTERM`
+   to that reported PID. Wait a bounded interval, then recheck both PID and
+   port. If the same verified process still owns the fixture listener, send
+   `SIGKILL` and recheck once more.
+
+Never signal a PID when the listener PID differs, the listener mapping is
+ambiguous, the response is not the exact fixture, or any check is unavailable.
+Record that state for manual intervention. PID equality must be established
+immediately before every signal so PID reuse cannot authorize termination.
+
 ## Gate 1: execution validity
 
 The judge verifies, using the execution report and bounded source-session
@@ -170,6 +200,20 @@ Write `<run_root>/evaluation.json` with this shape:
     "request_ids": [],
     "observations": []
   },
+  "fixture_cleanup_verification": {
+    "reported_host": "127.0.0.1",
+    "reported_port": 8876,
+    "reported_pid": 12345,
+    "reported_pid_exists_before_check": false,
+    "port_open_before_check": false,
+    "listener_pids": [],
+    "fixture_identity": "matched | not_fixture | not_checked | unavailable",
+    "listener_pid_matches_reported_pid": false,
+    "action": "none_already_stopped | none_port_closed_pid_exists | terminated_sigterm | terminated_sigkill | left_untouched_mismatch | left_untouched_non_fixture | left_untouched_ambiguous | invalid_report",
+    "reported_pid_exists_after_check": false,
+    "port_open_after_check": false,
+    "warning": null
+  },
   "rollout_observations": [],
   "cleanup": {
     "viewport_reset": true,
@@ -186,3 +230,9 @@ interactions pass and remaining partial/unsupported results are explicit IAB or
 observability limitations. Any failed core interaction or unjustified missing
 capability row is `failure`. A violated execution gate overrides capability
 rows with `invalid_execution`.
+
+A confirmed leftover fixture owned by the reported PID may be cleaned up by the
+judge without changing otherwise valid capability results. An invalid cleanup
+report, a non-fixture listener, a PID mismatch, or an ambiguous listener must be
+surfaced in `warning`; it does not authorize killing the process and may require
+manual intervention.

@@ -15,7 +15,7 @@ Use this shape:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "task_id": "01",
   "role": "executor",
   "run_root": "/absolute/workspace/.agent-work/live-agent-test/YYYYMMDD-HHMM",
@@ -26,6 +26,12 @@ Use this shape:
   "browser": "iab",
   "backend": "iab",
   "fixture_url": "http://127.0.0.1:8876/",
+  "fixture_server": {
+    "host": "127.0.0.1",
+    "port": 8876,
+    "pid": 12345,
+    "ready_marker_observed": true
+  },
   "run_started_at": "ISO-8601 timestamp",
   "run_finished_at": "ISO-8601 timestamp",
   "execution_constraints_observed": {
@@ -72,6 +78,12 @@ Use this shape:
   "judge_handoff_required": true
 }
 ```
+
+`fixture_server.pid` must be the positive integer PID returned by the shell
+when this run starts the server, not a later name-based lookup. The executor
+must preserve the original value after cleanup so the judge can check for a
+surviving process and listener. The executor's final response must repeat this
+exact PID and port.
 
 Use `null` when no postcondition was observed; do not replace it with an
 interpretive status. Keep observations short and synthetic. Do not include DOM

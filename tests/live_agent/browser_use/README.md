@@ -79,6 +79,14 @@ inside that run root. After handoff, the judge receives the exact run-root path,
 reads that root's `execution.json`, and writes `evaluation.json` back to the
 same root. The judge must never infer a run by selecting the latest timestamp.
 
+The executor records and reports the fixture server's exact PID and TCP port.
+The judge independently checks both after handoff. A surviving listener may be
+terminated only when all of the following agree: the reported PID still
+exists, the reported port is listening, a bounded localhost request returns
+this suite's exact fixture title and ready marker, and the unique listener PID
+equals the reported PID. A mismatch or ambiguous listener is evidence to
+record, never permission to terminate an unrelated process.
+
 ## Prerequisites
 
 1. Start the Codex GUI app and open this repository as the workspace.
@@ -138,7 +146,9 @@ browser binding itself is unavailable/disconnected and cannot continue.
 
 After cleanup, the executor tells the user to copy its complete final response,
 the exact run-root path, the `execution.json` path, and the source session/thread
-id into a new judge session. The judge follows `JUDGE_TASK.md` and
+id into a new judge session. The final response must also repeat the exact
+fixture port and PID recorded in `execution.json`. The judge follows
+`JUDGE_TASK.md` and
 `EVALUATION.md`, inspects bounded Gateway/session evidence, and writes the
 separate `evaluation.json` into that same run root. The executor must never
 judge its own run.

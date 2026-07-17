@@ -13,8 +13,16 @@ Read:
 
 Do not rerun Browser actions and do not modify the execution report. Inspect
 only bounded, credential-free Gateway and source-session evidence needed by
-`EVALUATION.md`. Classify every executor observation, perform the separate
-Gateway/rollout correlation check, write `<run_root>/evaluation.json`, and
-report the final verdict with the run root and evaluation artifact path. Use
-only the exact run root supplied by the user. Do not select the newest
-timestamp directory, reuse another run, or write to a shared artifact path.
+`EVALUATION.md`. In addition, perform its fixture process/listener cleanup
+verification using the exact PID and port reported in `execution.json`.
+Classify every executor observation, perform the separate Gateway/rollout
+correlation check, write `<run_root>/evaluation.json`, and report the final
+verdict with the run root and evaluation artifact path. Use only the exact run
+root supplied by the user. Do not select the newest timestamp directory, reuse
+another run, or write to a shared artifact path.
+
+Never terminate a process merely because its name resembles the fixture or
+because the port is open. Termination is allowed only when the reported PID
+exists, the reported port is listening, the bounded localhost response is the
+expected fixture, and the unique listener PID equals the reported PID. Record
+all mismatches and leave the process untouched.

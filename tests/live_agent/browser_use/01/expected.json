@@ -87,7 +87,16 @@
     "origin": "http://127.0.0.1:8876",
     "entry_url": "http://127.0.0.1:8876/",
     "title": "Browser Use Live Fixture",
-    "ready_marker": "ready"
+    "ready_marker": "ready",
+    "executor_must_report": [
+      "host",
+      "port",
+      "pid",
+      "ready_marker_observed"
+    ],
+    "expected_host": "127.0.0.1",
+    "expected_port": 8876,
+    "pid_source": "captured_when_executor_starts_server"
   },
   "capability_groups": [
     "binding_identity",
@@ -118,8 +127,43 @@
     "execution_provenance",
     "capability_status_classification",
     "gateway_and_rollout_correlation",
+    "fixture_reported_pid_exists",
+    "fixture_reported_port_listening",
+    "fixture_http_identity",
+    "fixture_listener_pid_matches_reported_pid",
+    "fixture_owned_survivor_cleanup",
     "overall_classification"
   ],
+  "judge_fixture_cleanup_contract": {
+    "always_check_after_handoff": true,
+    "identity_request": "GET http://127.0.0.1:8876/",
+    "identity_requires_http_status": 200,
+    "identity_requires_exact_markers": [
+      "Browser Use Live Fixture",
+      "ready"
+    ],
+    "terminate_only_if": [
+      "reported_pid_exists",
+      "reported_port_is_listening",
+      "fixture_identity_matches",
+      "exactly_one_listener_pid",
+      "listener_pid_equals_reported_pid"
+    ],
+    "termination_order": [
+      "SIGTERM",
+      "bounded_wait_and_recheck",
+      "SIGKILL_only_if_same_verified_owner_remains",
+      "final_recheck"
+    ],
+    "never_terminate_on": [
+      "invalid_or_missing_report",
+      "pid_mismatch",
+      "ambiguous_listener",
+      "listener_pid_unavailable",
+      "non_fixture_response",
+      "identity_check_unavailable"
+    ]
+  },
   "required_postconditions": {
     "form_status": "{\"name\":\"browser-live\",\"enabled\":true,\"color\":\"blue\"}",
     "counter": "2",
