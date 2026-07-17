@@ -3,6 +3,7 @@
 import pytest
 
 from codex_rosetta.gateway.model_presets import (
+    MODEL_PRESET_IGNORED_CATALOG_FIELDS,
     detect_model_preset,
     load_model_preset_resource,
     model_input_modalities,
@@ -11,53 +12,27 @@ from codex_rosetta.gateway.model_presets import (
 )
 
 
-ALPHA_20_TERRA_SHARED_OVERRIDES = {
-    "prefer_websockets": True,
+EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "support_verbosity": True,
     "default_verbosity": "low",
     "apply_patch_tool_type": "freeform",
     "web_search_tool_type": "text_and_image",
-    "supports_image_detail_original": True,
+    "supports_image_detail_original": False,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
-    "supports_parallel_tool_calls": True,
+    "supports_parallel_tool_calls": False,
     "tool_mode": "code_mode_only",
     "multi_agent_version": "v2",
     "use_responses_lite": True,
     "include_skills_usage_instructions": False,
     "auto_review_model_override": None,
     "auto_compact_token_limit": None,
-    "reasoning_summary_format": "experimental",
     "default_reasoning_summary": "none",
     "shell_type": "shell_command",
     "visibility": "list",
-    "minimal_client_version": "0.144.0",
     "supported_in_api": True,
     "availability_nux": None,
     "upgrade": None,
     "experimental_supported_tools": [],
-    "available_in_plans": [
-        "business",
-        "edu",
-        "edu_plus",
-        "edu_pro",
-        "education",
-        "enterprise",
-        "enterprise_cbp_automation",
-        "enterprise_cbp_usage_based",
-        "finserv",
-        "free",
-        "free_workspace",
-        "go",
-        "hc",
-        "k12",
-        "plus",
-        "pro",
-        "prolite",
-        "quorum",
-        "sci",
-        "self_serve_business_usage_based",
-        "team",
-    ],
     "supports_search_tool": True,
     "default_service_tier": None,
     "service_tiers": [
@@ -71,11 +46,14 @@ ALPHA_20_TERRA_SHARED_OVERRIDES = {
 }
 
 
-def test_shared_overrides_match_alpha_20_terra_catalog_snapshot() -> None:
+def test_shared_overrides_match_runtime_snapshot() -> None:
     resource = load_model_preset_resource()
 
     assert resource["template_slug"] == "gpt-5.6-terra"
-    assert resource["shared_overrides"] == ALPHA_20_TERRA_SHARED_OVERRIDES
+    assert resource["shared_overrides"] == EXPECTED_RUNTIME_SHARED_OVERRIDES
+    assert not (
+        MODEL_PRESET_IGNORED_CATALOG_FIELDS & resource["shared_overrides"].keys()
+    )
 
 
 def test_every_shared_override_is_allowed_in_each_model_preset() -> None:

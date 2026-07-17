@@ -20,6 +20,14 @@ MODEL_PRESET_EXTRA_OVERRIDE_FIELDS = frozenset(
     {"comp_hash", "supports_reasoning_summaries"}
 )
 MODEL_PRESET_LEGACY_FIELDS = frozenset({"effective_context_window_percent"})
+MODEL_PRESET_IGNORED_CATALOG_FIELDS = frozenset(
+    {
+        "available_in_plans",
+        "minimal_client_version",
+        "prefer_websockets",
+        "reasoning_summary_format",
+    }
+)
 MODEL_PRESET_TEMPLATE_FIELDS = frozenset(
     {
         "base_instructions",

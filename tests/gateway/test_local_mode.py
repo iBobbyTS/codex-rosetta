@@ -19,6 +19,7 @@ from codex_rosetta.gateway.local_mode import (
     ensure_codex_api_key,
 )
 from codex_rosetta.gateway.model_presets import (
+    MODEL_PRESET_IGNORED_CATALOG_FIELDS,
     load_model_preset_resource,
     normalize_model_preset,
 )
@@ -300,11 +301,11 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
         assert model["default_reasoning_level"] == (
             "medium" if "medium" in efforts else efforts[0]
         )
-        assert model["prefer_websockets"] is True
-        assert model["supports_image_detail_original"] is True
+        assert MODEL_PRESET_IGNORED_CATALOG_FIELDS.isdisjoint(model)
+        assert model["supports_image_detail_original"] is False
         assert model["tool_mode"] == "code_mode_only"
         assert model["apply_patch_tool_type"] == "freeform"
-        assert model["supports_parallel_tool_calls"] is True
+        assert model["supports_parallel_tool_calls"] is (slug == "minimax-m3")
         assert model["supports_search_tool"] is True
         assert model["web_search_tool_type"] == "text_and_image"
         assert model["use_responses_lite"] is True
@@ -344,6 +345,8 @@ def test_model_entry_overrides_every_shared_field_and_keeps_unknown_fallback() -
     )
     terra["future_catalog_field"] = {"from_template": True}
     terra["effective_context_window_percent"] = 85
+    for key in MODEL_PRESET_IGNORED_CATALOG_FIELDS:
+        terra[key] = "must-not-leak-from-template"
 
     conflicting_shared = {
         key: (
@@ -369,6 +372,7 @@ def test_model_entry_overrides_every_shared_field_and_keeps_unknown_fallback() -
     assert model["future_catalog_field"] == {"from_template": True}
     assert "supports_reasoning_summaries" not in model
     assert "effective_context_window_percent" not in model
+    assert MODEL_PRESET_IGNORED_CATALOG_FIELDS.isdisjoint(model)
 
 
 def test_catalog_detects_preset_from_upstream_model_for_an_exposed_alias() -> None:
