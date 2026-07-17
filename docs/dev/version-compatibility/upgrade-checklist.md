@@ -13,7 +13,7 @@ The upgrade must be completed in the following order, and the latter step cannot
 5. Define repair plans for changed items and manual-review/live-test plans for possibly unchanged items;
 6. Review the complete Codex model catalog contract and refresh `docs/en/codex-model-catalog.md` plus its Chinese counterpart when fields, defaults, bundled values, consumers, or third-party guidance changed; recheck configured Provider ID/name resolution, `is_openai()` and explicit bearer-token precedence used by local mode; then review and refresh `src/codex_rosetta/gateway/admin/tool_catalog.json` against the target tool specifications and bundled extensions, including its CLI/source metadata binding;
 7. Complete repairs and run all automated checks, including compatibility-specific tests, lint, and the full non-integration test suite;
-8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-terra` to observe native Codex/GPT request shapes and low-cost `deepseek-v4-flash` by default for third-party conversion debugging; record substitutions and reasons;
+8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-sol` as the native Codex/GPT request-shape reference, low-cost `deepseek-v4-flash` by default for third-party non-multimodal conversion debugging, and `mimo-v2.5` for third-party multimodal tests; record substitutions and reasons;
 9. After every gate passes, update the contract baseline, upgrade report, documentation, and package version, and record the exact source commit.
 
 The output of `make check-codex-compat` is the contract group classification, which is only one of the evidences in step 4; it cannot replace the compatibility point classification one by one, nor can it cover the real client behavior.
@@ -88,7 +88,7 @@ Key points to confirm:
   values, and the non-empty/unequal `comp_hash_changed` predicate;
 - `ModelInfo` and nested-struct fields, enum wire values, serde rename/default/skip behavior, instruction-template precedence, unknown-model fallback, and every runtime consumer;
 - local catalog `comp_hash` selection from the upstream model name, including explicit non-empty preset-hash precedence and alias inheritance, deterministic fallback, stability across exposed-alias and Provider changes, plus a change when the upstream model changes;
-- For every Codex model-catalog upgrade, compare the target `gpt-5.6-terra` entry field by field with `codex_model_presets.json`: classify identity/context/modality/reasoning/prompt fields as model-specific, copy every shareable field and exact value into `shared_overrides`, verify every shared key can be overridden by each `models[]` entry, and verify `template_slug` fills only previously unknown fields rather than resurrecting known fields removed by the target catalog;
+- For every Codex model-catalog upgrade, compare the target `gpt-5.6-sol` entry field by field with `codex_model_presets.json`: classify identity/context/modality/reasoning/prompt fields as model-specific, copy every shareable field and exact value into `shared_overrides`, verify every shared key can be overridden by each `models[]` entry, and verify `template_slug` fills only previously unknown fields rather than resurrecting known fields removed by the target catalog;
 - The complete bundled `models.json` key set and per-model values, including keys ignored by the current client and valid defaulted fields omitted from the JSON;
 - Whether catalog-selected tool surfaces changed, especially `web.run` versus hosted `web_search` and collaboration v2 versus `multi_agent_v1`.
 
@@ -308,8 +308,9 @@ Whether these project-dependent models understand tool specifications, form corr
 
 Select a model by debugging target, don't just look at the Codex-facing alias:
 
-- When you need to observe the Codex/GPT native request, tool, reasoning, transport or stream shape, use `gpt-5.6-terra`, and use Rosetta trace to confirm that the upstream is indeed a GPT route; the alias with the same name forwarded to a third-party provider cannot be used as evidence of the original GPT request;
+- When you need to observe the Codex/GPT native request, tool, reasoning, transport or stream shape, use `gpt-5.6-sol` as the reference, and use Rosetta trace to confirm that the upstream is indeed a GPT route; the alias with the same name forwarded to a third-party provider cannot be used as evidence of the original GPT request;
 - When debugging the Responses→Chat bridge, reasoning and multi-round tool calls of third-party models, `deepseek-v4-flash` is used by default because the cost is lower;
+- For third-party multimodal live-agent paths, use `mimo-v2.5` by default and verify real image input/output in Gateway Logs;
 - Actual testing of version upgrades should at least include scenarios related to this change in the above two categories;
 - If an item is only applicable to same-format Responses, specific hosted tools or model-specific capabilities, add the corresponding upstream;
 - If `deepseek-v4-flash` is temporarily unavailable, use a low-cost model with similar capabilities and support tool calls, and record the alternative model in the results, and cannot skip it without explanation;

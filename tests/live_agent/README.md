@@ -33,11 +33,11 @@ handling rather than prose quality.
 - [`subagent_tools`](subagent_tools/README.md): six isolated lifecycle
   scenarios covering every `collaboration` Function: spawn, wait, list,
   message, follow-up, and interrupt.
-- [`builtin_tools`](builtin_tools/README.md): fixed OpenAI-identified,
-  `gpt-5.6-sol`-equivalent Code Mode scenarios for top-level `wait`, projected
-  plan/file/image tools, the three-tool Goal lifecycle, and actual upstream
-  visual recognition. It also records why `request_user_input` cannot be
-  driven by the current non-interactive `codex exec` runner.
+- [`builtin_tools`](builtin_tools/README.md): OpenAI-identified Code Mode
+  scenarios using `gpt-5.6-sol` as the reference shape for top-level `wait`,
+  projected plan/file/image tools, the three-tool Goal lifecycle, and actual
+  upstream visual recognition. It also records why `request_user_input` cannot
+  be driven by the current non-interactive `codex exec` runner.
 - [`image_generation`](image_generation/README.md): a gated visual-model
   scenario that generates an image, opens the saved artifact through projected
   `view_image`, and leaves semantic agreement with the requested scene to the
@@ -62,12 +62,22 @@ executor/judge pair.
 
 ## Real-provider defaults
 
-The default third-party comparison model is `deepseek-v4-flash`; the native
-GPT comparison model is `gpt-5.6-terra`. For context-compaction protocol and
-summary-quality provider cells, route GPT to `Pixel (K12)` in the copied test config.
-A normal real-provider comparison uses both models. Always confirm the Gateway
-provider and actual upstream model in Rosetta Gateway Logs: a Codex-facing
-alias by itself is not evidence of the upstream route.
+Use `gpt-5.6-sol` as the default native GPT model and model-shape reference.
+Use `deepseek-v4-flash` for third-party non-multimodal tests and `mimo-v2.5`
+for third-party multimodal tests. For context-compaction protocol and
+summary-quality provider cells, route GPT to `Pixel (K12)` in the copied test
+config. A normal non-multimodal real-provider comparison uses the GPT and
+DeepSeek defaults. Always confirm the Gateway provider and actual upstream
+model in Rosetta Gateway Logs: a Codex-facing alias by itself is not evidence
+of the upstream route.
+
+These are defaults, not hard requirements embedded in task contracts. Select
+the default through the isolated `config.toml`; ordinary suite commands must
+not pass a CLI `-m` override, generate or inject `model_catalog.json`, set
+`model_catalog_json`, or require exact catalog equality. A deliberate
+same-thread model-switch cell may select its target model explicitly because
+the switch itself is the protocol under test. Record any model substitution
+and verify the observed request/tool shape against the `gpt-5.6-sol` reference.
 
 Every model, provider identity, and task matrix cell requires a separate
 timestamp run root. Never reuse the Codex home, copied Gateway configuration,

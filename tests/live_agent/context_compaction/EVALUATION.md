@@ -24,7 +24,7 @@ Write a bounded object to `RUN_ROOT/artifacts/evaluation.json`:
   "accepted_compaction_item_count": 1,
   "followup_compaction_input_observed": true,
   "error": null,
-  "model": "deepseek-v4-flash",
+  "model": "observed Codex-facing model alias",
   "gateway_provider": "Deepseek (Official)",
   "codex_model_provider": "openai",
   "thread_id": "<thread-id>",

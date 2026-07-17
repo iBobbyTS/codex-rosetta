@@ -1,7 +1,7 @@
 {
   "id": "01",
   "timeout_seconds": 120,
-  "model": "deepseek-v4-flash",
+  "default_model": "deepseek-v4-flash",
   "gateway_provider": "Deepseek (Official)",
   "codex_model_provider": "openai",
   "model_auto_compact_token_limit": 17000,

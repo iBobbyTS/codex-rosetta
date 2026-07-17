@@ -62,8 +62,8 @@ Run every provider/model/task combination:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
-| `gpt-5.6-terra` | `GPT中转站` | direct OpenAI Responses |
-| `deepseek-v4-flash` | `DeepSeek` | Responses-to-Chat conversion |
+| `gpt-5.6-sol` (default GPT) | `GPT中转站` | direct OpenAI Responses |
+| `deepseek-v4-flash` (default third-party text) | `DeepSeek` | Responses-to-Chat conversion |
 
 Every provider/model/task cell requires its own timestamp run root, Codex home,
 copied Gateway configuration, port, and Gateway Logs trace. Confirm the actual

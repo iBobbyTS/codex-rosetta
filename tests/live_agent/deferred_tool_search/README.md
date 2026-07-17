@@ -50,9 +50,12 @@ conda run -n llm-rosetta python "$SUITE/prepare_run.py" \
   --run-root "$RUN_ROOT" \
   --gateway-log-root "$GATEWAY_LOG_ROOT" \
   --port 18765 \
-  --model gpt-5.6-terra \
   --task-id 01
 ```
+
+The omitted `--model` defaults to `gpt-5.6-sol`. Supply `--model` only when
+preparing another matrix cell; the selected value becomes the isolated
+`config.toml` default and is not also forced on `codex exec`.
 
 `prepare_run.py` installs only the surfaces required by the selected task:
 
@@ -66,20 +69,21 @@ paths in copied plugin MCP manifests are resolved only inside the disposable
 worktree before installation. Installation/list outputs stay under `artifacts/`
 as evidence, not as proof that a model saw or used a capability.
 
-For third-party aliases the script writes a gateway-derived
-`model_catalog.json`; an unknown-model fallback is a setup failure.
+The script never writes or injects `model_catalog.json`. GPT uses
+`gpt-5.6-sol` as the reference shape, and third-party aliases exercise Codex's
+normal fallback metadata rather than a suite-controlled catalog.
 
 ## Model order and stop gate
 
-Run tasks `01` through `07` with `gpt-5.6-terra` first, using a separate run
+Run tasks `01` through `07` with the default GPT cell first, using a separate run
 root, gateway, Codex home, and trace for every cell. Stop and repair the first
-failing Terra task. Do not start `deepseek-v4-flash` until every Terra task
+failing GPT task. Do not start `deepseek-v4-flash` until every GPT task
 passes.
 
 | Model | Expected route |
 |---|---|
-| `gpt-5.6-terra` | direct OpenAI Responses Lite/code-mode baseline |
-| `deepseek-v4-flash` | Responses-to-Chat with generated 0.144.4 model catalog |
+| `gpt-5.6-sol` (default GPT shape reference) | direct OpenAI Responses Lite/code-mode baseline |
+| `deepseek-v4-flash` (default third-party text model) | Responses-to-Chat with normal fallback metadata |
 
 For the direct Responses baseline, deferred MCP discovery remains `exec ->
 runtime ALL_TOOLS -> nested tool`. On the Responses-to-Chat route, Rosetta must

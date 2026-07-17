@@ -7,9 +7,9 @@ and replay through Codex-Rosetta. It does not score summary quality; use
 ## Scenarios
 
 - `01`: `deepseek-v4-flash` context-limit compaction through Rosetta mode.
-- `02`: `gpt-5.6-terra` context-limit native passthrough through
+- `02`: `gpt-5.6-sol` context-limit native passthrough through
   `Pixel (K12)`.
-- `03`: `gpt-5.6-terra` through `Pixel (K12)` to
+- `03`: `gpt-5.6-sol` through `Pixel (K12)` to
   `deepseek-v4-flash`; require `comp_hash_changed` and Rosetta mode.
 - `04`: reverse `03`; require `comp_hash_changed` and Rosetta mode.
 
@@ -18,7 +18,7 @@ configuration, port, gateway process, and Gateway Logs trace.
 
 ## Provider routing
 
-In the copied config only, route every `gpt-5.6-terra` cell to the existing
+In the copied config only, route every `gpt-5.6-sol` cell to the existing
 provider named exactly `Pixel (K12)`. Keep `deepseek-v4-flash` on its existing
 sole provider. Verify both provider names and actual upstream models from the
 trace; model aliases alone are not evidence.
@@ -47,7 +47,9 @@ codex exec resume -m TARGET <thread-id> \
   "Proceed with the resume phase of the existing task."
 ```
 
-Non-interactive resume requires the new prompt. The first phase's fixed code is
+This explicit target selection is limited to the model-switch protocol cells;
+ordinary cells use the isolated config default without `-m`. Non-interactive
+resume requires the new prompt. The first phase's fixed code is
 not repeated in that prompt, so the target marker proves context continuation.
 
 ## Result interpretation

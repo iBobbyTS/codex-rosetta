@@ -24,9 +24,15 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
 - Resolve the repository root with `git rev-parse --show-toplevel`.
 - Select the suite and task from `tests/live_agent` as requested, then
   read that suite's `README.md`, optional `EVALUATION.md`, and task
-  `expected.json` before configuring the run. Suite-specific models, feature
-  flags, provider identities, task order, and result fields live there rather
-  than in this skill.
+  `expected.json` before configuring the run. Feature flags, provider
+  identities, task order, and result fields live there rather than in this
+  skill. Suites may define capability roles and default model choices, but must
+  not require a CLI model override or a custom Codex model catalog.
+- Unless the suite explicitly tests a different capability role, use
+  `gpt-5.6-sol` as the native GPT shape reference, `deepseek-v4-flash` for
+  third-party non-multimodal cells, and `mimo-v2.5` for third-party multimodal
+  cells. Put the selected default in the isolated `config.toml`; do not force
+  it with `codex exec -m` and do not inject `model_catalog_json`.
 - Use `tmp/agent_testing_workspace/YYYYMMDDHHMM` as the runtime root, with
   local time.
 - Use `/Volumes/RAMDisk/YYYYMMDDHHMM` as the macOS Gateway Logs root.
@@ -120,7 +126,7 @@ exists, stop and use another unused minute rather than adding a suffix.
 
    ```toml
    model_provider = "<provider-id>"
-   model = "<model>"
+   model = "<default-model>"
    sandbox_mode = "danger-full-access"
    approval_policy = "never"
    model_reasoning_effort = "medium"
@@ -163,10 +169,9 @@ exists, stop and use another unused minute rather than adding a suffix.
 3. Run Codex non-interactively with the isolated home and bounded duration:
 
    ```bash
-   MODEL=<model-required-by-suite>
    PROMPT=$(<"$RUN_ROOT/worktree/TASK.md")
    CODEX_HOME="$RUN_ROOT/codex_home" codex exec --json --skip-git-repo-check \
-     -C "$RUN_ROOT/worktree" -m "$MODEL" "$PROMPT" \
+     -C "$RUN_ROOT/worktree" "$PROMPT" \
      >"$RUN_ROOT/artifacts/codex.jsonl" \
      2>"$RUN_ROOT/artifacts/codex.stderr"
    ```
@@ -191,6 +196,16 @@ Use three bounded evidence sources:
    converted model-facing tool calls, reconstructed Codex-facing calls, and
    successful stream completion. This is the only artifact stored on the RAM
    Disk. Filter by model, request id, thread id, and timestamp.
+
+For every upstream request in the run, inspect its usage record and calculate
+the prompt-cache hit rate as cached input tokens divided by total input tokens.
+Record the request id, input tokens, cached tokens, computed rate, and a bounded
+normal/abnormal judgment. A first request may legitimately have a zero hit
+rate; later requests with a stable repeated prefix should normally report a
+non-zero hit. Missing usage, a zero denominator, an unexpected reset, or a
+route-specific discontinuity must be called out instead of silently omitted.
+Do not impose one universal numeric pass threshold unless the selected suite
+defines it, but always analyze every request and explain anomalies.
 
 Compare the evidence with `worktree/expected.json` and apply the field meanings
 and output schema defined by the selected suite's README/EVALUATION guide. Do
@@ -236,6 +251,8 @@ For every cell, record:
 - thread id and rollout path;
 - Rosetta trace path and observed upstream model;
 - terminal stream shape and any warning that changes interpretation;
+- per-request prompt-cache input tokens, cached tokens, hit rate, and anomaly
+  judgment;
 - every additional measurement required by the suite guide.
 
 ## Safety Rules
@@ -268,6 +285,9 @@ measures. The summary-quality suite measures only deterministic fact retention
 after compaction; it is one small regression scenario, not a general
 model-quality benchmark. Report both phase exit statuses, the phase-1 marker,
 same-thread resume evidence, and any command or compaction during resume.
+Include the per-request cache hit-rate observations and explicitly state
+whether their progression is normal; never summarize the run with only one
+aggregate cache number.
 
 Include every additional field required by the selected suite's guide. When an
 evaluation artifact is required, the final report must agree with it.

@@ -5,7 +5,7 @@
   "failure_marker": "RESULT:WEB_RUN_BROWSER_NAVIGATION_FAILED",
   "required_scope": {
     "provider_display_name": "OpenAI",
-    "model_catalog_equivalent_to": "gpt-5.6-sol",
+    "model_shape_reference": "gpt-5.6-sol",
     "tool_profile": "Chat Default（适用于第三方仅提供chat api的模型）",
     "search_surface": "web.run",
     "tavily_token": "not_required",

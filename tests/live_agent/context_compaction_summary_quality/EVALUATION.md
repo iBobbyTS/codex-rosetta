@@ -25,7 +25,7 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "post_compaction_tokens": 10000,
   "command_output_chars": 128000,
   "final_response_after_compaction": true,
-  "model": "gpt-5.6-terra",
+  "model": "observed Codex-facing model alias",
   "gateway_provider": "Pixel (K12)",
   "thread_id": "<thread-id>",
   "summary_reviewer": "coding_agent_or_developer",

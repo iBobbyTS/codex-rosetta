@@ -33,7 +33,8 @@ unrelated suites.
 Tasks `02` through `05` must use all of the following:
 
 - a provider display name exactly equal to `OpenAI`;
-- a model catalog entry exactly equivalent to `gpt-5.6-sol`;
+- the normal bundled/fallback model metadata, using `gpt-5.6-sol` only as the
+  reference shape and without a suite-injected catalog;
 - the bundled `Chat Default` Tool Profile with `web__run` set to Modified;
 - the Rosetta localhost `base_url` generated for the isolated run.
 
