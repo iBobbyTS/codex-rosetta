@@ -13,7 +13,7 @@ Use three bounded, credential-free sources:
    `<plugins_instructions>`, explicit `<skill>` injection, selected skill read,
    `exec` cells, nested MCP call, and consumed result.
 3. Gateway Logs: actual upstream model and route, source Responses request,
-   target Chat request when converted, the projected `tool_search`, the `exec`
+   target Chat request when converted, projected `tool_search`/`tool_read`, `exec`
    runtime-discovery contract, contextual ordering, and terminal stream state.
 
 Do not count installation output, prompt text, reasoning text, or a tool
@@ -35,9 +35,15 @@ host injection or selected skill read required by `expected.json`.
 - The source Responses request carries the `exec` description that defines
   `ALL_TOOLS`; deferred candidate names are not placed in the model request.
   The converted Chat request must retain raw `exec` and expose the synthetic
-  ordinary `tool_search` Function. A converted search call must return to Codex
-  as custom `exec`, with no native `tool_search_call/output` or Gateway-loaded
-  namespace. The final `exec` output must contain the three runtime
+  ordinary `tool_search`, `tool_read`, and fixed `invoke_deferred_tool`
+  Functions. Their top-level definitions must remain byte-identical across
+  search, read, and call. Converted search/read calls must return to Codex as
+  custom `exec`, with no native
+  `tool_search_call/output` or Gateway-loaded namespace. Because this fixture's
+  archive tools are outside the dispatcher allowlist, the selected archive must
+  be read by exact name and then called through raw `exec`. The final `exec`
+  output must contain
+  the three runtime
   `{name, description}` entries in Codex's stable canonical-name order declared
   by `catalog_exposure.candidate_order`.
 - For plugin MCP tasks, runtime names must retain the plugin/server namespace,
@@ -58,8 +64,10 @@ Record these checks independently:
 - `body_read`: required skill body was host-injected or read by the agent.
 - `tool_exposed`: the source model request retained the `ALL_TOOLS` discovery
   contract; on a converted route, the target request also exposed ordinary
-  `tool_search`, retained raw `exec`, and translated the search call back to
-  custom `exec`; the runtime catalog contained all three expected MCP entries;
+  `tool_search`, `tool_read`, plus fixed `invoke_deferred_tool`, retained raw
+  `exec`, kept top-level tools byte-identical across turns, and translated both
+  search and read back to custom `exec`; the runtime catalog contained all three
+  expected MCP entries;
   for plugin tasks, also verify selected-call provenance.
 - `tool_called`: expected tool received the exact arguments.
 - `result_used`: final answer came from the body/tool result.

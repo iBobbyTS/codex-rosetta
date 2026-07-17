@@ -13,21 +13,26 @@ import math
 import shlex
 import uuid
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from .code_mode_projection import (
+    ALL_TOOLS_READ_CHAT_NAME,
+    ALL_TOOLS_SEARCH_CHAT_NAME,
     DEFERRED_EXEC_GUIDANCE,
+    DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+    NODE_REPL_TOOL_NAMES,
     ExecDescriptionSection,
     ExecToolProjection,
+    all_tools_read_definition,
+    all_tools_search_definition,
     build_exec_script,
+    discovered_all_tools_search_names,
     discovered_node_repl_exec_tools,
     exec_tool_section_names,
     exec_tool_projections_for_route,
-    node_repl_exec_projections,
     plan_exec_tool_definitions,
     prune_exec_tool_description,
-    sanitize_projected_node_repl_history,
 )
 from .state_scope import GatewayStateScope
 from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
@@ -402,9 +407,8 @@ def localize_code_editing_chat_request(
         messages = localized_messages
 
     discovered = discovered_node_repl_exec_tools(messages)
+    discovered_search_names = discovered_all_tools_search_names(messages)
     requested_projections = dict(exec_projections or {})
-    requested_projections.update(node_repl_exec_projections())
-    requested_projections.update(discovered.projections)
 
     if isinstance(tools, list):
         preserved_tools: list[Any] = []
@@ -425,15 +429,14 @@ def localize_code_editing_chat_request(
                 native_capabilities,
                 requested_projections,
                 profile_route,
-                discovered.definitions,
             )
         )
-        messages = _sanitize_projected_discovery_history(
-            adapted,
-            messages,
-            discovered_names=frozenset(discovered.projections),
-            active_names=frozenset(active_projections),
-            visible_names=frozenset(projected_tools),
+        _configure_deferred_tool_projections(
+            projected_tools,
+            active_projections,
+            discovered.projections,
+            discovered_search_names,
+            existing_names,
         )
         localized_tools = [
             tool
@@ -492,20 +495,60 @@ def localize_code_editing_chat_request(
     return adapted
 
 
-def _sanitize_projected_discovery_history(
-    adapted: dict[str, Any],
-    messages: Any,
-    *,
-    discovered_names: frozenset[str],
-    active_names: frozenset[str],
-    visible_names: frozenset[str],
-) -> Any:
-    projected_names = discovered_names & active_names & visible_names
-    if not projected_names or not isinstance(messages, list):
-        return messages
-    sanitized = sanitize_projected_node_repl_history(messages, projected_names)
-    adapted["messages"] = sanitized
-    return sanitized
+def _configure_deferred_tool_projections(
+    projected_tools: dict[str, dict[str, Any]],
+    active_projections: dict[str, ExecToolProjection],
+    discovered_projections: dict[str, ExecToolProjection],
+    discovered_search_names: tuple[str, ...],
+    existing_names: set[str],
+) -> None:
+    """Bind request-history authorization without changing model-visible tools."""
+    search_active = ALL_TOOLS_SEARCH_CHAT_NAME in active_projections
+    read_active = ALL_TOOLS_READ_CHAT_NAME in active_projections
+    dispatch_active = (
+        search_active
+        and read_active
+        and DEFERRED_TOOL_DISPATCH_CHAT_NAME in active_projections
+    )
+    blocked_names = tuple(
+        name for name in NODE_REPL_TOOL_NAMES if name in existing_names
+    )
+
+    search_projection = active_projections.get(ALL_TOOLS_SEARCH_CHAT_NAME)
+    if search_projection is not None:
+        if ALL_TOOLS_SEARCH_CHAT_NAME in projected_tools:
+            projected_tools[ALL_TOOLS_SEARCH_CHAT_NAME] = all_tools_search_definition(
+                include_tool_read_guidance=read_active
+            )
+
+    read_projection = active_projections.get(ALL_TOOLS_READ_CHAT_NAME)
+    if read_projection is not None:
+        active_projections[ALL_TOOLS_READ_CHAT_NAME] = replace(
+            read_projection,
+            authorized_names=discovered_search_names,
+            include_dispatch_guidance=dispatch_active,
+            dispatch_blocked_names=blocked_names,
+        )
+        if ALL_TOOLS_READ_CHAT_NAME in projected_tools:
+            projected_tools[ALL_TOOLS_READ_CHAT_NAME] = all_tools_read_definition(
+                include_dispatch_guidance=dispatch_active
+            )
+
+    authorized_names = tuple(
+        name
+        for name in NODE_REPL_TOOL_NAMES
+        if name in discovered_projections and name not in existing_names
+    )
+    dispatch_projection = active_projections.get(DEFERRED_TOOL_DISPATCH_CHAT_NAME)
+    if dispatch_projection is not None:
+        if not dispatch_active:
+            active_projections.pop(DEFERRED_TOOL_DISPATCH_CHAT_NAME, None)
+            projected_tools.pop(DEFERRED_TOOL_DISPATCH_CHAT_NAME, None)
+        else:
+            active_projections[DEFERRED_TOOL_DISPATCH_CHAT_NAME] = replace(
+                dispatch_projection,
+                authorized_names=authorized_names,
+            )
 
 
 def _rewrite_or_hide_exec_projection_container(
@@ -576,7 +619,6 @@ def _project_exec_chat_tools(
     capabilities: NativeToolCapabilities,
     projections: dict[str, ExecToolProjection],
     profile_route: Any | None,
-    discovered_definitions: dict[str, dict[str, Any]],
 ) -> tuple[
     dict[str, dict[str, Any]],
     dict[str, ExecToolProjection],
@@ -601,8 +643,7 @@ def _project_exec_chat_tools(
         projections,
         profile_route=profile_route,
     )
-    definitions = dict(discovered_definitions)
-    definitions.update(plan.definitions)
+    definitions = plan.definitions
     active = {
         name: projections[name]
         for name in definitions
@@ -715,6 +756,13 @@ def translate_localized_tool_call_part(
     call_id = part.get("tool_call_id", "")
     localized_input = _ensure_input_dict(part.get("tool_input"))
     if localized_input is None:
+        if projection is not None:
+            return _exec_error_translation(
+                call_id,
+                localized_name,
+                {},
+                f"{localized_name} arguments must be a JSON object.",
+            )
         return _error_translation(
             call_id,
             localized_name,

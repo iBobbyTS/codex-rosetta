@@ -64,25 +64,28 @@ For a Responses-to-Chat route, additionally verify all of the following:
 
 - the first deferred lookup is the projected `tool_search`, returned to Codex
   as the marked search `exec` rather than a native `tool_search_call`;
-- the following target Chat request exposes only Node REPL Functions whose exact
-  names and declarations appeared in that paired result;
+- the first and following target Chat requests expose the same fixed
+  `tool_search`, `tool_read`, `invoke_deferred_tool`, and raw `exec` definitions in the same
+  order, with no independent Node REPL Functions added after search;
 - the search result is valid complete JSON with accurate `returned_matches`,
-  `total_matches`, and `truncated`, and never contains a partially sliced match;
-- after projection, the target Chat history replaces each projected Node
-  description with `projected_as_structured_function` while retaining unknown
-  match descriptions; the source Responses history remains complete;
-- every actual Browser runtime call is a structured
-  `mcp__node_repl__js` Function call at the model boundary, not model-authored
-  outer `exec` JavaScript;
+  `total_matches`, and `truncated`, contains only bounded summaries, and never
+  contains a partially sliced match;
+- each used allowlisted Node name has a paired `tool_read`; its result retains
+  the complete declaration plus exact dispatcher instruction in target Chat
+  history, while source Responses history remains complete;
+- every actual Browser runtime call is a structured `invoke_deferred_tool`
+  Function call at the model boundary with an exact allowlisted `name`, not a
+  direct Node Function call or model-authored outer `exec` JavaScript;
 - Rosetta rebuilds each call as custom `exec` using the matching nested tool and
   a content-block forwarder for text, image, and `isError`;
 - `mcp__node_repl__js_reset` and
-  `mcp__node_repl__js_add_node_module_dir` are absent unless each was returned
-  by the live search and used for its documented recovery/setup purpose.
+  `mcp__node_repl__js_add_node_module_dir` are rejected by the dispatcher unless
+  each was returned by its own paired live read and used for its documented
+  recovery/setup purpose.
 
 Treat a model-authored raw Browser wrapper after the structured Function became
-available as a tool-adaptation failure. The Rosetta-generated search `exec` is
-not a Browser runtime call and does not violate this rule. Direct
+available as a tool-adaptation failure. Rosetta-generated search/read `exec`
+calls are not Browser runtime calls and do not violate this rule. Direct
 Responses-to-Responses runs retain their native Code Mode behavior and are not
 judged against the Chat-boundary shape.
 

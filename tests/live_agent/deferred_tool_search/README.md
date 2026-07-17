@@ -87,9 +87,12 @@ passes.
 
 For the direct Responses baseline, deferred MCP discovery remains `exec ->
 runtime ALL_TOOLS -> nested tool`. On the Responses-to-Chat route, Rosetta must
-add an ordinary `tool_search` Function from the live deferred guidance; its call
-must return to Codex as custom `exec` JavaScript, after which the selected
-runtime tool is invoked through raw `exec`. Codex places candidate metadata only
-in the V8 runtime, and the fixture's compact catalog output captures it without
-Gateway discovery state. Follow
+add fixed ordinary `tool_search`, `tool_read`, and `invoke_deferred_tool`
+Functions from the live deferred guidance; top-level Chat tools must remain
+byte-identical across search, read, and call. Search and read must each return
+to Codex as custom `exec` JavaScript.
+These archive fixtures are outside the Browser Node dispatcher allowlist, so the
+selected runtime tool is still invoked through raw `exec`. Codex places
+candidate metadata only in the V8 runtime, and the fixture's compact catalog
+output captures it without Gateway discovery state. Follow
 [`EVALUATION.md`](EVALUATION.md) for structural evidence and result fields.
