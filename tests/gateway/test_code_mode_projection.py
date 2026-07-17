@@ -6,16 +6,22 @@ import asyncio
 import json
 import shutil
 import subprocess
+from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from codex_rosetta.gateway.code_mode_projection import (
+    ALL_TOOLS_READ_CHAT_NAME,
+    ALL_TOOLS_READ_RESULT_PROTOCOL,
     ALL_TOOLS_SEARCH_MAX_RESULT_CHARS,
     ALL_TOOLS_SEARCH_RESULT_PROTOCOL,
+    DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+    NODE_REPL_TOOL_NAMES,
     ExecToolProjection,
     build_exec_script,
+    discovered_all_tools_search_names,
     discovered_node_repl_exec_tools,
     exec_tool_section_names,
     exec_tool_projections_for_route,
@@ -23,7 +29,6 @@ from codex_rosetta.gateway.code_mode_projection import (
     prune_exec_tool_description,
     project_exec_tool_definitions,
     project_modified_exec_web_run_description,
-    sanitize_projected_node_repl_history,
 )
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
@@ -94,18 +99,81 @@ declare const tools: {{ {name}(args: {arguments}): Promise<CallToolResult>; }};
 ```"""
 
 
-def _all_tools_result(*names: str) -> dict:
+def _all_tools_read_result(name: str, *, found: bool = True) -> dict:
+    return {
+        "protocol": ALL_TOOLS_READ_RESULT_PROTOCOL,
+        "name": name,
+        "found": found,
+        "tool": (
+            {"name": name, "description": _node_repl_description(name)}
+            if found
+            else None
+        ),
+    }
+
+
+def _all_tools_search_result(*names: str) -> dict:
     return {
         "protocol": ALL_TOOLS_SEARCH_RESULT_PROTOCOL,
         "query": "node_repl js",
         "search_mode": "natural_language",
         "limit": 8,
         "total_matches": len(names),
+        "returned_matches": len(names),
+        "truncated": False,
         "matches": [
-            {"name": name, "description": _node_repl_description(name)}
+            {"name": name, "summary": "Persistent JavaScript runtime."}
             for name in names
         ],
     }
+
+
+def _node_repl_discovery_messages(*names: str) -> list[dict]:
+    messages: list[dict] = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_search",
+                        "arguments": '{"query":"node_repl js"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_search",
+            "content": json.dumps(_all_tools_search_result(*names)),
+        },
+    ]
+    for index, name in enumerate(names):
+        call_id = f"call_read_{index}"
+        messages.extend(
+            [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": "tool_read",
+                                "arguments": json.dumps({"name": name}),
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": json.dumps(_all_tools_read_result(name)),
+                },
+            ]
+        )
+    return messages
 
 
 def _web_run_section() -> str:
@@ -499,6 +567,7 @@ def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
         "get_context_remaining",
         "get_goal",
         "image_gen-imagegen",
+        "invoke_deferred_tool",
         "list_available_plugins_to_install",
         "list_mcp_resource_templates",
         "list_mcp_resources",
@@ -514,6 +583,7 @@ def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
         "skills-read",
         "spawn_agents_on_csv",
         "tool_search",
+        "tool_read",
         "update_goal",
         "update_plan",
         "view_image",
@@ -536,7 +606,11 @@ def test_exec_description_projects_precise_normal_function_schemas():
         _exec_description(), projections, profile_route=route
     )
 
-    assert set(definitions) == set(projections) - {"tool_search"}
+    assert set(definitions) == set(projections) - {
+        "tool_search",
+        "tool_read",
+        "invoke_deferred_tool",
+    }
     exec_schema = definitions["exec_command"]["function"]["parameters"]
     assert exec_schema["required"] == ["cmd"]
     assert exec_schema["properties"]["cmd"] == {
@@ -604,7 +678,8 @@ def test_deferred_exec_projects_stateless_all_tools_search_definition():
 
     function = definitions["tool_search"]["function"]
     assert "ALL_TOOLS" in function["description"]
-    assert "raw exec tool" in function["description"]
+    assert "tool_read" in function["description"]
+    assert "bounded summaries" in function["description"]
     assert function["parameters"] == {
         "type": "object",
         "properties": {
@@ -637,6 +712,36 @@ def test_deferred_exec_projects_stateless_all_tools_search_definition():
         "required": ["query"],
         "additionalProperties": False,
     }
+    reader = definitions[ALL_TOOLS_READ_CHAT_NAME]["function"]
+    assert "complete declaration" in reader["description"]
+    assert reader["parameters"] == {
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Exact tool name returned by tool_search.",
+            }
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    }
+    dispatcher = definitions[DEFERRED_TOOL_DISPATCH_CHAT_NAME]["function"]
+    assert dispatcher["parameters"] == {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "enum": list(NODE_REPL_TOOL_NAMES)},
+            "arguments": {
+                "type": "object",
+                "description": (
+                    "Arguments matching the tool declaration returned by tool_read."
+                ),
+            },
+        },
+        "required": ["name", "arguments"],
+        "additionalProperties": False,
+    }
 
 
 def test_all_tools_search_is_not_invented_without_deferred_guidance():
@@ -646,6 +751,8 @@ def test_all_tools_search_is_not_invented_without_deferred_guidance():
     )
 
     assert "tool_search" not in definitions
+    assert "tool_read" not in definitions
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME not in definitions
 
 
 def test_all_tools_search_script_uses_live_catalog_without_gateway_cache():
@@ -662,8 +769,9 @@ def test_all_tools_search_script_uses_live_catalog_without_gateway_cache():
     assert "const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];" in script
     assert "for (const { entry } of ranked)" in script
     assert "if (selectedMatches.length >= limit) break;" in script
-    assert 'name: String(entry.name ?? "")' in script
-    assert 'description: String(entry.description ?? "")' in script
+    assert 'const name = String(entry.name ?? "")' in script
+    assert 'const description = String(entry.description ?? "")' in script
+    assert "const candidate = { name, summary };" in script
     assert "returned_matches: matches.length" in script
     assert "JSON.stringify(candidateResult).length > maxResultChars" in script
     assert "length > maxResultChars) continue;" in script
@@ -676,11 +784,8 @@ def test_all_tools_search_script_uses_live_catalog_without_gateway_cache():
 def test_all_tools_search_runtime_enforces_whole_match_budget():
     projection = exec_tool_projections_for_route(_route())["tool_search"]
     catalog = [
-        {"name": "browser_oversized", "description": "x" * 30_000},
-        *[
-            {"name": f"browser_{index}", "description": str(index) * 5_000}
-            for index in range(10)
-        ],
+        {"name": f"browser_{index}", "description": str(index) * 5_000}
+        for index in range(100)
     ]
     script = build_exec_script(projection, {"query": "browser", "limit": 10})
     harness = (
@@ -701,11 +806,103 @@ def test_all_tools_search_runtime_enforces_whole_match_budget():
     serialized = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
 
     assert len(serialized) <= ALL_TOOLS_SEARCH_MAX_RESULT_CHARS
-    assert result["total_matches"] == 11
-    assert result["returned_matches"] == len(result["matches"]) == 4
+    assert result["total_matches"] == 100
+    assert result["returned_matches"] == len(result["matches"]) == 10
     assert result["truncated"] is True
     assert result["matches"][0]["name"] == "browser_0"
-    assert all(len(match["description"]) == 5_000 for match in result["matches"])
+    assert all(len(match["summary"]) == 240 for match in result["matches"])
+    assert all("description" not in match for match in result["matches"])
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_all_tools_read_appends_dispatch_guidance_only_to_allowlisted_matches():
+    projection = replace(
+        exec_tool_projections_for_route(_route())["tool_read"],
+        authorized_names=(
+            "mcp__node_repl__js",
+            "mcp__node_repl__js_reset",
+            "mcp__archive__lookup",
+        ),
+        include_dispatch_guidance=True,
+        dispatch_blocked_names=("mcp__node_repl__js_reset",),
+    )
+    catalog = [
+        {
+            "name": "mcp__node_repl__js",
+            "description": _node_repl_description("mcp__node_repl__js"),
+        },
+        {
+            "name": "mcp__node_repl__js_reset",
+            "description": _node_repl_description("mcp__node_repl__js_reset"),
+        },
+        {
+            "name": "mcp__archive__lookup",
+            "description": "Archive browser results.",
+        },
+    ]
+
+    def read(name: str) -> dict:
+        script = build_exec_script(projection, {"name": name})
+        completed = subprocess.run(
+            ["node", "--input-type=module"],
+            input=(
+                f"const ALL_TOOLS = {json.dumps(catalog)};\n"
+                "const text = (value) => console.log(JSON.stringify(value));\n"
+                "const exit = () => process.exit(0);\n"
+                f"{script}"
+            ),
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=5,
+        )
+        return json.loads(completed.stdout)
+
+    descriptions = {
+        name: read(name)["tool"]["description"]
+        for name in (catalog_entry["name"] for catalog_entry in catalog)
+    }
+    assert 'set `name` to\n"mcp__node_repl__js"' in descriptions["mcp__node_repl__js"]
+    assert (
+        "Do not call this tool directly or through raw `exec`."
+        in descriptions["mcp__node_repl__js"]
+    )
+    assert "invoke_deferred_tool" not in descriptions["mcp__node_repl__js_reset"]
+    assert "invoke_deferred_tool" not in descriptions["mcp__archive__lookup"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_all_tools_read_fails_closed_when_declaration_exceeds_budget():
+    projection = replace(
+        exec_tool_projections_for_route(_route())["tool_read"],
+        authorized_names=("mcp__node_repl__js",),
+        include_dispatch_guidance=True,
+    )
+    catalog = [
+        {"name": "mcp__node_repl__js", "description": "x" * 23_900},
+        {"name": "mcp__archive__lookup", "description": "mcp archive"},
+    ]
+    script = build_exec_script(projection, {"name": "mcp__node_repl__js"})
+    completed = subprocess.run(
+        ["node", "--input-type=module"],
+        input=(
+            f"const ALL_TOOLS = {json.dumps(catalog)};\n"
+            "const text = (value) => console.log(JSON.stringify(value));\n"
+            "const exit = () => process.exit(0);\n"
+            f"{script}"
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["protocol"] == ALL_TOOLS_READ_RESULT_PROTOCOL
+    assert result["name"] == "mcp__node_repl__js"
+    assert result["found"] is False
+    assert result["tool"] is None
+    assert result["error"]["code"] == "result_too_large"
 
 
 def test_all_tools_regex_search_script_and_argument_validation():
@@ -738,7 +935,7 @@ def test_all_tools_regex_search_script_and_argument_validation():
         )
 
 
-def test_deferred_exec_request_exposes_tool_search_and_keeps_raw_exec():
+def test_deferred_exec_request_exposes_search_read_dispatch_and_keeps_raw_exec():
     body = {
         "tools": [
             {
@@ -768,7 +965,11 @@ def test_deferred_exec_request_exposes_tool_search_and_keeps_raw_exec():
     names = [tool["function"]["name"] for tool in adapted["tools"]]
     assert "exec" in names
     assert "tool_search" in names
+    assert "tool_read" in names
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME in names
     assert "tool_search" in adapted[EXEC_PROJECTIONS_KEY]
+    assert "tool_read" in adapted[EXEC_PROJECTIONS_KEY]
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME in adapted[EXEC_PROJECTIONS_KEY]
     exec_description = next(
         tool["function"]["description"]
         for tool in adapted["tools"]
@@ -814,7 +1015,107 @@ def test_direct_tool_search_name_wins_over_synthetic_projection():
     assert len(search_tools) == 1
     assert search_tools[0]["function"]["description"] == "Direct provider search."
     assert "tool_search" not in adapted.get(EXEC_PROJECTIONS_KEY, {})
+    assert "tool_read" in adapted.get(EXEC_PROJECTIONS_KEY, {})
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME not in adapted.get(EXEC_PROJECTIONS_KEY, {})
     assert any(tool["function"]["name"] == "exec" for tool in adapted["tools"])
+
+
+def test_direct_dispatcher_name_wins_and_read_falls_back_to_raw_exec():
+    direct_dispatcher = {
+        "type": "function",
+        "function": {
+            "name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "description": "Provider-owned dispatcher.",
+            "parameters": {"type": "object"},
+        },
+    }
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": _deferred_exec_description(),
+                    "parameters": {"type": "object"},
+                },
+            },
+            direct_dispatcher,
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    dispatchers = [
+        tool
+        for tool in adapted["tools"]
+        if tool["function"]["name"] == DEFERRED_TOOL_DISPATCH_CHAT_NAME
+    ]
+    assert dispatchers == [direct_dispatcher]
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME not in adapted[EXEC_PROJECTIONS_KEY]
+    search = next(
+        tool["function"]
+        for tool in adapted["tools"]
+        if tool["function"]["name"] == "tool_search"
+    )
+    assert "tool_read" in search["description"]
+    reader = next(
+        tool["function"]
+        for tool in adapted["tools"]
+        if tool["function"]["name"] == "tool_read"
+    )
+    assert "Invoke declarations through raw exec" in reader["description"]
+    assert adapted[EXEC_PROJECTIONS_KEY]["tool_read"].include_dispatch_guidance is False
+
+
+def test_direct_tool_read_name_wins_and_disables_synthetic_dispatcher():
+    direct_reader = {
+        "type": "function",
+        "function": {
+            "name": "tool_read",
+            "description": "Provider-owned reader.",
+            "parameters": {"type": "object"},
+        },
+    }
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": _deferred_exec_description(),
+                    "parameters": {"type": "object"},
+                },
+            },
+            direct_reader,
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    readers = [
+        tool for tool in adapted["tools"] if tool["function"]["name"] == "tool_read"
+    ]
+    assert readers == [direct_reader]
+    assert "tool_read" not in adapted[EXEC_PROJECTIONS_KEY]
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME not in adapted[EXEC_PROJECTIONS_KEY]
+    search = next(
+        tool["function"]
+        for tool in adapted["tools"]
+        if tool["function"]["name"] == "tool_search"
+    )
+    assert "Use raw exec and ALL_TOOLS" in search["description"]
 
 
 def test_all_tools_search_call_translates_to_native_custom_exec():
@@ -838,30 +1139,33 @@ def test_all_tools_search_call_translates_to_native_custom_exec():
     assert translated.mapping.native_name == "exec"
 
 
+def test_all_tools_read_call_translates_to_native_custom_exec():
+    projection = replace(
+        exec_tool_projections_for_route(_route())["tool_read"],
+        authorized_names=("mcp__node_repl__js",),
+    )
+
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_read",
+            "tool_name": "tool_read",
+            "tool_input": {"name": "mcp__node_repl__js"},
+        },
+        exec_projections={"tool_read": projection},
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec"
+    assert translated.part["tool_type"] == "custom"
+    assert ALL_TOOLS_READ_RESULT_PROTOCOL in translated.part["tool_input"]["input"]
+    assert "catalog.filter" in translated.part["tool_input"]["input"]
+    assert 'code: "ambiguous_name"' in translated.part["tool_input"]["input"]
+    assert translated.mapping.localized_name == "tool_read"
+
+
 def test_discovered_node_repl_js_becomes_one_structured_function_only():
-    result = _all_tools_result("mcp__node_repl__js")
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_search",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_search",
-            "content": json.dumps(
-                [
-                    {"type": "text", "text": "Script completed\n"},
-                    {"type": "text", "text": json.dumps(result)},
-                ]
-            ),
-        },
-    ]
+    messages = _node_repl_discovery_messages("mcp__node_repl__js")
 
     plan = discovered_node_repl_exec_tools(messages)
 
@@ -880,18 +1184,57 @@ def test_discovered_node_repl_js_becomes_one_structured_function_only():
     }
 
 
-def test_discovered_node_repl_helpers_require_exact_live_matches():
-    result = _all_tools_result(
-        "mcp__node_repl__js",
-        "mcp__node_repl__js_reset",
-        "mcp__node_repl__js_add_node_module_dir",
-    )
-    result["matches"].append(
+def test_paired_tool_read_authorizes_node_repl_but_search_summary_does_not():
+    search_only = [
         {
-            "name": "mcp__node_repl__unknown",
-            "description": "exec tool declaration: unknown",
-        }
-    )
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_search",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_search",
+                        "arguments": '{"query":"node_repl js"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_search",
+            "content": json.dumps(_all_tools_search_result("mcp__node_repl__js")),
+        },
+    ]
+    assert discovered_node_repl_exec_tools(search_only).definitions == {}
+
+    read_history = [
+        *search_only,
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_read",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read",
+            "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
+        },
+    ]
+    assert set(discovered_node_repl_exec_tools(read_history).definitions) == {
+        "mcp__node_repl__js"
+    }
+
+
+def test_search_authorization_requires_exact_paired_arguments_and_summary_shape():
+    result = _all_tools_search_result("mcp__node_repl__js")
     messages = [
         {
             "role": "assistant",
@@ -899,7 +1242,10 @@ def test_discovered_node_repl_helpers_require_exact_live_matches():
                 {
                     "id": "call_search",
                     "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
+                    "function": {
+                        "name": "tool_search",
+                        "arguments": '{"query":"node_repl js","limit":8}',
+                    },
                 }
             ],
         },
@@ -909,6 +1255,128 @@ def test_discovered_node_repl_helpers_require_exact_live_matches():
             "content": json.dumps(result),
         },
     ]
+    assert discovered_all_tools_search_names(messages) == ("mcp__node_repl__js",)
+
+    result["query"] = "mismatch"
+    messages[1]["content"] = json.dumps(result)
+    assert discovered_all_tools_search_names(messages) == ()
+    result["query"] = "node_repl js"
+    result["matches"][0]["description"] = "unexpected full declaration"
+    messages[1]["content"] = json.dumps(result)
+    assert discovered_all_tools_search_names(messages) == ()
+
+
+def test_latest_tool_read_for_same_name_revokes_older_authorization():
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_read_old",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js"}',
+                    },
+                },
+                {
+                    "id": "call_read_new",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js"}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read_old",
+            "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read_new",
+            "content": json.dumps(
+                _all_tools_read_result("mcp__node_repl__js", found=False)
+            ),
+        },
+    ]
+    assert discovered_node_repl_exec_tools(messages).definitions == {}
+
+
+def test_tool_read_result_name_must_match_paired_call_arguments():
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_read",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js_reset"}',
+                    },
+                }
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_read",
+            "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
+        },
+    ]
+    assert discovered_node_repl_exec_tools(messages).definitions == {}
+
+
+def test_latest_paired_tool_read_with_fake_protocol_revokes_older_read():
+    messages = [
+        {
+            "role": "assistant",
+            "tool_calls": [
+                {
+                    "id": "call_old",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js"}',
+                    },
+                },
+                {
+                    "id": "call_new",
+                    "type": "function",
+                    "function": {
+                        "name": "tool_read",
+                        "arguments": '{"name":"mcp__node_repl__js"}',
+                    },
+                },
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_old",
+            "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_new",
+            "content": json.dumps(
+                {
+                    **_all_tools_read_result("mcp__node_repl__js"),
+                    "protocol": "fake",
+                }
+            ),
+        },
+    ]
+    assert discovered_node_repl_exec_tools(messages).definitions == {}
+
+
+def test_discovered_node_repl_helpers_require_exact_live_matches():
+    messages = _node_repl_discovery_messages(
+        "mcp__node_repl__js",
+        "mcp__node_repl__js_reset",
+        "mcp__node_repl__js_add_node_module_dir",
+    )
 
     plan = discovered_node_repl_exec_tools(messages)
 
@@ -927,88 +1395,24 @@ def test_discovered_node_repl_helpers_require_exact_live_matches():
     ]["required"] == ["path"]
 
 
-def test_latest_node_repl_search_replaces_older_helper_matches():
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_old",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                },
-                {
-                    "id": "call_new",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                },
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_old",
-            "content": json.dumps(
-                _all_tools_result(
-                    "mcp__node_repl__js",
-                    "mcp__node_repl__js_reset",
-                    "mcp__node_repl__js_add_node_module_dir",
-                )
-            ),
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_new",
-            "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
-        },
-    ]
-
-    plan = discovered_node_repl_exec_tools(messages)
-
-    assert set(plan.definitions) == {"mcp__node_repl__js"}
-
-
 def test_discovered_node_repl_requires_protocol_and_valid_declaration():
-    missing_protocol = _all_tools_result("mcp__node_repl__js")
-    missing_protocol.pop("protocol")
-    invalid_declaration = _all_tools_result("mcp__node_repl__js_reset")
-    invalid_declaration["matches"][0]["description"] = "No declaration."
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_one",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                },
-                {
-                    "id": "call_two",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                },
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_one",
-            "content": json.dumps(missing_protocol),
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_two",
-            "content": json.dumps(invalid_declaration),
-        },
-    ]
+    messages = _node_repl_discovery_messages("mcp__node_repl__js")
+    result = _all_tools_read_result("mcp__node_repl__js")
+    result.pop("protocol")
+    messages[-1]["content"] = json.dumps(result)
 
     plan = discovered_node_repl_exec_tools(messages)
 
     assert plan.definitions == {}
     assert plan.projections == {}
 
+    result = _all_tools_read_result("mcp__node_repl__js")
+    result["tool"]["description"] = "No declaration."
+    messages[-1]["content"] = json.dumps(result)
+    assert discovered_node_repl_exec_tools(messages).definitions == {}
 
-def test_discovered_node_repl_rejects_oversized_description():
-    result = _all_tools_result("mcp__node_repl__js")
-    result["matches"][0]["description"] = "x" * 65_537
+
+def test_version_one_full_search_history_is_not_accepted():
     messages = [
         {
             "role": "assistant",
@@ -1016,22 +1420,55 @@ def test_discovered_node_repl_rejects_oversized_description():
                 {
                     "id": "call_search",
                     "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
+                    "function": {
+                        "name": "tool_search",
+                        "arguments": '{"query":"node_repl js"}',
+                    },
                 }
             ],
         },
         {
             "role": "tool",
             "tool_call_id": "call_search",
-            "content": json.dumps(result),
+            "content": json.dumps(
+                {
+                    "protocol": "codex_rosetta.all_tools_search.v1",
+                    "matches": [
+                        {
+                            "name": "mcp__node_repl__js",
+                            "description": _node_repl_description("mcp__node_repl__js"),
+                        }
+                    ],
+                }
+            ),
         },
     ]
+
+    assert discovered_all_tools_search_names(messages) == ()
+    assert discovered_node_repl_exec_tools(messages).definitions == {}
+
+
+def test_discovered_node_repl_rejects_oversized_description():
+    messages = _node_repl_discovery_messages("mcp__node_repl__js")
+    result = _all_tools_read_result("mcp__node_repl__js")
+    result["tool"]["description"] = "x" * 65_537
+    messages[-1]["content"] = json.dumps(result)
 
     assert discovered_node_repl_exec_tools(messages).definitions == {}
 
 
-def test_raw_exec_search_history_activates_node_repl_without_mapping_cache():
-    result = _all_tools_result("mcp__node_repl__js")
+def test_marked_raw_search_and_read_history_authorize_without_mapping_cache():
+    search_script = build_exec_script(
+        exec_tool_projections_for_route(_route())["tool_search"],
+        {"query": "node_repl js"},
+    )
+    read_script = build_exec_script(
+        replace(
+            exec_tool_projections_for_route(_route())["tool_read"],
+            authorized_names=("mcp__node_repl__js",),
+        ),
+        {"name": "mcp__node_repl__js"},
+    )
     messages = [
         {
             "role": "assistant",
@@ -1041,14 +1478,7 @@ def test_raw_exec_search_history_activates_node_repl_without_mapping_cache():
                     "type": "function",
                     "function": {
                         "name": "exec",
-                        "arguments": json.dumps(
-                            {
-                                "input": (
-                                    "const resultProtocol = "
-                                    f'"{ALL_TOOLS_SEARCH_RESULT_PROTOCOL}";'
-                                )
-                            }
-                        ),
+                        "arguments": json.dumps({"input": search_script}),
                     },
                 }
             ],
@@ -1056,75 +1486,39 @@ def test_raw_exec_search_history_activates_node_repl_without_mapping_cache():
         {
             "role": "tool",
             "tool_call_id": "call_search",
-            "content": json.dumps(result),
+            "content": json.dumps(_all_tools_search_result("mcp__node_repl__js")),
         },
-    ]
-
-    assert set(discovered_node_repl_exec_tools(messages).definitions) == {
-        "mcp__node_repl__js"
-    }
-
-
-def test_projected_node_history_sanitizes_only_paired_exact_matches_copy_on_write():
-    result = _all_tools_result("mcp__node_repl__js")
-    result["matches"].append(
-        {
-            "name": "mcp__archive__lookup",
-            "description": "Unknown declaration remains available to raw exec.",
-        }
-    )
-    paired_content = json.dumps(
-        [
-            {"type": "text", "text": "Script completed\n"},
-            {"type": "text", "text": json.dumps(result)},
-        ]
-    )
-    messages = [
         {
             "role": "assistant",
             "tool_calls": [
                 {
-                    "id": "call_search",
+                    "id": "call_read",
                     "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
+                    "function": {
+                        "name": "exec",
+                        "arguments": json.dumps({"input": read_script}),
+                    },
                 }
             ],
         },
         {
             "role": "tool",
-            "tool_call_id": "call_search",
-            "content": paired_content,
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_unpaired",
-            "content": paired_content,
+            "tool_call_id": "call_read",
+            "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
         },
     ]
 
-    sanitized = sanitize_projected_node_repl_history(
-        messages,
-        {"mcp__node_repl__js"},
-    )
-
-    assert sanitized is not messages
-    assert sanitized[0] is messages[0]
-    assert sanitized[2] is messages[2]
-    original_outer = json.loads(messages[1]["content"])
-    original_result = json.loads(original_outer[1]["text"])
-    assert "description" in original_result["matches"][0]
-    sanitized_outer = json.loads(sanitized[1]["content"])
-    sanitized_result = json.loads(sanitized_outer[1]["text"])
-    assert sanitized_result["matches"][0] == {
-        "name": "mcp__node_repl__js",
-        "status": "projected_as_structured_function",
+    assert discovered_all_tools_search_names(messages) == ("mcp__node_repl__js",)
+    assert set(discovered_node_repl_exec_tools(messages).definitions) == {
+        "mcp__node_repl__js"
     }
-    assert sanitized_result["matches"][1] == result["matches"][1]
 
 
-def test_invalid_node_declaration_is_not_sanitized_without_projection():
-    result = _all_tools_result("mcp__node_repl__js")
-    result["matches"][0]["description"] = "Not a parseable declaration."
+def test_invalid_node_declaration_does_not_authorize_dispatch():
+    messages = _node_repl_discovery_messages("mcp__node_repl__js")
+    result = _all_tools_read_result("mcp__node_repl__js")
+    result["tool"]["description"] = "Not a parseable declaration."
+    messages[-1]["content"] = json.dumps(result)
     body = {
         "tools": [
             {
@@ -1136,23 +1530,7 @@ def test_invalid_node_declaration_is_not_sanitized_without_projection():
                 },
             }
         ],
-        "messages": [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "call_search",
-                        "type": "function",
-                        "function": {"name": "tool_search", "arguments": "{}"},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_search",
-                "content": json.dumps(result),
-            },
-        ],
+        "messages": messages,
     }
 
     adapted = localize_code_editing_chat_request(
@@ -1167,27 +1545,15 @@ def test_invalid_node_declaration_is_not_sanitized_without_projection():
     assert "mcp__node_repl__js" not in {
         tool["function"]["name"] for tool in adapted["tools"]
     }
+    assert (
+        adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME].authorized_names
+        == ()
+    )
 
 
 def test_node_repl_projection_generates_mcp_content_forwarder():
     plan = discovered_node_repl_exec_tools(
-        [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "call_search",
-                        "type": "function",
-                        "function": {"name": "tool_search", "arguments": "{}"},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_search",
-                "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
-            },
-        ]
+        _node_repl_discovery_messages("mcp__node_repl__js")
     )
     script = build_exec_script(
         plan.projections["mcp__node_repl__js"],
@@ -1209,78 +1575,124 @@ def test_node_repl_projection_generates_mcp_content_forwarder():
     assert "return result" not in script
 
 
-def test_node_repl_structured_call_translates_to_custom_exec():
-    messages = [
-        {
-            "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": "call_search",
-                    "type": "function",
-                    "function": {"name": "tool_search", "arguments": "{}"},
-                }
-            ],
-        },
-        {
-            "role": "tool",
-            "tool_call_id": "call_search",
-            "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
-        },
-    ]
-    plan = discovered_node_repl_exec_tools(messages)
+def test_dispatcher_call_translates_to_allowlisted_custom_exec():
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=("mcp__node_repl__js",),
+    )
 
     translated = translate_localized_tool_call_part(
         {
             "type": "tool_call",
-            "tool_call_id": "call_js",
-            "tool_name": "mcp__node_repl__js",
+            "tool_call_id": "call_dispatch",
+            "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
             "tool_input": {
-                "code": "nodeRepl.write(await iab.tabs.list())",
-                "title": "List tabs",
+                "name": "mcp__node_repl__js",
+                "arguments": {
+                    "code": "nodeRepl.write(await iab.tabs.list())",
+                    "title": "List tabs",
+                },
             },
         },
-        exec_projections=plan.projections,
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection},
     )
 
     assert translated is not None
     assert translated.part["tool_name"] == "exec"
     assert translated.part["tool_type"] == "custom"
-    script = translated.part["tool_input"]["input"]
-    assert script.startswith(
+    assert translated.mapping.localized_name == DEFERRED_TOOL_DISPATCH_CHAT_NAME
+    assert translated.part["tool_input"]["input"].startswith(
         "const result = await tools.mcp__node_repl__js("
         '{"code":"nodeRepl.write(await iab.tabs.list())","title":"List tabs"});'
     )
-    assert 'else if (item?.type === "image") image(item);' in script
-
-
-def test_streaming_node_repl_call_emits_custom_exec_input():
-    plan = discovered_node_repl_exec_tools(
-        [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "call_search",
-                        "type": "function",
-                        "function": {"name": "tool_search", "arguments": "{}"},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_search",
-                "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
-            },
-        ]
+    assert (
+        'else if (item?.type === "image") image(item);'
+        in translated.part["tool_input"]["input"]
     )
-    transformer = LocalizedToolCallStreamTransformer(exec_projections=plan.projections)
+
+
+@pytest.mark.parametrize(
+    ("tool_input", "error"),
+    [
+        (
+            {
+                "name": "mcp__node_repl__js_reset",
+                "arguments": {},
+            },
+            "no valid paired tool_read authorization",
+        ),
+        (
+            {"name": "mcp__archive__lookup", "arguments": {}},
+            "name must be an allowlisted deferred tool",
+        ),
+        (
+            {"name": "mcp__node_repl__js", "arguments": "bad"},
+            "arguments must be a JSON object",
+        ),
+    ],
+)
+def test_dispatcher_call_fails_closed_without_invoking_dynamic_tool(tool_input, error):
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=("mcp__node_repl__js",),
+    )
+
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_dispatch",
+            "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "tool_input": tool_input,
+        },
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection},
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec"
+    script = translated.part["tool_input"]["input"]
+    assert "Tool adaptation error:" in script
+    assert error in script
+    assert "await tools." not in script
+
+
+def test_dispatcher_non_object_outer_arguments_fail_as_safe_custom_exec():
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=("mcp__node_repl__js",),
+    )
+
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_dispatch",
+            "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "tool_input": "bad",
+        },
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection},
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec"
+    script = translated.part["tool_input"]["input"]
+    assert "arguments must be a JSON object" in script
+    assert "await tools." not in script
+
+
+def test_streaming_dispatcher_call_emits_custom_exec_input():
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=("mcp__node_repl__js_reset",),
+    )
+    transformer = LocalizedToolCallStreamTransformer(
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection}
+    )
 
     assert (
         transformer.transform(
             {
                 "type": "tool_call_start",
-                "tool_call_id": "call_js",
-                "tool_name": "mcp__node_repl__js",
+                "tool_call_id": "call_dispatch",
+                "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
             }
         )
         == []
@@ -1289,8 +1701,10 @@ def test_streaming_node_repl_call_emits_custom_exec_input():
         transformer.transform(
             {
                 "type": "tool_call_delta",
-                "tool_call_id": "call_js",
-                "arguments_delta": '{"code":"nodeRepl.write(1)"}',
+                "tool_call_id": "call_dispatch",
+                "arguments_delta": (
+                    '{"name":"mcp__node_repl__js_reset","arguments":{}}'
+                ),
             }
         )
         == []
@@ -1300,12 +1714,11 @@ def test_streaming_node_repl_call_emits_custom_exec_input():
     assert events[0]["tool_name"] == "exec"
     assert events[0]["tool_type"] == "custom"
     assert events[1]["arguments_delta"].startswith(
-        'const result = await tools.mcp__node_repl__js({"code":"nodeRepl.write(1)"});'
+        "const result = await tools.mcp__node_repl__js_reset({});"
     )
-    assert 'if (item?.type === "text") text(item.text);' in events[1]["arguments_delta"]
 
 
-def test_localized_request_exposes_only_discovered_node_repl_tools():
+def test_localized_request_keeps_tools_stable_and_authorizes_dispatcher():
     body = {
         "tools": [
             {
@@ -1324,18 +1737,46 @@ def test_localized_request_exposes_only_discovered_node_repl_tools():
                     {
                         "id": "call_search",
                         "type": "function",
-                        "function": {"name": "tool_search", "arguments": "{}"},
+                        "function": {
+                            "name": "tool_search",
+                            "arguments": '{"query":"node_repl js"}',
+                        },
                     }
                 ],
             },
             {
                 "role": "tool",
                 "tool_call_id": "call_search",
-                "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
+                "content": json.dumps(_all_tools_search_result("mcp__node_repl__js")),
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_read",
+                        "type": "function",
+                        "function": {
+                            "name": "tool_read",
+                            "arguments": '{"name":"mcp__node_repl__js"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_read",
+                "content": json.dumps(_all_tools_read_result("mcp__node_repl__js")),
             },
         ],
     }
 
+    first = localize_code_editing_chat_request(
+        {"tools": body["tools"], "messages": []},
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
     adapted = localize_code_editing_chat_request(
         body,
         capabilities=NativeToolCapabilities(has_custom_exec=True),
@@ -1345,18 +1786,18 @@ def test_localized_request_exposes_only_discovered_node_repl_tools():
     )
 
     names = {tool["function"]["name"] for tool in adapted["tools"]}
-    assert "mcp__node_repl__js" in names
-    assert "mcp__node_repl__js_reset" not in names
-    assert "mcp__node_repl__js_add_node_module_dir" not in names
-    assert "mcp__node_repl__js" in adapted[EXEC_PROJECTIONS_KEY]
-    sanitized_result = json.loads(adapted["messages"][1]["content"])
-    assert sanitized_result["matches"] == [
-        {
-            "name": "mcp__node_repl__js",
-            "status": "projected_as_structured_function",
-        }
-    ]
-    assert "description" in json.loads(body["messages"][1]["content"])["matches"][0]
+    assert not set(NODE_REPL_TOOL_NAMES) & names
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME in names
+    assert json.dumps(first["tools"], separators=(",", ":")) == json.dumps(
+        adapted["tools"], separators=(",", ":")
+    )
+    assert "mcp__node_repl__js" not in adapted[EXEC_PROJECTIONS_KEY]
+    dispatcher = adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME]
+    assert dispatcher.authorized_names == ("mcp__node_repl__js",)
+    reader = adapted[EXEC_PROJECTIONS_KEY]["tool_read"]
+    assert reader.authorized_names == ("mcp__node_repl__js",)
+    assert adapted["messages"] == body["messages"]
+    assert "description" in json.loads(adapted["messages"][3]["content"])["tool"]
 
 
 def test_same_named_direct_node_repl_function_wins_over_discovery():
@@ -1380,23 +1821,7 @@ def test_same_named_direct_node_repl_function_wins_over_discovery():
             },
             direct,
         ],
-        "messages": [
-            {
-                "role": "assistant",
-                "tool_calls": [
-                    {
-                        "id": "call_search",
-                        "type": "function",
-                        "function": {"name": "tool_search", "arguments": "{}"},
-                    }
-                ],
-            },
-            {
-                "role": "tool",
-                "tool_call_id": "call_search",
-                "content": json.dumps(_all_tools_result("mcp__node_repl__js")),
-            },
-        ],
+        "messages": _node_repl_discovery_messages("mcp__node_repl__js"),
     }
 
     adapted = localize_code_editing_chat_request(
@@ -1414,6 +1839,13 @@ def test_same_named_direct_node_repl_function_wins_over_discovery():
     ]
     assert node_tools == [direct]
     assert "mcp__node_repl__js" not in adapted[EXEC_PROJECTIONS_KEY]
+    assert adapted[EXEC_PROJECTIONS_KEY]["tool_read"].dispatch_blocked_names == (
+        "mcp__node_repl__js",
+    )
+    assert (
+        adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME].authorized_names
+        == ()
+    )
     assert adapted["messages"] == body["messages"]
 
 
@@ -1746,13 +2178,23 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
     visible_projection_names = {
         name
         for name, projection in projections.items()
-        if projection.model_visible and name != "tool_search"
+        if projection.model_visible
+        and name
+        not in {
+            "tool_search",
+            "tool_read",
+            DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+        }
     }
     assert visible_projection_names.issubset(names)
     assert "exec" not in names
     assert "apply_patch" not in names
     assert adapted["tool_choice"] == "auto"
-    assert set(adapted[EXEC_PROJECTIONS_KEY]) == set(projections) - {"tool_search"}
+    assert set(adapted[EXEC_PROJECTIONS_KEY]) == set(projections) - {
+        "tool_search",
+        "tool_read",
+        DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+    }
 
 
 def test_modified_web_run_request_sends_pruned_function_to_upstream_model():
@@ -2012,7 +2454,7 @@ def test_gateway_all_tools_search_round_trips_as_custom_exec():
     assert "const limit = 4;" in output["input"]
 
 
-def test_gateway_search_history_exposes_and_translates_structured_node_repl():
+def test_gateway_search_history_dispatches_node_repl_with_stable_tools():
     captured_bodies: list[dict] = []
     upstream_responses = [
         {
@@ -2041,9 +2483,36 @@ def test_gateway_search_history_exposes_and_translates_structured_node_repl():
             ],
         },
         {
-            "id": "chatcmpl-node-call",
+            "id": "chatcmpl-node-read",
             "object": "chat.completion",
             "created": 2,
+            "model": "deepseek-v4-flash",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_read",
+                                "type": "function",
+                                "function": {
+                                    "name": "tool_read",
+                                    "arguments": json.dumps(
+                                        {"name": "mcp__node_repl__js"}
+                                    ),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ],
+        },
+        {
+            "id": "chatcmpl-node-call",
+            "object": "chat.completion",
+            "created": 3,
             "model": "deepseek-v4-flash",
             "choices": [
                 {
@@ -2055,12 +2524,17 @@ def test_gateway_search_history_exposes_and_translates_structured_node_repl():
                                 "id": "call_js",
                                 "type": "function",
                                 "function": {
-                                    "name": "mcp__node_repl__js",
+                                    "name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
                                     "arguments": json.dumps(
                                         {
-                                            "code": "nodeRepl.write(await iab.tabs.list())",
-                                            "timeout_ms": 60_000,
-                                            "title": "List browser tabs",
+                                            "name": "mcp__node_repl__js",
+                                            "arguments": {
+                                                "code": (
+                                                    "nodeRepl.write(await iab.tabs.list())"
+                                                ),
+                                                "timeout_ms": 60_000,
+                                                "title": "List browser tabs",
+                                            },
                                         }
                                     ),
                                 },
@@ -2125,7 +2599,21 @@ def test_gateway_search_history_exposes_and_translates_structured_node_repl():
     assert first_output["type"] == "custom_tool_call"
     assert ALL_TOOLS_SEARCH_RESULT_PROTOCOL in first_output["input"]
 
-    search_result = _all_tools_result("mcp__node_repl__js")
+    search_result = {
+        "protocol": ALL_TOOLS_SEARCH_RESULT_PROTOCOL,
+        "query": "node_repl js",
+        "search_mode": "natural_language",
+        "limit": 8,
+        "total_matches": 1,
+        "returned_matches": 1,
+        "truncated": False,
+        "matches": [
+            {
+                "name": "mcp__node_repl__js",
+                "summary": "Use the persistent Node-backed JavaScript runtime.",
+            }
+        ],
+    }
     second_response, _ = asyncio.run(
         run(
             {
@@ -2154,25 +2642,64 @@ def test_gateway_search_history_exposes_and_translates_structured_node_repl():
         )
     )
 
+    second_output = json.loads(second_response.body)["output"][0]
+    assert second_output["type"] == "custom_tool_call"
+    assert second_output["name"] == "exec"
+    assert ALL_TOOLS_READ_RESULT_PROTOCOL in second_output["input"]
+
+    read_result = _all_tools_read_result("mcp__node_repl__js")
+    third_response, _ = asyncio.run(
+        run(
+            {
+                "model": "deepseek-v4-flash",
+                "input": [
+                    {
+                        "type": "additional_tools",
+                        "role": "developer",
+                        "tools": direct_tools,
+                    },
+                    first_output,
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_search",
+                        "output": json.dumps(search_result),
+                    },
+                    second_output,
+                    {
+                        "type": "custom_tool_call_output",
+                        "call_id": "call_read",
+                        "output": json.dumps(read_result),
+                    },
+                    {"role": "user", "content": "continue"},
+                ],
+            }
+        )
+    )
+
+    serialized_tool_sets = [
+        json.dumps(body["tools"], separators=(",", ":")) for body in captured_bodies
+    ]
+    assert len(set(serialized_tool_sets)) == 1
     second_names = {
         tool["function"]["name"]
         for tool in captured_bodies[1]["tools"]
         if isinstance(tool.get("function"), dict)
     }
-    assert "mcp__node_repl__js" in second_names
-    assert "mcp__node_repl__js_reset" not in second_names
-    assert "mcp__node_repl__js_add_node_module_dir" not in second_names
+    assert DEFERRED_TOOL_DISPATCH_CHAT_NAME in second_names
+    assert not set(NODE_REPL_TOOL_NAMES) & second_names
     model_history = json.dumps(captured_bodies[1]["messages"])
-    assert "projected_as_structured_function" in model_history
-    assert "exec tool declaration" not in model_history
-    assert "description" in search_result["matches"][0]
-    second_output = json.loads(second_response.body)["output"][0]
-    assert second_output["type"] == "custom_tool_call"
-    assert second_output["name"] == "exec"
-    assert second_output["input"].startswith(
+    assert "projected_as_structured_function" not in model_history
+    assert "declare const tools" not in model_history
+    assert "description" not in search_result["matches"][0]
+    third_model_history = json.dumps(captured_bodies[2]["messages"])
+    assert "declare const tools" in third_model_history
+    third_output = json.loads(third_response.body)["output"][0]
+    assert third_output["type"] == "custom_tool_call"
+    assert third_output["name"] == "exec"
+    assert third_output["input"].startswith(
         "const result = await tools.mcp__node_repl__js("
     )
-    assert 'else if (item?.type === "image") image(item);' in second_output["input"]
+    assert 'else if (item?.type === "image") image(item);' in third_output["input"]
 
 
 def test_projected_call_translates_to_custom_exec_and_round_trips_mapping():
@@ -2555,7 +3082,13 @@ def test_gateway_projects_direct_tools_and_persists_exec_round_trip_with_ttl(tmp
     assert {
         name
         for name, projection in projections.items()
-        if projection.model_visible and name != "tool_search"
+        if projection.model_visible
+        and name
+        not in {
+            "tool_search",
+            "tool_read",
+            DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+        }
     }.issubset(first_names)
     assert {"Edit", "Write"}.issubset(first_names)
     assert "apply_patch" not in first_names

@@ -66,19 +66,18 @@ name the target capability. Evaluation separately records catalog exposure,
 selection, skill-body access, deferred tool exposure, call, and consumed result
 across the Codex rollout, source Responses request, and converted Chat request.
 For code-mode models the source discovery surface is runtime `ALL_TOOLS`. On a
-Responses-to-Chat route, Rosetta projects an ordinary `tool_search` Function
-only when the live `exec` description advertises deferred nested tools; calling
-it must round-trip as custom `exec` JavaScript that searches that request-local
-Array. Generic matches still use raw `exec`. Exact matches for the three Node
-REPL tools are a specialized exception: on the next request Rosetta validates
-their declarations from the paired search history, exposes only the matched
-ordinary Functions, and converts structured model arguments back to custom
-`exec` with MCP text/image result forwarding. Search output admits only whole
-matches within a 24,000-character serialized budget. Once a Node match is
-projected, its declaration is replaced by a short projected-status marker only
-in the model-facing history copy; unknown matches retain their full declaration.
-Codex injects candidate metadata into the V8 runtime, so live evidence covers
-projection, search, selection, call, and consumed result without a Gateway discovery cache. Browser,
+Responses-to-Chat route, Rosetta projects fixed ordinary `tool_search` and
+`tool_read` Functions only when the live `exec` description advertises deferred
+nested tools. Both round-trip as custom `exec`: search returns bounded names and
+240-character summaries, while read retrieves one exact complete declaration.
+Generic declarations still use raw `exec`. For the three Node REPL tools, a
+valid paired read authorizes the fixed `invoke_deferred_tool`; Rosetta converts
+its structured arguments back to custom `exec` with MCP text/image result
+forwarding. Search and read each enforce a 24,000-character serialized budget,
+their results remain in their original history positions, and top-level tool
+definitions do not change. Codex injects candidate metadata into the V8 runtime,
+so live evidence covers projection, search, read, selection, call, and consumed
+result without a Gateway discovery cache. Browser,
 authenticated apps, and real user or third-party capabilities remain outside
 this deferred-tool suite and use their dedicated live tests.
 

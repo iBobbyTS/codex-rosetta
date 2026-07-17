@@ -34,6 +34,9 @@ class ExecToolProjection:
     model_visible: bool = True
     allowed_detail_values: tuple[str, ...] | None = None
     description_replaced_by: tuple[str, ...] = ()
+    authorized_names: tuple[str, ...] = ()
+    include_dispatch_guidance: bool = False
+    dispatch_blocked_names: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -87,13 +90,23 @@ DEFERRED_EXEC_GUIDANCE = (
     "Some deferred nested tools may be omitted from this description."
 )
 ALL_TOOLS_SEARCH_CHAT_NAME = "tool_search"
-ALL_TOOLS_SEARCH_RESULT_PROTOCOL = "codex_rosetta.all_tools_search.v1"
+ALL_TOOLS_READ_CHAT_NAME = "tool_read"
+DEFERRED_TOOL_DISPATCH_CHAT_NAME = "invoke_deferred_tool"
+ALL_TOOLS_SEARCH_RESULT_PROTOCOL = "codex_rosetta.all_tools_search.v2"
+ALL_TOOLS_READ_RESULT_PROTOCOL = "codex_rosetta.all_tools_read.v1"
 ALL_TOOLS_SEARCH_MAX_RESULT_CHARS = 24_000
+ALL_TOOLS_SEARCH_SUMMARY_CHARS = 240
 ALL_TOOLS_SEARCH_PROJECTION = ExecToolProjection(
     item_id="synthetic.all_tools_search",
     chat_name=ALL_TOOLS_SEARCH_CHAT_NAME,
     nested_name="",
     input_mode="all_tools_search",
+)
+ALL_TOOLS_READ_PROJECTION = ExecToolProjection(
+    item_id="synthetic.all_tools_read",
+    chat_name=ALL_TOOLS_READ_CHAT_NAME,
+    nested_name="",
+    input_mode="all_tools_read",
 )
 NODE_REPL_TOOL_NAMES = (
     "mcp__node_repl__js",
@@ -109,6 +122,12 @@ _NODE_REPL_EXEC_PROJECTIONS = {
     )
     for name in NODE_REPL_TOOL_NAMES
 }
+DEFERRED_TOOL_DISPATCH_PROJECTION = ExecToolProjection(
+    item_id="synthetic.deferred_tool_dispatch",
+    chat_name=DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+    nested_name="",
+    input_mode="deferred_dispatch",
+)
 _MAX_DISCOVERED_TOOL_DESCRIPTION_CHARS = 65_536
 _MAX_TOOL_RESULT_TEXT_CHARS = 262_144
 _MAX_DISCOVERY_HISTORY_CALLS = 64
@@ -348,6 +367,8 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
         )
         projections[projection.chat_name] = projection
     projections[ALL_TOOLS_SEARCH_CHAT_NAME] = ALL_TOOLS_SEARCH_PROJECTION
+    projections[ALL_TOOLS_READ_CHAT_NAME] = ALL_TOOLS_READ_PROJECTION
+    projections[DEFERRED_TOOL_DISPATCH_CHAT_NAME] = DEFERRED_TOOL_DISPATCH_PROJECTION
     return projections
 
 
@@ -381,7 +402,14 @@ def plan_exec_tool_definitions(
     )
     section_projections = dict(projections)
     all_tools_search = section_projections.pop(ALL_TOOLS_SEARCH_CHAT_NAME, None)
-    definitions = _all_tools_search_definitions(exec_description, all_tools_search)
+    all_tools_read = section_projections.pop(ALL_TOOLS_READ_CHAT_NAME, None)
+    deferred_dispatch = section_projections.pop(DEFERRED_TOOL_DISPATCH_CHAT_NAME, None)
+    definitions = _deferred_tool_definitions(
+        exec_description,
+        all_tools_search,
+        all_tools_read,
+        deferred_dispatch,
+    )
     projected_sections: dict[str, ExecDescriptionSection] = {}
     for chat_name, projection in section_projections.items():
         matching_sections = sections_by_name.get(projection.nested_name, [])
@@ -433,6 +461,32 @@ def build_exec_script(
     """Build deterministic JavaScript for one projected nested-tool call."""
     if projection.input_mode == "all_tools_search":
         return _build_all_tools_search_script(arguments)
+    if projection.input_mode == "all_tools_read":
+        name = arguments.get("name")
+        if not isinstance(name, str) or name not in projection.authorized_names:
+            raise ValueError(
+                f"tool_read has no valid paired tool_search authorization for {name}"
+            )
+        return _build_all_tools_read_script(
+            arguments,
+            include_dispatch_guidance=projection.include_dispatch_guidance,
+            blocked_names=projection.dispatch_blocked_names,
+        )
+    if projection.input_mode == "deferred_dispatch":
+        name = arguments.get("name")
+        nested_arguments = arguments.get("arguments")
+        if not isinstance(name, str) or name not in NODE_REPL_TOOL_NAMES:
+            raise ValueError(
+                "invoke_deferred_tool name must be an allowlisted deferred tool"
+            )
+        if name not in projection.authorized_names:
+            raise ValueError(
+                f"invoke_deferred_tool has no valid paired tool_read authorization "
+                f"for {name}"
+            )
+        if not isinstance(nested_arguments, dict):
+            raise ValueError("invoke_deferred_tool arguments must be a JSON object")
+        return build_exec_script(_NODE_REPL_EXEC_PROJECTIONS[name], nested_arguments)
     if projection.input_mode == "freeform":
         value = arguments.get(projection.input_field)
         if not isinstance(value, str):
@@ -475,20 +529,15 @@ if (result?.isError) text({ isError: true });
     return invocation + f"{output_helper}(result);\n"
 
 
-def _all_tools_search_definition() -> dict[str, Any]:
+def all_tools_search_definition(
+    *, include_tool_read_guidance: bool = True
+) -> dict[str, Any]:
     """Build the Chat function used to search Codex's live ALL_TOOLS catalog."""
     return {
         "type": "function",
         "function": {
             "name": ALL_TOOLS_SEARCH_CHAT_NAME,
-            "description": (
-                "Search deferred tools in Codex's live ALL_TOOLS runtime catalog. "
-                "Use natural_language for capability searches and regex for exact "
-                "name or declaration patterns. Results include complete tool "
-                "descriptions and declarations. Supported Node REPL matches become "
-                "structured functions on the next request; invoke other matches "
-                "through the raw exec tool."
-            ),
+            "description": _all_tools_search_description(include_tool_read_guidance),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -525,21 +574,123 @@ def _all_tools_search_definition() -> dict[str, Any]:
     }
 
 
-def _all_tools_search_definitions(
+def _all_tools_search_description(include_tool_read_guidance: bool) -> str:
+    base = (
+        "Search deferred tools in Codex's live ALL_TOOLS runtime catalog. "
+        "Use natural_language for capability searches and regex for exact name or "
+        "declaration patterns. Results contain exact names and bounded summaries, "
+        "not complete declarations, and never become independent Chat functions. "
+    )
+    if include_tool_read_guidance:
+        return (
+            base + "Call tool_read with an exact returned name before invoking a "
+            "match. Search results alone do not authorize invoke_deferred_tool."
+        )
+    return (
+        base + "Use raw exec and ALL_TOOLS to read the exact declaration before "
+        "invoking a match."
+    )
+
+
+def all_tools_read_definition(
+    *, include_dispatch_guidance: bool = True
+) -> dict[str, Any]:
+    """Build the Chat function used to read one exact ALL_TOOLS declaration."""
+    invocation_guidance = (
+        "Declarations carrying invoke_deferred_tool instructions must be invoked "
+        "with that dispatcher. Invoke all other declarations through raw exec as "
+        "tools.<name>(...)."
+        if include_dispatch_guidance
+        else "Invoke declarations through raw exec as tools.<name>(...)."
+    )
+    return {
+        "type": "function",
+        "function": {
+            "name": ALL_TOOLS_READ_CHAT_NAME,
+            "description": (
+                "Read the complete declaration for one deferred tool by exact name "
+                "from Codex's live ALL_TOOLS runtime catalog. Search results are only "
+                f"summaries; read a declaration before invoking it. {invocation_guidance}"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 512,
+                        "description": "Exact tool name returned by tool_search.",
+                    }
+                },
+                "required": ["name"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def deferred_tool_dispatch_definition() -> dict[str, Any]:
+    """Build the fixed allowlisted deferred-tool dispatcher definition."""
+    return {
+        "type": "function",
+        "function": {
+            "name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "description": (
+                "Invoke an allowlisted deferred tool whose complete declaration was "
+                "returned by a paired tool_read call in this conversation."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "enum": list(NODE_REPL_TOOL_NAMES)},
+                    "arguments": {
+                        "type": "object",
+                        "description": (
+                            "Arguments matching the tool declaration returned by "
+                            "tool_read."
+                        ),
+                    },
+                },
+                "required": ["name", "arguments"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _deferred_tool_definitions(
     exec_description: str,
-    projection: ExecToolProjection | None,
+    search_projection: ExecToolProjection | None,
+    read_projection: ExecToolProjection | None,
+    dispatch_projection: ExecToolProjection | None,
 ) -> dict[str, dict[str, Any]]:
-    """Return the synthetic search definition only for a live deferred exec."""
+    """Return fixed synthetic definitions only for a live deferred exec."""
     if (
-        projection is None
-        or projection.input_mode != "all_tools_search"
+        search_projection is None
+        or search_projection.input_mode != "all_tools_search"
         or DEFERRED_EXEC_GUIDANCE not in exec_description
     ):
         return {}
-    return {projection.chat_name: _all_tools_search_definition()}
+    definitions = {
+        search_projection.chat_name: all_tools_search_definition(
+            include_tool_read_guidance=read_projection is not None
+        )
+    }
+    if read_projection is not None and read_projection.input_mode == "all_tools_read":
+        definitions[read_projection.chat_name] = all_tools_read_definition(
+            include_dispatch_guidance=dispatch_projection is not None
+        )
+    if (
+        dispatch_projection is not None
+        and dispatch_projection.input_mode == "deferred_dispatch"
+    ):
+        definitions[dispatch_projection.chat_name] = deferred_tool_dispatch_definition()
+    return definitions
 
 
-def _build_all_tools_search_script(arguments: dict[str, Any]) -> str:
+def _build_all_tools_search_script(
+    arguments: dict[str, Any],
+) -> str:
     """Build bounded JavaScript that searches only the live ALL_TOOLS array."""
     query = arguments.get("query")
     if not isinstance(query, str) or not query.strip():
@@ -567,6 +718,7 @@ const searchMode = {mode_literal};
 const limit = {limit};
 const resultProtocol = {protocol_literal};
 const maxResultChars = {ALL_TOOLS_SEARCH_MAX_RESULT_CHARS};
+const maxSummaryChars = {ALL_TOOLS_SEARCH_SUMMARY_CHARS};
 const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];
 const normalize = (value) => String(value ?? "").normalize("NFKC").toLowerCase();
 const queryText = normalize(query);
@@ -629,10 +781,19 @@ const buildResult = (matches, truncated) => ({{
 const selectedMatches = [];
 for (const {{ entry }} of ranked) {{
   if (selectedMatches.length >= limit) break;
-  const candidate = {{
-    name: String(entry.name ?? ""),
-    description: String(entry.description ?? ""),
-  }};
+  const name = String(entry.name ?? "");
+  const description = String(entry.description ?? "");
+  const declarationIndex = description.indexOf("exec tool declaration:");
+  const introduction = declarationIndex >= 0
+    ? description.slice(0, declarationIndex)
+    : description;
+  const normalizedIntroduction = introduction.replace(/\\s+/g, " ").trim();
+  const normalizedDescription = description.replace(/\\s+/g, " ").trim();
+  const sourceSummary = normalizedIntroduction || normalizedDescription;
+  const summary = sourceSummary.length <= maxSummaryChars
+    ? sourceSummary
+    : sourceSummary.slice(0, Math.max(0, maxSummaryChars - 3)) + "...";
+  const candidate = {{ name, summary }};
   const candidateResult = buildResult([...selectedMatches, candidate], false);
   if (JSON.stringify(candidateResult).length > maxResultChars) continue;
   selectedMatches.push(candidate);
@@ -641,32 +802,156 @@ text(buildResult(selectedMatches, selectedMatches.length < ranked.length));
 """
 
 
+def _build_all_tools_read_script(
+    arguments: dict[str, Any],
+    *,
+    include_dispatch_guidance: bool,
+    blocked_names: tuple[str, ...],
+) -> str:
+    """Build bounded JavaScript that reads one exact live ALL_TOOLS entry."""
+    name = arguments.get("name")
+    if not isinstance(name, str) or not name:
+        raise ValueError("tool_read requires a non-empty string field 'name'")
+    if len(name) > 512:
+        raise ValueError("tool_read name must be at most 512 characters")
+
+    name_literal = _javascript_json_literal(name)
+    protocol_literal = _javascript_json_literal(ALL_TOOLS_READ_RESULT_PROTOCOL)
+    dispatch_names_literal = _javascript_json_literal(list(NODE_REPL_TOOL_NAMES))
+    blocked_names_literal = _javascript_json_literal(list(blocked_names))
+    dispatch_guidance_literal = _javascript_json_literal(include_dispatch_guidance)
+    return f"""const name = {name_literal};
+const resultProtocol = {protocol_literal};
+const maxResultChars = {ALL_TOOLS_SEARCH_MAX_RESULT_CHARS};
+const dispatchNames = new Set({dispatch_names_literal});
+const blockedDispatchNames = new Set({blocked_names_literal});
+const includeDispatchGuidance = {dispatch_guidance_literal};
+const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];
+const entries = catalog.filter((candidate) => String(candidate?.name ?? "") === name);
+if (entries.length === 0) {{
+  text({{ protocol: resultProtocol, name, found: false, tool: null }});
+  exit();
+}}
+if (entries.length !== 1) {{
+  text({{
+    protocol: resultProtocol,
+    name,
+    found: false,
+    tool: null,
+    error: {{ code: "ambiguous_name", matches: entries.length }},
+  }});
+  exit();
+}}
+const entry = entries[0];
+let description = String(entry.description ?? "");
+if (
+  includeDispatchGuidance &&
+  dispatchNames.has(name) &&
+  !blockedDispatchNames.has(name)
+) {{
+  description += "\\n\\nInvoke this tool with `invoke_deferred_tool`: set `name` to\\n" +
+    JSON.stringify(name) +
+    " and set `arguments` to an object matching the `args`\\n" +
+    "declaration above. Do not call this tool directly or through raw `exec`.";
+}}
+const result = {{
+  protocol: resultProtocol,
+  name,
+  found: true,
+  tool: {{ name, description }},
+}};
+if (JSON.stringify(result).length > maxResultChars) {{
+  text({{
+    protocol: resultProtocol,
+    name,
+    found: false,
+    tool: null,
+    error: {{ code: "result_too_large", max_result_chars: maxResultChars }},
+  }});
+  exit();
+}}
+text(result);
+"""
+
+
 def node_repl_exec_projections() -> dict[str, ExecToolProjection]:
     """Return isolated projection mappings for the three Node REPL tools."""
     return dict(_NODE_REPL_EXEC_PROJECTIONS)
 
 
+def discovered_all_tools_search_names(messages: Any) -> tuple[str, ...]:
+    """Recover exact names from valid paired version-2 search history."""
+    if not isinstance(messages, list):
+        return ()
+    search_calls = _all_tools_search_calls(messages)
+    if not search_calls:
+        return ()
+    names: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "tool":
+            continue
+        call_id = str(message.get("tool_call_id") or "")
+        expected = search_calls.get(call_id)
+        if expected is None:
+            continue
+        for result in _all_tools_v2_search_results(message.get("content")):
+            if not _valid_all_tools_search_result(result, expected):
+                continue
+            for match in result["matches"]:
+                name = match["name"]
+                if name not in names:
+                    names.append(name)
+    return tuple(names)
+
+
+def _valid_all_tools_search_result(
+    result: dict[str, Any],
+    expected: tuple[str, str, int],
+) -> bool:
+    query, search_mode, limit = expected
+    matches = result.get("matches")
+    if (
+        result.get("query") != query
+        or result.get("search_mode") != search_mode
+        or result.get("limit") != limit
+        or not isinstance(matches, list)
+        or len(matches) > limit
+        or result.get("returned_matches") != len(matches)
+        or isinstance(result.get("total_matches"), bool)
+        or not isinstance(result.get("total_matches"), int)
+        or result["total_matches"] < len(matches)
+        or not isinstance(result.get("truncated"), bool)
+    ):
+        return False
+    for match in matches:
+        if (
+            not isinstance(match, dict)
+            or not isinstance(match.get("name"), str)
+            or not match["name"]
+            or len(match["name"]) > 512
+            or not isinstance(match.get("summary"), str)
+            or len(match["summary"]) > ALL_TOOLS_SEARCH_SUMMARY_CHARS
+            or set(match) != {"name", "summary"}
+        ):
+            return False
+    return True
+
+
 def discovered_node_repl_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
-    """Recover validated Node REPL definitions from paired search history."""
+    """Recover validated Node REPL definitions from paired search/read history."""
     if not isinstance(messages, list):
         return DiscoveredExecToolPlan(definitions={}, projections={})
 
-    search_call_ids = _all_tools_search_call_ids(messages)
-    if not search_call_ids:
-        return DiscoveredExecToolPlan(definitions={}, projections={})
-
     candidates = node_repl_exec_projections()
-    matches = _latest_node_repl_search_matches(
+    searched_names = frozenset(discovered_all_tools_search_names(messages))
+    read_matches, _ = _latest_node_repl_read_matches(
         messages,
-        search_call_ids=search_call_ids,
-        candidate_names=frozenset(candidates),
+        read_calls=_all_tools_read_calls(messages),
+        candidate_names=frozenset(candidates) & searched_names,
     )
-    if matches is None:
-        return DiscoveredExecToolPlan(definitions={}, projections={})
-
     definitions: dict[str, dict[str, Any]] = {}
     projections: dict[str, ExecToolProjection] = {}
-    for match in matches:
+    for match in read_matches:
         projected = _project_discovered_node_repl_match(match, candidates)
         if projected is None:
             continue
@@ -679,198 +964,36 @@ def discovered_node_repl_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
     )
 
 
-def sanitize_projected_node_repl_history(
-    messages: Any,
-    projected_names: frozenset[str] | set[str],
-) -> Any:
-    """Hide projected Node declarations only in the model-facing history copy."""
-    if not isinstance(messages, list) or not projected_names:
-        return messages
-    search_call_ids = _all_tools_search_call_ids(messages)
-    if not search_call_ids:
-        return messages
-
-    changed = False
-    sanitized_messages: list[Any] = []
-    names = frozenset(projected_names)
-    for message in messages:
-        sanitized = _sanitize_search_result_message(
-            message,
-            search_call_ids=search_call_ids,
-            projected_names=names,
-        )
-        changed = changed or sanitized is not message
-        sanitized_messages.append(sanitized)
-    return sanitized_messages if changed else messages
-
-
-def _sanitize_search_result_message(
-    message: Any,
-    *,
-    search_call_ids: set[str],
-    projected_names: frozenset[str],
-) -> Any:
-    if (
-        not isinstance(message, dict)
-        or message.get("role") != "tool"
-        or str(message.get("tool_call_id") or "") not in search_call_ids
-    ):
-        return message
-    content, changed = _sanitize_search_result_value(
-        message.get("content"),
-        projected_names=projected_names,
-    )
-    if not changed:
-        return message
-    sanitized = dict(message)
-    sanitized["content"] = content
-    return sanitized
-
-
-def _sanitize_search_result_value(
-    value: Any,
-    *,
-    projected_names: frozenset[str],
-    depth: int = 0,
-) -> tuple[Any, bool]:
-    if depth > 5:
-        return value, False
-    if isinstance(value, str):
-        if len(value) > _MAX_TOOL_RESULT_TEXT_CHARS:
-            return value, False
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError:
-            return value, False
-        sanitized, changed = _sanitize_search_result_value(
-            decoded,
-            projected_names=projected_names,
-            depth=depth + 1,
-        )
-        if not changed:
-            return value, False
-        return (
-            json.dumps(sanitized, ensure_ascii=False, separators=(",", ":")),
-            True,
-        )
-    if isinstance(value, list):
-        return _sanitize_search_result_list(
-            value,
-            projected_names=projected_names,
-            depth=depth,
-        )
-    if isinstance(value, dict):
-        if value.get("protocol") == ALL_TOOLS_SEARCH_RESULT_PROTOCOL:
-            return _sanitize_all_tools_search_result(value, projected_names)
-        return _sanitize_search_result_container(
-            value,
-            projected_names=projected_names,
-            depth=depth,
-        )
-    return value, False
-
-
-def _sanitize_search_result_list(
-    values: list[Any],
-    *,
-    projected_names: frozenset[str],
-    depth: int,
-) -> tuple[list[Any], bool]:
-    changed = False
-    sanitized_values: list[Any] = []
-    for value in values:
-        sanitized, item_changed = _sanitize_search_result_value(
-            value,
-            projected_names=projected_names,
-            depth=depth + 1,
-        )
-        changed = changed or item_changed
-        sanitized_values.append(sanitized)
-    return (sanitized_values, True) if changed else (values, False)
-
-
-def _sanitize_search_result_container(
-    value: dict[str, Any],
-    *,
-    projected_names: frozenset[str],
-    depth: int,
-) -> tuple[dict[str, Any], bool]:
-    sanitized = dict(value)
-    changed = False
-    for key in ("text", "content", "output", "result"):
-        if key not in value:
-            continue
-        child, child_changed = _sanitize_search_result_value(
-            value[key],
-            projected_names=projected_names,
-            depth=depth + 1,
-        )
-        if child_changed:
-            sanitized[key] = child
-            changed = True
-    return (sanitized, True) if changed else (value, False)
-
-
-def _sanitize_all_tools_search_result(
-    result: dict[str, Any],
-    projected_names: frozenset[str],
-) -> tuple[dict[str, Any], bool]:
-    matches = result.get("matches")
-    if not isinstance(matches, list):
-        return result, False
-    changed = False
-    sanitized_matches: list[Any] = []
-    for match in matches:
-        if not isinstance(match, dict) or match.get("name") not in projected_names:
-            sanitized_matches.append(match)
-            continue
-        sanitized_match = {
-            key: value for key, value in match.items() if key != "description"
-        }
-        sanitized_match["status"] = "projected_as_structured_function"
-        sanitized_matches.append(sanitized_match)
-        changed = True
-    if not changed:
-        return result, False
-    sanitized_result = dict(result)
-    sanitized_result["matches"] = sanitized_matches
-    return sanitized_result, True
-
-
-def _latest_node_repl_search_matches(
+def _latest_node_repl_read_matches(
     messages: list[Any],
     *,
-    search_call_ids: set[str],
+    read_calls: dict[str, str],
     candidate_names: frozenset[str],
-) -> list[Any] | None:
+) -> tuple[list[Any], frozenset[str]]:
+    """Return the latest paired read outcome for each candidate name."""
+    if not read_calls or not candidate_names:
+        return [], frozenset()
+    addressed_names: set[str] = set()
+    matches: list[Any] = []
     for message in reversed(messages):
-        results = _paired_all_tools_search_results(message, search_call_ids)
-        if not results:
+        if not isinstance(message, dict) or message.get("role") != "tool":
             continue
+        call_id = str(message.get("tool_call_id") or "")
+        requested_name = read_calls.get(call_id)
+        if requested_name not in candidate_names or requested_name in addressed_names:
+            continue
+        addressed_names.add(requested_name)
+        results = _all_tools_read_results(message.get("content"))
         for result in reversed(results):
-            matches = result.get("matches")
-            if not isinstance(matches, list):
+            if result.get("name") != requested_name:
                 continue
-            if not any(
-                isinstance(match, dict) and match.get("name") in candidate_names
-                for match in matches
-            ):
-                continue
-            return matches
-    return None
-
-
-def _paired_all_tools_search_results(
-    message: Any,
-    search_call_ids: set[str],
-) -> list[dict[str, Any]]:
-    if (
-        not isinstance(message, dict)
-        or message.get("role") != "tool"
-        or str(message.get("tool_call_id") or "") not in search_call_ids
-    ):
-        return []
-    return _all_tools_search_results(message.get("content"))
+            tool = result.get("tool")
+            if result.get("found") is True and isinstance(tool, dict):
+                matches.append(tool)
+            break
+        if addressed_names == set(candidate_names):
+            break
+    return matches, frozenset(addressed_names)
 
 
 def _project_discovered_node_repl_match(
@@ -894,8 +1017,8 @@ def _project_discovered_node_repl_match(
     return name, definition, projection
 
 
-def _all_tools_search_call_ids(messages: list[Any]) -> set[str]:
-    call_ids: list[str] = []
+def _all_tools_read_calls(messages: list[Any]) -> dict[str, str]:
+    calls: list[tuple[str, str]] = []
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
@@ -909,36 +1032,155 @@ def _all_tools_search_call_ids(messages: list[Any]) -> set[str]:
             if not isinstance(function, dict):
                 continue
             name = function.get("name")
-            if name == ALL_TOOLS_SEARCH_CHAT_NAME or (
-                name == "exec"
-                and _raw_exec_is_all_tools_search(function.get("arguments"))
-            ):
-                call_id = str(tool_call.get("id") or "")
-                if call_id and call_id not in call_ids:
-                    call_ids.append(call_id)
-    return set(call_ids[-_MAX_DISCOVERY_HISTORY_CALLS:])
+            arguments = function.get("arguments")
+            requested_name = (
+                _structured_tool_read_name(arguments)
+                if name == ALL_TOOLS_READ_CHAT_NAME
+                else _raw_exec_tool_read_name(arguments)
+                if name == "exec"
+                else None
+            )
+            call_id = str(tool_call.get("id") or "")
+            if call_id and requested_name:
+                calls.append((call_id, requested_name))
+    return dict(calls[-_MAX_DISCOVERY_HISTORY_CALLS:])
 
 
-def _raw_exec_is_all_tools_search(arguments: Any) -> bool:
+def _all_tools_search_calls(
+    messages: list[Any],
+) -> dict[str, tuple[str, str, int]]:
+    calls: list[tuple[str, tuple[str, str, int]]] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            continue
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            function = tool_call.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = function.get("name")
+            arguments = function.get("arguments")
+            search = (
+                _structured_tool_search_arguments(arguments)
+                if name == ALL_TOOLS_SEARCH_CHAT_NAME
+                else _raw_exec_tool_search_arguments(arguments)
+                if name == "exec"
+                else None
+            )
+            call_id = str(tool_call.get("id") or "")
+            if call_id and search is not None:
+                calls.append((call_id, search))
+    return dict(calls[-_MAX_DISCOVERY_HISTORY_CALLS:])
+
+
+def _structured_tool_search_arguments(
+    arguments: Any,
+) -> tuple[str, str, int] | None:
     if not isinstance(arguments, str):
-        return False
+        return None
     try:
         value = json.loads(arguments or "{}")
     except json.JSONDecodeError:
-        return False
-    return (
-        isinstance(value, dict)
-        and isinstance(value.get("input"), str)
-        and ALL_TOOLS_SEARCH_RESULT_PROTOCOL in value["input"]
+        return None
+    if not isinstance(value, dict):
+        return None
+    query = value.get("query")
+    search_mode = value.get("search_mode", "natural_language")
+    limit = value.get("limit", 8)
+    if (
+        not isinstance(query, str)
+        or not query.strip()
+        or search_mode not in {"natural_language", "regex"}
+        or isinstance(limit, bool)
+        or not isinstance(limit, int)
+        or not 1 <= limit <= 50
+    ):
+        return None
+    return query, search_mode, limit
+
+
+def _raw_exec_tool_search_arguments(
+    arguments: Any,
+) -> tuple[str, str, int] | None:
+    if not isinstance(arguments, str):
+        return None
+    try:
+        value = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    script = value.get("input") if isinstance(value, dict) else None
+    if not isinstance(script, str) or ALL_TOOLS_SEARCH_RESULT_PROTOCOL not in script:
+        return None
+    query_match = re.search(
+        r"^const query = (\"(?:[^\"\\]|\\.)*\");$", script, re.MULTILINE
+    )
+    mode_match = re.search(
+        r"^const searchMode = (\"(?:[^\"\\]|\\.)*\");$", script, re.MULTILINE
+    )
+    limit_match = re.search(r"^const limit = (\d+);$", script, re.MULTILINE)
+    if query_match is None or mode_match is None or limit_match is None:
+        return None
+    try:
+        query = json.loads(query_match.group(1))
+        search_mode = json.loads(mode_match.group(1))
+        limit = int(limit_match.group(1))
+    except json.JSONDecodeError, ValueError:
+        return None
+    return _structured_tool_search_arguments(
+        json.dumps({"query": query, "search_mode": search_mode, "limit": limit})
     )
 
 
-def _all_tools_search_results(content: Any) -> list[dict[str, Any]]:
+def _structured_tool_read_name(arguments: Any) -> str | None:
+    if not isinstance(arguments, str):
+        return None
+    try:
+        value = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    name = value.get("name") if isinstance(value, dict) else None
+    return name if isinstance(name, str) and name else None
+
+
+def _raw_exec_tool_read_name(arguments: Any) -> str | None:
+    if not isinstance(arguments, str):
+        return None
+    try:
+        value = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return None
+    script = value.get("input") if isinstance(value, dict) else None
+    if not isinstance(script, str) or ALL_TOOLS_READ_RESULT_PROTOCOL not in script:
+        return None
+    match = re.search(r"^const name = (\"(?:[^\"\\]|\\.)*\");$", script, re.MULTILINE)
+    if match is None:
+        return None
+    try:
+        name = json.loads(match.group(1))
+    except json.JSONDecodeError:
+        return None
+    return name if isinstance(name, str) and name else None
+
+
+def _all_tools_v2_search_results(content: Any) -> list[dict[str, Any]]:
     return [
         value
         for value in _decoded_tool_result_values(content)
         if isinstance(value, dict)
         and value.get("protocol") == ALL_TOOLS_SEARCH_RESULT_PROTOCOL
+    ]
+
+
+def _all_tools_read_results(content: Any) -> list[dict[str, Any]]:
+    return [
+        value
+        for value in _decoded_tool_result_values(content)
+        if isinstance(value, dict)
+        and value.get("protocol") == ALL_TOOLS_READ_RESULT_PROTOCOL
     ]
 
 
@@ -1297,11 +1539,15 @@ def _javascript_json_literal(value: Any) -> str:
 __all__ = [
     "ALL_TOOLS_SEARCH_MAX_RESULT_CHARS",
     "ALL_TOOLS_SEARCH_RESULT_PROTOCOL",
+    "DEFERRED_TOOL_DISPATCH_CHAT_NAME",
     "DiscoveredExecToolPlan",
     "ExecDescriptionSection",
     "ExecToolDefinitionPlan",
     "ExecToolProjection",
+    "NODE_REPL_TOOL_NAMES",
+    "all_tools_search_definition",
     "build_exec_script",
+    "deferred_tool_dispatch_definition",
     "discovered_node_repl_exec_tools",
     "exec_tool_section_names",
     "exec_tool_projections_for_route",
@@ -1310,5 +1556,4 @@ __all__ = [
     "prune_exec_tool_description",
     "project_exec_tool_definitions",
     "project_modified_exec_web_run_description",
-    "sanitize_projected_node_repl_history",
 ]

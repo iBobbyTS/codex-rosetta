@@ -103,15 +103,16 @@ Rosetta may replace only the inserting principal's oldest entry; it never evicts
 another principal's state. Capacity failures are returned as HTTP 413 before
 partial cache mutation. Deferred Code Mode tool discovery does not add
 cross-turn Gateway state: it searches Codex's request-local `ALL_TOOLS` runtime
-catalog through `exec`. A paired search call/result carried back in the next
-request may expose an exactly matched Node REPL tool as a structured Chat
-Function, but Rosetta validates the live declaration from that history and does
-not retain a separate discovery cache. A search result for `js` does not expose
-`js_reset` or `js_add_node_module_dir` unless each helper was returned itself.
-Search responses contain only whole matches within a 24,000-character
-serialized budget. After a Node Function is projected, its declaration is
-removed only from the model-facing history copy; unknown matches and the source
-request are unchanged.
+catalog through `exec`. Fixed `tool_search` returns bounded names and summaries;
+fixed `tool_read` retrieves one exact complete declaration. Only a paired read
+call/result carried into the next request may authorize that exact Node REPL
+name through `invoke_deferred_tool`, and Rosetta validates the declaration from
+history without retaining a discovery cache. Reading `js` does not authorize
+`js_reset` or `js_add_node_module_dir`. Search summaries are at most 240
+characters and whole search results stay within 24,000 serialized characters;
+exact reads also enforce a 24,000-character fail-closed budget. Discovered Node
+tools are never added as top-level Chat Functions, so tool definitions remain
+byte-stable across search, read, and invocation; both results remain in history.
 
 ## Environment-backed example config
 
