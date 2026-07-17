@@ -8,13 +8,18 @@ Log rows, session JSONL, rollout JSONL, or archived session metadata. It must
 not read `EVALUATION.md`, assign capability statuses, or produce an overall
 verdict.
 
-Write `artifacts/browser_use/01/execution.json` with this shape:
+Write `<run_root>/execution.json`, where `run_root` is the unique
+`.agent-work/live-agent-test/{YYYYMMDD-HHMM}` directory created before Browser
+setup. Never write to a shared result path or an existing timestamp directory.
+Use this shape:
 
 ```json
 {
   "schema_version": 1,
   "task_id": "01",
   "role": "executor",
+  "run_root": "/absolute/workspace/.agent-work/live-agent-test/YYYYMMDD-HHMM",
+  "run_stamp": "YYYYMMDD-HHMM",
   "host_surface": "codex_gui_app",
   "plugin": "Browser",
   "skill": "browser:control-in-app-browser",

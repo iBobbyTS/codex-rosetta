@@ -1,5 +1,5 @@
 请作为 test executor 执行 `tests/live_agent/browser_use/01` 独立 live test。
-
+[@Browser](plugin://browser@openai-bundled) 
 开始前完整阅读并严格遵循：
 
 - `tests/live_agent/browser_use/README.md`

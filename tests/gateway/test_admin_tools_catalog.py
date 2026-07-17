@@ -645,6 +645,9 @@ def test_catalog_defaults_and_namespace_image_policy():
         ]
         is True
     )
+    assert tool_profile_contract()["exec_projections"]["custom.apply_patch"][
+        "description_replaced_by"
+    ] == ("Edit", "Write")
 
     web_search_policy = policies[items["hosted.web_search"]["policy_id"]]
     assert web_search_policy["route_defaults"] == [

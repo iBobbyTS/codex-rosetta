@@ -3,8 +3,8 @@
 This is a **judge-only** contract. The Browser test executor must not read or
 apply it. Evaluation occurs in a new user-created judge-agent session after the
 user copies the executor's complete final response, supplies the
-`artifacts/browser_use/01/execution.json` path, and identifies the source test
-session/thread.
+exact `.agent-work/live-agent-test/{YYYYMMDD-HHMM}` run root plus its
+`execution.json` path, and identifies the source test session/thread.
 
 The judge must not rerun Browser actions or modify `execution.json`.
 
@@ -13,7 +13,7 @@ The judge must not rerun Browser actions or modify `execution.json`.
 Require all of the following before issuing a verdict:
 
 1. The executor's copied final response.
-2. `artifacts/browser_use/01/execution.json`.
+2. The supplied `<run_root>/execution.json`.
 3. The source test session/thread id supplied by the user.
 4. `01/expected.json` for capability order, execution boundaries, and exact
    postconditions.
@@ -21,6 +21,13 @@ Require all of the following before issuing a verdict:
 If the source session id is absent, report that the judge cannot complete
 provenance/log correlation and ask the user for it. Do not guess from the most
 recent file alone when multiple candidate sessions exist.
+
+The judge must verify that `execution.json`'s absolute `run_root` and
+`run_stamp` match the user-supplied directory, that the basename has the exact
+`YYYYMMDD-HHMM` shape, and that it resides directly under
+`.agent-work/live-agent-test/`. Never select a run by latest modification time.
+Write only `<run_root>/evaluation.json`; do not overwrite another run or use a
+shared `artifacts/browser_use/01` destination.
 
 ## Gate 1: execution validity
 
@@ -92,14 +99,16 @@ incomplete matrix.
 
 ## Required judge result
 
-Write `artifacts/browser_use/01/evaluation.json` with this shape:
+Write `<run_root>/evaluation.json` with this shape:
 
 ```json
 {
   "classification": "success | success_with_limitations | failure | invalid_environment | invalid_execution",
   "task_id": "01",
   "role": "judge",
-  "source_execution_path": "artifacts/browser_use/01/execution.json",
+  "run_root": "/absolute/workspace/.agent-work/live-agent-test/YYYYMMDD-HHMM",
+  "run_stamp": "YYYYMMDD-HHMM",
+  "source_execution_path": "/absolute/workspace/.agent-work/live-agent-test/YYYYMMDD-HHMM/execution.json",
   "source_thread_id": "user-supplied GUI test thread id",
   "source_rollout_path": "matching rollout JSONL path",
   "execution_gates": {

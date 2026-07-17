@@ -412,6 +412,28 @@ def test_exec_projection_internal_when_disabled_must_be_boolean(monkeypatch):
         tool_profiles_module.tool_profile_contract.cache_clear()
 
 
+@pytest.mark.parametrize(
+    ("replacement", "message"),
+    [
+        ("missing_tool", "references unknown tool names"),
+        ("exec_command", "must reference custom injections"),
+    ],
+)
+def test_exec_projection_description_replacements_must_be_injections(
+    monkeypatch, replacement, message
+):
+    catalog = copy.deepcopy(load_tool_catalog())
+    item = next(item for item in catalog["items"] if item["id"] == "custom.apply_patch")
+    item["exec_projection"]["description_replaced_by"] = [replacement]
+    monkeypatch.setattr(tool_profiles_module, "load_tool_catalog", lambda: catalog)
+    tool_profiles_module.tool_profile_contract.cache_clear()
+    try:
+        with pytest.raises(ValueError, match=message):
+            tool_profiles_module.tool_profile_contract()
+    finally:
+        tool_profiles_module.tool_profile_contract.cache_clear()
+
+
 def test_internal_container_when_disabled_must_be_boolean(monkeypatch):
     catalog = copy.deepcopy(load_tool_catalog())
     item = next(item for item in catalog["items"] if item["id"] == "custom.exec")

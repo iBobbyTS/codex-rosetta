@@ -12,14 +12,16 @@ import pytest
 from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
     build_exec_script,
+    exec_tool_section_names,
     exec_tool_projections_for_route,
+    plan_exec_tool_definitions,
+    prune_exec_tool_description,
     project_exec_tool_definitions,
     project_modified_exec_web_run_description,
 )
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
     EXEC_PROJECTIONS_KEY,
-    LOCALIZATION_CAPABILITIES_KEY,
     LocalizedToolCallStreamTransformer,
     NativeToolCapabilities,
     localize_code_editing_chat_request,
@@ -668,6 +670,179 @@ def test_exec_description_with_unknown_typescript_syntax_fails_closed():
         )
 
 
+def test_projection_plan_rejects_duplicate_sections_and_preserves_them():
+    projection = ExecToolProjection(
+        item_id="function.exec_command",
+        chat_name="exec_command",
+        nested_name="exec_command",
+    )
+    description = "\n\n".join(
+        [
+            "Run JavaScript.",
+            _section("exec_command", "args", "{ cmd: string; }"),
+            _section("exec_command", "args", "{ cmd: string; cwd?: string; }"),
+        ]
+    )
+
+    plan = plan_exec_tool_definitions(description, {projection.chat_name: projection})
+
+    assert plan.definitions == {}
+    assert plan.sections == {}
+    assert plan.duplicate_section_names == frozenset({"exec_command"})
+    assert prune_exec_tool_description(description, tuple(plan.sections.values())) == (
+        description
+    )
+
+
+def test_pruning_removes_only_exact_projected_declaration_section():
+    projection = ExecToolProjection(
+        item_id="function.exec_command",
+        chat_name="exec_command",
+        nested_name="exec_command",
+    )
+    known = _section("exec_command", "args", "{ cmd: string; }")
+    unknown = _section("future_tool", "args", "{ value: string; }")
+    suffix = (
+        "Some deferred nested tools may be omitted from this description. "
+        "They remain available through the ALL_TOOLS runtime catalog."
+    )
+    description = f"Run JavaScript.\n\n{known}\n\n{unknown}\n\n{suffix}"
+    plan = plan_exec_tool_definitions(description, {projection.chat_name: projection})
+
+    pruned = prune_exec_tool_description(description, tuple(plan.sections.values()))
+
+    assert pruned == f"Run JavaScript.\n\n\n\n{unknown}\n\n{suffix}"
+    assert exec_tool_section_names(pruned) == ("future_tool",)
+
+
+def test_projection_retains_parseable_declaration_with_unclosed_fence():
+    projection = ExecToolProjection(
+        item_id="function.exec_command",
+        chat_name="exec_command",
+        nested_name="exec_command",
+    )
+    description = """### `exec_command`
+Description for exec_command.
+
+exec tool declaration:
+```ts
+declare const tools: { exec_command(args: { cmd: string; }): Promise<unknown>; };
+
+Deferred guidance remains here."""
+
+    plan = plan_exec_tool_definitions(description, {projection.chat_name: projection})
+
+    assert plan.definitions == {}
+    assert plan.sections == {}
+    assert prune_exec_tool_description(description, ()) == description
+
+
+def test_request_prunes_known_section_but_retains_unknown_exec_capability():
+    description = "\n\n".join(
+        [
+            "Run JavaScript.",
+            _section("exec_command", "args", "{ cmd: string; }"),
+            _section("future_tool", "args", "{ value: string; }"),
+        ]
+    )
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": description,
+                    "parameters": {},
+                },
+            }
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    tools = {tool["function"]["name"]: tool["function"] for tool in adapted["tools"]}
+    assert set(tools) == {"exec", "exec_command"}
+    assert exec_tool_section_names(tools["exec"]["description"]) == ("future_tool",)
+    assert "Description for future_tool." in tools["exec"]["description"]
+
+
+def test_request_retains_conflicting_and_malformed_known_sections():
+    valid = _section("exec_command", "args", "{ cmd: string; }")
+    malformed = _section("update_plan", "args", "{ plan: InvalidType; }")
+    description = f"Run JavaScript.\n\n{valid}\n\n{malformed}"
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": description,
+                    "parameters": {},
+                },
+            },
+            {
+                "type": "function",
+                "function": {"name": "exec_command", "parameters": {}},
+            },
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    exec_function = next(
+        tool["function"]
+        for tool in adapted["tools"]
+        if tool["function"]["name"] == "exec"
+    )
+    assert exec_function["description"] == description
+    assert exec_tool_section_names(exec_function["description"]) == (
+        "exec_command",
+        "update_plan",
+    )
+
+
+def test_internal_section_requires_all_declared_replacements_before_pruning():
+    description = "Run JavaScript.\n\n" + _section("apply_patch", "input", "string")
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": description,
+                    "parameters": {},
+                },
+            }
+        ]
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset({"Edit"}),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    names = [tool["function"]["name"] for tool in adapted["tools"]]
+    assert names == ["exec", "Edit"]
+    assert exec_tool_section_names(adapted["tools"][0]["function"]["description"]) == (
+        "apply_patch",
+    )
+
+
 def test_request_projection_preserves_direct_tools_and_records_only_added_tools():
     projections = exec_tool_projections_for_route(_route())
     body = {
@@ -700,7 +875,7 @@ def test_request_projection_preserves_direct_tools_and_records_only_added_tools(
         body,
         capabilities=NativeToolCapabilities(has_custom_exec=True),
         native_tool_names=frozenset(),
-        injected_tool_names=frozenset(),
+        injected_tool_names=frozenset({"Edit", "Write"}),
         exec_projections=projections,
     )
     names = [tool["function"]["name"] for tool in adapted["tools"]]
@@ -748,7 +923,7 @@ def test_modified_web_run_request_sends_pruned_function_to_upstream_model():
     assert set(properties) == {"search_query", "open", "time", "response_length"}
 
 
-def test_disabled_exec_container_is_hidden_when_no_child_can_be_parsed():
+def test_unparsed_exec_container_is_retained_fail_closed():
     body = {
         "tool_choice": {"type": "function", "function": {"name": "exec"}},
         "tools": [
@@ -772,9 +947,8 @@ def test_disabled_exec_container_is_hidden_when_no_child_can_be_parsed():
         hide_exec_container=True,
     )
 
-    assert adapted["tools"] == []
-    assert adapted["tool_choice"] == "auto"
-    assert adapted[LOCALIZATION_CAPABILITIES_KEY]["has_custom_exec"] is True
+    assert adapted["tools"] == body["tools"]
+    assert adapted["tool_choice"] == body["tool_choice"]
 
 
 def test_gateway_preserves_deferred_exec_container_and_custom_round_trip():
@@ -866,6 +1040,9 @@ def test_gateway_preserves_deferred_exec_container_and_custom_round_trip():
         "properties": {"input": {"type": "string"}},
         "required": ["input"],
     }
+    target_description = target_exec["description"]
+    assert exec_tool_section_names(target_description) == ()
+    assert "deferred nested tools" in target_description
     output = json.loads(response.body)["output"][0]
     assert output["type"] == "custom_tool_call"
     assert output["name"] == "exec"
