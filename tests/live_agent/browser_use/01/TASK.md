@@ -39,16 +39,30 @@ Read and follow:
 - `tests/live_agent/browser_use/01/expected.json`
 - `tests/live_agent/browser_use/EXECUTION_REPORT.md`
 
+Before starting the fixture or Browser, create this run's unique workspace:
+
+```text
+.agent-work/live-agent-test/{YYYYMMDD-HHMM}
+```
+
+Compute the timestamp once from the host's local time. Create the exact
+directory without `-p` or any overwrite behavior. If it already exists, stop
+before Browser setup and tell the user to start a new test in a new minute. Do
+not reuse, delete, rename, or clear an earlier run directory, and do not add a
+model name, counter, seconds, or another suffix. Retain the exact absolute
+`run_root` path for the entire executor/judge handoff.
+
 Through the main GUI task's ordinary shell tool, start
 `python3 tests/live_agent/browser_use/serve_fixture.py --port 8876`, retain its
-process handle, and verify only that the server reports its ready marker. Open
+process handle, and write bounded server output to `<run_root>/fixture-server.log`.
+Verify only that the server reports its ready marker. Open
 `http://127.0.0.1:8876/` in the selected in-app Browser.
 
 Exercise each executor capability group in `expected.json` in order. Before
 every action, resolve a unique semantic locator or obtain fresh screenshot/DOM
 coordinates as applicable. After each group, record the Browser operation,
 whether the call returned, the exact bounded page-level postcondition, and any
-error or limitation in `artifacts/browser_use/01/execution.json`. Do not convert
+error or limitation in `<run_root>/execution.json`. Do not convert
 those observations into `pass`, `partial`, `fail`, or an overall classification.
 
 Do not stop the matrix when an individual operation errors or its expected
@@ -76,7 +90,8 @@ created by this task.
 
 At the end, reset any viewport override, close/finalize all test tabs, stop the
 exact fixture server process, and finish `execution.json` according to
-`EXECUTION_REPORT.md`.
+`EXECUTION_REPORT.md` inside the same run root. Never copy or move it to a
+shared result path.
 
 ## Required final response and handoff
 
@@ -87,6 +102,7 @@ Report only:
 - a concise list of observed errors or missing postconditions, without judging
   them;
 - cleanup state;
+- the exact absolute run-root path;
 - the clickable path to `execution.json`.
 
 Do not state `success`, `success_with_limitations`, `partial`, `failure`,
@@ -95,6 +111,7 @@ Do not state `success`, `success_with_limitations`, `partial`, `failure`,
 End by telling the user exactly this:
 
 > 请把本回复完整复制到一个新的 judge agent session，并同时提供
-> `artifacts/browser_use/01/execution.json` 的路径和本测试 session/thread id。
+> 本次 `.agent-work/live-agent-test/{YYYYMMDD-HHMM}` 运行目录、其中
+> `execution.json` 的路径和本测试 session/thread id。
 > 由 judge agent 按 `tests/live_agent/browser_use/JUDGE_TASK.md` 独立检查日志并
 > 给出最终分类；当前测试 agent 不负责判定结果。

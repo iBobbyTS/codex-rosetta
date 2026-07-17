@@ -33,6 +33,29 @@ class ExecToolProjection:
     output_mode: str = "text"
     model_visible: bool = True
     allowed_detail_values: tuple[str, ...] | None = None
+    description_replaced_by: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExecDescriptionSection:
+    """One exact top-level tool section inside an exec description."""
+
+    name: str
+    heading_start: int
+    body_start: int
+    section_end: int
+    raw: str
+    body: str
+    has_complete_declaration: bool
+
+
+@dataclass(frozen=True)
+class ExecToolDefinitionPlan:
+    """Projected definitions and the exact source sections that produced them."""
+
+    definitions: dict[str, dict[str, Any]]
+    sections: dict[str, ExecDescriptionSection]
+    duplicate_section_names: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -50,6 +73,8 @@ _TOKEN_RE = re.compile(
 )
 _WHITESPACE_RE = re.compile(r"\s+")
 _EXEC_SECTION_HEADING_RE = re.compile(r"(?m)^### `([^`]+)`(?: \(`[^`]+`\))?[ \t]*$")
+_EXEC_DECLARATION_FENCE_RE = re.compile(r"(?m)^```ts[ \t]*$")
+_EXEC_CLOSING_FENCE_RE = re.compile(r"(?m)^```[ \t]*$")
 
 
 def _tokenize_typescript(source: str) -> list[_Token]:
@@ -295,13 +320,37 @@ def project_exec_tool_definitions(
     profile_route: Any | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build Chat function definitions from selected exec description sections."""
-    sections = _exec_description_sections(exec_description)
+    return plan_exec_tool_definitions(
+        exec_description,
+        projections,
+        profile_route=profile_route,
+    ).definitions
+
+
+def plan_exec_tool_definitions(
+    exec_description: str,
+    projections: dict[str, ExecToolProjection],
+    *,
+    profile_route: Any | None = None,
+) -> ExecToolDefinitionPlan:
+    """Build definitions and retain the unique source span for each success."""
+    section_spans = _exec_description_section_spans(exec_description)
+    sections_by_name: dict[str, list[ExecDescriptionSection]] = {}
+    for section in section_spans:
+        sections_by_name.setdefault(section.name, []).append(section)
+    duplicate_names = frozenset(
+        name for name, sections in sections_by_name.items() if len(sections) > 1
+    )
     definitions: dict[str, dict[str, Any]] = {}
+    projected_sections: dict[str, ExecDescriptionSection] = {}
     for chat_name, projection in projections.items():
-        section = sections.get(projection.nested_name)
-        if section is None:
+        matching_sections = sections_by_name.get(projection.nested_name, [])
+        if len(matching_sections) != 1:
             continue
-        parsed = _project_one_definition(section, projection)
+        section = matching_sections[0]
+        if not section.has_complete_declaration:
+            continue
+        parsed = _project_one_definition(section.body, projection)
         if parsed is not None:
             if profile_route is not None:
                 parsed = dict(parsed)
@@ -329,7 +378,12 @@ def project_exec_tool_definitions(
                         parsed["function"], profile_route
                     )
             definitions[chat_name] = parsed
-    return definitions
+            projected_sections[chat_name] = section
+    return ExecToolDefinitionPlan(
+        definitions=definitions,
+        sections=projected_sections,
+        duplicate_section_names=duplicate_names,
+    )
 
 
 def build_exec_script(
@@ -366,15 +420,84 @@ def build_exec_script(
     )
 
 
-def _exec_description_sections(description: str) -> dict[str, str]:
+def _exec_description_section_spans(description: str) -> list[ExecDescriptionSection]:
     matches = list(_EXEC_SECTION_HEADING_RE.finditer(description))
-    sections: dict[str, str] = {}
+    sections: list[ExecDescriptionSection] = []
     for index, match in enumerate(matches):
-        end = (
+        boundary = (
             matches[index + 1].start() if index + 1 < len(matches) else len(description)
         )
-        sections[match.group(1)] = description[match.end() : end].strip()
+        declaration_end = _exec_description_section_end(
+            description, match.end(), boundary
+        )
+        end = declaration_end if declaration_end is not None else boundary
+        sections.append(
+            ExecDescriptionSection(
+                name=match.group(1),
+                heading_start=match.start(),
+                body_start=match.end(),
+                section_end=end,
+                raw=description[match.start() : end],
+                body=description[match.end() : end].strip(),
+                has_complete_declaration=declaration_end is not None,
+            )
+        )
     return sections
+
+
+def _exec_description_section_end(
+    description: str,
+    body_start: int,
+    boundary: int,
+) -> int | None:
+    """End one section at its declaration fence, excluding later guidance."""
+    declaration_label = description.find("exec tool declaration:", body_start, boundary)
+    if declaration_label < 0:
+        return None
+    opening = _EXEC_DECLARATION_FENCE_RE.search(
+        description, declaration_label, boundary
+    )
+    if opening is None:
+        return None
+    closing = _EXEC_CLOSING_FENCE_RE.search(description, opening.end(), boundary)
+    if closing is None:
+        return None
+    return closing.end()
+
+
+def exec_tool_section_names(description: str) -> tuple[str, ...]:
+    """Return ordered exec section names without discarding duplicates."""
+    return tuple(
+        section.name for section in _exec_description_section_spans(description)
+    )
+
+
+def prune_exec_tool_description(
+    description: str,
+    sections: list[ExecDescriptionSection] | tuple[ExecDescriptionSection, ...],
+) -> str:
+    """Remove exact successfully projected sections while preserving other bytes."""
+    unique_spans: dict[tuple[int, int], ExecDescriptionSection] = {
+        (section.heading_start, section.section_end): section for section in sections
+    }
+    ordered = sorted(unique_spans.values(), key=lambda section: section.heading_start)
+    previous_end = -1
+    for section in ordered:
+        if (
+            section.heading_start < previous_end
+            or section.heading_start < 0
+            or section.section_end > len(description)
+            or section.heading_start >= section.section_end
+            or not section.has_complete_declaration
+            or description[section.heading_start : section.section_end] != section.raw
+        ):
+            raise ValueError("exec description section span no longer matches source")
+        previous_end = section.section_end
+
+    result = description
+    for section in reversed(ordered):
+        result = result[: section.heading_start] + result[section.section_end :]
+    return result
 
 
 def project_modified_exec_web_run_description(
@@ -391,11 +514,19 @@ def project_modified_exec_web_run_description(
         return exec_description
 
     heading = matches[web_match_index]
-    section_end = (
+    section_boundary = (
         matches[web_match_index + 1].start()
         if web_match_index + 1 < len(matches)
         else len(exec_description)
     )
+    declaration_end = _exec_description_section_end(
+        exec_description,
+        heading.end(),
+        section_boundary,
+    )
+    if declaration_end is None:
+        return exec_description[: heading.start()] + exec_description[section_boundary:]
+    section_end = declaration_end
     section = exec_description[heading.end() : section_end]
     projection = ExecToolProjection(
         item_id=WEB_RUN_PROFILE_ITEM_ID,
@@ -617,9 +748,14 @@ def _javascript_json_literal(value: Any) -> str:
 
 
 __all__ = [
+    "ExecDescriptionSection",
+    "ExecToolDefinitionPlan",
     "ExecToolProjection",
     "build_exec_script",
+    "exec_tool_section_names",
     "exec_tool_projections_for_route",
+    "plan_exec_tool_definitions",
+    "prune_exec_tool_description",
     "project_exec_tool_definitions",
     "project_modified_exec_web_run_description",
 ]

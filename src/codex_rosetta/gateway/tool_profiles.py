@@ -377,6 +377,43 @@ def _exec_projection_internal_when_disabled(raw: dict[str, Any], item_id: str) -
     return value
 
 
+def _exec_projection_description_replacements(
+    raw: dict[str, Any],
+    item_id: str,
+    catalog_items_by_name: dict[str, dict[str, Any]],
+) -> tuple[str, ...]:
+    """Validate explicit custom injections that replace one raw exec section."""
+    replacements = raw.get("description_replaced_by", [])
+    if (
+        not isinstance(replacements, list)
+        or any(not isinstance(name, str) or not name for name in replacements)
+        or len(replacements) != len(set(replacements))
+    ):
+        raise ValueError(
+            f"catalog item {item_id!r} exec_projection "
+            "description_replaced_by must contain unique non-empty names"
+        )
+    unknown = sorted(set(replacements) - set(catalog_items_by_name))
+    if unknown:
+        raise ValueError(
+            f"catalog item {item_id!r} exec_projection "
+            "description_replaced_by references unknown tool names: "
+            f"{unknown}"
+        )
+    invalid = sorted(
+        name
+        for name in replacements
+        if catalog_items_by_name[name]["type"] != "custom_injection"
+    )
+    if invalid:
+        raise ValueError(
+            f"catalog item {item_id!r} exec_projection "
+            "description_replaced_by must reference custom injections: "
+            f"{invalid}"
+        )
+    return tuple(replacements)
+
+
 def _exec_projection_contract(
     catalog: dict[str, Any],
     supported: dict[str, tuple[str, ...]],
@@ -384,6 +421,7 @@ def _exec_projection_contract(
     """Validate Profile-owned Code Mode exec projection declarations."""
     projections: dict[str, dict[str, Any]] = {}
     chat_names: set[str] = set()
+    catalog_items_by_name = {item["name"]: item for item in catalog["items"]}
     for item in catalog["items"]:
         item_id = item["id"]
         raw = item.get("exec_projection")
@@ -400,6 +438,7 @@ def _exec_projection_contract(
             "input_field",
             "output_mode",
             "internal_when_disabled",
+            "description_replaced_by",
         }
         if unsupported:
             raise ValueError(
@@ -440,6 +479,9 @@ def _exec_projection_contract(
                 "'text', 'image', or 'generated_image'"
             )
         internal_when_disabled = _exec_projection_internal_when_disabled(raw, item_id)
+        description_replaced_by = _exec_projection_description_replacements(
+            raw, item_id, catalog_items_by_name
+        )
         chat_names.add(chat_name)
         projections[item_id] = {
             "chat_name": chat_name,
@@ -448,6 +490,7 @@ def _exec_projection_contract(
             "input_field": input_field,
             "output_mode": output_mode,
             "internal_when_disabled": internal_when_disabled,
+            "description_replaced_by": description_replaced_by,
         }
     return projections
 

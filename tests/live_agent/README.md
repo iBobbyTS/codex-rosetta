@@ -56,6 +56,9 @@ below. Run it only in the Codex GUI app by following its own README; never pass
 it to the repository `rosetta-codex-readme-test` runner. Its GUI executor writes
 only `execution.json` and must not read Gateway/session logs or judge itself;
 the user hands the result to a new judge-agent session for `evaluation.json`.
+Each run uses one non-reused
+`.agent-work/live-agent-test/{YYYYMMDD-HHMM}` directory shared only by that
+executor/judge pair.
 
 ## Real-provider defaults
 

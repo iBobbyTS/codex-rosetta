@@ -48,6 +48,30 @@ reserved for the independent judge session.
 - `serve_fixture.py`: localhost-only fixture server.
 - `fixture/`: deterministic HTML, iframe, image, and download resources.
 
+## Per-run workspace
+
+Every execution owns one immutable local-time run root:
+
+```text
+.agent-work/live-agent-test/{YYYYMMDD-HHMM}/
+  execution.json
+  evaluation.json
+  fixture-server.log
+```
+
+The executor computes `{YYYYMMDD-HHMM}` once at the beginning of the run using
+the host's local time and creates the exact directory atomically. It must not
+use an existing directory, delete or clear an earlier run, choose the newest
+directory, or write to a shared `artifacts/browser_use/01` path. If the exact
+minute directory already exists, stop before Browser setup and ask the user to
+start the test again in a new minute. Do not add model names, counters, seconds,
+or other suffixes to the directory name.
+
+The executor writes `execution.json` and bounded fixture-server files only
+inside that run root. After handoff, the judge receives the exact run-root path,
+reads that root's `execution.json`, and writes `evaluation.json` back to the
+same root. The judge must never infer a run by selecting the latest timestamp.
+
 ## Prerequisites
 
 1. Start the Codex GUI app and open this repository as the workspace.
@@ -90,8 +114,8 @@ actions.
 
 Paste `01/TASK.md` into a fresh Codex GUI main task with the two required
 Browser attachments. The executor reads `EXECUTION_REPORT.md`, creates
-`artifacts/browser_use/01/execution.json`, and records observations without
-assigning statuses or an overall classification. It must not read
+`<run_root>/execution.json`, and records observations without assigning
+statuses or an overall classification. It must not read
 `EVALUATION.md`, Gateway Logs, Gateway traces/databases, Request Logs, session
 JSONL, or rollout JSONL.
 
@@ -106,10 +130,11 @@ Early termination is allowed only when an execution gate is invalid or the IAB
 browser binding itself is unavailable/disconnected and cannot continue.
 
 After cleanup, the executor tells the user to copy its complete final response,
-the `execution.json` path, and the source session/thread id into a new judge
-session. The judge follows `JUDGE_TASK.md` and `EVALUATION.md`, inspects bounded
-Gateway/session evidence, and writes the separate `evaluation.json`. The
-executor must never judge its own run.
+the exact run-root path, the `execution.json` path, and the source session/thread
+id into a new judge session. The judge follows `JUDGE_TASK.md` and
+`EVALUATION.md`, inspects bounded Gateway/session evidence, and writes the
+separate `evaluation.json` into that same run root. The executor must never
+judge its own run.
 
 The historical 2026-07-16 exploratory run is retained in
 `.agent-work/browser-live-test-results.md`. It is useful as a baseline but does

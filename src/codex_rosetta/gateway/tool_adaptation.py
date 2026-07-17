@@ -17,10 +17,13 @@ from dataclasses import dataclass
 from typing import Any
 
 from .code_mode_projection import (
+    ExecDescriptionSection,
     ExecToolProjection,
     build_exec_script,
+    exec_tool_section_names,
     exec_tool_projections_for_route,
-    project_exec_tool_definitions,
+    plan_exec_tool_definitions,
+    prune_exec_tool_description,
 )
 from .state_scope import GatewayStateScope
 from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
@@ -395,17 +398,44 @@ def localize_code_editing_chat_request(
                 existing_names.add(name)
             preserved_tools.append(tool)
 
-        projected_tools, active_projections = _project_exec_chat_tools(
-            preserved_tools,
-            existing_names,
-            native_capabilities,
-            requested_projections,
-            profile_route,
+        projected_tools, active_projections, projection_sections = (
+            _project_exec_chat_tools(
+                preserved_tools,
+                existing_names,
+                native_capabilities,
+                requested_projections,
+                profile_route,
+            )
         )
-        model_tools, removed_projected_containers = _hide_exec_projection_container(
-            preserved_tools,
-            projected_tools,
-            hide_when_empty=hide_exec_container,
+        localized_tools = [
+            tool
+            for tool in _localized_chat_tool_definitions()
+            if _chat_tool_name(tool) in injected_tool_names
+            and _chat_tool_name(tool) not in existing_names
+        ]
+        emitted_localized_names = {
+            name for tool in localized_tools if (name := _chat_tool_name(tool))
+        }
+        consumed_sections = [
+            projection_sections[name]
+            for name, projection in active_projections.items()
+            if name in projection_sections
+            and (
+                (projection.model_visible and name in projected_tools)
+                or (
+                    bool(projection.description_replaced_by)
+                    and set(projection.description_replaced_by)
+                    <= emitted_localized_names
+                )
+            )
+        ]
+        model_tools, removed_projected_containers = (
+            _rewrite_or_hide_exec_projection_container(
+                preserved_tools,
+                projected_tools,
+                consumed_sections=consumed_sections,
+                hide_when_empty=hide_exec_container,
+            )
         )
 
         if (
@@ -415,12 +445,6 @@ def localize_code_editing_chat_request(
             or removed_projected_containers
             or LOCALIZED_CODE_TOOL_NAMES.intersection(existing_names)
         ):
-            localized_tools = [
-                tool
-                for tool in _localized_chat_tool_definitions()
-                if _chat_tool_name(tool) in injected_tool_names
-                and _chat_tool_name(tool) not in existing_names
-            ]
             adapted["tools"] = (
                 model_tools
                 + localized_tools
@@ -455,36 +479,66 @@ def localize_code_editing_chat_request(
     return adapted
 
 
-def _hide_exec_projection_container(
+def _rewrite_or_hide_exec_projection_container(
     preserved_tools: list[Any],
     projected_tools: dict[str, dict[str, Any]],
     *,
+    consumed_sections: list[ExecDescriptionSection],
     hide_when_empty: bool,
 ) -> tuple[list[Any], frozenset[str]]:
-    """Hide an internal exec container after projection or by Profile contract."""
-    exec_tool = next(
-        (tool for tool in preserved_tools if _chat_tool_name(tool) == "exec"), None
+    """Prune replaced exec sections and retain only unresolved raw capability."""
+    exec_index = next(
+        (
+            index
+            for index, tool in enumerate(preserved_tools)
+            if _chat_tool_name(tool) == "exec"
+        ),
+        None,
     )
-    has_exec = exec_tool is not None
-    if not has_exec or (not projected_tools and not hide_when_empty):
+    if exec_index is None:
         return preserved_tools, frozenset()
-    if _exec_has_deferred_nested_tools(exec_tool):
-        return preserved_tools, frozenset()
+    exec_tool = preserved_tools[exec_index]
+    function = exec_tool.get("function") if isinstance(exec_tool, dict) else None
+    description = function.get("description") if isinstance(function, dict) else None
+    if (
+        not isinstance(exec_tool, dict)
+        or not isinstance(function, dict)
+        or not isinstance(description, str)
+    ):
+        if not projected_tools and not hide_when_empty:
+            return preserved_tools, frozenset()
+        return (
+            [tool for index, tool in enumerate(preserved_tools) if index != exec_index],
+            frozenset({"exec"}),
+        )
+
+    pruned_description = prune_exec_tool_description(description, consumed_sections)
+    has_deferred_tools = DEFERRED_EXEC_GUIDANCE in pruned_description
+    has_unconsumed_sections = bool(exec_tool_section_names(pruned_description))
+    source_section_names = exec_tool_section_names(description)
+    has_unparsed_source_description = (
+        bool(description.strip()) and not source_section_names
+    )
+    if (
+        has_deferred_tools
+        or has_unconsumed_sections
+        or has_unparsed_source_description
+        or (not projected_tools and not hide_when_empty and not consumed_sections)
+    ):
+        if pruned_description == description:
+            return preserved_tools, frozenset()
+        rewritten_function = function.copy()
+        rewritten_function["description"] = pruned_description
+        rewritten_tool = exec_tool.copy()
+        rewritten_tool["function"] = rewritten_function
+        rewritten_tools = list(preserved_tools)
+        rewritten_tools[exec_index] = rewritten_tool
+        return rewritten_tools, frozenset()
+
     return (
-        [tool for tool in preserved_tools if _chat_tool_name(tool) != "exec"],
+        [tool for index, tool in enumerate(preserved_tools) if index != exec_index],
         frozenset({"exec"}),
     )
-
-
-def _exec_has_deferred_nested_tools(tool: Any) -> bool:
-    """Return whether an exec definition owns runtime-only deferred tools."""
-    if not isinstance(tool, dict):
-        return False
-    function = tool.get("function")
-    if not isinstance(function, dict):
-        return False
-    description = function.get("description")
-    return isinstance(description, str) and DEFERRED_EXEC_GUIDANCE in description
 
 
 def _project_exec_chat_tools(
@@ -493,35 +547,44 @@ def _project_exec_chat_tools(
     capabilities: NativeToolCapabilities,
     projections: dict[str, ExecToolProjection],
     profile_route: Any | None,
-) -> tuple[dict[str, dict[str, Any]], dict[str, ExecToolProjection]]:
+) -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, ExecToolProjection],
+    dict[str, ExecDescriptionSection],
+]:
     """Project parseable nested exec tools that do not conflict with direct tools."""
     if not capabilities.has_custom_exec or not projections:
-        return {}, {}
+        return {}, {}, {}
     exec_tool = next(
         (tool for tool in preserved_tools if _chat_tool_name(tool) == "exec"), None
     )
     if not isinstance(exec_tool, dict):
-        return {}, {}
+        return {}, {}, {}
     function = exec_tool.get("function")
     if not isinstance(function, dict):
-        return {}, {}
+        return {}, {}, {}
     description = function.get("description")
     if not isinstance(description, str):
-        return {}, {}
-    definitions = project_exec_tool_definitions(
+        return {}, {}, {}
+    plan = plan_exec_tool_definitions(
         description,
         projections,
         profile_route=profile_route,
     )
     active = {
-        name: projections[name] for name in definitions if name not in existing_names
+        name: projections[name]
+        for name in plan.definitions
+        if name not in existing_names
     }
     visible_definitions = {
         name: definition
-        for name, definition in definitions.items()
+        for name, definition in plan.definitions.items()
         if name in active and projections[name].model_visible
     }
-    return visible_definitions, active
+    active_sections = {
+        name: section for name, section in plan.sections.items() if name in active
+    }
+    return visible_definitions, active, active_sections
 
 
 def restore_localized_history_from_mappings(

@@ -589,7 +589,11 @@
         "nested_name": "apply_patch",
         "input_mode": "freeform",
         "input_field": "patch",
-        "internal_when_disabled": true
+        "internal_when_disabled": true,
+        "description_replaced_by": [
+          "Edit",
+          "Write"
+        ]
       }
     },
     {

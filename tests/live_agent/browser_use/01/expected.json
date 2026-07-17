@@ -18,6 +18,25 @@
       "raw_model_traces"
     ]
   },
+  "run_workspace_contract": {
+    "root_pattern": ".agent-work/live-agent-test/{YYYYMMDD-HHMM}",
+    "timestamp_regex": "^[0-9]{8}-[0-9]{4}$",
+    "timestamp_timezone": "host_local_time",
+    "create_before_browser_setup": true,
+    "atomic_create": true,
+    "reuse_existing_directory": false,
+    "delete_or_clear_existing_directory": false,
+    "select_latest_directory": false,
+    "allowed_suffixes": [],
+    "on_collision": "stop_before_browser_setup_and_retry_in_a_new_minute",
+    "executor_files": [
+      "execution.json",
+      "fixture-server.log"
+    ],
+    "judge_files": [
+      "evaluation.json"
+    ]
+  },
   "execution_contract": {
     "host_surface": "codex_gui_app",
     "agent_scope": "main_task_only",
@@ -122,6 +141,6 @@
     "session_stores",
     "preexisting_system_clipboard"
   ],
-  "executor_result_path": "artifacts/browser_use/01/execution.json",
-  "judge_result_path": "artifacts/browser_use/01/evaluation.json"
+  "executor_result_path": "{run_root}/execution.json",
+  "judge_result_path": "{run_root}/evaluation.json"
 }
