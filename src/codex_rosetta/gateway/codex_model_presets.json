@@ -2,69 +2,37 @@
   "template_slug": "gpt-5.6-terra",
   "identity_source": "GPT-5",
   "shared_overrides": {
-    "prefer_websockets": true,
     "support_verbosity": true,
     "default_verbosity": "low",
     "apply_patch_tool_type": "freeform",
     "web_search_tool_type": "text_and_image",
-    "supports_image_detail_original": true,
+    "supports_image_detail_original": false,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
-    "supports_parallel_tool_calls": true,
+    "supports_parallel_tool_calls": false,
     "tool_mode": "code_mode_only",
     "multi_agent_version": "v2",
     "use_responses_lite": true,
     "include_skills_usage_instructions": false,
     "auto_review_model_override": null,
     "auto_compact_token_limit": null,
-    "reasoning_summary_format": "experimental",
     "default_reasoning_summary": "none",
     "shell_type": "shell_command",
     "visibility": "list",
-    "minimal_client_version": "0.144.0",
     "supported_in_api": true,
     "availability_nux": null,
     "upgrade": null,
     "experimental_supported_tools": [],
-    "available_in_plans": [
-      "business",
-      "edu",
-      "edu_plus",
-      "edu_pro",
-      "education",
-      "enterprise",
-      "enterprise_cbp_automation",
-      "enterprise_cbp_usage_based",
-      "finserv",
-      "free",
-      "free_workspace",
-      "go",
-      "hc",
-      "k12",
-      "plus",
-      "pro",
-      "prolite",
-      "quorum",
-      "sci",
-      "self_serve_business_usage_based",
-      "team"
-    ],
     "supports_search_tool": true,
     "default_service_tier": null,
-    "service_tiers": [
-      {
-        "id": "priority",
-        "name": "Fast",
-        "description": "1.5x speed, increased usage"
-      }
-    ],
-    "additional_speed_tiers": ["fast"]
+    "service_tiers": [],
+    "additional_speed_tiers": []
   },
   "models": [
     {
       "slug": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
       "description": "Stronger version of DeepSeek V4",
-      "identity": "DeepSeek V4 Pro",
+      "identity": "DeepSeek V4 Pro Preview",
       "priority": 20,
       "context_window": 1000000,
       "input_modalities": ["text"],
@@ -75,7 +43,7 @@
       "slug": "deepseek-v4-flash",
       "display_name": "DeepSeek V4 Flash",
       "description": "Cheaper version of DeepSeek V4",
-      "identity": "DeepSeek V4 Flash",
+      "identity": "DeepSeek V4 Flash Preview",
       "priority": 20,
       "context_window": 1000000,
       "input_modalities": ["text"],
@@ -160,7 +128,6 @@
       "supports_reasoning_summaries": true,
       "default_reasoning_summary": "none",
       "truncation_policy": {"mode": "bytes", "limit": 10000},
-      "supports_parallel_tool_calls": true,
       "comp_hash": "minimax-3"
     },
     {
@@ -173,6 +140,17 @@
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "comp_hash": "kimi-2.7"
+    },
+    {
+      "slug": "kimi-k3",
+      "display_name": "Kimi K3",
+      "description": "Kimi K3",
+      "identity": "Kimi K3 by Moonshot",
+      "priority": 20,
+      "context_window": 1048576,
+      "input_modalities": ["text", "image"],
+      "supported_reasoning_levels": ["high"],
+      "comp_hash": "kimi-3"
     }
   ]
 }

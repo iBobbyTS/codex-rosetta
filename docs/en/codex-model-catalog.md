@@ -100,17 +100,21 @@ own context, modalities, reasoning levels, and explicitly selected Codex catalog
 fields. MiniMax M3 additionally overrides reasoning-summary support, the default
 summary, byte-based truncation, and parallel tool calls in its preset.
 
-The preset resource's `shared_overrides` is pinned to the 28 identity-independent
-fields from the official `gpt-5.6-terra` catalog in Codex
-`0.145.0-alpha.20`. Identity, context, modalities, reasoning levels and their
-default, priority, `comp_hash`, and the identity-bearing instruction payloads
-remain model-specific or are materialized through the dedicated identity
-substitution path. Every key present in `shared_overrides` is also accepted on
-an individual `models[]` entry and takes precedence there. `template_slug`
-provides a forward-compatible fallback only for catalog fields that Rosetta
-does not yet recognize; a known field removed from the newer catalog is not
-silently inherited from an older template. This scoped snapshot does not by
-itself declare full Codex `0.145` compatibility.
+The preset resource's `shared_overrides` starts from the 24 client-consumed,
+identity-independent fields in the official Codex `0.145.0-alpha.20`
+`gpt-5.6-terra` catalog. It uses Terra as the reference Codex runtime surface,
+while targeting current flagship third-party models through Rosetta's Chat
+bridge. Shared values follow the Terra runtime surface unless Rosetta's fixed
+Responses Lite/Chat translation requires an intentional protocol-specific
+value. Identity, context, modalities,
+reasoning levels and their default, priority, `comp_hash`, and the
+identity-bearing instruction payloads remain model-specific or are materialized
+through the dedicated identity substitution path. Every key present in
+`shared_overrides` is also accepted on an individual `models[]` entry and takes
+precedence there. `template_slug` provides a forward-compatible fallback only
+for catalog fields that Rosetta does not yet recognize; known client-ignored or
+removed fields are not silently inherited from the template. This scoped
+snapshot does not by itself declare full Codex `0.145` compatibility.
 
 The bundled JSON uses 41 distinct keys. `ModelInfo` also accepts
 `effective_context_window_percent`, which all bundled entries omit and
@@ -125,11 +129,12 @@ Four keys exist in the bundled JSON but are not members of the current Rust
 - `prefer_websockets`;
 - `reasoning_summary_format`.
 
-They are marked **ignored in 0.144.4** below. Rosetta must not implement runtime
-protocol behavior from them unless a later Codex version starts consuming
-them. `used_fallback_model_metadata` is the inverse case: it is an internal
-`ModelInfo` runtime flag with deserialization disabled, so it is not a valid
-catalog input field.
+They are marked **ignored in 0.144.4** below. Rosetta omits them from generated
+third-party presets and explicitly blocks `template_slug` from restoring them.
+Rosetta must not implement runtime protocol behavior from them unless a later
+Codex version starts consuming them. `used_fallback_model_metadata` is the
+inverse case: it is an internal `ModelInfo` runtime flag with deserialization
+disabled, so it is not a valid catalog input field.
 
 ## Identity, discovery, and UI
 
@@ -143,8 +148,8 @@ catalog input field.
 | `supported_in_api` | boolean, `true` | Propagates into the model preset's API-support marker. | Set only when the exposed alias can actually be routed by Rosetta. This flag does not validate the upstream API. |
 | `availability_nux` | object or null, `{"message":"New model available."}` | Optional new-user-experience message shown when a model becomes available. | Usually `null` for private aliases. Never use it as a capability switch. |
 | `upgrade` | object or null, `{"model":"replacement","migration_markdown":"Use replacement."}` | Supplies a recommended replacement and migration message for an older model. | Use only for a deliberate alias migration. Keep upstream routing changes in Rosetta configuration, not in this UI hint. |
-| `available_in_plans` | string array, `["plus","team"]` | **Ignored in 0.144.4:** not present in `ModelInfo`. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
-| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in 0.144.4:** not present in `ModelInfo`. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
+| `available_in_plans` | string array, `["plus","team"]` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
+| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
 
 ## Reasoning, output, and service tiers
 
@@ -154,7 +159,7 @@ catalog input field.
 | `supported_reasoning_levels` | object array, `[{"effort":"low","description":"Fast"},{"effort":"high","description":"Deep"}]` | Populates selectable reasoning efforts and their UI descriptions. Current enums include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, subject to version changes. | Advertise only efforts that the upstream accepts or that Rosetta intentionally maps. Do not copy `ultra` merely to obtain delegation behavior. |
 | `supports_reasoning_summaries` | boolean, `false` | Allows Codex to request reasoning summaries. | Use `false` unless the upstream supports the request/response shape or Rosetta reliably converts or strips it. |
 | `default_reasoning_summary` | `"auto"`, `"concise"`, `"detailed"`, or `"none"` | Default summary mode when the user has not configured one. | Prefer `none` for third-party models until summary delivery is verified end to end. |
-| `reasoning_summary_format` | string, `"experimental"` | **Ignored in 0.144.4:** not present in `ModelInfo`. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
+| `reasoning_summary_format` | string, `"experimental"` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
 | `support_verbosity` | boolean, `true` | When true, Codex sends the configured or default Responses `text.verbosity`; when false it omits it. | Enable only when the upstream accepts it or Rosetta strips/maps it. |
 | `default_verbosity` | `"low"`, `"medium"`, `"high"`, or null | Default Responses verbosity when supported and not overridden by the user. | Use a value actually supported by the upstream. `null` is safest when `support_verbosity` is false. |
 | `service_tiers` | object array, `[{"id":"priority","name":"Fast","description":"Higher speed"}]` | Lists allowed service tiers for UI and subagent/model selection; requested tiers are validated against this list. | Keep empty unless the Rosetta provider maps the tier to a real upstream service class. |
@@ -179,16 +184,16 @@ catalog input field.
 | Field | Type and example | Codex behavior | Rosetta guidance |
 | --- | --- | --- | --- |
 | `shell_type` | `"default"`, `"local"`, `"unified_exec"`, `"disabled"`, or `"shell_command"` | Selects the Codex shell-tool family before feature/config overrides. Bundled models use `shell_command`. | Choose the tool form the third-party model can call reliably and that Rosetta maps. `disabled` is safer than advertising an unsupported command schema. |
-| `apply_patch_tool_type` | `"freeform"` or null | Non-null registers the custom/freeform `apply_patch` tool. | Use `freeform` only when the model produces stable patches and the selected Rosetta protocol preserves custom tool source and results. Otherwise use null. |
-| `tool_mode` | `"direct"`, `"code_mode"`, `"code_mode_only"`, or null | Selects direct native tools, a combination with Code Mode, or Code Mode only. Invalid selector strings deserialize to null. | Start weak tool callers on `direct`. Use `code_mode_only` only when the model reliably writes valid JavaScript for custom `exec`; use `code_mode` when both surfaces are intentionally supported. |
+| `apply_patch_tool_type` | `"freeform"` or null | Non-null registers the custom/freeform `apply_patch` tool. | Keep `freeform` for the Terra-compatible latest-model profile; Rosetta localizes custom/freeform calls for Chat upstreams. |
+| `tool_mode` | `"direct"`, `"code_mode"`, `"code_mode_only"`, or null | Selects direct native tools, a combination with Code Mode, or Code Mode only. Invalid selector strings deserialize to null. | Keep `code_mode_only` for the supported latest-model profile. Rosetta owns the Responses Lite/custom `exec` projection onto Chat. |
 | `experimental_supported_tools` | string array, `[]` | Enables named experimental tools known to the current client; current source uses it for narrow test/experimental gates. | Keep empty unless a specific Codex source version defines and Rosetta supports the named tool. |
 | `supports_parallel_tool_calls` | boolean, `false` | Allows parallel tool calls. Responses Lite additionally forces parallel calls off in its request shape. | `false` is the safe third-party default. Turn it on only after call IDs, result ordering, and history replay pass concurrent tests. |
-| `supports_search_tool` | boolean, `false` | Controls Codex namespace/tool discovery such as native `tool_search`; it is distinct from hosted `web_search` and standalone `web.run`. | Enable only after the client-visible discovery flow is tested. On Responses→Chat Code Mode routes, Rosetta separately projects request-local `ALL_TOOLS` search and exact read when the live `exec` description advertises deferred tools. Paired exact Node REPL reads authorize structured dispatcher calls converted back to `exec`; no Gateway namespace/discovery cache is retained. Configure hosted search in Tool Profiles and Modified `web.run` in the global Web Search settings. |
-| `web_search_tool_type` | `"text"` or `"text_and_image"` | Chooses the content types declared for hosted web search. | Use `text` unless image-search results are supported by both the client path and upstream. This does not configure Tavily credentials or `web.run` mapping. |
-| `use_responses_lite` | boolean, `false` | Enables Codex's Responses Lite dialect: tools/instructions may move into input items, internal headers are used, hosted tools are disabled, and standalone namespace tools are expected. | Set true only if Rosetta handles `input[].type="additional_tools"`, developer instructions, custom `exec`, standalone `/v1/alpha/search`, compact/header behavior, and the resulting stream. |
-| `multi_agent_version` | `"disabled"`, `"v1"`, `"v2"`, or null | Selects legacy multi-agent, collaboration v2, disabled, or feature/config fallback behavior. It affects tool definitions and subagent lifecycle. | Use `disabled` or null until the third-party model reliably completes the corresponding tool loop. Prefer v1 over v2 when collaboration-specific schemas are not stable for that model. |
+| `supports_search_tool` | boolean, `false` | Controls Codex namespace/tool discovery such as native `tool_search`; it is distinct from hosted `web_search` and standalone `web.run`. | Keep true for the Terra-compatible latest-model profile. On Responses→Chat Code Mode routes, Rosetta projects request-local `ALL_TOOLS` search and exact read when the live `exec` description advertises deferred tools. Paired exact Node REPL reads authorize structured dispatcher calls converted back to `exec`; no Gateway namespace/discovery cache is retained. Configure Modified `web.run` in the global Web Search settings. |
+| `web_search_tool_type` | `"text"` or `"text_and_image"` | For hosted `web_search`, `text` omits `search_content_types`; `text_and_image` sends `["text", "image"]`. Responses Lite suppresses hosted tools before this field is consulted. | Keep Terra's `text_and_image`. It is dormant on Rosetta's mandatory Responses Lite path: search uses standalone namespace `web.run`, and this field does not configure its provider or output modalities. |
+| `use_responses_lite` | boolean, `true` | Enables Codex's Responses Lite dialect: tools/instructions move into input items, internal headers are used, hosted tools are disabled, and standalone namespace tools are expected. | Keep true. Rosetta owns `input[].type="additional_tools"`, developer instructions, custom `exec`, standalone `/v1/alpha/search`, compact/header behavior, and stream conversion for Chat upstreams. |
+| `multi_agent_version` | `"disabled"`, `"v1"`, `"v2"`, or null | Selects legacy multi-agent, collaboration v2, disabled, or feature/config fallback behavior. It affects tool definitions and subagent lifecycle. | Keep `v2` for the Terra-compatible latest-model profile. Do not add weak-model downgrade presets to this catalog. |
 | `auto_review_model_override` | string or null, `"review-model"` | Redirects command-execution approval review from the selected model to another model. | Set to a Rosetta-exposed alias that is actually routable and suited to approval review. Keep null for ordinary models. |
-| `prefer_websockets` | boolean, `true` | **Ignored in 0.144.4:** not present in `ModelInfo`; WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
+| `prefer_websockets` | boolean, `true` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets, and WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
 
 ## Instructions and skills
 
@@ -254,34 +259,34 @@ the detected preset in any editable field, Admin marks the detection as
 modified; the panel's restore action names the detected preset and removes the
 override so the preset becomes authoritative again.
 
-### Recommended decisions for a third-party model
+### Required baseline for current third-party models
 
-| Capability | Safe starting value | Enable only after proving |
+This catalog targets current flagship third-party models, not weak-model
+fallbacks. Rosetta exposes one Terra-compatible client surface and translates
+its mandatory Responses Lite request shape to the configured Chat protocol.
+
+| Capability | Baseline | Meaning |
 | --- | --- | --- |
-| Tool surface | `tool_mode: "direct"`, conservative `shell_type` | The model emits the exact custom/code-mode payload if moving to `code_mode` or `code_mode_only`. |
-| Responses dialect | `use_responses_lite: false` | Additional tools, developer instructions, headers, custom `exec`, Search, compact, and stream continuation all survive Rosetta. |
+| Tool surface | `tool_mode: "code_mode_only"`, `apply_patch_tool_type: "freeform"` | Codex exposes the Terra Code Mode surface; Rosetta translates custom tools to Chat. |
+| Responses dialect | `use_responses_lite: true` | Additional tools, developer instructions, headers, custom `exec`, Search, compact, and stream continuation are Rosetta-owned compatibility behavior. |
 | Parallel calls | `supports_parallel_tool_calls: false` | Concurrent call IDs, result association, replay, and model behavior are stable. |
-| Collaboration | `multi_agent_version: "disabled"` or null | The model can call and recover across every tool in the selected v1/v2 namespace. |
-| Vision | `input_modalities: ["text"]`, `supports_image_detail_original: false` | Images and original detail survive the selected protocol and upstream. |
+| Collaboration | `multi_agent_version: "v2"` | Use the current collaboration namespace and lifecycle. |
+| Vision | Per-model `input_modalities`, shared `supports_image_detail_original: false` | Model entries declare whether image input is available; original-detail handling remains a protocol-specific shared choice. |
 | Reasoning summaries | `supports_reasoning_summaries: false`, `default_reasoning_summary: "none"` | Request mapping, streamed summaries, encrypted content, and later turns remain valid. |
-| Verbosity | `support_verbosity: false`, `default_verbosity: null` | The upstream accepts or Rosetta removes/maps Responses `text.verbosity`. |
-| Search discovery | `supports_search_tool: false`, `web_search_tool_type: "text"` | Namespace discovery, hosted search, and `web.run` are separately tested and configured. |
+| Verbosity | `support_verbosity: true`, `default_verbosity: "low"` | Preserve Terra's client behavior. The current Responses→Chat converter does not forward `text.verbosity`, so this is client-surface metadata until an upstream mapping is added. |
+| Search | `supports_search_tool: true`, `web_search_tool_type: "text_and_image"` | Responses Lite uses standalone `web.run`; the hosted-search type remains Terra-compatible but dormant. |
 | Context | Real provider limits, `auto_compact_token_limit: null` | Long sessions compact and resume before the upstream rejects the request. |
-| Compact compatibility | `comp_hash: null` | Two aliases truly share prompts, tools, compact history, and replay semantics. |
-| Patch editing | `apply_patch_tool_type: null` | The model and Rosetta reliably preserve freeform patch calls and error recovery. |
+| Compact compatibility | Per-model `comp_hash` | The upstream model name selects the reviewed compact-compatibility group. |
 
-For a new third-party model integration, prefer the current Codex tool surface
-when both choices can be supported reliably: prefer standalone namespace
-`web.run` over legacy hosted `web_search`, and collaboration v2 over legacy
-`multi_agent_v1`. Keep the older surface only for a model that cannot yet call
-the newer schema reliably. “Prefer newer” does not override the evidence gates
-above: start disabled, then enable the newer surface after its complete
-search/open or subagent lifecycle succeeds through Rosetta.
+For a new third-party model integration, preserve this surface and add only the
+model-specific identity, limits, modalities, reasoning levels, and `comp_hash`.
+Do not add `direct`, non-Lite, disabled collaboration, or hosted-search fallback
+profiles. A model that cannot use this surface is outside this catalog's scope.
 
-### Conservative third-party example
+### Current third-party example
 
-This example is intentionally a starting point, not a claim that every
-third-party model should use the same prompt or limits:
+The shared values below show the fixed Terra-compatible client surface; the
+identity, limits, modalities, reasoning levels, and hash remain model-specific:
 
 ```json
 {
@@ -297,8 +302,14 @@ third-party model should use the same prompt or limits:
   "visibility": "list",
   "supported_in_api": true,
   "priority": 20,
-  "additional_speed_tiers": [],
-  "service_tiers": [],
+  "additional_speed_tiers": ["fast"],
+  "service_tiers": [
+    {
+      "id": "priority",
+      "name": "Fast",
+      "description": "1.5x speed, increased usage"
+    }
+  ],
   "default_service_tier": null,
   "availability_nux": null,
   "upgrade": null,
@@ -307,25 +318,25 @@ third-party model should use the same prompt or limits:
   "include_skills_usage_instructions": false,
   "supports_reasoning_summaries": false,
   "default_reasoning_summary": "none",
-  "support_verbosity": false,
-  "default_verbosity": null,
-  "apply_patch_tool_type": null,
-  "web_search_tool_type": "text",
+  "support_verbosity": true,
+  "default_verbosity": "low",
+  "apply_patch_tool_type": "freeform",
+  "web_search_tool_type": "text_and_image",
   "truncation_policy": {"mode": "tokens", "limit": 10000},
   "supports_parallel_tool_calls": false,
   "supports_image_detail_original": false,
   "context_window": 128000,
   "max_context_window": 128000,
   "auto_compact_token_limit": null,
-  "comp_hash": null,
+  "comp_hash": "third-party-agent",
   "effective_context_window_percent": 90,
   "experimental_supported_tools": [],
   "input_modalities": ["text"],
-  "supports_search_tool": false,
-  "use_responses_lite": false,
+  "supports_search_tool": true,
+  "use_responses_lite": true,
   "auto_review_model_override": null,
-  "tool_mode": "direct",
-  "multi_agent_version": "disabled"
+  "tool_mode": "code_mode_only",
+  "multi_agent_version": "v2"
 }
 ```
 

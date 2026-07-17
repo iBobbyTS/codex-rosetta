@@ -17,6 +17,7 @@ from .config import _atomic_write_bytes, normalize_codex_settings
 from .model_presets import (
     MODEL_INFO_FIELDS,
     MODEL_PRESET_EXTRA_OVERRIDE_FIELDS,
+    MODEL_PRESET_IGNORED_CATALOG_FIELDS,
     MODEL_PRESET_LEGACY_FIELDS,
     MODEL_PRESET_TEMPLATE_FIELDS,
     load_model_preset_resource,
@@ -500,6 +501,7 @@ def _materialize_model_preset(
     explicit_fields = (
         MODEL_INFO_FIELDS
         | MODEL_PRESET_EXTRA_OVERRIDE_FIELDS
+        | MODEL_PRESET_IGNORED_CATALOG_FIELDS
         | MODEL_PRESET_LEGACY_FIELDS
         | MODEL_PRESET_TEMPLATE_FIELDS
         | frozenset(shared_overrides)
