@@ -54,6 +54,13 @@ def test_expected_contract_is_uniform_for_all_tasks() -> None:
         }
         assert isinstance(expected["plugin_guidance_expected"], bool)
         assert isinstance(expected["prohibited_fallbacks"], list)
+        if expected["capability_kind"] in {"mcp", "plugin_mcp"}:
+            assert expected["tool_discovery"]["route_surfaces"] == {
+                "responses_direct": "exec_runtime.ALL_TOOLS",
+                "responses_to_chat": (
+                    "tool_search -> tool_read -> invoke_deferred_tool"
+                ),
+            }
 
 
 def test_isolated_config_uses_selected_default_without_catalog_override(

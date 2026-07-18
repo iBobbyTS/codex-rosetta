@@ -90,9 +90,11 @@ runtime ALL_TOOLS -> nested tool`. On the Responses-to-Chat route, Rosetta must
 add fixed ordinary `tool_search`, `tool_read`, and `invoke_deferred_tool`
 Functions from the live deferred guidance; top-level Chat tools must remain
 byte-identical across search, read, and call. Search and read must each return
-to Codex as custom `exec` JavaScript.
-These archive fixtures are outside the Browser Node dispatcher allowlist, so the
-selected runtime tool is still invoked through raw `exec`. Codex places
-candidate metadata only in the V8 runtime, and the fixture's compact catalog
-output captures it without Gateway discovery state. Follow
+to Codex as custom `exec` JavaScript. A paired search and exact-name read must
+authorize the request-local archive `mcp__` name for the fixed
+`invoke_deferred_tool` Function; no discovered MCP declaration may be inserted
+as another top-level Chat tool. Node REPL remains on its original static
+projection while the archive fixture exercises the generic MCP projection.
+Codex places candidate metadata only in the V8 runtime, and search/read history
+is the Gateway's sole authorization source. Follow
 [`EVALUATION.md`](EVALUATION.md) for structural evidence and result fields.

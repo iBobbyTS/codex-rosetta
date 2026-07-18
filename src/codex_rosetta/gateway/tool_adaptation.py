@@ -28,7 +28,7 @@ from .code_mode_projection import (
     all_tools_search_definition,
     build_exec_script,
     discovered_all_tools_search_names,
-    discovered_node_repl_exec_tools,
+    discovered_deferred_exec_tools,
     exec_tool_section_names,
     exec_tool_projections_for_route,
     plan_exec_tool_definitions,
@@ -406,7 +406,7 @@ def localize_code_editing_chat_request(
         adapted[READ_OUTPUT_CACHE_KEY] = read_cache
         messages = localized_messages
 
-    discovered = discovered_node_repl_exec_tools(messages)
+    discovered = discovered_deferred_exec_tools(messages)
     discovered_search_names = discovered_all_tools_search_names(messages)
     requested_projections = dict(exec_projections or {})
 
@@ -512,6 +512,12 @@ def _configure_deferred_tool_projections(
     )
     blocked_names = tuple(
         name for name in NODE_REPL_TOOL_NAMES if name in existing_names
+    ) + tuple(
+        sorted(
+            name
+            for name in existing_names
+            if name.startswith("mcp__") and name not in NODE_REPL_TOOL_NAMES
+        )
     )
 
     search_projection = active_projections.get(ALL_TOOLS_SEARCH_CHAT_NAME)
@@ -535,9 +541,7 @@ def _configure_deferred_tool_projections(
             )
 
     authorized_names = tuple(
-        name
-        for name in NODE_REPL_TOOL_NAMES
-        if name in discovered_projections and name not in existing_names
+        name for name in discovered_projections if name not in existing_names
     )
     dispatch_projection = active_projections.get(DEFERRED_TOOL_DISPATCH_CHAT_NAME)
     if dispatch_projection is not None:

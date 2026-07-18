@@ -8,14 +8,18 @@
   "catalog_exposure": {
     "context_sections": [
       "exec_description.ALL_TOOLS_contract",
-      "exec_runtime.ALL_TOOLS_catalog"
+      "route_specific.deferred_catalog"
     ],
     "candidate_order": ["add_integers", "get_archive_proof", "normalize_color"],
     "target_description_contains": ["archive", "proof"]
   },
   "body_access": "not_applicable",
   "tool_discovery": {
-    "surface": "exec_runtime.ALL_TOOLS",
+    "surface": "route_specific.deferred_discovery",
+    "route_surfaces": {
+      "responses_direct": "exec_runtime.ALL_TOOLS",
+      "responses_to_chat": "tool_search -> tool_read -> invoke_deferred_tool"
+    },
     "target_name_contains": "get_archive_proof",
     "plugin_provenance": null
   },

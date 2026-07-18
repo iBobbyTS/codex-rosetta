@@ -475,10 +475,8 @@ def build_exec_script(
     if projection.input_mode == "deferred_dispatch":
         name = arguments.get("name")
         nested_arguments = arguments.get("arguments")
-        if not isinstance(name, str) or name not in NODE_REPL_TOOL_NAMES:
-            raise ValueError(
-                "invoke_deferred_tool name must be an allowlisted deferred tool"
-            )
+        if not isinstance(name, str) or not name.startswith("mcp__") or len(name) > 512:
+            raise ValueError("invoke_deferred_tool name must be an MCP deferred tool")
         if name not in projection.authorized_names:
             raise ValueError(
                 f"invoke_deferred_tool has no valid paired tool_read authorization "
@@ -486,7 +484,13 @@ def build_exec_script(
             )
         if not isinstance(nested_arguments, dict):
             raise ValueError("invoke_deferred_tool arguments must be a JSON object")
-        return build_exec_script(_NODE_REPL_EXEC_PROJECTIONS[name], nested_arguments)
+        nested_projection = _NODE_REPL_EXEC_PROJECTIONS.get(name) or ExecToolProjection(
+            item_id=f"deferred.{name}",
+            chat_name=name,
+            nested_name=name,
+            output_mode="mcp_content",
+        )
+        return build_exec_script(nested_projection, nested_arguments)
     if projection.input_mode == "freeform":
         value = arguments.get(projection.input_field)
         if not isinstance(value, str):
@@ -505,7 +509,13 @@ def build_exec_script(
                 f"{list(projection.allowed_detail_values)}"
             )
     literal = _javascript_json_literal(nested_input)
-    invocation = f"const result = await tools.{projection.nested_name}({literal});\n"
+    tool_reference = (
+        f"tools[{_javascript_json_literal(projection.nested_name)}]"
+        if projection.item_id.startswith("deferred.")
+        and projection.nested_name not in NODE_REPL_TOOL_NAMES
+        else f"tools.{projection.nested_name}"
+    )
+    invocation = f"const result = await {tool_reference}({literal});\n"
     if projection.output_mode == "mcp_content":
         return (
             invocation
@@ -630,19 +640,23 @@ def all_tools_read_definition(
 
 
 def deferred_tool_dispatch_definition() -> dict[str, Any]:
-    """Build the fixed allowlisted deferred-tool dispatcher definition."""
+    """Build the fixed history-authorized MCP dispatcher definition."""
     return {
         "type": "function",
         "function": {
             "name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
             "description": (
-                "Invoke an allowlisted deferred tool whose complete declaration was "
+                "Invoke an MCP deferred tool whose complete declaration was "
                 "returned by a paired tool_read call in this conversation."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string", "enum": list(NODE_REPL_TOOL_NAMES)},
+                    "name": {
+                        "type": "string",
+                        "pattern": "^mcp__",
+                        "maxLength": 512,
+                    },
                     "arguments": {
                         "type": "object",
                         "description": (
@@ -817,13 +831,11 @@ def _build_all_tools_read_script(
 
     name_literal = _javascript_json_literal(name)
     protocol_literal = _javascript_json_literal(ALL_TOOLS_READ_RESULT_PROTOCOL)
-    dispatch_names_literal = _javascript_json_literal(list(NODE_REPL_TOOL_NAMES))
     blocked_names_literal = _javascript_json_literal(list(blocked_names))
     dispatch_guidance_literal = _javascript_json_literal(include_dispatch_guidance)
     return f"""const name = {name_literal};
 const resultProtocol = {protocol_literal};
 const maxResultChars = {ALL_TOOLS_SEARCH_MAX_RESULT_CHARS};
-const dispatchNames = new Set({dispatch_names_literal});
 const blockedDispatchNames = new Set({blocked_names_literal});
 const includeDispatchGuidance = {dispatch_guidance_literal};
 const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];
@@ -846,7 +858,7 @@ const entry = entries[0];
 let description = String(entry.description ?? "");
 if (
   includeDispatchGuidance &&
-  dispatchNames.has(name) &&
+  name.startsWith("mcp__") &&
   !blockedDispatchNames.has(name)
 ) {{
   description += "\\n\\nInvoke this tool with `invoke_deferred_tool`: set `name` to\\n" +
@@ -937,17 +949,32 @@ def _valid_all_tools_search_result(
     return True
 
 
-def discovered_node_repl_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
-    """Recover validated Node REPL definitions from paired search/read history."""
+def discovered_deferred_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
+    """Recover validated deferred MCP definitions from paired search/read history."""
     if not isinstance(messages, list):
         return DiscoveredExecToolPlan(definitions={}, projections={})
 
-    candidates = node_repl_exec_projections()
     searched_names = frozenset(discovered_all_tools_search_names(messages))
+    candidate_names = frozenset(
+        name for name in searched_names if name.startswith("mcp__") and len(name) <= 512
+    )
+    candidates = node_repl_exec_projections()
+    candidates.update(
+        {
+            name: ExecToolProjection(
+                item_id=f"deferred.{name}",
+                chat_name=name,
+                nested_name=name,
+                output_mode="mcp_content",
+            )
+            for name in candidate_names
+            if name not in candidates
+        }
+    )
     read_matches, _ = _latest_node_repl_read_matches(
         messages,
         read_calls=_all_tools_read_calls(messages),
-        candidate_names=frozenset(candidates) & searched_names,
+        candidate_names=candidate_names,
     )
     definitions: dict[str, dict[str, Any]] = {}
     projections: dict[str, ExecToolProjection] = {}
@@ -962,6 +989,11 @@ def discovered_node_repl_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
         definitions=definitions,
         projections=projections,
     )
+
+
+def discovered_node_repl_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
+    """Return deferred MCP projections under the legacy Node REPL API name."""
+    return discovered_deferred_exec_tools(messages)
 
 
 def _latest_node_repl_read_matches(
@@ -1548,6 +1580,7 @@ __all__ = [
     "all_tools_search_definition",
     "build_exec_script",
     "deferred_tool_dispatch_definition",
+    "discovered_deferred_exec_tools",
     "discovered_node_repl_exec_tools",
     "exec_tool_section_names",
     "exec_tool_projections_for_route",
