@@ -1,4 +1,6 @@
-# Codex v0.144.4 Scoped Reference Review
+# Codex Catalog Reference Review
+Date: 2026-07-14
+Codex version: 0.144.0
 
 Status: **Pending / not approved**. This report records the exact 0.144.4
 release source, the source-contract changes reviewed in this worktree, and the

@@ -97,6 +97,9 @@ multi_agent_v1-spawn_agent
 
 插件、延迟、MCP 资源、上下文预算、权限和 Agent Job 工具都由 Codex 按条件装配。在普通工具模式中它们是顶层 Function；在 Code Mode Only 中，除 `new_context` 外，下面满足条件的工具都会嵌套到 `exec`。
 
+下表是面向用户的行为参考，不是版本升级记录。源码审查和版本采用以
+[开发者兼容性 checklist（英文）](../../dev/version-compatibility/upgrade-checklist.md)为准。
+
 | 工具 | Codex 0.144.4 暴露条件 |
 |---|---|
 | `wait_for_environment` | 启用仍在开发的 `deferred_executor` Feature。 |

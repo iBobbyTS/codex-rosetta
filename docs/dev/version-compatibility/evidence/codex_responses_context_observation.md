@@ -1,6 +1,12 @@
-# Codex Responses Context Observation - 2026-07-06
+# Codex Responses Context Observation
+Date: 2026-07-06
+Codex version: 0.144.0
 
 Observed with Codex Desktop / CLI version `0.142.5` on 2026-07-06.
+
+This is historical runtime evidence for the version-compatibility ledger. It is
+not a current compatibility claim; current ownership, limitations, and upgrade
+gates are recorded in [`../compatibility-points.md`](../compatibility-points.md).
 
 ## Summary
 

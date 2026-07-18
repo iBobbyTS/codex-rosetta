@@ -260,24 +260,17 @@ in `docs/dev/README.md`.
   adopted Codex release at `r0` and increment `rN` only for Rosetta-only fixes.
   Keep the `rN` spelling in source; Python package metadata may normalize it to
   the equivalent PEP 440 `.postN` form.
+- `docs/dev/version-compatibility/` is the sole owner of Codex upgrade
+  procedures, compatibility points, source ownership, evidence, and reports.
+  Do not maintain a second checklist elsewhere.
 - Before changing a Codex-facing request, response, stream, tool, session, or
-  model-catalog behavior, read `docs/dev/version-compatibility/README.md` and
-  `docs/dev/version-compatibility/compatibility-points.md`.
-- Every Codex version update requires a source-contract review and the tests in
-  `docs/dev/version-compatibility/upgrade-checklist.md`. Record the new CLI version,
-  Codex source commit, reviewed contract changes, test results, and any accepted
-  gaps before claiming compatibility.
-- During normal development, every Codex-specific compatibility point must be
-  recorded in `docs/dev/version-compatibility/compatibility-points.md` with both its
-  automatable checks and the real Codex/API tests required when triggered.
-- For a Codex upgrade, first record the previous source commit, then update
-  `../openai-codex-src` with a fast-forward-only pull. Classify every recorded
-  compatibility point as high-confidence unchanged, possibly unchanged, or
-  changed; contract-group output alone is not the final per-point report.
-- Run all automatable checks. Every possibly-unchanged or changed compatibility
-  point requires a real Codex/API test before the upgrade can be accepted.
-- Only after repairs and all required tests pass, update the Codex-Rosetta
-  package version to the target Codex release version and record the exact
-  source commit as the second compatibility identifier.
-- When a Codex-specific compatibility point is added, changed, or removed,
-  update the compatibility ledger and upgrade checklist in the same task.
+  model-catalog behavior, read that directory's `README.md`,
+  `rosetta-source-map.md`, `compatibility-points.md`, and
+  `upgrade-checklist.md`.
+- The developer selects routine versus full inventory review. Every Codex
+  version update must follow the selected workflow, produce a report, and
+  satisfy all triggered automation and real Codex/API gates before compatibility
+  or a package-version advance can be claimed.
+- During normal development, add, change, or retire Codex-specific points and
+  their code/test owners in the centralized ledger and source map in the same
+  task.

@@ -1,8 +1,13 @@
-# Codex File Editing Toolset Research - 2026-07-06
+# Codex File Editing Toolset Research
+Date: 2026-07-06
+Codex version: 0.144.0
 
 This note records the Codex file-editing tool surface observed while designing
 open-model tool localization for Codex. It complements
-`open_model_file_editing_tool_localization.md`.
+[`../../sdk_ir/open_model_file_editing_tool_localization.md`](../../sdk_ir/open_model_file_editing_tool_localization.md).
+It is historical source evidence, not a current compatibility claim; the
+maintained tool contract and upgrade gates live in
+[`../compatibility-points.md`](../compatibility-points.md).
 
 ## Snapshot
 

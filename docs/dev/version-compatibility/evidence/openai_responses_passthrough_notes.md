@@ -1,9 +1,14 @@
 # OpenAI Responses Passthrough Notes
+Date: 2026-07-06
+Codex version: 0.144.0
 
 This note records Responses API fields and event details that codex-rosetta has
 already had to preserve while converting through IR. It exists so future
 cross-protocol conversions into Responses do not need to rediscover the same
 Responses-specific behavior.
+
+This supporting contract note is subordinate to the maintained compatibility
+point list in [`../compatibility-points.md`](../compatibility-points.md).
 
 ## Scope
 

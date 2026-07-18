@@ -33,8 +33,9 @@ python -m build
 
 Install the wheel into a clean Python 3.14.6 virtual environment, then verify the
 core import and `codex-rosetta-gateway --version`.
-Complete any real Codex/API tests triggered by the version-compatibility
-checklist before claiming compatibility.
+Complete every real Codex/API gate triggered by the authoritative
+[`version-compatibility checklist`](version-compatibility/upgrade-checklist.md)
+before claiming compatibility.
 
 ## Create and roll back the release
 

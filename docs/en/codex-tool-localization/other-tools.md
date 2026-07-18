@@ -101,6 +101,10 @@ For Responses-to-Responses routes, namespace tools stay in their native Response
 
 Plugin, deferred, MCP-resource, context-budget, permission, and Agent Job tools are assembled conditionally by Codex. In normal tool mode they are top-level Functions; in Code Mode Only, every item below except `new_context` is nested in `exec` when its condition is satisfied.
 
+This table is a user-facing behavior reference, not an upgrade record. Source
+review and version adoption use the
+[developer compatibility checklist](../../dev/version-compatibility/upgrade-checklist.md).
+
 | Tools | Codex 0.144.4 exposure condition |
 |---|---|
 | `wait_for_environment` | The under-development `deferred_executor` Feature is enabled. |
