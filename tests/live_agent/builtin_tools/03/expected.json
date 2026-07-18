@@ -1,19 +1,17 @@
 {
   "id": "03",
   "timeout_seconds": 120,
-  "success_marker": "RESULT:LOCALIZED_FILES_OK",
-  "failure_marker": "RESULT:LOCALIZED_FILES_FAILED",
-  "expected_model_facing_pattern": {
-    "Glob": 1,
-    "Grep": 1,
-    "Read": 1,
-    "apply_patch": 0,
-    "Edit": 2,
-    "Write": 1
-  },
-  "expected_native_pattern": {
-    "nested_exec_command_calls_min": 3,
-    "apply_patch_semantic_calls_min": 3,
+  "success_marker": "RESULT:FILE_EDIT_OK",
+  "failure_marker": "RESULT:FILE_EDIT_FAILED",
+  "route_tool_observations": {
+    "openai_chat": {
+      "localized_tools_to_check": ["Glob", "Grep", "Read", "Edit", "Write"],
+      "model_facing_apply_patch_expected": false
+    },
+    "openai_responses": {
+      "native_apply_patch_to_check": true,
+      "localized_tools_expected": false
+    },
     "model_selected_shell_calls_max": 0,
     "gateway_log_evidence_required": true
   },

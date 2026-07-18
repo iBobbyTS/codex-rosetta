@@ -22,25 +22,17 @@ child state from one scenario must not satisfy another scenario.
 
 ## Required Codex configuration
 
-Run the exact case-sensitive provider identities `custom` and `OpenAI` while
-keeping the isolated Rosetta localhost `base_url`. Define each identity as a
-custom provider entry whose display name exactly matches its ID. Codex compares
-the display name to `OpenAI` case-sensitively, so do not use `openai`, `OPENAI`,
-or any other spelling for the OpenAI matrix column.
+Use the local-mode Provider ID `codex_rosetta` with the exact case-sensitive
+display name `OpenAI` while keeping the isolated Rosetta localhost `base_url`.
+Do not define `custom`, `OpenAI`, or any other suite-specific Provider ID, and
+do not use `openai`, `OPENAI`, or another display-name spelling.
 
-Use these two shapes in separate runs:
-
-```toml
-model_provider = "custom"
-
-[model_providers.custom]
-name = "custom"
-```
+Use this shape for every run:
 
 ```toml
-model_provider = "OpenAI"
+model_provider = "codex_rosetta"
 
-[model_providers.OpenAI]
+[model_providers.codex_rosetta]
 name = "OpenAI"
 ```
 
@@ -58,14 +50,14 @@ Do not enable or test legacy `multi_agent_v1` in this suite.
 
 ## Provider matrix
 
-Run every provider/model/task combination:
+Run every model/task combination:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
 | `gpt-5.6-sol` (default GPT) | `GPT中转站` | direct OpenAI Responses |
 | `deepseek-v4-flash` (default third-party text) | `DeepSeek` | Responses-to-Chat conversion |
 
-Every provider/model/task cell requires its own timestamp run root, Codex home,
+Every model/task cell requires its own timestamp run root, Codex home,
 copied Gateway configuration, port, and Gateway Logs trace. Confirm the actual
 upstream model from Gateway Logs.
 

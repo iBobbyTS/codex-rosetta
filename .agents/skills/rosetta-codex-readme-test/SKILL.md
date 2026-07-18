@@ -27,12 +27,22 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
   `expected.json` before configuring the run. Feature flags, provider
   identities, task order, and result fields live there rather than in this
   skill. Suites may define capability roles and default model choices, but must
-  not require a CLI model override or a custom Codex model catalog.
+  not require a CLI model override for an ordinary cell.
+- Check the task's runner and auth prerequisites before creating a CLI cell.
+  If a suite requires an app-server orchestrator, GUI Browser, or a Codex auth
+  path unavailable to the isolated local-mode bearer Provider, follow its
+  explicit unsupported classification. Do not force it through `codex exec`
+  and attribute the missing surface to the model.
 - Unless the suite explicitly tests a different capability role, use
   `gpt-5.6-sol` as the native GPT shape reference, `deepseek-v4-flash` for
   third-party non-multimodal cells, and `mimo-v2.5` for third-party multimodal
   cells. Put the selected default in the isolated `config.toml`; do not force
-  it with `codex exec -m` and do not inject `model_catalog_json`.
+  it with `codex exec -m`.
+- Prefer the gateway's local mode for CLI live suites. Let it generate and own
+  the isolated `model_catalog.json`, root `model_catalog_json`, and managed
+  Provider. Use Provider ID `codex_rosetta` with the exact case-sensitive
+  display name `OpenAI`. Do not define suite-specific provider IDs or any
+  provider whose display name is `openai`, `custom`, or another spelling.
 - Use `tmp/agent_testing_workspace/YYYYMMDDHHMM` as the runtime root, with
   local time.
 - Use `/Volumes/RAMDisk/YYYYMMDDHHMM` as the macOS Gateway Logs root.
@@ -120,19 +130,19 @@ exists, stop and use another unused minute rather than adding a suffix.
 
 5. Create `RUN_ROOT/codex_home/config.toml` pointing to the isolated gateway.
    Use a client API key from the copied gateway config as the bearer token, but
-   never include that value in reports. Use the model, provider identity,
+   never include that value in reports. Use the model, fixed Provider identity,
    feature flags, and any diagnostic limits required by the selected suite's
-   own guide. A generic custom-provider shape is:
+   own guide. Seed the managed local-mode Provider shape as:
 
    ```toml
-   model_provider = "<provider-id>"
+   model_provider = "codex_rosetta"
    model = "<default-model>"
    sandbox_mode = "danger-full-access"
    approval_policy = "never"
    model_reasoning_effort = "medium"
 
-   [model_providers.<provider-id>]
-   name = "<provider-display-name>"
+   [model_providers.codex_rosetta]
+   name = "OpenAI"
    wire_api = "responses"
    requires_openai_auth = true
    base_url = "http://127.0.0.1:<port>/v1"
@@ -151,7 +161,8 @@ exists, stop and use another unused minute rather than adding a suffix.
 
    ```bash
    codex-rosetta-gateway --config "$RUN_ROOT/gateway" --codex-home "$RUN_ROOT/codex_home" \
-     --host 127.0.0.1 --port 18765 --no-banner \
+     --host 127.0.0.1 --port 18765 --no-banner --local-mode \
+     --confirm-clear-existing-catalog \
      >"$RUN_ROOT/gateway/stdout.log" 2>"$RUN_ROOT/gateway/stderr.log" &
    GATEWAY_PID=$!
    printf '%s\n' "$GATEWAY_PID" >"$RUN_ROOT/gateway/pid"
@@ -198,26 +209,28 @@ Use three bounded evidence sources:
    Disk. Filter by model, request id, thread id, and timestamp.
 
 For every upstream request in the run, inspect its usage record. Do not
-calculate or report a prompt-cache hit rate. For every non-first request,
-calculate this signed adjacent-request delta:
+calculate or report a prompt-cache hit rate. Group interleaved parent and child
+requests by conversation or prompt-cache key before choosing an adjacent
+request. For every non-first request in that group, calculate exactly this
+signed adjacent-request delta:
 
 ```text
 current.cached_input_tokens
 - (previous.input_tokens
-   + previous.output_tokens
-   + other tokens added between the two requests that are actually carried
-     into the current conversation, if any)
+   + previous.output_tokens)
 ```
 
-Derive any additional carried-token term from the actual adjacent request
-bodies instead of guessing it. Examples may include tool results, injected
-conversation items, compaction output, or other content appended after the
-previous response and retained in the current request. State each included
-component and avoid double counting tokens already represented by the previous
-input or output totals. Record the current request id, the previous request's
-input and output tokens, every additional carried-token component, the current
-cached input tokens, and the computed signed delta. The first request has no
-adjacent-request delta and should be recorded only as the baseline usage.
+Do not add a separate carried-token term. Tool results, injected conversation
+items, compaction output, and other new content belong in the bounded body
+comparison, not in the arithmetic. Record the current request id, the previous
+request's input and output tokens, the current cached input tokens, and the
+computed signed delta. The first request has no adjacent-request delta and
+should be recorded only as the baseline usage.
+
+The previous output is already subtracted by this formula. It is still useful
+to decompose a negative result algebraically: if current cached input is 82
+tokens below previous input and previous output is 1,463 tokens, the delta is
+`-82 - 1463 = -1545`. This explanation does not subtract output a second time.
 
 When the absolute delta is greater than 200 tokens, inspect the bounded actual
 request content and explain the cause. At minimum compare the prompt-cache key,
@@ -231,6 +244,13 @@ unexplained discontinuity must be called out instead of silently omitted.
 Compare the evidence with `worktree/expected.json` and apply the field meanings
 and output schema defined by the selected suite's README/EVALUATION guide. Do
 not infer a suite-specific pass condition from this skill.
+
+For compaction suites, inspect the Gateway request-log profile in addition to
+stream tracing. Rosetta may recognize a valid in-band trigger and return its
+compaction response before the normal stream-trace request stage; a bounded
+profile containing `compaction_mode` and `compaction_reason`, combined with
+mapping or native-item persistence and installed follow-up evidence, is not a
+rollout-only signal.
 
 For `context_compaction_summary_quality`, read canonical expected facts from
 the suite root, not the isolated worktree, and verify the two model cells use
@@ -261,19 +281,19 @@ credential-free.
 
 ## Real Provider Matrix
 
-When a suite guide requests a provider/model matrix, create a separate
-timestamp run root for every model, provider identity, and task. Never reuse a
-Codex home, copied gateway config, process state, or workspace across cells.
+When a suite guide requests a model matrix, create a separate timestamp run
+root for every model and task. Never reuse a Codex home, copied gateway config,
+process state, or workspace across cells.
 
 For every cell, record:
 
-- model, provider identity, and task id;
+- model, fixed `codex_rosetta`/`OpenAI` provider identity, and task id;
 - Codex exit status and exact final marker;
 - thread id and rollout path;
 - Rosetta trace path and observed upstream model;
 - terminal stream shape and any warning that changes interpretation;
 - per-request input/output/cached-input tokens, each non-first request's signed
-  adjacent-request cache delta (including itemized additional carried tokens),
+  adjacent-request cache delta,
   and the bounded request-content analysis required when its absolute value is
   greater than 200;
 - every additional measurement required by the suite guide.

@@ -50,11 +50,11 @@ Write `artifacts/evaluation.json` with this shape:
 
 ```json
 {
-  "classification": "success | success with deviations | failure",
+  "classification": "success | success with deviations | failure | runner_auth_not_supported",
   "task_id": "01",
   "target_scope": "image_generation_then_view_image",
   "model": "Codex-facing model alias",
-  "provider_identity": "isolated provider id",
+  "provider_identity": "codex_rosetta",
   "provider_display_name": "OpenAI",
   "upstream_model": "model proven by Gateway Logs",
   "thread_id": "Codex thread id",
@@ -65,6 +65,7 @@ Write `artifacts/evaluation.json` with this shape:
     "visual_recognition": "passed",
     "vision_capable_model": true,
     "image_generation_profile_configured": true,
+    "codex_image_generation_auth_gate": "passed | runner_auth_not_supported",
     "evidence": ["bounded references to prior or current prerequisite evidence"]
   },
   "result_prefix_observed": true,

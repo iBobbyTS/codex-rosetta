@@ -1,22 +1,18 @@
-Test the complete localized file-tool workflow. Perform these operations in
-order using the exact named tools:
+Modify the files under `fixtures` so the workspace has exactly these outcomes:
 
-1. Call `Glob` with pattern `fixtures/*.txt`. Require both
-   `fixtures/alpha.txt` and `fixtures/beta.txt` in the result.
-2. Call `Grep` for `ROSETTA_EDIT_TARGET` under `fixtures` with
-   `output_mode` set to `content`. Require a match in `fixtures/alpha.txt`.
-3. Call `Read` on `fixtures/alpha.txt`. Require the complete line
-   `status=original`.
-4. Call `Edit` on `fixtures/beta.txt`, replacing the exact complete line
-   `status=unchanged` with `status=patched`. Do not use `replace_all`.
-5. Call `Edit` on `fixtures/alpha.txt`, replacing the exact complete line
-   `status=original` with `status=edited`. Do not use `replace_all`.
-6. Call `Write` to create `fixtures/created.txt` with exact content
-   `CREATED_BY_WRITE` followed by one newline.
+1. Discover the existing `.txt` fixtures and locate the file containing
+   `ROSETTA_EDIT_TARGET`.
+2. Inspect the relevant files before editing them.
+3. In `fixtures/alpha.txt`, replace the complete line `status=original` with
+   `status=edited`.
+4. In `fixtures/beta.txt`, replace the complete line `status=unchanged` with
+   `status=patched`.
+5. Create `fixtures/created.txt` with exact content `CREATED_BY_WRITE` followed
+   by one newline.
 
-Do not use shell commands, Python, or any other file tools as substitutes.
-Attempt all six calls in order; if one fails,
-do not repair the workspace through a fallback.
+Choose the available file discovery, search, read, and edit tools appropriate
+to the active protocol. Do not use shell commands or Python to inspect or
+modify the files. Do not change any other file.
 
-If all six calls succeed, reply with only `RESULT:LOCALIZED_FILES_OK`.
-Otherwise reply with only `RESULT:LOCALIZED_FILES_FAILED`.
+If every required workspace outcome is satisfied, reply with only
+`RESULT:FILE_EDIT_OK`. Otherwise reply with only `RESULT:FILE_EDIT_FAILED`.

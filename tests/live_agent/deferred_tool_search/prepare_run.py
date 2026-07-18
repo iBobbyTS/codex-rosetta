@@ -66,11 +66,11 @@ def _write_json(path: Path, value: Any) -> None:
 
 
 def _build_codex_config(
-    *, model: str, provider_id: str, client_key: str, port: int, worktree: Path
+    *, model: str, client_key: str, port: int, worktree: Path
 ) -> str:
-    """Build an isolated config without forcing a custom model catalog."""
+    """Build the isolated seed config used before local-mode startup."""
     config_lines = [
-        f"model_provider = {_toml_string(provider_id)}",
+        'model_provider = "codex_rosetta"',
         f"model = {_toml_string(model)}",
         'sandbox_mode = "danger-full-access"',
         'approval_policy = "never"',
@@ -82,8 +82,8 @@ def _build_codex_config(
         "[skills]",
         "include_instructions = true",
         "",
-        f"[model_providers.{provider_id}]",
-        'name = "openai"',
+        "[model_providers.codex_rosetta]",
+        'name = "OpenAI"',
         'wire_api = "responses"',
         "requires_openai_auth = true",
         f'base_url = "http://127.0.0.1:{port}/v1"',
@@ -242,10 +242,8 @@ def main() -> None:
     if not isinstance(client_key, str) or not client_key:
         raise ValueError("copied gateway config has no usable client key")
 
-    provider_id = "deferred-tool-test"
     codex_config = _build_codex_config(
         model=args.model,
-        provider_id=provider_id,
         client_key=client_key,
         port=args.port,
         worktree=run_root / "worktree",

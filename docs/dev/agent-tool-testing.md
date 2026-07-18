@@ -51,10 +51,12 @@ The Namespace-tools suite is
 [`tests/live_agent/namespace_tools`](../../tests/live_agent/namespace_tools/README.md).
 It gives the agent a fixed sequence of direct calls to `clock.curr_time`,
 `memories.list`, and `skills.list`. It tests Namespace exposure,
-Responses-to-Chat flattening/restoration, and local tool execution rather than
-planning quality. The suite enables `current_time_reminder` and `memories`,
-seeds an isolated memory root, and treats an unavailable app-server
-orchestrator skill provider as a real `skills` Namespace failure.
+Responses-to-Chat flattening/restoration, and tool execution rather than
+planning quality. The suite enables `current_time_reminder`, `memories`, and
+orchestrator skills and seeds an isolated memory root. It requires an app-server
+orchestrator runner with no attached local execution environment because Codex
+suppresses orchestrator-owned skills for local `codex exec` threads. Until that
+runner exists, report `runner_not_supported`, not a model or conversion failure.
 
 The capability-exposure suite is
 [`tests/live_agent/deferred_tool_search`](../../tests/live_agent/deferred_tool_search/README.md).
@@ -99,18 +101,17 @@ scenario, but each task has exactly one core Function so failures remain
 attributable. The suite enables `multi_agent_v2` and evaluates canonical child
 paths, mailbox delivery, idle-agent follow-up, completion notifications, and
 resident state after interruption. It measures tool-call behavior rather than
-delegation judgment or subagent answer quality. Its provider matrix uses exact
-case-sensitive IDs and display names `custom` and `OpenAI`; lowercase `openai`
-does not satisfy the OpenAI identity cell.
+delegation judgment or subagent answer quality. Every cell uses local-mode
+Provider ID `codex_rosetta` with display name exactly `OpenAI`.
 
 The built-in Code Mode suite is
 [`tests/live_agent/builtin_tools`](../../tests/live_agent/builtin_tools/README.md).
-It fixes the provider display name to `OpenAI`, uses `gpt-5.6-sol` as the
-reference model shape without injecting a catalog, then exercises a yielded
+It fixes the local-mode Provider ID to `codex_rosetta` and display name to
+`OpenAI`, uses `gpt-5.6-sol` as the reference model shape, then exercises a yielded
 `exec` cell through top-level `wait`, two projected `update_plan` calls, one
-grouped localized file workflow
-(`Glob`, `Grep`, `Read`, two `Edit` calls, and create-file `Write`) where
-`apply_patch` remains model-hidden, projected `view_image`, and one grouped
+protocol-neutral file workflow whose Chat run records natural selection of
+`Glob`, `Grep`, `Read`, `Edit`, and `Write` while its direct GPT run records
+native `apply_patch` selection, projected `view_image`, and one grouped
 `get_goal`/`create_goal`/`update_goal` lifecycle. A separate visual-recognition
 task verifies that projected `view_image` returns real image content to a
 vision-capable upstream model rather than only proving that Codex can open the
@@ -124,14 +125,18 @@ the exact scene `草坪上一只狗在跑`, uses the saved result path for one p
 `view_image` call, and asks the tested model for a one-sentence Chinese visual
 description. The outer developer or development agent, not the tested model,
 decides whether that description contains a dog, grass or a lawn, and running.
-The suite also requires a Profile-configured OpenAI-compatible Images endpoint;
-it does not measure artistic quality.
+The suite also requires a Profile-configured OpenAI-compatible Images endpoint
+and a Codex auth path that passes the standalone image-generation runtime gate.
+An ordinary local-mode `experimental_bearer_token` does not pass that gate; use
+`runner_auth_not_supported` rather than attributing the missing declaration to
+the model. The suite does not measure artistic quality.
 
 Across these live suites, the defaults are `gpt-5.6-sol` for native GPT and
 shape reference, `deepseek-v4-flash` for third-party text/tool tests, and
 `mimo-v2.5` for third-party multimodal tests. The isolated `config.toml` owns
-the selected default. Ordinary runs do not pass `codex exec -m` and do not
-generate or inject `model_catalog.json`; only a deliberate model-switch
+the selected default. Prefer gateway local mode, retain its generated catalog,
+and use only Provider ID `codex_rosetta` with display name exactly `OpenAI`.
+Ordinary runs do not pass `codex exec -m`; only a deliberate model-switch
 protocol cell selects a resume target explicitly. Gateway Logs remain the
 source of truth for the actual upstream model and request shape.
 
@@ -189,6 +194,16 @@ For each run, retain:
 - the Web Admin Gateway Logs stream trace under the recorded Gateway Logs root;
 - the upstream model actually observed in the trace.
 
+For cache analysis, group requests by conversation or prompt-cache key. For
+every non-first request report the signed value
+`current.cached_input_tokens - (previous.input_tokens + previous.output_tokens)`.
+Do not add tool-result or other carried-token terms and do not replace this
+calculation with cache hit rate. If the absolute value exceeds 200, compare the
+actual adjacent bodies: cache key, model/route, instructions, tools, exact
+previous-input prefix retention, and newly appended or rewritten items. This
+separates accidental prefix scattering from output tokens that were not primed
+into prompt cache, token-block alignment, model switches, and compaction.
+
 A pass requires the exact success marker and the native call pattern declared
 in `expected.json`. For continuation tasks, confirm that the returned session
 identifier is reused. Restarting the scenario is a failure even if it produces
@@ -205,12 +220,24 @@ Sidecar-backed browser/PDF execution behind `web.run` is a target path, not a
 fallback. Missing or inconclusive Gateway Logs make the surface `ambiguous`
 and the run cannot pass.
 
-For context-compaction tasks, require a genuine `compaction_trigger` input item
-in the Gateway Logs trace. Classify the run as completed, error reproduced, or
-not triggered according to the suite README and retain the exact compact
-response item types. A source listing or log message containing the same text
-does not prove that Codex issued a compaction request. Count both the canonical
-`compaction` item and the accepted `compaction_summary` wire alias.
+For context-compaction tasks, prefer the Gateway request-log profile plus the
+HTTP path, then use exact wire items when the request reaches stream tracing.
+`/v1/responses/compact` is legacy remote compaction;
+`/v1/responses` with one final `compaction_trigger` input item is Remote
+Compaction V2; a later `/v1/responses` request carrying `compaction` without a
+new trigger is a post-compaction follow-up. A Codex rollout `compacted` or
+`context_compacted` event without either wire shape is local/internal
+compaction, not Remote V2. Retain `x-codex-turn-metadata` reason, request model,
+route, prompt-cache key, response item type, and the next request's installed
+item. Rosetta-mode Remote V2 can return before a normal stream-trace request
+record is created. In that case a request-log profile containing
+`compaction_mode` and `compaction_reason`, plus mapping/install evidence,
+proves that the Gateway recognized the trigger. The current stream trace does
+not carry the HTTP path, so do not label a request legacy unless another bounded
+capture proves it. A source listing or log message containing the same text
+does not prove
+that Codex issued a compaction request. Count both the canonical `compaction`
+item and the accepted `compaction_summary` wire alias.
 The test executor (including a coding agent or developer) follows the selected
 suite's `EVALUATION.md` and writes `artifacts/evaluation.json`. Protocol tests
 report the end-to-end compaction result and method without scoring text.
@@ -220,9 +247,11 @@ resume. Resume must not run another command or compaction. Only then does the
 test executor score deterministic fact retention; the tested model never
 evaluates its own summary. Do not confuse context compaction with HTTP
 compression such as zstd.
-When comparing provider identities, `openai` is expected to select remote v2,
-while a provider whose id and display name are `custom` is expected to run a
-normal no-tools Responses turn that produces a local summary message.
+All eligible CLI live cells use local-mode Provider ID `codex_rosetta` with
+display name `OpenAI`; runner-gated Namespace and image-generation cells retain
+the same Gateway identity after their app-server/auth preconditions are met.
+Provider-identity A/B behavior belongs to the dedicated GPT relay integration
+suite.
 
 For Namespace-tool tasks, verify every required native Namespace call and
 successful result in the isolated rollout. Use Gateway Logs to record the

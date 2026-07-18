@@ -18,13 +18,21 @@ Subagent lifecycle behavior is intentionally isolated in the
 [`subagent_tools`](../subagent_tools/README.md) suite so each `collaboration`
 Function can be evaluated independently.
 
-## Required Codex configuration
+## Required Codex runner and configuration
 
-Use the custom provider ID `namespace-test` with provider display name `openai`
-for both models while keeping the isolated Rosetta localhost `base_url`. Codex
-reserves the built-in `openai` ID and rejects attempts to override its URL, but
-the exact display name supplies the OpenAI Namespace capability to the custom
-test provider. Record this test-only identity override in the evaluation.
+This combined task cannot run through ordinary local `codex exec`. Current
+Codex source deliberately disables orchestrator-owned skills whenever the
+thread has a local execution environment, and `codex exec` supplies that
+environment. Use an app-server runner that can start the thread without the
+local environment while still routing model requests through the isolated
+local-mode Gateway. Until that runner is available, classify this suite as
+`runner_not_supported`; do not report the missing `skills.list` surface as a
+Terra, DeepSeek, or Rosetta conversion failure.
+
+Use the local-mode Provider ID `codex_rosetta` with provider display name
+exactly `OpenAI` for both models. Do not define any suite-specific Provider.
+Keep the isolated Rosetta localhost `base_url` and retain the catalog generated
+by local mode.
 
 Add these feature flags to the isolated `config.toml`:
 
@@ -37,6 +45,9 @@ memories = true
 generate_memories = false
 use_memories = true
 dedicated_tools = true
+
+[orchestrator.skills]
+enabled = true
 ```
 
 After copying the suite task, prepare the isolated memory store without reading
@@ -49,10 +60,12 @@ cp "$RUN_ROOT/worktree/memory_fixture.md" \
 ```
 
 The `skills` Namespace is contributed only when the Codex runtime has an
-app-server orchestrator skill provider. Do not replace it with ordinary local
-Skill discovery. If `skills.list` is absent, the test must record
-`skills.status = "not_exposed"` and the overall run fails even if the other
-three Namespaces work.
+app-server orchestrator skill provider, `[orchestrator.skills]` is enabled,
+and no local execution environment is attached. Do not replace it with
+ordinary local Skill discovery. If those preconditions are satisfied and
+`skills.list` is still absent, record `skills.status = "not_exposed"` and fail
+the run. If the runner cannot establish those preconditions, use
+`runner_not_supported` instead.
 
 ## Provider matrix
 

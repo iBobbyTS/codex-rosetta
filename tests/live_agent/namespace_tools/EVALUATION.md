@@ -18,6 +18,12 @@ Do not count tool descriptions or prompt text as calls. Do not count shell,
 browser, direct local-file, or ordinary local Skill discovery as Namespace
 execution.
 
+Before evaluating calls, prove the thread used the app-server orchestrator
+runner, `[orchestrator.skills]` was enabled, and no local execution environment
+was attached. If any runner precondition cannot be established, set the
+overall classification to `runner_not_supported` and do not attribute the
+result to the tested model or Rosetta.
+
 ## Per-Namespace decisions
 
 - `clock`: require one successful native `clock.curr_time` call.
@@ -48,14 +54,17 @@ Write `artifacts/evaluation.json` with this shape:
 
 ```json
 {
-  "classification": "success | success with deviations | failure",
+  "classification": "success | success with deviations | failure | runner_not_supported",
   "model": "model alias used by Codex",
-  "provider_identity": "namespace-test (display name: openai)",
-  "provider_identity_override": true,
+  "provider_identity": "codex_rosetta (display name: OpenAI)",
+  "provider_identity_override": false,
   "upstream_model": "model proven by Gateway Logs",
   "thread_id": "Codex thread id",
   "rollout_path": "isolated rollout path",
   "process_exit_code": 0,
+  "runner": "app_server_orchestrator",
+  "local_execution_environment_attached": false,
+  "orchestrator_skills_enabled": true,
   "success_marker_observed": true,
   "namespaces": {
     "clock": {

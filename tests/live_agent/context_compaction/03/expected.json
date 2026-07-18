@@ -6,6 +6,7 @@
   "default_resume_model": "deepseek-v4-flash",
   "resume_gateway_provider": "Deepseek (Official)",
   "expected_reason": "comp_hash_changed",
+  "expected_request_kind": "remote_v2_in_band",
   "expected_mode": "rosetta",
   "expected_compaction_count": 1,
   "expected_rosetta_mapping_rows": 1,

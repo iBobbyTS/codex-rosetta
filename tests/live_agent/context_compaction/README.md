@@ -26,18 +26,20 @@ trace; model aliases alone are not evidence.
 For context-limit tasks `01` and `02`, set:
 
 ```toml
-model_provider = "openai"
+model_provider = "codex_rosetta"
 model_auto_compact_token_limit = 17000
 ```
 
-The deterministic command emits more than 100,000 characters of neutral filler
-so the 17,000-token diagnostic limit sits above both the baseline and
-post-compaction turns, while the pending command result forces one compaction
-before the next model call. Record the baseline and post-compaction Codex token
-counts plus the command-output character count. Require both token counts below
-17,000, at least 100,000 command-output characters, and exactly one genuine
-`context_limit` compaction after the command. A run without that measured shape
-is invalid and must be reported rather than silently accepted.
+The deterministic command emits more than 100,000 characters of neutral filler.
+The tested model must configure its command call to retain at least 20,000
+output tokens; otherwise Code Mode may select a 1,000-token result cap and keep
+the next request below the 17,000-token diagnostic limit. Record the baseline
+and post-compaction Codex token counts, selected command output-token cap, and
+retained command-output character count. Require both token counts below
+17,000, a cap of at least 20,000 tokens, at least 60,000 retained characters,
+and exactly one genuine `context_limit` compaction after the command. A run
+without that measured shape is invalid and must be reported rather than
+silently accepted.
 
 For model-switch tasks `03` and `04`, use the normal token limit. Retain the
 first execution's thread id and run:
@@ -58,3 +60,28 @@ Follow [`EVALUATION.md`](EVALUATION.md). Require a genuine trigger item, exact
 reason/mode, one canonical compaction output, installed follow-up input, the
 expected mapping count, and the final marker. Do not count strings that merely
 appear inside prompts, source listings, tool output, or errors.
+
+Classify each compact-related request from the strongest bounded evidence
+available. Prefer the Gateway request-log profile plus the HTTP path; use the
+wire body when the request reaches stream tracing. Rosetta may answer a Remote
+V2 trigger early, before creating a normal stream-trace request record, so an
+absent `raw_passthrough_request` is not evidence that compaction did not occur:
+
+- `legacy_remote_compact`: `POST /v1/responses/compact`;
+- `remote_v2_in_band`: `POST /v1/responses` whose final input item is the sole
+  `compaction_trigger`;
+- `post_compaction_followup`: `POST /v1/responses` carrying an installed
+  `compaction` or accepted `compaction_summary` item without a new trigger;
+- `local_internal`: a rollout `compacted`/`context_compacted` event with none
+  of the wire shapes above;
+- `ordinary_response`: none of the compact request/event evidence above.
+
+Also record the `x-codex-turn-metadata` reason, model, route, prompt-cache key,
+response item type, and the next request's installed item. This combination
+distinguishes Remote V2 and proves the full trigger/result/replay chain even
+when the current stream trace does not record the early-response request. A
+Gateway request-log profile with `compaction_mode` and `compaction_reason` is
+created only after a valid in-band trigger is recognized; combine it with the
+registered `/v1/responses` route and mapping/install evidence. Do not classify
+a legacy compact request unless a bounded access log or capture proves
+`/v1/responses/compact`.

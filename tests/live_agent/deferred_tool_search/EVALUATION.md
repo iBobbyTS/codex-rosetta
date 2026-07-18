@@ -87,7 +87,7 @@ Write `artifacts/evaluation.json` with this shape:
   "classification": "success | success with deviations | failure | active_discovery_failed",
   "task_id": "01",
   "model": "model alias used by Codex",
-  "provider_identity": "deferred-tool-test (display name: openai)",
+  "provider_identity": "codex_rosetta (display name: OpenAI)",
   "upstream_model": "model proven by Gateway Logs",
   "route": "responses_direct | responses_to_chat",
   "thread_id": "Codex thread id",
