@@ -25,7 +25,8 @@ handling rather than prose quality.
   with byte-identical phase-1 and post-compaction resume prompts; evaluation
   belongs to the test executor.
 - [`namespace_tools`](namespace_tools/README.md): directly exercising the
-  `clock`, `memories`, and `skills` Namespace tools.
+  `clock`, `memories`, and `skills` Namespace tools through an app-server
+  orchestrator runner without an attached local execution environment.
 - [`deferred_tool_search`](deferred_tool_search/README.md): installing a local
   three-candidate skill/plugin/MCP fixture catalog, pairing explicit controls
   with natural-language discovery, and verifying contextual exposure plus
@@ -60,6 +61,12 @@ Each run uses one non-reused
 `.agent-work/live-agent-test/{YYYYMMDD-HHMM}` directory shared only by that
 executor/judge pair.
 
+`namespace_tools` is also runner-gated because local `codex exec` suppresses
+orchestrator skills. `image_generation` is auth-gated because an ordinary
+local-mode bearer token does not satisfy Codex's standalone image-generation
+auth check. Follow each suite README and report its explicit unsupported status
+instead of starting an invalid CLI cell.
+
 ## Real-provider defaults
 
 Use `gpt-5.6-sol` as the default native GPT model and model-shape reference.
@@ -73,13 +80,15 @@ of the upstream route.
 
 These are defaults, not hard requirements embedded in task contracts. Select
 the default through the isolated `config.toml`; ordinary suite commands must
-not pass a CLI `-m` override, generate or inject `model_catalog.json`, set
-`model_catalog_json`, or require exact catalog equality. A deliberate
-same-thread model-switch cell may select its target model explicitly because
-the switch itself is the protocol under test. Record any model substitution
-and verify the observed request/tool shape against the `gpt-5.6-sol` reference.
+not pass a CLI `-m` override. Prefer the copied gateway's local mode and retain
+its generated catalog. Every eligible CLI suite uses the managed Provider ID
+`codex_rosetta` with display name exactly `OpenAI`; do not define suite-specific
+Provider IDs or lowercase/alternate display names. A deliberate same-thread
+model-switch cell may select its target model explicitly because the switch
+itself is the protocol under test. Record any model substitution and verify the
+observed request/tool shape against the `gpt-5.6-sol` reference.
 
-Every model, provider identity, and task matrix cell requires a separate
+Every model and task matrix cell requires a separate
 timestamp run root. Never reuse the Codex home, copied Gateway configuration,
 process state, or workspace across cells.
 

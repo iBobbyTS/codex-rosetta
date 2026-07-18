@@ -1,0 +1,112 @@
+from __future__ import annotations
+
+import json
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+
+LIVE_AGENT = Path(__file__).parent
+
+
+def _walk(value: Any) -> Iterator[dict[str, Any]]:
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk(child)
+
+
+def test_declared_codex_providers_use_local_mode_identity() -> None:
+    observed_keys: set[str] = set()
+
+    for path in LIVE_AGENT.glob("*/[0-9][0-9]/expected.json"):
+        expected = json.loads(path.read_text(encoding="utf-8"))
+        for mapping in _walk(expected):
+            if "provider_identity" in mapping:
+                observed_keys.add("provider_identity")
+                assert mapping["provider_identity"] == "codex_rosetta", path
+            if "provider_identities" in mapping:
+                observed_keys.add("provider_identities")
+                assert mapping["provider_identities"] == ["codex_rosetta"], path
+            if "provider_display_name" in mapping:
+                observed_keys.add("provider_display_name")
+                assert mapping["provider_display_name"] == "OpenAI", path
+            if "codex_model_provider" in mapping:
+                observed_keys.add("codex_model_provider")
+                assert mapping["codex_model_provider"] == "codex_rosetta", path
+
+    assert observed_keys == {
+        "provider_identity",
+        "provider_identities",
+        "provider_display_name",
+        "codex_model_provider",
+    }
+
+
+def test_compaction_contract_requires_remote_v2_request_kind() -> None:
+    paths = [
+        *LIVE_AGENT.glob("context_compaction/[0-9][0-9]/expected.json"),
+        *LIVE_AGENT.glob("context_compaction_summary_quality/[0-9][0-9]/expected.json"),
+    ]
+
+    assert len(paths) == 6
+    for path in paths:
+        expected = json.loads(path.read_text(encoding="utf-8"))
+        assert expected["expected_request_kind"] == "remote_v2_in_band", path
+
+
+def test_context_limit_compaction_retains_enough_command_output() -> None:
+    for task_id in ("01", "02"):
+        expected = json.loads(
+            (LIVE_AGENT / "context_compaction" / task_id / "expected.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        assert expected["command_max_output_tokens_min"] >= 20_000
+        assert expected["retained_command_output_chars_min"] >= 60_000
+
+
+def test_namespace_contract_requires_non_local_orchestrator_runner() -> None:
+    expected = json.loads(
+        (LIVE_AGENT / "namespace_tools" / "01" / "expected.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert expected["required_runner"] == "app_server_orchestrator"
+    assert expected["local_execution_environment_attached"] is False
+    assert expected["orchestrator_skills_enabled"] is True
+
+
+def test_image_generation_contract_requires_codex_auth_gate() -> None:
+    expected = json.loads(
+        (LIVE_AGENT / "image_generation" / "01" / "expected.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert (
+        expected["mandatory_prerequisites"]["codex_image_generation_auth_gate"]
+        == "passed"
+    )
+
+
+def test_file_workflow_records_route_specific_tool_selection() -> None:
+    expected = json.loads(
+        (LIVE_AGENT / "builtin_tools" / "03" / "expected.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    observations = expected["route_tool_observations"]
+    assert observations["openai_chat"]["localized_tools_to_check"] == [
+        "Glob",
+        "Grep",
+        "Read",
+        "Edit",
+        "Write",
+    ]
+    assert observations["openai_responses"]["native_apply_patch_to_check"] is True

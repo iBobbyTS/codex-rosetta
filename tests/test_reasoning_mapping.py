@@ -375,6 +375,42 @@ def test_glm_preserves_reasoning_history_signal():
     assert result["thinking"] == {"type": "enabled", "clear_thinking": False}
 
 
+def test_reasoning_history_ignores_object_valued_json_schema_type_property():
+    result = apply_reasoning_mapping_to_provider_request(
+        {
+            "model": "deepseek-v4-flash",
+            "messages": [],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "inspect",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "description": "A schema property named type.",
+                                }
+                            },
+                        },
+                    },
+                }
+            ],
+        },
+        ir_request={"reasoning": {"effort": "high"}},
+        target_provider="openai_chat",
+        reasoning_mapping="deepseek_v4",
+    )
+
+    assert result["thinking"] == {"type": "enabled"}
+    assert result["reasoning_effort"] == "high"
+    assert result["tools"][0]["function"]["parameters"]["properties"]["type"] == {
+        "type": "string",
+        "description": "A schema property named type.",
+    }
+
+
 def test_reasoning_mapping_does_not_require_capability_declaration():
     result = apply_reasoning_mapping_to_provider_request(
         {"model": "qwen", "messages": [], "reasoning_effort": "none"},

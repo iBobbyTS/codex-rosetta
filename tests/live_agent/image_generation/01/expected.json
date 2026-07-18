@@ -8,7 +8,8 @@
     "view_image_transport": "passed",
     "visual_recognition": "passed",
     "vision_capable_model": true,
-    "image_generation_profile_configured": true
+    "image_generation_profile_configured": true,
+    "codex_image_generation_auth_gate": "passed"
   },
   "expected_native_pattern": {
     "model_facing_image_generation_calls": 1,

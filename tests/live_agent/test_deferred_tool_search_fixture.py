@@ -63,12 +63,11 @@ def test_expected_contract_is_uniform_for_all_tasks() -> None:
             }
 
 
-def test_isolated_config_uses_selected_default_without_catalog_override(
+def test_isolated_config_seeds_local_mode_provider(
     prepare_module: ModuleType, tmp_path: Path
 ) -> None:
     content = prepare_module._build_codex_config(
         model="deepseek-v4-flash",
-        provider_id="deferred-tool-test",
         client_key="test-key",
         port=18765,
         worktree=tmp_path / "worktree",
@@ -77,7 +76,9 @@ def test_isolated_config_uses_selected_default_without_catalog_override(
     parsed = tomllib.loads(content)
     assert parsed["model"] == "deepseek-v4-flash"
     assert "model_catalog_json" not in parsed
-    assert parsed["model_providers"]["deferred-tool-test"]["base_url"] == (
+    assert parsed["model_provider"] == "codex_rosetta"
+    assert parsed["model_providers"]["codex_rosetta"]["name"] == "OpenAI"
+    assert parsed["model_providers"]["codex_rosetta"]["base_url"] == (
         "http://127.0.0.1:18765/v1"
     )
 

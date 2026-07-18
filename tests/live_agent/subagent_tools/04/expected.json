@@ -8,7 +8,7 @@
     "gpt-5.6-sol",
     "deepseek-v4-flash"
   ],
-  "provider_identities": ["custom", "OpenAI"],
+  "provider_identities": ["codex_rosetta"],
   "expected_native_pattern": {
     "collaboration.spawn_agent": 1,
     "collaboration.send_message": 1,

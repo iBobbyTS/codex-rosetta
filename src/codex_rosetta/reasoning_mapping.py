@@ -456,7 +456,7 @@ def _has_reasoning_history(value: Any) -> bool:
     if isinstance(value, dict):
         if "reasoning_content" in value:
             return True
-        if value.get("type") in {"reasoning", "thinking"}:
+        if value.get("type") in ("reasoning", "thinking"):
             return True
         return any(_has_reasoning_history(v) for v in value.values())
     if isinstance(value, list):

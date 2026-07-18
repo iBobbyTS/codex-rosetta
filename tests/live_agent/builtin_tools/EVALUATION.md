@@ -38,21 +38,30 @@ first state must be `Inspect fixture: in_progress` and `Report result: pending`;
 the second must mark both steps `completed`. A prose checklist is not a plan
 tool call.
 
-### `03` / localized file workflow
+### `03` / protocol-neutral file workflow
 
-Require model-facing `Glob`, `Grep`, `Read`, two `Edit` calls, and one `Write`
-call, with no model-facing `apply_patch`. Gateway Logs must prove that `Glob`,
-`Grep`, and `Read` became nested `exec_command` executions and that both `Edit`
-calls plus `Write` reached native `apply_patch` semantics. The final workspace
-must satisfy these exact checks:
+First evaluate the final workspace independently of tool selection. It must
+satisfy these exact checks:
 
 - `fixtures/alpha.txt` contains `status=edited` and no `status=original`;
 - `fixtures/beta.txt` contains `status=patched` and no `status=unchanged`;
 - `fixtures/created.txt` contains exactly `CREATED_BY_WRITE` followed by one
   newline.
 
-Shell commands or direct Python calls selected by the model do not satisfy the
-localized alias requirements, even if the files end in the expected state.
+Then evaluate the active route without treating declarations as calls:
+
+- On Responses-to-Chat, record separately whether the model selected each of
+  `Glob`, `Grep`, `Read`, `Edit`, and `Write`. Verify selected localized calls
+  were reconstructed as `exec_command` or native `apply_patch` semantics and
+  that `apply_patch` was not itself model-facing.
+- On direct GPT Responses, record whether GPT selected native `apply_patch` and
+  verify that no localized Chat aliases were injected.
+
+The exact marker plus correct workspace is the core task result. If those pass
+but the active route does not demonstrate its target tool-selection signal,
+classify the run as `success with deviations` and preserve each observed/missing
+tool boolean. Shell or Python selected by the model is still prohibited and
+makes the run a failure even if the final files happen to be correct.
 
 ### `04` / `view_image`
 
@@ -90,7 +99,7 @@ Write `artifacts/evaluation.json` with this shape:
   "target_scope": "wait | update_plan | localized_file_workflow | view_image | goal_lifecycle | visual_recognition",
   "model": "Codex-facing model alias",
   "model_shape_reference": "gpt-5.6-sol",
-  "provider_identity": "isolated provider id",
+  "provider_identity": "codex_rosetta",
   "provider_display_name": "OpenAI",
   "upstream_model": "model proven by Gateway Logs",
   "thread_id": "Codex thread id",
@@ -99,6 +108,17 @@ Write `artifacts/evaluation.json` with this shape:
   "success_marker_observed": true,
   "model_facing_calls": ["observed names in order"],
   "native_calls": ["observed native calls in order"],
+  "route_tool_observations": {
+    "chat_localized_tools": {
+      "Glob": false,
+      "Grep": false,
+      "Read": false,
+      "Edit": false,
+      "Write": false
+    },
+    "chat_model_facing_apply_patch": false,
+    "gpt_native_apply_patch": false
+  },
   "successful_target_results": true,
   "state_observations": ["bounded task-specific evidence"],
   "workspace_assertions": {},

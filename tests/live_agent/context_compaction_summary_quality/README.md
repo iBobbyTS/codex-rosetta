@@ -27,7 +27,8 @@ and upstream model from Gateway Logs.
 
 ## Two-phase run
 
-Use the isolated Codex provider written by Gateway local mode and set:
+Use local-mode Provider ID `codex_rosetta`, require display name `OpenAI`,
+retain its generated catalog, and set:
 
 ```toml
 model_auto_compact_token_limit = 15000
@@ -62,6 +63,10 @@ The run is scoreable only when all protocol preconditions hold:
    another command or compaction.
 7. Baseline and post-compaction Codex token counts are below 15,000 and the
    command emits at least 100,000 characters.
+
+Classify the compact request using the path/body/event method in
+[`context_compaction/EVALUATION.md`](../context_compaction/EVALUATION.md); a
+rollout-only local/internal compact event does not satisfy these preconditions.
 
 Zero or multiple phase-1 compactions, a repeated command, an early query, a
 different resume thread, or another resume compaction makes the quality result

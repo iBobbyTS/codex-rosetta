@@ -16,6 +16,8 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "phase1_marker_observed": true,
   "same_thread_resume": true,
   "compaction_reason": "context_limit",
+  "request_kind": "remote_v2_in_band",
+  "request_http_path": "/v1/responses | /v1/responses/compact | unknown",
   "gateway_compaction_mode": "native",
   "compaction_count": 1,
   "resume_compaction_count": 0,
