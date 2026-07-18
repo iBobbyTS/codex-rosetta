@@ -2207,6 +2207,11 @@ async def _handle_direct_responses_streaming(
     """Handle same-protocol Responses streaming passthrough."""
     profile: dict[str, Any] = {}
     log_original_request(body, state=body_log_state)
+    wire_passthrough = (
+        inbound_wire_request is not None
+        and body.get("stream") is True
+        and inbound_wire_request.matches(body)
+    )
     request_id = extra_headers.get("x-request-id") if extra_headers else None
     trace = _create_stream_trace_logger(
         stream_trace_state,
@@ -2226,18 +2231,25 @@ async def _handle_direct_responses_streaming(
                 "provider_name": route.provider_name,
                 "entry_id": entry_id,
                 "passthrough": True,
+                "wire_passthrough": wire_passthrough,
             },
         )
         trace.log("raw_passthrough_request", body)
 
     t_connect = time.perf_counter()
     try:
-        send_kwargs: dict[str, Any] = {"extra_headers": extra_headers}
-        if (
-            inbound_wire_request is not None
-            and body.get("stream") is True
-            and inbound_wire_request.matches(body)
-        ):
+        upstream_extra_headers = extra_headers
+        if wire_passthrough:
+            # An attested request must retain the client wire contract. Keep
+            # supported client metadata such as User-Agent, but do not add the
+            # Gateway-owned correlation header that was absent from that wire.
+            upstream_extra_headers = {
+                name: value
+                for name, value in (extra_headers or {}).items()
+                if name.lower() != "x-request-id"
+            }
+        send_kwargs: dict[str, Any] = {"extra_headers": upstream_extra_headers}
+        if wire_passthrough:
             send_kwargs.update(
                 wire_body=inbound_wire_request.body,
                 wire_headers=inbound_wire_request.headers,
@@ -2439,17 +2451,25 @@ async def handle_streaming(  # noqa: C901
         return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
-    body = _apply_tool_adaptation(body, route)
-    body, web_search_runtime = _prepare_web_search_runtime_and_body(
-        route=route,
-        body=body,
-        web_search_client=web_search_client,
+    preserve_native_wire = (
+        profile.get("compaction_mode") == "native"
+        and inbound_wire_request is not None
+        and inbound_wire_request.matches(body)
     )
+    if preserve_native_wire:
+        web_search_runtime = None
+    else:
+        body = _apply_tool_adaptation(body, route)
+        body, web_search_runtime = _prepare_web_search_runtime_and_body(
+            route=route,
+            body=body,
+            web_search_client=web_search_client,
+        )
     source_tool_capabilities = _source_tool_capabilities_after_profile(
         original_body, body, route
     )
     if is_responses_passthrough(route):
-        return await _handle_direct_responses_streaming(
+        response, direct_profile = await _handle_direct_responses_streaming(
             route,
             provider_info,
             body,
@@ -2464,6 +2484,8 @@ async def handle_streaming(  # noqa: C901
             body_log_state=body_log_state,
             inbound_wire_request=inbound_wire_request,
         )
+        profile.update(direct_profile)
+        return response, profile
 
     log_original_request(body, state=body_log_state)
     image_fetch_cancellation = ImageFetchCancellation()

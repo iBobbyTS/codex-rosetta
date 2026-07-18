@@ -119,7 +119,7 @@ def decompress_zstd_bounded(body: bytes, *, max_body_size: int) -> bytes:
         raise ZstdRequestBodyError("Invalid Zstd request body") from exc
 
 
-def decode_inbound_zstd(request: Any) -> Response | None:
+async def decode_inbound_zstd(request: Any) -> Response | None:
     """Decode an authenticated ``/v1`` Zstd request or return a stable error."""
     _inbound_wire_request_var.set(None)
     if not (request.path == "/v1" or request.path.startswith("/v1/")):
