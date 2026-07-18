@@ -341,11 +341,17 @@ captured target-version header set and the resulting allowlist decision; a
 passing old fixture or the absence of a new header from Rosetta source is not
 sufficient evidence. Client `Authorization`, `Cookie`, `Host`, and inbound
 `Content-Length` remain excluded, and Provider configuration must continue to
-own upstream authentication.
+own upstream authentication. The Gateway-owned `x-request-id` is also excluded
+from exact attested-wire forwarding even though it remains valid ordinary
+upstream correlation metadata; injecting a header absent from the captured
+client wire invalidates the transparency contract. The ingress contract test must run the decoder
+through the real App dispatcher, not only call it directly, so request-local
+wire capture cannot be lost if a synchronous middleware hook is moved to the
+server's worker thread.
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
 
-- The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields and original response JSON/SSE bytes remain unchanged below the transport safety envelope. Unchanged attested streaming requests retain their original compressed body and allowlisted Codex wire headers; any request mutation rebuilds JSON without stale attestation. Native `context_limit`/`user_requested` compaction stays direct, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
+- The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields and original response JSON/SSE bytes remain unchanged below the transport safety envelope. Unchanged attested streaming requests retain their original compressed body and allowlisted Codex wire headers; any request mutation rebuilds JSON without stale attestation. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
 - header allowlists for ordinary metadata and exact attested-wire passthrough; Provider-owned Authorization on every upstream request; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
 - Responses Namespace children expand to canonical regex-safe `namespace-function` names; streaming and non-streaming return paths restore hyphenated names, unique `namespace_function` and `namespace.function` compatible names, and unique bare children, while ordinary Function conflicts, shared child names, and alias collisions remain flat and fail closed;
@@ -485,7 +491,7 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - Complete a single round of text and multiple rounds of dialogue, and confirm that there are no repeated, truncated or unended turns;
 - Capture real HTTP headers and body `client_metadata`, confirm identity/turn metadata;
 - Verify window/thread changes of the same turn, compact, resume, fork, subagent;
-- Confirm that the bundled 透传 Profile does not lose fields or alter any native tool shape, that web.run 注入 changes only Search endpoint handling, and that listed-provider Tool Mapping changes only tools while preserving every ordinary non-tool request field and raw response. For native Remote V2 compact, capture the inbound and upstream body plus attestation and require byte identity; verify Provider auth replaces gateway-client auth. Switch from GPT Responses to a different-`comp_hash` third-party Responses model and verify the old GPT request uses the Rosetta prompt, the returned handle maps to seven-day plaintext, and the new Provider receives rehydrated plaintext rather than GPT's encrypted compaction item; confirm the Chat bridge does not leak Rosetta's internal metadata to the upstream;
+- Confirm that the bundled 透传 Profile does not lose fields or alter any native tool shape, that web.run 注入 changes only Search endpoint handling, and that listed-provider Tool Mapping changes only tools while preserving every ordinary non-tool request field and raw response. For native Remote V2 compact, capture the inbound and upstream body plus attestation and require byte identity under both 透传 and web.run 注入/another Profile that mutates Responses Lite `additional_tools` on ordinary traffic; verify the compact bypasses that mutation and Provider auth replaces gateway-client auth. Switch from GPT Responses to a different-`comp_hash` third-party Responses model and verify the old GPT request uses the Rosetta prompt, the returned handle maps to seven-day plaintext, and the new Provider receives rehydrated plaintext rather than GPT's encrypted compaction item; confirm the Chat bridge does not leak Rosetta's internal metadata to the upstream;
 - Confirm that the actual stream will not end abnormally before `response.completed`, and failed/incomplete can be rendered correctly.
 
 #### B. UI, phase and steering behavior
@@ -547,6 +553,12 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
   require byte-identical task/scenario/resume-query input, exactly one command
   plus one installed compaction, and a same-thread resume with no additional
   command or compaction before scoring deterministic fact retention;
+- Run `tests/live_agent/context_compaction/run_live.py --model gpt-5.6-terra`
+  for a low-cost native manual-compact smoke cell. It must use an isolated
+  Codex Home seeded from the authorized ChatGPT OAuth source, answer the
+  app-server `attestation/generate` request through the installed Desktop
+  DeviceCheck module without logging the token, and require exact wire
+  passthrough plus one installed compaction and a successful follow-up turn;
 - No orphan tool output, repeated tool calls or history cache confusion after compact/resume;
 - Long conversations can still continue to complete file tool tasks after reaching the compact threshold;
 - Historical tool mapping and final behavior remain consistent after closing and restoring the Codex session.

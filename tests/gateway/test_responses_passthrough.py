@@ -681,9 +681,20 @@ def test_attested_native_compact_forwards_original_wire_body() -> None:
     body = {
         "model": "gpt-test",
         "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "update_plan",
+                        "parameters": {},
+                    }
+                ],
+            },
             {"type": "message", "role": "user", "content": "hello"},
             {"type": "compaction_trigger"},
         ],
+        "tool_choice": {"type": "function", "name": "update_plan"},
         "client_metadata": {"x-codex-turn-metadata": json.dumps(metadata)},
         "stream": True,
     }
@@ -695,26 +706,36 @@ def test_attested_native_compact_forwards_original_wire_body() -> None:
         },
     ).with_parsed_body(body)
     provider_info = _provider_info()
+    route = _responses_route()
+    route = replace(
+        route,
+        tool_profile={**route.tool_profile, "function.update_plan": "disabled"},
+    )
 
     response, profile = asyncio.run(
         handle_streaming(
-            _responses_route(),
+            route,
             provider_info,
             body,
             transport=transport,
-            extra_headers={"x-request-id": "req-compact"},
+            extra_headers={
+                "x-request-id": "req-compact",
+                "User-Agent": "Codex Desktop/test",
+            },
             inbound_wire_request=wire,
         )
     )
 
     assert isinstance(response, StreamingResponse)
     assert profile["passthrough"] is True
+    assert profile["wire_passthrough"] is True
+    assert profile["compaction_mode"] == "native"
     transport.send_streaming.assert_awaited_once_with(
         provider_info,
         "openai_responses",
         body,
         "gpt-test",
-        extra_headers={"x-request-id": "req-compact"},
+        extra_headers={"User-Agent": "Codex Desktop/test"},
         wire_body=b"exact-zstd-frame",
         wire_headers={
             "Content-Encoding": "zstd",
@@ -755,6 +776,7 @@ def test_attested_request_falls_back_to_json_after_profile_mutation() -> None:
     )
 
     call = transport.send_streaming.await_args
+    assert call is not None
     assert call.kwargs == {"extra_headers": None}
     assert call.args[2] == {
         "model": "gpt-test",

@@ -16,6 +16,36 @@ and replay through Codex-Rosetta. It does not score summary quality; use
 Every cell uses a separate timestamped run root, Codex Home, copied gateway
 configuration, port, gateway process, and Gateway Logs trace.
 
+## Automated native smoke run
+
+`run_live.py` automates the isolated setup, dual-auth validation, gateway
+lifecycle, a real Codex app-server session, and bounded native-compaction
+checks. It defaults to task `02` with `gpt-5.6-terra`, which is an intentional
+model substitution for a lower-cost native wire smoke test. The default
+`--trigger manual` path creates a seed turn, invokes the official
+`thread/compact/start` API, and runs a follow-up turn, reproducing the same
+`user_requested` path as the interactive `/compact` command:
+
+```bash
+conda run -n llm-rosetta python tests/live_agent/context_compaction/run_live.py
+```
+
+The command prints the timestamped run root and writes a credential-free
+`artifacts/automation-result.json`. Success requires exactly one in-band
+trigger, `wire_passthrough=true`, no trigger-request upstream error, a later
+installed `compaction` input, one native `user_requested` request profile, the
+final marker, and a zero Codex exit status. Use `--model gpt-5.6-sol` to run the
+task's canonical model instead. Use `--trigger context-limit` to run the
+original deterministic auto-threshold scenario. The runner never reuses or
+stops the user's main gateway.
+
+Each run copies `/Users/ibobby/.codex-multi-2/auth.json` into its ignored,
+timestamped `codex_home` with mode `0600`, points `CODEX_HOME` at that directory,
+and verifies ChatGPT OAuth before starting Codex. On macOS, the manual path uses
+the installed Codex Desktop DeviceCheck module to answer app-server
+`attestation/generate` requests. Attestation values stay in process memory and
+are never written to the protocol artifact or stream trace.
+
 ## Provider routing
 
 In the copied config only, route every `gpt-5.6-sol` cell to the existing

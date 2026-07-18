@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
 from compression import zstd
 
+from codex_rosetta._vendor.httpserver import App, JSONResponse, Request, Response
 from codex_rosetta.gateway.inbound_content_encoding import (
     ZstdRequestBodyError,
     ZstdRequestBodyTooLargeError,
@@ -50,7 +52,7 @@ def test_inbound_zstd_hook_decodes_body_and_normalizes_headers() -> None:
     original = json.dumps({"model": "gpt-test"}).encode()
     request = _request(zstd.compress(original), encoding="zstd")
 
-    assert decode_inbound_zstd(request) is None
+    assert asyncio.run(decode_inbound_zstd(request)) is None
     assert request.body == original
     assert request.headers.get("content-encoding") is None
     assert request.headers["content-length"] == str(len(original))
@@ -70,9 +72,12 @@ def test_inbound_zstd_hook_captures_attested_wire_request_before_decoding() -> N
         }
     )
 
-    assert decode_inbound_zstd(request) is None
+    async def decode_and_take():
+        response = await decode_inbound_zstd(request)
+        return response, take_inbound_wire_request()
 
-    wire = take_inbound_wire_request()
+    response, wire = asyncio.run(decode_and_take())
+    assert response is None
     assert wire is not None
     assert wire.body == compressed
     assert wire.headers == {
@@ -88,18 +93,21 @@ def test_inbound_zstd_hook_captures_attested_wire_request_before_decoding() -> N
 def test_non_attested_request_clears_prior_wire_capture() -> None:
     attested = _request(b"{}", encoding=None)
     attested.headers["x-oai-attestation"] = "proof"
-    assert decode_inbound_zstd(attested) is None
-    assert take_inbound_wire_request() is not None
-
     plain = _request(b"{}", encoding=None)
-    assert decode_inbound_zstd(plain) is None
-    assert take_inbound_wire_request() is None
+
+    async def decode_both():
+        assert await decode_inbound_zstd(attested) is None
+        assert take_inbound_wire_request() is not None
+        assert await decode_inbound_zstd(plain) is None
+        return take_inbound_wire_request()
+
+    assert asyncio.run(decode_both()) is None
 
 
 def test_inbound_zstd_hook_returns_413_for_decoded_overflow() -> None:
     request = _request(zstd.compress(b"a" * 33), encoding="zstd", limit=32)
 
-    response = decode_inbound_zstd(request)
+    response = asyncio.run(decode_inbound_zstd(request))
 
     assert response is not None
     assert response.status_code == 413
@@ -109,7 +117,7 @@ def test_inbound_zstd_hook_returns_413_for_decoded_overflow() -> None:
 def test_inbound_zstd_hook_returns_400_for_malformed_body() -> None:
     request = _request(b"not-zstd", encoding="zstd")
 
-    response = decode_inbound_zstd(request)
+    response = asyncio.run(decode_inbound_zstd(request))
 
     assert response is not None
     assert response.status_code == 400
@@ -120,7 +128,7 @@ def test_inbound_zstd_hook_leaves_uncompressed_request_unchanged() -> None:
     body = b'{"model":"gpt-test"}'
     request = _request(body, encoding=None)
 
-    assert decode_inbound_zstd(request) is None
+    assert asyncio.run(decode_inbound_zstd(request)) is None
     assert request.body is body
     assert request.headers == {
         "content-length": str(len(body)),
@@ -132,6 +140,46 @@ def test_inbound_zstd_hook_does_not_decode_non_api_routes() -> None:
     request = _request(body, encoding="zstd")
     request.path = "/admin/api/config"
 
-    assert decode_inbound_zstd(request) is None
+    assert asyncio.run(decode_inbound_zstd(request)) is None
     assert request.body is body
     assert request.headers["content-encoding"] == "zstd"
+
+
+def test_async_hook_preserves_wire_capture_through_real_dispatch() -> None:
+    original = json.dumps({"model": "gpt-test", "stream": True}).encode()
+    compressed = zstd.compress(original)
+    app = App(max_body_size=1024)
+    app.before_request(decode_inbound_zstd)
+
+    @app.post("/v1/responses")
+    async def responses(_request):
+        wire = take_inbound_wire_request()
+        return JSONResponse(
+            {
+                "captured": wire is not None,
+                "wire_body_matches": wire is not None and wire.body == compressed,
+            }
+        )
+
+    request = Request(
+        method="POST",
+        path="/v1/responses",
+        query_string="",
+        headers={
+            "content-encoding": "zstd",
+            "content-length": str(len(compressed)),
+            "content-type": "application/json",
+            "x-oai-attestation": "signed-wire-proof",
+        },
+        body=compressed,
+        client_addr=("127.0.0.1", 12345),
+        app=app,
+    )
+
+    response = asyncio.run(app._dispatch(request))
+
+    assert isinstance(response, Response)
+    assert json.loads(response.body) == {
+        "captured": True,
+        "wire_body_matches": True,
+    }
