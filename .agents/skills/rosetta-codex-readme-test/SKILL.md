@@ -197,15 +197,36 @@ Use three bounded evidence sources:
    successful stream completion. This is the only artifact stored on the RAM
    Disk. Filter by model, request id, thread id, and timestamp.
 
-For every upstream request in the run, inspect its usage record and calculate
-the prompt-cache hit rate as cached input tokens divided by total input tokens.
-Record the request id, input tokens, cached tokens, computed rate, and a bounded
-normal/abnormal judgment. A first request may legitimately have a zero hit
-rate; later requests with a stable repeated prefix should normally report a
-non-zero hit. Missing usage, a zero denominator, an unexpected reset, or a
-route-specific discontinuity must be called out instead of silently omitted.
-Do not impose one universal numeric pass threshold unless the selected suite
-defines it, but always analyze every request and explain anomalies.
+For every upstream request in the run, inspect its usage record. Do not
+calculate or report a prompt-cache hit rate. For every non-first request,
+calculate this signed adjacent-request delta:
+
+```text
+current.cached_input_tokens
+- (previous.input_tokens
+   + previous.output_tokens
+   + other tokens added between the two requests that are actually carried
+     into the current conversation, if any)
+```
+
+Derive any additional carried-token term from the actual adjacent request
+bodies instead of guessing it. Examples may include tool results, injected
+conversation items, compaction output, or other content appended after the
+previous response and retained in the current request. State each included
+component and avoid double counting tokens already represented by the previous
+input or output totals. Record the current request id, the previous request's
+input and output tokens, every additional carried-token component, the current
+cached input tokens, and the computed signed delta. The first request has no
+adjacent-request delta and should be recorded only as the baseline usage.
+
+When the absolute delta is greater than 200 tokens, inspect the bounded actual
+request content and explain the cause. At minimum compare the prompt-cache key,
+model and route, tool definitions, stable instructions, whether the previous
+messages/items remain an exact prefix, and the newly added or rewritten
+conversation items. Distinguish cache-prefix breakage from expected changes
+such as model switching, compaction, tool-result insertion, token-block
+alignment, or deliberate instruction/tool mutations. Missing usage or an
+unexplained discontinuity must be called out instead of silently omitted.
 
 Compare the evidence with `worktree/expected.json` and apply the field meanings
 and output schema defined by the selected suite's README/EVALUATION guide. Do
@@ -251,8 +272,10 @@ For every cell, record:
 - thread id and rollout path;
 - Rosetta trace path and observed upstream model;
 - terminal stream shape and any warning that changes interpretation;
-- per-request prompt-cache input tokens, cached tokens, hit rate, and anomaly
-  judgment;
+- per-request input/output/cached-input tokens, each non-first request's signed
+  adjacent-request cache delta (including itemized additional carried tokens),
+  and the bounded request-content analysis required when its absolute value is
+  greater than 200;
 - every additional measurement required by the suite guide.
 
 ## Safety Rules
@@ -285,9 +308,10 @@ measures. The summary-quality suite measures only deterministic fact retention
 after compaction; it is one small regression scenario, not a general
 model-quality benchmark. Report both phase exit statuses, the phase-1 marker,
 same-thread resume evidence, and any command or compaction during resume.
-Include the per-request cache hit-rate observations and explicitly state
-whether their progression is normal; never summarize the run with only one
-aggregate cache number.
+Include every non-first request's adjacent-request cache-delta calculation and
+explicitly analyze the bounded request content whenever the absolute delta is
+greater than 200. Do not report cache hit rates or replace the per-request
+calculations with one aggregate cache number.
 
 Include every additional field required by the selected suite's guide. When an
 evaluation artifact is required, the final report must agree with it.
