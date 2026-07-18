@@ -27,7 +27,7 @@ from .model_presets import (
 
 CATALOG_FILENAME = "model_catalog.json"
 CODEX_CONFIG_FILENAME = "config.toml"
-CATALOG_RESOURCE = "codex_models_0_144_4.json"
+CATALOG_RESOURCE = "codex_models.json"
 CODEX_API_KEY_ID = "codex"
 CODEX_API_KEY_LABEL = "codex"
 CODEX_PROVIDER_ID = "codex_rosetta"
