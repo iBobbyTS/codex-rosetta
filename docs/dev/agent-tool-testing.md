@@ -70,10 +70,12 @@ Responses-to-Chat route, Rosetta projects fixed ordinary `tool_search` and
 `tool_read` Functions only when the live `exec` description advertises deferred
 nested tools. Both round-trip as custom `exec`: search returns bounded names and
 240-character summaries, while read retrieves one exact complete declaration.
-Generic declarations still use raw `exec`. For the three Node REPL tools, a
-valid paired read authorizes the fixed `invoke_deferred_tool`; Rosetta converts
-its structured arguments back to custom `exec` with MCP text/image result
-forwarding. Search and read each enforce a 24,000-character serialized budget,
+Non-MCP declarations still use raw `exec`. For an exact `mcp__` tool, a valid
+paired read authorizes the fixed `invoke_deferred_tool`; the three Node REPL
+tools retain their static projections while unknown MCP names use request-local
+generic projections. Rosetta converts structured arguments back to custom
+`exec` with MCP text/image result forwarding. Search and read each enforce a
+24,000-character serialized budget,
 their results remain in their original history positions, and top-level tool
 definitions do not change. Codex injects candidate metadata into the V8 runtime,
 so live evidence covers projection, search, read, selection, call, and consumed

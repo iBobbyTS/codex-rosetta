@@ -22,6 +22,7 @@ from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
     build_exec_script,
     discovered_all_tools_search_names,
+    discovered_deferred_exec_tools,
     discovered_node_repl_exec_tools,
     exec_tool_section_names,
     exec_tool_projections_for_route,
@@ -99,13 +100,29 @@ declare const tools: {{ {name}(args: {arguments}): Promise<CallToolResult>; }};
 ```"""
 
 
+def _deferred_mcp_description(name: str) -> str:
+    return f"""Look up one immutable archive record.
+
+exec tool declaration:
+```ts
+declare const tools: {{ {name}(args: {{ record_id: string; }}): Promise<CallToolResult>; }};
+```"""
+
+
 def _all_tools_read_result(name: str, *, found: bool = True) -> dict:
     return {
         "protocol": ALL_TOOLS_READ_RESULT_PROTOCOL,
         "name": name,
         "found": found,
         "tool": (
-            {"name": name, "description": _node_repl_description(name)}
+            {
+                "name": name,
+                "description": (
+                    _node_repl_description(name)
+                    if name in NODE_REPL_TOOL_NAMES
+                    else _deferred_mcp_description(name)
+                ),
+            }
             if found
             else None
         ),
@@ -731,7 +748,11 @@ def test_deferred_exec_projects_stateless_all_tools_search_definition():
     assert dispatcher["parameters"] == {
         "type": "object",
         "properties": {
-            "name": {"type": "string", "enum": list(NODE_REPL_TOOL_NAMES)},
+            "name": {
+                "type": "string",
+                "pattern": "^mcp__",
+                "maxLength": 512,
+            },
             "arguments": {
                 "type": "object",
                 "description": (
@@ -815,7 +836,7 @@ def test_all_tools_search_runtime_enforces_whole_match_budget():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
-def test_all_tools_read_appends_dispatch_guidance_only_to_allowlisted_matches():
+def test_all_tools_read_appends_dispatch_guidance_to_unblocked_mcp_matches():
     projection = replace(
         exec_tool_projections_for_route(_route())["tool_read"],
         authorized_names=(
@@ -837,7 +858,7 @@ def test_all_tools_read_appends_dispatch_guidance_only_to_allowlisted_matches():
         },
         {
             "name": "mcp__archive__lookup",
-            "description": "Archive browser results.",
+            "description": _deferred_mcp_description("mcp__archive__lookup"),
         },
     ]
 
@@ -868,7 +889,9 @@ def test_all_tools_read_appends_dispatch_guidance_only_to_allowlisted_matches():
         in descriptions["mcp__node_repl__js"]
     )
     assert "invoke_deferred_tool" not in descriptions["mcp__node_repl__js_reset"]
-    assert "invoke_deferred_tool" not in descriptions["mcp__archive__lookup"]
+    assert (
+        'set `name` to\n"mcp__archive__lookup"' in descriptions["mcp__archive__lookup"]
+    )
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
@@ -1575,6 +1598,21 @@ def test_node_repl_projection_generates_mcp_content_forwarder():
     assert "return result" not in script
 
 
+def test_unknown_mcp_projection_is_recovered_from_paired_search_and_read():
+    name = "mcp__archive__lookup"
+    messages = _node_repl_discovery_messages(name)
+    plan = discovered_deferred_exec_tools(messages)
+
+    assert set(plan.definitions) == {name}
+    assert set(plan.projections) == {name}
+    assert discovered_node_repl_exec_tools(messages) == plan
+    script = build_exec_script(plan.projections[name], {"record_id": "ARCHIVE-7"})
+    assert script.startswith(
+        'const result = await tools["mcp__archive__lookup"]({"record_id":"ARCHIVE-7"});'
+    )
+    assert 'else if (item?.type === "image") image(item);' in script
+
+
 def test_dispatcher_call_translates_to_allowlisted_custom_exec():
     projection = replace(
         exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
@@ -1611,6 +1649,33 @@ def test_dispatcher_call_translates_to_allowlisted_custom_exec():
     )
 
 
+def test_dispatcher_call_translates_history_authorized_unknown_mcp():
+    name = "mcp__archive__lookup"
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=(name,),
+    )
+
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_dispatch_unknown",
+            "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "tool_input": {
+                "name": name,
+                "arguments": {"record_id": "ARCHIVE-7"},
+            },
+        },
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection},
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec"
+    assert translated.part["tool_input"]["input"].startswith(
+        'const result = await tools["mcp__archive__lookup"]({"record_id":"ARCHIVE-7"});'
+    )
+
+
 @pytest.mark.parametrize(
     ("tool_input", "error"),
     [
@@ -1623,7 +1688,11 @@ def test_dispatcher_call_translates_to_allowlisted_custom_exec():
         ),
         (
             {"name": "mcp__archive__lookup", "arguments": {}},
-            "name must be an allowlisted deferred tool",
+            "no valid paired tool_read authorization",
+        ),
+        (
+            {"name": "exec_command", "arguments": {}},
+            "name must be an MCP deferred tool",
         ),
         (
             {"name": "mcp__node_repl__js", "arguments": "bad"},
@@ -1846,6 +1915,92 @@ def test_same_named_direct_node_repl_function_wins_over_discovery():
         adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME].authorized_names
         == ()
     )
+    assert adapted["messages"] == body["messages"]
+
+
+def test_same_named_direct_unknown_mcp_function_wins_over_discovery():
+    name = "mcp__archive__lookup"
+    direct = {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "Direct provider function.",
+            "parameters": {"type": "object"},
+        },
+    }
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": _deferred_exec_description(),
+                    "parameters": {"type": "object"},
+                },
+            },
+            direct,
+        ],
+        "messages": _node_repl_discovery_messages(name),
+    }
+
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    matching_tools = [
+        tool for tool in adapted["tools"] if tool["function"]["name"] == name
+    ]
+    assert matching_tools == [direct]
+    assert name not in adapted[EXEC_PROJECTIONS_KEY]
+    assert adapted[EXEC_PROJECTIONS_KEY]["tool_read"].dispatch_blocked_names == (name,)
+    assert (
+        adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME].authorized_names
+        == ()
+    )
+    assert adapted["messages"] == body["messages"]
+
+
+def test_unknown_mcp_authorization_keeps_top_level_tools_fixed():
+    name = "mcp__archive__lookup"
+    body = {
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "exec",
+                    "description": _deferred_exec_description(),
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        "messages": _node_repl_discovery_messages(name),
+    }
+
+    initial = localize_code_editing_chat_request(
+        {"tools": body["tools"], "messages": []},
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+    adapted = localize_code_editing_chat_request(
+        body,
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+        native_tool_names=frozenset(),
+        injected_tool_names=frozenset(),
+        exec_projections=exec_tool_projections_for_route(_route()),
+    )
+
+    assert json.dumps(initial["tools"], separators=(",", ":")) == json.dumps(
+        adapted["tools"], separators=(",", ":")
+    )
+    assert name not in {tool["function"]["name"] for tool in adapted["tools"]}
+    dispatcher = adapted[EXEC_PROJECTIONS_KEY][DEFERRED_TOOL_DISPATCH_CHAT_NAME]
+    assert dispatcher.authorized_names == (name,)
     assert adapted["messages"] == body["messages"]
 
 
