@@ -9,7 +9,7 @@ from importlib import resources
 from typing import Any
 
 PRESET_RESOURCE = "codex_model_presets.json"
-MODEL_CATALOG_RESOURCE = "codex_models_0_144_4.json"
+MODEL_CATALOG_RESOURCE = "codex_models.json"
 MODEL_INFO_STRING_FIELDS = ("slug", "display_name", "description", "identity")
 MODEL_INFO_INTEGER_FIELDS = ("priority", "context_window")
 MODEL_INFO_LIST_FIELDS = ("input_modalities", "supported_reasoning_levels")
