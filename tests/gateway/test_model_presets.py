@@ -20,6 +20,7 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "supports_image_detail_original": False,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
     "supports_parallel_tool_calls": False,
+    "supports_reasoning_summaries": False,
     "tool_mode": "code_mode_only",
     "multi_agent_version": "v2",
     "use_responses_lite": True,

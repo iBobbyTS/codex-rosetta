@@ -292,7 +292,7 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
             assert model["supports_reasoning_summaries"] is True
             assert model["truncation_policy"] == {"mode": "bytes", "limit": 10000}
         else:
-            assert "supports_reasoning_summaries" not in model
+            assert model["supports_reasoning_summaries"] is False
             assert model["truncation_policy"] == {
                 "mode": "tokens",
                 "limit": 10000,
@@ -370,7 +370,7 @@ def test_model_entry_overrides_every_shared_field_and_keeps_unknown_fallback() -
     for key, value in official_shared.items():
         assert model[key] == value
     assert model["future_catalog_field"] == {"from_template": True}
-    assert "supports_reasoning_summaries" not in model
+    assert model["supports_reasoning_summaries"] is False
     assert "effective_context_window_percent" not in model
     assert MODEL_PRESET_IGNORED_CATALOG_FIELDS.isdisjoint(model)
 
