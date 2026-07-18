@@ -11,8 +11,9 @@ Codex CLI `0.144.4`, source commit
 - the consumers under `codex-rs/core`, `codex-rs/tools`, and `codex-rs/ext`.
 
 These are internal Codex contracts, not fields defined by the public OpenAI
-API. Re-check the source-contract compatibility points whenever Codex is
-upgraded.
+API. Whenever Codex is upgraded, use the centralized
+[`version-compatibility checklist`](../dev/version-compatibility/upgrade-checklist.md)
+rather than treating this field reference as an upgrade procedure.
 
 The file envelope is `{"models":[ModelInfo,...]}`. `models` is the only
 top-level catalog key; the tables below describe every supported `ModelInfo`
@@ -345,19 +346,8 @@ would not change Codex 0.144.4 runtime behavior.
 
 ## Upgrade review requirements
 
-On every Codex source upgrade, compare both the schema and the bundled values:
-
-1. Diff `ModelInfo`, nested structs, enums, serde rename/default/skip behavior,
-   and the unknown-model fallback initializer.
-2. Diff the complete key set and model entries in
-   `codex-rs/models-manager/models.json`, including fields that the current
-   client ignores.
-3. Trace each changed consumed field to its callers in core, tools, extensions,
-   UI/model preset conversion, session persistence, and request construction.
-4. Reclassify Rosetta's third-party defaults and aliases. A copied GPT value is
-   not compatible merely because it still deserializes.
-5. Test every changed request/tool mode with a real Codex client and the actual
-   upstream model, then confirm the model-facing request in Rosetta logs.
-
-The authoritative checklist and compatibility point are maintained under
-[`docs/dev/version-compatibility`](../dev/version-compatibility/README.md).
+The version-specific schema/value diff, consumer tracing, third-party default
+review, and real-client gates are centralized in the authoritative
+[`Codex version-compatibility checklist`](../dev/version-compatibility/upgrade-checklist.md).
+This page remains the user-facing field reference and must be refreshed when
+that checklist finds a catalog contract change.

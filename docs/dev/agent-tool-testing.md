@@ -174,13 +174,14 @@ rather than an agent fixture because the deterministic public PDF contains
 embedded text. The agent PDF task still exercises the complete model-facing
 `screenshot` operation and verifies render metadata plus returned text.
 
-`request_user_input` is not represented by a `codex exec` task. Codex 0.144.1
-explicitly rejects that server request in exec mode. Codex's own integration
-test drives it through the app-server protocol, captures the
-`ToolRequestUserInput` JSON-RPC request, sends a deterministic answer, and only
-then waits for turn completion. A future real-agent fixture must add an
-app-server JSON-RPC runner; `auto_resolution_ms` does not make the current exec
-runner capable of answering the request.
+`request_user_input` is not represented by a `codex exec` task. The exact
+version-bound observation is retained in the
+[compatibility evidence](version-compatibility/evidence/real_agent_tool_test_results.md).
+Codex's own integration test drives it through the app-server protocol,
+captures the `ToolRequestUserInput` JSON-RPC request, sends a deterministic
+answer, and only then waits for turn completion. A future real-agent fixture
+must add an app-server JSON-RPC runner; `auto_resolution_ms` does not make the
+current exec runner capable of answering the request.
 
 The GPT relay provider-identity suite is
 [`tests/integration/gpt_relay`](../../tests/integration/gpt_relay/README.md).

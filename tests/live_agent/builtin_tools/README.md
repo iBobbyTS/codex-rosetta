@@ -1,10 +1,10 @@
 # Built-in Code Mode Tool Test
 
-This suite covers the built-in tools that Codex 0.144.1 exposes for an
-OpenAI-identified provider, using `gpt-5.6-sol` as the default model-shape
-reference with the local-mode catalog. It tests tool exposure, Code Mode
-projection, Rosetta reconstruction, native execution, and result delivery. It
-does not measure general coding, planning, visual, or agent quality.
+This suite covers the built-in tools in the maintained Codex compatibility
+ledger for an OpenAI-identified provider, using `gpt-5.6-sol` as the default
+model-shape reference with the local-mode catalog. It tests tool exposure, Code
+Mode projection, Rosetta reconstruction, native execution, and result delivery.
+It does not measure general coding, planning, visual, or agent quality.
 
 ## Fixed scope
 
@@ -45,11 +45,12 @@ scenario must not leak into another run.
 ## `request_user_input` limitation
 
 There is intentionally no `request_user_input` task for the current
-`codex exec` runner. Codex 0.144.1 rejects the corresponding app-server request
-with `request_user_input is not supported in exec mode`. The upstream Codex
-test uses an app-server test client: it receives `ToolRequestUserInput`, captures
-the JSON-RPC request id, and explicitly sends an answer response before waiting
-for turn completion.
+`codex exec` runner. The exact version-bound rejection observation is retained
+in the
+[central compatibility evidence](../../../docs/dev/version-compatibility/evidence/real_agent_tool_test_results.md).
+The upstream Codex test uses an app-server test client: it receives
+`ToolRequestUserInput`, captures the JSON-RPC request id, and explicitly sends
+an answer response before waiting for turn completion.
 
 An honest real-agent test therefore requires a separate app-server JSON-RPC
 runner with deterministic response injection. Do not substitute

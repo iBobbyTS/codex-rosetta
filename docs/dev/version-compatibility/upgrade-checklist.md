@@ -2,21 +2,55 @@
 
 Execute this checklist whenever you update the Codex CLI, sync `../openai-codex-src`, or change Codex-facing gateway/converter behavior. List unfinished items explicitly as limitations in the compatibility statement.
 
+## Select the review mode
+
+The developer selects the review mode and records it in the report. Do not
+infer the mode from the semantic version number alone.
+
+- **Routine release review** uses the maintained Rosetta owner map and stable
+  compatibility ledger. It is intended for a release the developer judges to
+  be bounded enough that the current documentation remains a trustworthy
+  inventory.
+- **Full inventory review** repeats the code-to-document reverse map,
+  scattered-document scan, and bounded release-range validation in
+  [`rosetta-source-map.md`](rosetta-source-map.md). It is the same class of
+  review used to establish the current ledger.
+
+During a routine review, stop and ask the developer whether to switch modes if
+any of the following occurs:
+
+- a Codex source change cannot be assigned to an existing `CP-*` point;
+- a changed or newly discovered Rosetta owner is absent from the source map;
+- a new endpoint, transport, request item, SSE event, tool family, client
+  extension, identity lifecycle, compaction path, or model-catalog consumer
+  crosses the existing ownership boundaries;
+- the source-contract extractor and the source semantics disagree;
+- point names/counts, source owners, tests, or version-specific documents have
+  drifted out of sync.
+
+These are escalation signals, not an automatic definition of a "major"
+release. The developer makes the final review-mode decision.
+
 ## Authoritative execution order
 
 The upgrade must be completed in the following order, and the latter step cannot replace the previous one:
 
-1. Record the pre-upgrade Codex CLI version, Codex source commit, and Codex-Rosetta version and commit;
-2. Confirm that `../openai-codex-src` has no uncommitted tracked modifications, then fetch and fast-forward-only pull to the latest remote version;
+1. Record the selected review mode, pre-upgrade Codex CLI version, Codex source commit, and Codex-Rosetta version and commit;
+2. Confirm that `../openai-codex-src` has no uncommitted tracked modifications, fetch tags and remote references, resolve the exact target release commit, and use the safe update method described below;
 3. Record the target Codex release and new source commit, then run the contract diff;
-4. Classify every item in `compatibility-points.md` as **high-confidence unchanged**, **possibly unchanged**, or **changed**;
+4. Verify the stable ledger integrity, then classify every `CP-*` item in `compatibility-points.md` as **high-confidence unchanged**, **possibly unchanged**, or **changed**;
 5. Define repair plans for changed items and manual-review/live-test plans for possibly unchanged items;
 6. Review the complete Codex model catalog contract and refresh `docs/en/codex-model-catalog.md` plus its Chinese counterpart when fields, defaults, bundled values, consumers, or third-party guidance changed; recheck configured Provider ID/name resolution, `is_openai()` and explicit bearer-token precedence used by local mode; then review and refresh `src/codex_rosetta/gateway/admin/tool_catalog.json` against the target tool specifications and bundled extensions, including its CLI/source metadata binding;
 7. Complete repairs and run all automated checks, including compatibility-specific tests, lint, and the full non-integration test suite;
 8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-sol` as the native Codex/GPT request-shape reference, low-cost `deepseek-v4-flash` by default for third-party non-multimodal conversion debugging, and `mimo-v2.5` for third-party multimodal tests; record substitutions and reasons;
 9. After every gate passes, update the contract baseline, upgrade report, documentation, and package version, and record the exact source commit.
 
-The output of `make check-codex-compat` is the contract group classification, which is only one of the evidences in step 4; it cannot replace the compatibility point classification one by one, nor can it cover the real client behavior.
+For a full inventory review, complete the reverse-map and documentation scan
+before step 4. The output of `make check-codex-compat` is the contract group
+classification, which is only one of the evidences in step 4; it cannot replace
+the compatibility point classification one by one, nor can it cover the real
+client behavior. Release-note labels such as "maintenance-only", "version-only",
+or "no user-facing changes" never replace an exact stable-tag source diff.
 
 ## 1. Record upgrade baseline
 
@@ -31,17 +65,35 @@ git status --short --branch
 git rev-parse HEAD
 ```
 
-Write the old CLI version, Codex source code complete commit, Codex-Rosetta version/commit and date into the upgrade report. Confirm that the source code checkout is not tracked and then update again:
+Write the review mode, old CLI version, full Codex source commit,
+Codex-Rosetta version/commit, and date into the upgrade report. Confirm that
+the source checkout has no tracked modifications, fetch the remote state, and
+resolve the exact target release before changing `HEAD`:
 
 ```bash
 test -z "$(git -C ../openai-codex-src status --porcelain --untracked-files=no)"
-git -C ../openai-codex-src fetch origin
-git -C ../openai-codex-src pull --ff-only
-git -C ../openai-codex-src rev-parse HEAD
-git -C ../openai-codex-src log -1 --date=iso-strict --format='%H%n%ad%n%s'
+git -C ../openai-codex-src fetch origin --tags --prune
+git -C ../openai-codex-src rev-parse 'rust-vX.Y.Z^{}'
+git -C ../openai-codex-src show -s --date=iso-strict \
+  --format='%H%n%ad%n%s' 'rust-vX.Y.Z^{}'
 ```
 
-If the tracked checkout is not clean or the pull cannot be fast-forwarded, stop the upgrade and process the source code repository status first. Do not reset, stash, or overwrite existing work. Do not use `0.0.0`/`0.0.0-dev` in the Codex source code manifest instead of commit, and do not regard the local `origin/main` that has not executed fetch as the latest remote state.
+Use `git pull --ff-only` when advancing a branch to an ancestor-compatible
+target. Release patch tags may be backport snapshots and therefore may not be
+descendants of the currently detached source commit. When the requested target
+is an exact release tag, a clean detached checkout may instead use:
+
+```bash
+git -C ../openai-codex-src switch --detach 'rust-vX.Y.Z'
+```
+
+Record the prior commit, target tag, peeled target commit, and whether the move
+was fast-forward or exact-tag detach. If the tracked checkout is dirty, the
+target cannot be resolved after fetch, or an in-place branch update is not
+fast-forwardable, stop before changing source state. Do not reset, stash, or
+overwrite existing work. Do not substitute a `0.0.0`/`0.0.0-dev` manifest
+value for the source commit, and do not treat an unfetched local `origin/main`
+as the latest remote state.
 
 ## 2. Review Codex source contract diff
 
@@ -69,6 +121,21 @@ codex-rs/protocol/src/models.rs
 codex-rs/protocol/src/openai_models.rs
 codex-rs/tools/src/tool_spec.rs
 codex-rs/models-manager/models.json
+codex-rs/model-provider/src/provider.rs
+codex-rs/model-provider-info/src/lib.rs
+codex-rs/code-mode/
+codex-rs/code-mode-host/
+codex-rs/code-mode-protocol/
+codex-rs/core-skills/
+codex-rs/ext/skills/
+codex-rs/ext/web-search/
+codex-rs/ext/image-generation/
+codex-rs/core-plugins/
+codex-rs/app-server/
+codex-rs/app-server-protocol/
+codex-rs/shell-command/
+src/codex_rosetta/gateway/codex_models.json
+src/codex_rosetta/gateway/codex_models_version.md
 ```
 
 Key points to confirm:
@@ -90,7 +157,19 @@ Key points to confirm:
 - local catalog `comp_hash` selection from the upstream model name, including explicit non-empty preset-hash precedence and alias inheritance, deterministic fallback, stability across exposed-alias and Provider changes, plus a change when the upstream model changes;
 - For every Codex model-catalog upgrade, compare the target `gpt-5.6-sol` entry field by field with `codex_model_presets.json`: classify identity/context/modality/reasoning/prompt fields as model-specific, trace every remaining field to the target client's `ModelInfo` and runtime consumers, copy client-consumed shareable fields into `shared_overrides`, preserve the fixed Responses Lite/Code Mode only/collaboration v2 surface for current flagship third-party models, record any protocol-specific deviation from Terra, verify every shared key can be overridden by each `models[]` entry, and verify `template_slug` fills only previously unknown fields rather than restoring removed or client-ignored fields;
 - The complete bundled `models.json` key set and per-model values, including keys ignored by the current client and valid defaulted fields omitted from the JSON;
+- Rosetta's packaged `src/codex_rosetta/gateway/codex_models.json` and its
+  adjacent `codex_models_version.md` as one atomic review unit: compare every
+  JSON value with the target Codex `models.json`, set the sidecar version to
+  the reviewed Codex release, and record both the semantic diff and source
+  commit. Until the legacy version-named catalog resource is retired, compare
+  it too and do not accept divergent bundled catalog copies;
 - Whether catalog-selected tool surfaces changed, especially `web.run` versus hosted `web_search` and collaboration v2 versus `multi_agent_v1`.
+- Whether local filesystem Skills still use catalog plus selected-body injection,
+  while orchestrator-owned Skills still require app-server, no local executor,
+  and exact `skills.list`/`skills.read` resource handles;
+- Whether command-policy rejection remains a client-side error surface or
+  changes the model-facing custom/Code-Mode tool schema, call/output item, or
+  recovery loop.
 
 ## 3. Compare Rosetta ownership boundaries
 
@@ -100,21 +179,39 @@ For each Codex contract diff, clearly fall into one of the following ownership d
 2. **Bridge must be adapted**: modify converter/gateway, and add request, stream and multiple rounds of testing;
 3. **Currently not supported**: Record disabling methods, fallback dependencies and test conditions before enabling.
 
-Key review:
+Use [`rosetta-source-map.md`](rosetta-source-map.md) as the exhaustive owner
+index. The following are the high-level entry points, not a substitute for that
+map:
 
 ```text
 src/codex_rosetta/gateway/app.py
+src/codex_rosetta/gateway/auth.py
 src/codex_rosetta/gateway/codex_auxiliary.py
+src/codex_rosetta/gateway/codex_compaction.py
+src/codex_rosetta/gateway/codex_compact_prompt.md
+src/codex_rosetta/gateway/codex_compact_summary_prefix.md
 src/codex_rosetta/gateway/headers.py
 src/codex_rosetta/gateway/proxy.py
+src/codex_rosetta/gateway/providers.py
 src/codex_rosetta/gateway/stream_phase_buffer.py
 src/codex_rosetta/gateway/tool_adaptation.py
 src/codex_rosetta/gateway/web_search.py
+src/codex_rosetta/gateway/web_run_capabilities.py
+src/codex_rosetta/gateway/web_run_health.py
+src/codex_rosetta/gateway/web_run_sidecar.py
+src/codex_rosetta/gateway/web_run_supervisor.py
 src/codex_rosetta/gateway/local_mode.py
 src/codex_rosetta/gateway/cli.py
 src/codex_rosetta/gateway/codex_models_0_144_4.json
+src/codex_rosetta/gateway/codex_models.json
+src/codex_rosetta/gateway/codex_models_version.md
 src/codex_rosetta/gateway/codex_model_presets.json
 src/codex_rosetta/gateway/admin/tool_catalog.json
+src/codex_rosetta/capabilities.py
+src/codex_rosetta/reasoning_mapping.py
+src/codex_rosetta/pipeline.py
+src/codex_rosetta/observability/persistence.py
+src/codex_rosetta/observability/tool_mapping_crypto.py
 src/codex_rosetta/converters/openai_responses/
 src/codex_rosetta/converters/openai_chat/
 src/codex_rosetta/converters/base/helpers/tool_orphan_fix.py
@@ -123,11 +220,22 @@ src/codex_rosetta/types/openai/responses/
 
 ### Compatibility point classification and repair plan one by one
 
-After completing the source diff and automated contract report, copy every item from `compatibility-points.md` and fill in these fields. The number of report rows must match the source list. Save reports under `docs/dev/version-compatibility/reports/YYYYMMDD-codex-vX.Y.Z.md`:
+Before classification, verify that the stable registry, compatibility overview,
+and test matrix contain the same current point set (23 points at the
+`2026-07-18` baseline). A missing, duplicated, or renamed row is a
+documentation defect and must be fixed before the release decision; when a new
+point is added, update all three structures in the same task.
 
-| Compatibility points | Classification | Source code/contract evidence | Fix or review plan | Automation results | Real API results |
+After completing the source diff and automated contract report, copy every
+`CP-*` ID and canonical name from `compatibility-points.md` and fill in these
+fields. The number of report rows must match the registry. Save reports under a
+descriptive date-free name such as
+`docs/dev/version-compatibility/reports/range-coverage-review.md`, then put
+the date followed by `Codex version: 0.144.0` directly below the title:
+
+| ID and compatibility point | Classification | Source code/contract evidence | Fix or review plan | Automation results | Real API results |
 | --- | --- | --- | --- | --- | --- |
-| `<Compatibility point name>` | High confidence no change / probably no change / yes change | `<commit/diff/code location>` | `<no fix, review step, or fix required>` | `<command and result>` | `<model, route, result, or non-trigger reason>` |
+| `CP-XX — <canonical name>` | High confidence no change / probably no change / yes change | `<commit/diff/code location>` | `<no fix, review step, or fix required>` | `<command and result>` | `<model, route, result, or non-trigger reason>` |
 
 Classification rules:
 
@@ -192,6 +300,13 @@ You can't incorporate "probably no changes" into the pass, and you can't omit th
 
 Still to be implemented: field types, nested model-catalog structs, serde rename/default/skip strategy, instruction-template precedence, full bundled model values and consumer mapping, SSE match arm digest, full generic tool schema, tool_search defaults, and model fallback initializer. The extractor currently covers the `ModelInfo` field set, key model enums, and a Responses Lite capability subset only. Therefore, the current baseline cannot claim complete model-catalog compatibility.
 
+The `0.144.6` range audit proves why the manual catalog step is mandatory:
+Codex changed only bundled Sol/Terra/Luna instruction and context-window values,
+while the extracted content groups still matched the `0.144.4` baseline. For
+every routine or full review, diff the complete target `models.json` values
+against both the previous Codex release and Rosetta's packaged catalog asset,
+even when the contract output reports only source-commit drift.
+
 #### B. Fixture and unit/component testing
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
@@ -255,17 +370,26 @@ Existing special test commands:
 ```bash
 CONDA_ENV="${CODEX_ROSETTA_CONDA_ENV:-llm-rosetta}"
 conda run -n "$CONDA_ENV" python -m pytest \
+  tests/gateway/test_auth.py \
   tests/gateway/test_app_headers.py \
   tests/gateway/test_request_state_lifecycle.py \
   tests/gateway/test_http_transport_limits.py \
   tests/gateway/test_responses_passthrough.py \
+  tests/gateway/test_codex_compaction.py \
   tests/gateway/test_stream_phase_buffer.py \
   tests/gateway/test_code_mode_projection.py \
   tests/gateway/test_tool_adaptation.py \
   tests/gateway/test_codex_page.py \
   tests/gateway/test_codex_search.py \
   tests/gateway/test_codex_auxiliary.py \
+  tests/gateway/test_web_run_health.py \
+  tests/gateway/test_web_run_sidecar.py \
+  tests/gateway/test_web_run_supervisor.py \
+  tests/gateway/test_web_run_google_search.py \
+  tests/gateway/test_web_run_bing_search.py \
   tests/gateway/test_web_search_bridge.py \
+  tests/gateway/test_model_presets.py \
+  tests/gateway/test_local_mode.py \
   tests/gateway/test_config.py \
   tests/gateway/test_admin_config_routes.py \
   tests/converters/openai_chat/test_message_ops.py \
@@ -273,7 +397,10 @@ conda run -n "$CONDA_ENV" python -m pytest \
   tests/converters/openai_responses/test_tool_ops.py \
   tests/converters/openai_responses/test_stream.py \
   tests/converters/test_strip_orphaned_tool_config.py \
+  tests/test_reasoning_mapping.py \
+  tests/test_provider_reasoning_transforms.py \
   tests/test_codex_source_contract.py \
+  tests/live_agent/test_live_agent_configuration_contract.py \
   tests/test_pipeline.py -q
 ```
 

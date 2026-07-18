@@ -1,4 +1,6 @@
-# Codex v0.144.1 Scoped Reference Review
+# Codex Scoped Reference Review
+Date: 2026-07-12
+Codex version: 0.144.0
 
 Status: **Pending / not approved**. This report records the exact 0.144.1
 release source used as the current reference and the Namespace compatibility

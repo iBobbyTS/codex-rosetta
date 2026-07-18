@@ -25,39 +25,45 @@ Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first t
 
 ## Current pending inspection baseline
 
-Inspection date: 2026-07-14
+Inspection date: 2026-07-18
 
 | Project | Current Value | Description |
 | --- | --- | --- |
-| Local Codex CLI | `codex-cli 0.144.4` | From `codex --version`; newer than the `0.144.0.r0` compatibility target |
-| Codex source branch | detached `rust-v0.144.4` | Exact release reference in `../openai-codex-src` |
-| Codex source commit | `8c68d4c87dc54d38861f5114e920c3de2efa5876` | Exact peeled commit for `rust-v0.144.4` |
-| Codex source timestamp | `2026-07-13T21:20:37-07:00` | Release commit timestamp |
+| Local Codex CLI | `codex-cli 0.144.6` | From `codex --version`; this inspection does not adopt it as the Rosetta package target |
+| Codex source branch | detached `rust-v0.144.6` | Exact release reference in `../openai-codex-src` |
+| Codex source commit | `5d1fbf26c43abc65a203928b2e31561cb039e06d` | Exact peeled commit for `rust-v0.144.6` |
+| Codex source timestamp | `2026-07-18T09:05:05-04:00` | Release commit timestamp |
 | Codex-Rosetta package version | `0.144.0.r0` | First Rosetta patch for Codex `0.144.0` |
-| Codex-Rosetta review snapshot | HEAD `47157ee` plus the 0.144.4 compatibility worktree | Exact release compatibility remains pending until the triggered live gates pass |
+| Codex-Rosetta review snapshot | HEAD `d2770c7aefcabc191e4416fa6b4ea0128bea106a` plus this documentation-only worktree | Runtime adaptation, baseline refresh, package-version change, and compatibility approval are outside this inspection |
 
-This is a dirty inspection snapshot, not a clean reproducible release revision. The `0.144.4` reference review and the earlier `0.144.0` compatibility decision are **pending / not approved** until every triggered live gate passes against an exact clean Codex-Rosetta commit. The Codex CLI release version, Codex source commit, Codex-Rosetta source version, and Codex-Rosetta commit remain independent compatibility identifiers. See [`reports/20260714-codex-v0.144.4.md`](reports/20260714-codex-v0.144.4.md) for the scoped source review and remaining gates; the 0.144.1 report remains historical evidence.
+This is a documentation coverage inspection, not a clean reproducible release
+revision or a compatibility approval. It validates the code-derived ledger and
+checklist against Codex `0.142.0` through `0.144.6`, while deliberately leaving
+Rosetta runtime code, packaged assets, the source-contract baseline, and the
+package version unchanged. The Codex CLI release version, Codex source commit,
+Codex-Rosetta source version, and Codex-Rosetta commit remain independent
+identifiers. See
+[`reports/range-coverage-review.md`](reports/range-coverage-review.md)
+for the range audit and the known `0.144.6` implementation gap.
 
-## Recorded verification results (partial)
+## Recorded documentation verification
 
 | Check | Results |
 | --- | --- |
-| Codex source contract check | Baseline reviewed and updated for `8c68d4c87dc…`; final worktree verification is recorded in the 0.144.4 report |
-| Codex-specific targeted regression | `404 passed`; extended regression `425 passed, 6 warnings`; Responses converter `356 passed` |
-| `make lint` | Passed; both Ruff check and format check passed |
-| `make test` | `2533 passed, 4 skipped, 9 warnings` |
-| Real Codex/API | **Partial:** `deepseek-v4-flash` completed controlled Lite/code-mode, file reading, multi-turn tools, `ultra`, and `exec` through an isolated gateway. Native GPT, compact/resume/fork, plugin/MCP/deferred tools, web search, UI phase, Desktop tools, changed error paths, and multi-agent remain unverified/not triggered; WebSocket Responses, incremental history, and remote compact remain unsupported |
-
-The controlled alias is evidence only for the third-party route it actually exercised. It must not be expanded into native GPT evidence or treated as satisfying the complete live matrix. See [`reports/20260709-codex-v0.144.0.md`](reports/20260709-codex-v0.144.0.md) for the itemized `tested`, `unverified / not triggered`, and `unsupported` status.
-
-The earlier intermittent `TestPipelineProfile::test_profile_populated_after_convert_request` failure was traced to test arithmetic, not conversion state leakage: each phase and the total are independently rounded to a 0.01 ms reporting quantum, so adding rounded sub-millisecond phases can exceed the separately rounded total. The request/response assertions now use tight absolute tolerances derived from that quantization; focused tests, a 50,000-iteration stress run, and the full suite pass. See `.agent-work/debug/resolved/20260709-pipeline-profile-rounding-flake.md` for the evidence chain.
+| Codex source contract check | Ran against exact `0.144.6`; all extracted content groups matched the reviewed `0.144.4` baseline and only `codex_source_commit` changed. The command correctly failed because the baseline was not refreshed |
+| Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 23 points |
+| Ledger integrity | Compatibility overview and test matrix contain the same 23 names exactly once; the previously unmatched Skill and Bing rows and deferred-tool naming were reconciled |
+| `0.142.0` … `0.144.6` range coverage | Every Codex-facing change family maps to a stable compatibility point or is explicitly classified as outside Rosetta's compatibility boundary in the 0.144.6 report |
+| Runtime adaptation and real Codex/API | **Not performed in this documentation-only inspection.** In particular, the packaged `0.144.4` catalog still differs from `0.144.6` for Sol/Terra/Luna instructions and context-window values, so `0.144.6` is not approved |
 
 ## Files
 
 - [`../../en/codex-model-catalog.md`](../../en/codex-model-catalog.md): Complete Codex model catalog field reference and Rosetta third-party adaptation guidance, mirrored under `docs/zh-cn`.
 - [`compatibility-points.md`](compatibility-points.md): Codex-specific compatibility points, ownership boundaries, evidence paths, and known limitations.
+- [`rosetta-source-map.md`](rosetta-source-map.md): Code-derived Rosetta owner and deterministic-test map used by routine release reviews.
 - [`upgrade-checklist.md`](upgrade-checklist.md): Source-review and test checklist for Codex upgrades, separating the automation backlog from live Codex/model gates.
 - [`codex-source-contract.json`](codex-source-contract.json): A machine-comparable contract baseline extracted from the current Codex source code and saved after human review.
+- [`evidence/`](evidence/README.md): Historical source research, runtime observations, and supporting protocol notes. These are evidence, not current compatibility claims.
 - [`reports/`](reports/README.md): Old/new versions, itemized classifications, fixes, automation results, real API results and final version decisions for each Codex upgrade.
 
 Primary automation entry point:
@@ -78,9 +84,29 @@ Category three will be displayed even if it is empty. By default "changed" cause
 
 ## Maintenance rules
 
+- Current Rosetta code and deterministic tests are implementation facts. The
+  compatibility ledger is the intended contract, and
+  [`rosetta-source-map.md`](rosetta-source-map.md) is the maintained index
+  between them. Correct the documentation whenever the three disagree.
+- The developer selects either a routine release review or a full inventory
+  review; semantic version numbers do not select the mode automatically. A
+  routine review may use the documented source map, but an unmapped Codex diff,
+  an unmapped Rosetta owner, or conflicting extractor/source evidence must be
+  escalated for an explicit review-mode decision.
+- Stable `CP-*` IDs, rather than free-form row names, identify compatibility
+  points in reports. The overview and test matrix must each contain every
+  registered point exactly once.
+- Store version-specific source research, runtime observations, and upgrade
+  decisions only under this directory's `evidence/` and `reports/`. User-facing
+  references and general test guides may link here but must not maintain a
+  second compatibility baseline or upgrade checklist.
 - When any Codex-specific adaptation is discovered or added during daily development, the corresponding compatibility points must be added or updated in `compatibility-points.md`, and the checks that can be automatically completed, when the real Codex/API test must be connected, and the recommended actual test scenarios must be written clearly.
 - When updating the Codex CLI or `../openai-codex-src`, an upgrade checklist must be performed.
-- The upgrade must first record the old commit, and then fast-forward `../openai-codex-src` to the latest remote version; you cannot just compare the local `origin/main` that has not been fetched.
+- The upgrade must first record the old commit, fetch tags and remote references,
+  and resolve the peeled target release commit. Prefer fast-forward-only branch
+  updates; when a requested release tag is a divergent backport snapshot, a
+  clean exact-tag detach is allowed and must be recorded. Never compare only an
+  unfetched local `origin/main`.
 - When `make check-codex-compat` reports a commit or contract drift, the semantic review must be completed first; the baseline must not be refreshed directly to make the check green.
 - The three-category contract-group output of `make check-codex-compat` is evidence input only. The final report must provide "high confidence no change", "possibly no change" or "change" for each compatibility point in `compatibility-points.md` item by item, and compatibility points not covered by the extractor must not be missed.
 - Run all automated tests. Every compatibility point classified as "possibly unchanged" or "changed" requires a real Codex/API test. Only after all repairs and gates pass may the Codex-Rosetta package version advance to `{codex_version}.r{patch_number}`; record the exact source commit at the same time.

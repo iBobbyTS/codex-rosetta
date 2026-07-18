@@ -1,4 +1,6 @@
-# Codex v0.144.0 Upgrade Report and Execution Plan
+# Codex Upgrade Report and Execution Plan
+Date: 2026-07-09
+Codex version: 0.144.0
 
 Status: **Pending / not approved**. Implementation and automated checks have partial evidence, but the required live matrix is incomplete. The source version remains `0.144.0.r0`; this report does not authorize a release.
 
