@@ -321,7 +321,7 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
     persistence.close()
 
 
-def test_live_quality_matrix_uses_identical_input_and_locked_provider_routes() -> None:
+def test_live_quality_matrix_uses_identical_input_and_optional_gpt_provider() -> None:
     live_root = Path(__file__).parents[2] / "tests" / "live_agent"
     quality = live_root / "context_compaction_summary_quality"
 
@@ -337,7 +337,7 @@ def test_live_quality_matrix_uses_identical_input_and_locked_provider_routes() -
 
     gpt = json.loads((quality / "01" / "expected.json").read_text())
     deepseek = json.loads((quality / "02" / "expected.json").read_text())
-    assert gpt["gateway_provider"] == "Pixel (K12)"
+    assert gpt["gateway_provider"] is None
     assert gpt["default_model"] == "gpt-5.6-sol"
     assert deepseek["default_model"] == "deepseek-v4-flash"
     assert gpt["model_auto_compact_token_limit"] == 15000

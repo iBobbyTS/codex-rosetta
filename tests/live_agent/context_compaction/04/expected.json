@@ -4,7 +4,7 @@
   "default_first_model": "deepseek-v4-flash",
   "first_gateway_provider": "Deepseek (Official)",
   "default_resume_model": "gpt-5.6-sol",
-  "resume_gateway_provider": "Pixel (K12)",
+  "resume_gateway_provider": null,
   "expected_reason": "comp_hash_changed",
   "expected_request_kind": "remote_v2_in_band",
   "expected_mode": "rosetta",

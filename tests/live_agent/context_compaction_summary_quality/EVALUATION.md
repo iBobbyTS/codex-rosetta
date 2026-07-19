@@ -28,7 +28,7 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "command_output_chars": 128000,
   "final_response_after_compaction": true,
   "model": "observed Codex-facing model alias",
-  "gateway_provider": "Pixel (K12)",
+  "gateway_provider": "observed configured provider",
   "thread_id": "<thread-id>",
   "summary_reviewer": "coding_agent_or_developer",
   "summary_review": "effective",
@@ -62,6 +62,11 @@ Write `RUN_ROOT/artifacts/evaluation.json` with this bounded schema:
   "error": null
 }
 ```
+
+For the GPT cell, `gateway_provider` records the observed configured provider
+and is not an expected fixed value. If the selected model is unavailable or
+the provider cannot be reached, stop with a user-decision-required result
+instead of changing the model or provider automatically.
 
 For each key:
 

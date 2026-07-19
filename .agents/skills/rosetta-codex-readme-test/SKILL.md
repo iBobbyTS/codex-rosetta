@@ -56,6 +56,11 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
   Provider. Use Provider ID `codex_rosetta` with the exact case-sensitive
   display name `OpenAI`. Do not define suite-specific provider IDs or any
   provider whose display name is `openai`, `custom`, or another spelling.
+- GPT live cells must not pin an upstream Gateway provider name. Accept any
+  configured provider that serves the selected GPT model and records a real
+  response. If the model route is missing or the upstream is unavailable,
+  stop with a user-decision-required result; never silently substitute a
+  provider or model.
 - Source every Gateway credential needed by a test, including model-provider,
   Images, Tavily, and sidecar credentials, only from the user's
   `~/.config/codex-rosetta-gateway` directory. Source Codex login state only

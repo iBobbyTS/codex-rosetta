@@ -9,7 +9,7 @@ the fixed post-compaction facts.
 
 | Task | Default model | Copied-config provider | Expected gateway mode |
 |---|---|---|---|
-| `01` | `gpt-5.6-sol` | `Pixel (K12)` | native |
+| `01` | `gpt-5.6-sol` | any configured reachable GPT provider | native |
 | `02` | `deepseek-v4-flash` | existing sole provider | Rosetta |
 
 The two tasks must keep byte-identical `TASK.md`, `scenario.py`, and `QUERY.md`
@@ -20,10 +20,12 @@ filler only forces compaction. The canonical expected values live once in
 [`expected_facts.json`](expected_facts.json) and are read only by the test
 executor.
 
-In the copied Gateway config only, route `gpt-5.6-sol` to the provider named
-exactly `Pixel (K12)`. Do not modify the user's main config. Keep
-`deepseek-v4-flash` on its existing sole provider. Confirm the observed provider
-and upstream model from Gateway Logs.
+In the copied Gateway config only, retain the existing route for `gpt-5.6-sol`.
+Any provider is valid for the GPT cell if that model is configured and produces
+a response. Do not modify the user's main config. Keep `deepseek-v4-flash` on
+its existing sole provider. Confirm the observed provider and upstream model
+from Gateway Logs. If the GPT route is unavailable, stop and request a user
+decision rather than changing the model or provider automatically.
 
 ## Two-phase run
 

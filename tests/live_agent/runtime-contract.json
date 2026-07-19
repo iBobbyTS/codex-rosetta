@@ -12,6 +12,8 @@
   "provider_request_auth": "experimental_bearer_token",
   "provider_base_url": "isolated_localhost_gateway",
   "model_requests_must_reach_isolated_gateway": true,
+  "gpt_upstream_provider_policy": "any_configured_provider_that_responds",
+  "unreachable_provider_action": "stop_and_request_user_decision",
   "credential_free_artifact": "artifacts/runtime-auth.json",
   "credential_free_artifact_required_fields": [
     "execution_mode",

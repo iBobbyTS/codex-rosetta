@@ -2,7 +2,7 @@
   "id": "03",
   "timeout_seconds": 120,
   "default_first_model": "gpt-5.6-sol",
-  "first_gateway_provider": "Pixel (K12)",
+  "first_gateway_provider": null,
   "default_resume_model": "deepseek-v4-flash",
   "resume_gateway_provider": "Deepseek (Official)",
   "expected_reason": "comp_hash_changed",

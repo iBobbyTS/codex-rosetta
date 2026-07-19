@@ -147,6 +147,19 @@ native compaction/replay but cannot satisfy the stricter raw-wire assertion;
 the runner should either use app-server for that gate or make the raw-wire
 assertion conditional on attestation.
 
+The historical `Pixel (K12)` label in this result came from the former native
+smoke-runner contract, not from a protocol requirement. The runner contract is
+now provider-neutral for GPT: it accepts any configured provider that serves
+the selected GPT model, records the observed provider, and stops with a
+user-decision-required result when the model route is missing or unavailable.
+
+The first provider-neutral Terra smoke (`202607191438`) resolved the model to
+the configured `Pixel (Plus)` provider, so the old Pixel (K12) precondition no
+longer blocked it. Codex then stopped at `thread/start` because the copied
+local `model_catalog.json` lacks the current
+`supports_reasoning_summaries` field. This is recorded as a user-decision
+configuration block; no provider or model substitution was attempted.
+
 ## Split DeepSeek Flash compaction rerun — 2026-07-19
 
 The rerun used the local Codex source binary `0.145.0-alpha.23`, the isolated

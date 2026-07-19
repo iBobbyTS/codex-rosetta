@@ -49,6 +49,12 @@ Write a bounded object to `RUN_ROOT/artifacts/evaluation.json`:
 Do not include credentials, prompts, compaction payloads, summary plaintext,
 or unbounded error bodies.
 
+`gateway_provider` is an observed result, not a GPT input requirement. For GPT
+cells, any configured provider is acceptable when the selected model responds.
+If the model is not configured or the upstream provider is unreachable, stop
+with `user_decision_required` and ask the user whether to change configuration
+or choose another model; do not silently substitute either one.
+
 ## Split success decision
 
 For every counted Remote Compaction V2 protocol chain, require all of these:
@@ -98,6 +104,10 @@ initiates compaction and the target model produces the resume marker.
   actions recorded outside that scope.
 - `model_behavior_failure`: the protocol chain completed, but task `05` failed
   the exactly-once behavior contract.
+- `provider_unavailable_requires_user_decision`: the selected model was
+  configured but its provider or local model catalog returned a bounded
+  unavailable/auth/routing/configuration error; stop without substituting a
+  model or provider.
 - `remote_compaction_error_reproduced`: a genuine trigger is followed by the
   bounded compact-task error recorded in the artifact.
 - `not_triggered`: the scenario ran but no genuine trigger was sent.
