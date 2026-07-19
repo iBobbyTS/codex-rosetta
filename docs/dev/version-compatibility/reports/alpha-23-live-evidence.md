@@ -79,22 +79,28 @@ Each usage tuple is `request-id-prefix:input/output/cached/adjacent-delta`; `bas
 | `202607182050` | `context_compaction/02-context-limit` | `gpt-5.6-terra`; `Pixel (K12)` | `019f7847-d1f8-7150-970b-0ce0194408c3` | `0` / `True` / `infrastructure_failure` | native app-server runner did not emit the shared usage artifact |
 | `202607182051` | `context_compaction/02-manual` | `gpt-5.6-terra`; `Pixel (K12)` | `019f7848-bfb3-72b3-b2db-987c42de9c23` | `0` / `True` / `completed` | native app-server runner did not emit the shared usage artifact |
 | `202607191010` | `command_execution/03` | `deepseek-v4-pro`; Deepseek (Official) openai_responses→openai_chat | `019f7b24-43b4-7911-89fe-6fe5cc5a9070` | `124` / `False` / `failure` | four upstream requests; first three completed, last cancelled; model emitted three new command starts and no `write_stdin` |
+| `202607191330` | `command_execution/03` | `deepseek-v4-pro`; Deepseek (Official) openai_responses→openai_chat; Chat default example guidance | `019f7bdb-b7fd-7a13-994a-27aae9e07299` | `0` / `True` / `success` | three upstream requests; one `exec_command`, one same-session `write_stdin`, streaming arguments reconstructed to `chars: "rosetta\\n"`; marker observed |
 | `202607191011` | `image_generation/01` | `mimo-v2.5`; Opencode Go openai_responses→openai_chat | `019f7b26-0637-7f52-82ba-3db10af0c2c2` | `0` / `False` / `failure` | eight upstream requests; corrected image call reached Images endpoint, which returned 404 `model_not_found` for `gpt-image-2`; no artifact/view call |
+| `202607191246` | `command_execution/03` | `glm-5.2`; Opencode Go openai_responses→openai_chat | `019f7bb3-59e8-7382-a1ed-10258d1a0990` | `124` / `False` / `failure` | real Chat request exposed standalone `exec_command` and `write_stdin`; GLM started one PTY, then polled, sent `chars: "rosetta"` without LF, and polled again |
+| `202607191300` | `command_execution/03` | `glm-5.2`; Opencode Go openai_responses→openai_chat; Chat default profile guidance revision | `019f7bc0-8dec-7d62-ba30-52ff96ca7264` | `124` / `False` / `failure` | profile guidance was present; GLM started one PTY, reused the same session, but emitted `chars: "rosetta\\n"` with an over-escaped literal backslash+n, then polled |
+| `202607191309` | `command_execution/03` | `glm-5.2`; Opencode Go openai_responses→openai_chat; explicit call example added | `unknown` | `124` / `False` / `failure` | example improved the visible call sequence but GLM still reused the session with `chars: "rosetta\\n"` and then polled; no marker |
 
 ## Cache-continuation review
 
-Across the original recorded CLI cells there were 227 upstream requests, 154 non-first adjacent deltas, and eight requests without usage. The two 2026-07-19 follow-up cells add 12 source requests without a new cache aggregate. Of the original deltas, 61 were within ±200 tokens; 63 retained the same model, route, tool and instruction fingerprints and reflect an uncached conversation suffix or backend token-block alignment; 25 changed the instruction fingerprint in subagent lifecycle traffic; two changed model, provider, route, tools and instructions during deliberate compaction model switches; and three same-structure requests reported zero cached tokens, classified as backend cache misses rather than Rosetta request-shape drift.
+Across the original recorded CLI cells there were 227 upstream requests, 154 non-first adjacent deltas, and eight requests without usage. The three 2026-07-19 follow-up cells add 18 source requests without a new combined cache aggregate. Of the original deltas, 61 were within ±200 tokens; 63 retained the same model, route, tool and instruction fingerprints and reflect an uncached conversation suffix or backend token-block alignment; 25 changed the instruction fingerprint in subagent lifecycle traffic; two changed model, provider, route, tools and instructions during deliberate compaction model switches; and three same-structure requests reported zero cached tokens, classified as backend cache misses rather than Rosetta request-shape drift.
 
 The eight missing-usage requests are preserved explicitly in the table: one Terra 429 request, four requests from failed/timeout command cells, and three completed Terra subagent requests whose upstream completed event omitted usage. Their stream terminal stages were still inspected; missing usage was not converted into a synthetic zero or an aggregate rate.
 
 ## 2026-07-19 follow-up retests
 
-The new-key `deepseek-v4-pro` task-03 retest reproduced the command failure.
-The first request returned `INPUT:VALUE`; the model then issued two more
-`exec_command` starts instead of using the returned session ID. All requests
-reached the same DeepSeek provider through Rosetta's Responses-to-Chat route,
-and no converter or upstream transport error occurred. This is a model-facing
-tool-use/continuation failure, not a Rosetta session-loss failure.
+The earlier new-key `deepseek-v4-pro` task-03 retest reproduced the command
+failure: the model restarted the command instead of using the returned session
+ID. A later retest after the Chat Default continuation example succeeded. The
+model issued one `exec_command`, reused its returned session with one
+`write_stdin`, and the streamed arguments reconstructed to `chars: "rosetta\\n"`;
+the process returned `RESULT:INPUT_OK`. All requests reached the same DeepSeek
+provider through Rosetta's Responses-to-Chat route, with no converter or
+upstream transport error.
 
 The new-key MiMo image retest also reached the isolated Images endpoint. MiMo
 first emitted an invalid top-level `return` in the JavaScript wrapper, then
@@ -102,6 +108,15 @@ correctly invoked the image tool; the corrected request returned 404 because
 the endpoint's configured model list omitted `gpt-image-2`. The key refresh did
 not change the endpoint capability, and no generated artifact existed to pass
 to `view_image`.
+
+The GLM 5.2 task-03 control initially failed, but it confirms the projection
+layer. After the Chat default profile gained explicit continuation and escape
+guidance, GLM correctly started one PTY and reused its session ID. It still
+emitted a raw argument containing two backslashes (`chars: "rosetta\\\\n"`),
+which Rosetta reconstructed exactly as the literal two-character sequence
+`\\n`; the process therefore remained blocked in `readline()` until the
+30-second timeout. This narrows the remaining failure to GLM's JSON/tool-
+argument escaping, not standalone `write_stdin` expansion or session routing.
 
 ## Compaction failure classification
 

@@ -663,6 +663,15 @@ def test_exec_description_projects_precise_normal_function_schemas():
         "use_default",
         "require_escalated",
     ]
+    write_stdin_schema = definitions["write_stdin"]["function"]["parameters"]
+    chars_description = write_stdin_schema["properties"]["chars"]["description"]
+    assert "type exactly one backslash before n" in chars_description
+    assert "after exec_command returns session_id 123" in chars_description
+    assert (
+        'write_stdin with {chars: "rosetta\\n", session_id: 123}' in chars_description
+    )
+    assert "do not send the two literal characters backslash+n" in chars_description
+    assert "only polls; it does not submit input" in chars_description
     plan_schema = definitions["update_plan"]["function"]["parameters"]
     assert plan_schema["properties"]["plan"]["items"]["required"] == [
         "step",
@@ -675,7 +684,17 @@ def test_exec_description_projects_precise_normal_function_schemas():
         "additionalProperties": False,
     }
     assert definitions["exec_command"]["function"]["description"] == (
-        "Description for exec_command."
+        "Description for exec_command.\n\nWhen an interactive command returns a session_id, "
+        "the command is still available for follow-up even if the wrapper reports "
+        "Script completed; reuse that exact session_id with write_stdin instead of "
+        'starting the command again. Example: exec_command({cmd: "python3 scenario.py", '
+        "tty: true, yield_time_ms: 1000}) -> {session_id: 123}; then "
+        'write_stdin({chars: "rosetta\\n", session_id: 123}) and use its output. '
+        "For line-oriented input, send the complete line "
+        "including the newline in one write_stdin call. In the JavaScript string, use "
+        'one backslash escape (chars: "rosetta\\n"), not the literal two-character '
+        'sequence backslash+n (chars: "rosetta\\\\n"). Boolean parameters such as '
+        "tty must be JSON booleans true or false, not quoted strings."
     )
     assert definitions["create_goal"]["function"]["description"].endswith(
         "Do not set token_budget unless the user explicitly provided a numeric token "

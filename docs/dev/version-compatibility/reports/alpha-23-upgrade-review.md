@@ -105,17 +105,33 @@ Rosetta preserved that value. Terra generated a JavaScript newline escape and
 continued the original session successfully. This is a model-facing
 tool-argument reliability failure, not a Rosetta serialization failure.
 
-The additional `deepseek-v4-pro` retest also failed: it received `INPUT:VALUE`
-but restarted the command three times without any `write_stdin` call. This
-confirms the issue is not specific to the Flash model. The additional MiMo
+The first additional `deepseek-v4-pro` retest failed: it received
+`INPUT:VALUE` but restarted the command three times without any `write_stdin`
+call. A later retest after the Chat Default continuation example succeeded: it
+issued one `exec_command`, reused the same session with one `write_stdin`, and
+sent the required newline, returning `RESULT:INPUT_OK`. This confirms the
+original issue was model-facing prompt/tool-use behavior rather than a
+Rosetta session or converter defect. The additional MiMo
 retest reached the Images endpoint with the refreshed key, but the endpoint
 still did not expose `gpt-image-2`.
+
+The `glm-5.2` control was rerun after adding Chat default profile guidance to
+both `exec_command` and `write_stdin`. The upstream request still exposed both
+as independent Chat functions. GLM kept one process session and called
+`write_stdin`, but its raw function arguments contained an over-escaped
+`chars: "rosetta\\\\n"`; Rosetta preserved that exact value, so the process
+remained blocked waiting for a newline. This confirms that `write_stdin` is
+expanded outside `exec` for Chat upstreams and that the remaining failure is
+model-side JSON escaping rather than Rosetta session or serialization loss.
+Adding an explicit `exec_command` → `write_stdin` example to the profile was
+also tested; it improved the documented sequence but did not change GLM's
+over-escaping behavior.
 
 ### Ordinary suites
 
 | Suite | Result |
 | --- | --- |
-| Command execution | 7/8 original final cells passed. Terra task 03 also passed in the 2026-07-19 new-key retest. DeepSeek task 03 failed again with the new key: repeated process restart and an over-escaped newline; this is a model-facing tool-argument reliability failure, not a Rosetta conversion failure. |
+| Command execution | 7/8 original final cells passed. Terra task 03 passed in the 2026-07-19 new-key retest. DeepSeek-v4-pro first failed but passed after the Chat Default continuation example; GLM task 03 still fails on over-escaped newline arguments. The remaining GLM failure is model-facing, not a Rosetta conversion failure. |
 | Deferred discovery | 14/14 passed across Terra and DeepSeek. |
 | Built-in tools | 11/11 passed: Terra 5, DeepSeek 4, MiMo view transport and visual recognition 2. |
 | Local skills and namespace tools | 4/4 passed; native dotted and model-facing hyphenated names were both observed. |
@@ -153,8 +169,8 @@ failed cells, plus two explicitly unscored quality cells.
 ### Cache-continuation evidence
 
 The original matrix appendix records 227 upstream requests and 154 adjacent
-non-first deltas; the two new-key follow-ups add 12 source requests without
-being folded into a new cache aggregate. No aggregate hit rate is claimed.
+non-first deltas; the three follow-up cells add 18 source requests without
+being folded into a new combined cache aggregate. No aggregate hit rate is claimed.
 Sixty-one original deltas were within ±200 tokens.
 Larger deltas were inspected and attributed to uncached conversation suffixes,
 backend block alignment, subagent instruction changes, deliberate model/profile
@@ -192,9 +208,10 @@ They remain missing rather than being synthesized as zero.
 
 ## Adoption blockers
 
-1. DeepSeek command task 03 must complete the stdin/session continuation
-   contract reliably; Flash failed in the original/new-key cells and Pro also
-   failed in the follow-up cell.
+1. DeepSeek-v4-flash and the first DeepSeek-v4-pro cells failed the stdin/session
+   continuation contract; the latest DeepSeek-v4-pro cell passed after the
+   Chat Default prompt/example revision. Keep the successful replay as the
+   current compatibility evidence and continue monitoring model variance.
 2. The Images endpoint must expose Codex alpha.23's `gpt-image-2`, or the
    deployment must provide an explicitly compatible image-model mapping.
 3. DeepSeek's one-shot compaction replay is a model/session continuity failure;
