@@ -548,7 +548,9 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - `reasoning_content` of `deepseek-v4-flash` remains renewable before and after the tool and in subsequent turns;
 - reasoning summary/encrypted state does not lead to invalid requests or repeated thinking content;
 - Run `tests/live_agent/context_compaction` as a protocol-only four-cell matrix,
-  routing GPT to `Pixel (K12)` in the copied config. Separately run
+  retaining the configured GPT route without requiring a specific upstream
+  provider. Any configured provider is valid when the GPT model responds.
+  Separately run
   `tests/live_agent/context_compaction_summary_quality` for GPT and DeepSeek;
   require byte-identical task/scenario/resume-query input, exactly one command
   plus one installed compaction, and a same-thread resume with no additional
@@ -558,7 +560,9 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
   Codex Home seeded from the authorized ChatGPT OAuth source, answer the
   app-server `attestation/generate` request through the installed Desktop
   DeviceCheck module without logging the token, and require exact wire
-  passthrough plus one installed compaction and a successful follow-up turn;
+  passthrough plus one installed compaction and a successful follow-up turn.
+  If the selected GPT model is not configured or its provider is unreachable,
+  stop and request a user decision;
 - No orphan tool output, repeated tool calls or history cache confusion after compact/resume;
 - Long conversations can still continue to complete file tool tasks after reaching the compact threshold;
 - Historical tool mapping and final behavior remain consistent after closing and restoring the Codex session.

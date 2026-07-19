@@ -69,6 +69,11 @@ def test_gateway_backed_cells_require_dual_auth_local_mode() -> None:
     assert contract["provider_request_auth"] == "experimental_bearer_token"
     assert contract["provider_base_url"] == "isolated_localhost_gateway"
     assert contract["model_requests_must_reach_isolated_gateway"] is True
+    assert (
+        contract["gpt_upstream_provider_policy"]
+        == "any_configured_provider_that_responds"
+    )
+    assert contract["unreachable_provider_action"] == "stop_and_request_user_decision"
     assert contract["credential_free_artifact"] == "artifacts/runtime-auth.json"
     assert contract["credential_free_artifact_required_fields"] == [
         "execution_mode",
@@ -137,6 +142,23 @@ def test_compaction_protocol_and_exactly_once_scopes_are_separate() -> None:
     assert exactly_once["expected_command_starts"] == 1
     assert exactly_once["expected_compaction_count"] == 1
     assert exactly_once["expected_rosetta_mapping_rows"] == 1
+
+
+def test_gpt_live_cells_do_not_pin_an_upstream_gateway_provider() -> None:
+    expected_paths = {
+        "02": ("gateway_provider",),
+        "03": ("first_gateway_provider",),
+        "04": ("resume_gateway_provider",),
+        "quality": ("gateway_provider",),
+    }
+    for task_id, fields in expected_paths.items():
+        path = (
+            LIVE_AGENT / "context_compaction_summary_quality" / "01" / "expected.json"
+            if task_id == "quality"
+            else LIVE_AGENT / "context_compaction" / task_id / "expected.json"
+        )
+        expected = json.loads(path.read_text(encoding="utf-8"))
+        assert all(expected[field] is None for field in fields), path
 
 
 def test_skill_delivery_contracts_use_separate_runners() -> None:

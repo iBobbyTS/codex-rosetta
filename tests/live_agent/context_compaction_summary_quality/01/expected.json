@@ -2,7 +2,7 @@
   "id": "01",
   "timeout_seconds": 120,
   "default_model": "gpt-5.6-sol",
-  "gateway_provider": "Pixel (K12)",
+  "gateway_provider": null,
   "codex_model_provider": "codex_rosetta",
   "expected_request_kind": "remote_v2_in_band",
   "model_auto_compact_token_limit": 15000,

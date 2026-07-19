@@ -7,11 +7,12 @@ and replay through Codex-Rosetta. It does not score summary quality; use
 ## Scenarios
 
 - `01`: `deepseek-v4-flash` context-limit compaction through Rosetta mode.
-- `02`: `gpt-5.6-sol` context-limit native passthrough through
-  `Pixel (K12)`.
-- `03`: `gpt-5.6-sol` through `Pixel (K12)` to
+- `02`: GPT context-limit native passthrough through whichever configured
+  provider can serve the selected GPT model.
+- `03`: the selected GPT model through its configured provider to
   `deepseek-v4-flash`; require `comp_hash_changed` and Rosetta mode.
-- `04`: reverse `03`; require `comp_hash_changed` and Rosetta mode.
+- `04`: reverse `03`; the GPT resume leg may use any configured provider that
+  can serve the selected GPT model.
 - `05`: `deepseek-v4-flash` post-compaction exactly-once behavior. It uses the
   same large deterministic scenario as `01` but scores model command
   discipline separately from the Remote V2 protocol.
@@ -38,7 +39,8 @@ The command prints the timestamped run root and writes a credential-free
 trigger, `wire_passthrough=true`, no trigger-request upstream error, a later
 installed `compaction` input, one native `user_requested` request profile, the
 final marker, and a zero Codex exit status. Use `--model gpt-5.6-sol` to run the
-task's canonical model instead. Use `--trigger context-limit` to run the
+task's canonical model instead, or provide another configured GPT model. Use
+`--trigger context-limit` to run the
 original deterministic auto-threshold scenario. The runner never reuses or
 stops the user's main gateway.
 
@@ -51,10 +53,14 @@ are never written to the protocol artifact or stream trace.
 
 ## Provider routing
 
-In the copied config only, route every `gpt-5.6-sol` cell to the existing
-provider named exactly `Pixel (K12)`. Keep `deepseek-v4-flash` on its existing
-sole provider. Verify both provider names and actual upstream models from the
-trace; model aliases alone are not evidence.
+In the copied config only, retain the existing route for each GPT model. Do
+not require a specific upstream provider name for GPT: any configured provider
+is valid when the selected GPT model is present and produces a response. Keep
+`deepseek-v4-flash` on its existing sole provider. Verify the observed provider
+and actual upstream model from the trace; model aliases alone are not evidence.
+If the selected GPT model is not configured, or its provider is unreachable,
+stop the run and request a user decision instead of silently switching models
+or providers.
 
 For context-limit tasks `01`, `02`, and `05`, set:
 

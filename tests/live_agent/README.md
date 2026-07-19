@@ -104,11 +104,14 @@ starting an invalid cell.
 Use `gpt-5.6-sol` as the default native GPT model and model-shape reference.
 Use `deepseek-v4-flash` for third-party non-multimodal tests and `mimo-v2.5`
 for third-party multimodal tests. For context-compaction protocol and
-summary-quality provider cells, route GPT to `Pixel (K12)` in the copied test
-config. A normal non-multimodal real-provider comparison uses the GPT and
-DeepSeek defaults. Always confirm the Gateway provider and actual upstream
-model in Rosetta Gateway Logs: a Codex-facing alias by itself is not evidence
-of the upstream route.
+summary-quality provider cells, retain the configured GPT route without
+requiring a specific upstream provider name. A GPT provider is valid when the
+selected model is configured and produces a response. A normal non-multimodal
+real-provider comparison uses the GPT and DeepSeek defaults. Always confirm
+the Gateway provider and actual upstream model in Rosetta Gateway Logs: a
+Codex-facing alias by itself is not evidence of the upstream route. If the GPT
+model is not configured or its provider is unreachable, stop and request a
+user decision instead of silently substituting a model or provider.
 
 These are defaults, not hard requirements embedded in task contracts. Select
 the default through the isolated `config.toml`; ordinary suite commands must

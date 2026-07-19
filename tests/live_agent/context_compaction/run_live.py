@@ -40,6 +40,10 @@ def _toml_string(value: str) -> str:
     return json.dumps(value)
 
 
+def _is_gpt_model(model: str) -> bool:
+    return model.startswith("gpt-")
+
+
 def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -72,7 +76,8 @@ def _configure_run(
     model: str,
     port: int,
     auto_compact_token_limit: int,
-) -> str:
+    expected_gateway_provider: str | None,
+) -> tuple[str, list[str]]:
     gateway_path = run_root / "gateway" / "config.jsonc"
     config = json.loads(_strip_jsonc_comments(gateway_path.read_text(encoding="utf-8")))
     server = config.setdefault("server", {})
@@ -99,9 +104,25 @@ def _configure_run(
         if isinstance(group, dict) and model in group.get("models", {})
     ]
     if not matching_groups:
-        raise ValueError(f"copied gateway config does not route model {model!r}")
-    if not any(group.get("provider") == "Pixel (K12)" for _, group in matching_groups):
-        raise ValueError(f"model {model!r} is not routed to Pixel (K12)")
+        raise RuntimeError(
+            "USER_DECISION_REQUIRED: copied Gateway config does not route "
+            f"model {model!r}; stop and choose whether to update the config or "
+            "select another model"
+        )
+    providers = sorted(
+        {
+            provider
+            for _, group in matching_groups
+            if isinstance(provider := group.get("provider"), str) and provider
+        }
+    )
+    if expected_gateway_provider and expected_gateway_provider not in providers:
+        raise RuntimeError(
+            "USER_DECISION_REQUIRED: expected provider "
+            f"{expected_gateway_provider!r} is not configured for model {model!r}; "
+            "stop and choose whether to accept the observed provider or update "
+            "the Gateway config"
+        )
 
     _write_json(gateway_path, config)
     codex_config = "\n".join(
@@ -129,7 +150,7 @@ def _configure_run(
         codex_config,
         encoding="utf-8",
     )
-    return client_key
+    return client_key, providers
 
 
 def _codex_env(run_root: Path) -> dict[str, str]:
@@ -212,6 +233,7 @@ def _trace_result(path: Path) -> dict[str, Any]:
             "trigger_wire_passthrough": [],
             "followup_compaction_input_observed": False,
             "trigger_upstream_errors": [],
+            "upstream_error_statuses": [],
         }
     for line in path.open(encoding="utf-8"):
         event = json.loads(line)
@@ -241,6 +263,7 @@ def _trace_result(path: Path) -> dict[str, Any]:
         "trigger_upstream_errors": [
             errors[item] for item in trigger_ids if item in errors
         ],
+        "upstream_error_statuses": sorted(set(errors.values())),
     }
 
 
@@ -525,13 +548,31 @@ def main() -> int:
     )
 
     port = _free_port()
-    client_key = _configure_run(
-        run_root,
-        gateway_log_root,
-        model=args.model,
-        port=port,
-        auto_compact_token_limit=int(expected["model_auto_compact_token_limit"]),
-    )
+    try:
+        client_key, configured_providers = _configure_run(
+            run_root,
+            gateway_log_root,
+            model=args.model,
+            port=port,
+            auto_compact_token_limit=int(expected["model_auto_compact_token_limit"]),
+            expected_gateway_provider=(
+                None if _is_gpt_model(args.model) else expected.get("gateway_provider")
+            ),
+        )
+    except RuntimeError as exc:
+        result = {
+            "suite": "context_compaction",
+            "task_id": args.task_id,
+            "trigger": args.trigger,
+            "classification": "user_decision_required",
+            "success": False,
+            "user_decision_required": True,
+            "model": args.model,
+            "runner_error": str(exc),
+        }
+        _write_json(run_root / "artifacts" / "automation-result.json", result)
+        print(json.dumps(result, ensure_ascii=False))
+        return 2
     _validate_auth(run_root, port=port, client_key=client_key)
 
     stdout = (run_root / "gateway" / "stdout.log").open("wb")
@@ -598,8 +639,21 @@ def main() -> int:
         and len(native_profiles) == 1
         and native_profiles[0].get("wire_passthrough") is True
     )
+    provider_unavailable = any(
+        status in {401, 403, 404, 408, 429, 500, 502, 503, 504}
+        for status in trace["upstream_error_statuses"]
+    )
+    configuration_blocked = bool(
+        runner_error
+        and (
+            "failed to load configuration" in runner_error
+            or "model_catalog" in runner_error
+        )
+    )
     if success:
         classification = "completed"
+    elif provider_unavailable or configuration_blocked:
+        classification = "provider_unavailable_requires_user_decision"
     elif trace["trigger_upstream_errors"]:
         classification = "remote_compaction_error_reproduced"
     elif trace["trigger_request_count"] == 0:
@@ -612,9 +666,13 @@ def main() -> int:
         "trigger": args.trigger,
         "classification": classification,
         "success": success,
+        "user_decision_required": provider_unavailable or configuration_blocked,
         "model": args.model,
         "model_substitution": args.model != expected.get("default_model"),
-        "gateway_provider": "Pixel (K12)",
+        "gateway_provider": (
+            configured_providers[0] if len(configured_providers) == 1 else None
+        ),
+        "gateway_providers": configured_providers,
         "codex_model_provider": "codex_rosetta",
         "codex_exit_code": codex_exit,
         "success_marker_observed": expected["success_marker"] in final_text,
