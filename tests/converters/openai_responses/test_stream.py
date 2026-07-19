@@ -225,6 +225,10 @@ class TestStreamResponseFromProvider:
                     "input_tokens": 10,
                     "output_tokens": 5,
                     "total_tokens": 15,
+                    "input_tokens_details": {
+                        "cached_tokens": 4,
+                        "cache_write_tokens": 3,
+                    },
                 },
             },
         }
@@ -236,6 +240,8 @@ class TestStreamResponseFromProvider:
         assert usage_event["usage"]["prompt_tokens"] == 10
         assert usage_event["usage"]["completion_tokens"] == 5
         assert usage_event["usage"]["total_tokens"] == 15
+        assert usage_event["usage"]["cache_read_tokens"] == 4
+        assert usage_event["usage"]["cache_creation_tokens"] == 3
 
     # --- Response failed ---
 
@@ -558,6 +564,8 @@ class TestStreamResponseToProvider:
                     "prompt_tokens": 10,
                     "completion_tokens": 5,
                     "total_tokens": 15,
+                    "cache_read_tokens": 4,
+                    "cache_creation_tokens": 3,
                 },
             },
         )
@@ -566,6 +574,10 @@ class TestStreamResponseToProvider:
         assert result["response"]["usage"]["input_tokens"] == 10
         assert result["response"]["usage"]["output_tokens"] == 5
         assert result["response"]["usage"]["total_tokens"] == 15
+        assert result["response"]["usage"]["input_tokens_details"] == {
+            "cached_tokens": 4,
+            "cache_write_tokens": 3,
+        }
 
     def test_unknown_event_type(self):
         """Unknown event type returns empty dict."""
@@ -1151,6 +1163,8 @@ class TestStreamResponseToProviderWithContext:
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
+            "cache_read_tokens": 4,
+            "cache_creation_tokens": 3,
         }
         event = cast(
             FinishEvent,
@@ -1179,6 +1193,10 @@ class TestStreamResponseToProviderWithContext:
         assert end_result["response"]["usage"]["input_tokens"] == 10
         assert end_result["response"]["usage"]["output_tokens"] == 5
         assert end_result["response"]["usage"]["total_tokens"] == 15
+        assert end_result["response"]["usage"]["input_tokens_details"] == {
+            "cached_tokens": 4,
+            "cache_write_tokens": 3,
+        }
 
     def test_finish_with_context_no_pending_usage(self):
         """FinishEvent with context but no pending usage omits usage field."""

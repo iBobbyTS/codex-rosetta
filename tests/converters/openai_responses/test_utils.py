@@ -87,6 +87,17 @@ class TestBuildMessagePreambleEvents:
         build_message_preamble_events(self.ctx)
         assert self.ctx.item_id == "msg_resp_123"
 
+    def test_generates_one_valid_item_id_when_response_id_is_empty(self):
+        self.ctx.response_id = ""
+
+        events = build_message_preamble_events(self.ctx)
+
+        item_id = events[0]["item"]["id"]
+        assert item_id.startswith("msg_")
+        assert item_id != "msg_"
+        assert events[1]["item_id"] == item_id
+        assert self.ctx.item_id == item_id
+
     def test_respects_output_index(self):
         events = build_message_preamble_events(self.ctx, output_index=2)
         assert events[0]["output_index"] == 2

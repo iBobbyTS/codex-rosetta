@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from ..base.context import StreamContext
@@ -51,7 +52,11 @@ def build_message_preamble_events(
         Two-element list of SSE event dicts.
     """
     context.output_item_emitted = True
-    item_id = context.item_id or generate_message_id(context.response_id)
+    item_id = (
+        context.item_id
+        or generate_message_id(context.response_id)
+        or f"msg_{uuid.uuid4()}"
+    )
     context.item_id = item_id
     item = {
         "id": item_id,

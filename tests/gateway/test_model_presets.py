@@ -20,7 +20,7 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "supports_image_detail_original": False,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
     "supports_parallel_tool_calls": False,
-    "supports_reasoning_summaries": False,
+    "supports_reasoning_summary_parameter": False,
     "tool_mode": "code_mode_only",
     "multi_agent_version": "v2",
     "use_responses_lite": True,
@@ -36,14 +36,8 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "experimental_supported_tools": [],
     "supports_search_tool": True,
     "default_service_tier": None,
-    "service_tiers": [
-        {
-            "id": "priority",
-            "name": "Fast",
-            "description": "1.5x speed, increased usage",
-        }
-    ],
-    "additional_speed_tiers": ["fast"],
+    "service_tiers": [],
+    "additional_speed_tiers": [],
 }
 
 
@@ -89,13 +83,13 @@ def test_admin_detection_combines_codex_catalog_and_third_party_presets() -> Non
     assert presets["deepseek-v4-pro"]["display_name"] == "DeepSeek V4 Pro"
     assert presets["qwen3.7-max"]["comp_hash"] == "qwen3.7-max-text"
     assert presets["qwen3.7-max-2026-06-08"]["comp_hash"] == "qwen3.7-max-image"
-    assert presets["minimax-m3"]["supports_reasoning_summaries"] is True
+    assert presets["minimax-m3"]["supports_reasoning_summary_parameter"] is True
     assert presets["minimax-m3"]["default_reasoning_summary"] == "none"
     assert presets["minimax-m3"]["truncation_policy"] == {
         "mode": "bytes",
         "limit": 10000,
     }
-    assert presets["minimax-m3"]["supports_parallel_tool_calls"] is True
+    assert "supports_parallel_tool_calls" not in presets["minimax-m3"]
 
 
 def test_model_detection_uses_exact_upstream_slug_then_exposed_slug() -> None:

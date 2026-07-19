@@ -1,9 +1,9 @@
 {
   "metadata": {
     "schema_version": 4,
-    "catalog_version": "codex-0.144.4",
-    "codex_cli_version": "0.144.4",
-    "codex_source_commit": "8c68d4c87dc54d38861f5114e920c3de2efa5876",
+    "catalog_version": "codex-0.145.0-alpha.23",
+    "codex_cli_version": "0.145.0-alpha.23",
+    "codex_source_commit": "655224ffae098a85efeddf8289171ff3bd2624d1",
     "static_catalog": true,
     "profile_selection": "model_group"
   },

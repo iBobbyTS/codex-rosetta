@@ -23,38 +23,39 @@ Compatibility cannot be declared just because the version numbers are the same.
 
 Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form. Manual GitHub Release tags retain the repository's historical `v` prefix, so source `0.144.0.r0` maps to tag `v0.144.0.r0`.
 
-## Current pending inspection baseline
+## Current alpha.23 adaptation baseline
 
 Inspection date: 2026-07-18
 
 | Project | Current Value | Description |
 | --- | --- | --- |
 | Local Codex CLI | `codex-cli 0.144.6` | From `codex --version`; this inspection does not adopt it as the Rosetta package target |
-| Codex source branch | detached `rust-v0.144.6` | Exact release reference in `../openai-codex-src` |
-| Codex source commit | `5d1fbf26c43abc65a203928b2e31561cb039e06d` | Exact peeled commit for `rust-v0.144.6` |
-| Codex source timestamp | `2026-07-18T09:05:05-04:00` | Release commit timestamp |
+| Codex source branch | detached `rust-v0.145.0-alpha.23` | Exact release reference in `../openai-codex-src` |
+| Codex source commit | `655224ffae098a85efeddf8289171ff3bd2624d1` | Exact peeled commit for `rust-v0.145.0-alpha.23` |
+| Codex source timestamp | `2026-07-17T14:53:36-07:00` | Release commit timestamp |
 | Codex-Rosetta package version | `0.144.0.r0` | First Rosetta patch for Codex `0.144.0` |
-| Codex-Rosetta review snapshot | HEAD `d2770c7aefcabc191e4416fa6b4ea0128bea106a` plus this documentation-only worktree | Runtime adaptation, baseline refresh, package-version change, and compatibility approval are outside this inspection |
+| Codex-Rosetta review snapshot | HEAD `5dd45e7e60f8b5dacea321002b0a55a85b01bf17` plus the uncommitted adaptation worktree | The implementation and evidence are not a clean release revision; no commit was requested |
 
-This is a documentation coverage inspection, not a clean reproducible release
-revision or a compatibility approval. It validates the code-derived ledger and
-checklist against Codex `0.142.0` through `0.144.6`, while deliberately leaving
-Rosetta runtime code, packaged assets, the source-contract baseline, and the
-package version unchanged. The Codex CLI release version, Codex source commit,
-Codex-Rosetta source version, and Codex-Rosetta commit remain independent
-identifiers. See
-[`reports/range-coverage-review.md`](reports/range-coverage-review.md)
-for the range audit and the known `0.144.6` implementation gap.
+This is a full-inventory, source-first adaptation, not a clean reproducible
+release revision or a compatibility approval. It validates the code-derived
+ledger against Codex 0.142.0, 0.144.6, and 0.145.0-alpha.23, updates the
+Rosetta runtime owners and packaged assets, and runs the available automated and
+live gates. The package version remains unchanged because required live cells
+still fail or lack their required external runner/backend. The Codex CLI release version, Codex source
+commit, Codex-Rosetta source version, and Codex-Rosetta commit remain
+independent identifiers. See the [alpha-23-upgrade-review report](reports/alpha-23-upgrade-review.md)
+for the source findings and the [range-coverage-review report](reports/range-coverage-review.md)
+for the historical 0.142.0–0.144.6 documentation review.
 
 ## Recorded documentation verification
 
 | Check | Results |
 | --- | --- |
-| Codex source contract check | Ran against exact `0.144.6`; all extracted content groups matched the reviewed `0.144.4` baseline and only `codex_source_commit` changed. The command correctly failed because the baseline was not refreshed |
+| Codex source contract check | Extractor updated for alpha.23 and reviewed against exact commit `655224ff…`: 22 high-confidence unchanged groups, 11 possibly unchanged groups, and no changed group against the reviewed target snapshot |
 | Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 23 points |
 | Ledger integrity | Compatibility overview and test matrix contain the same 23 names exactly once; the previously unmatched Skill and Bing rows and deferred-tool naming were reconciled |
-| `0.142.0` … `0.144.6` range coverage | Every Codex-facing change family maps to a stable compatibility point or is explicitly classified as outside Rosetta's compatibility boundary in the 0.144.6 report |
-| Runtime adaptation and real Codex/API | **Not performed in this documentation-only inspection.** In particular, the packaged `0.144.4` catalog still differs from `0.144.6` for Sol/Terra/Luna instructions and context-window values, so `0.144.6` is not approved |
+| `0.142.0` … `0.145.0-alpha.23` source coverage | The prior 0.142.0–0.144.6 map was rechecked directly against the alpha.23 source and every CP-01…CP-23 point is classified in the alpha.23 report |
+| Runtime adaptation and real Codex/API | Implemented and exercised with the locally built `0.145.0-alpha.23` client. Most CLI-compatible cells pass; image generation, one DeepSeek process-continuation cell, exact Terra context-limit passthrough, GUI Browser, orchestrator Skills, sidecar search, and agentabi remain failed or unavailable. Alpha.23 is therefore not approved |
 
 ## Files
 

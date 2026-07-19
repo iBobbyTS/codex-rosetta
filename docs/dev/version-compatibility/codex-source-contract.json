@@ -1,5 +1,5 @@
 {
-  "codex_source_commit": "8c68d4c87dc54d38861f5114e920c3de2efa5876",
+  "codex_source_commit": "655224ffae098a85efeddf8289171ff3bd2624d1",
   "contract": {
     "apply_patch": {
       "format_type": "grammar",
@@ -17,8 +17,18 @@
         "type": "Option<String>"
       }
     },
+    "auto_review_messages_fields": {
+      "policy": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "policy_template": {
+        "attributes": [],
+        "type": "Option<String>"
+      }
+    },
     "code_mode_exec_shape": {
-      "description_builder_sha256": "60b29330e44424d693a4c5b62f3ba64d6150d307f14d8b57da9cf1a761a16008",
+      "description_builder_sha256": "02f3f432c386eda25cf35f94d398c35aa2b9c486b6f697975ac4519a332907c2",
       "nested_declaration_renderer_sha256": "80d9ffb8ca7469a0bcc74d5c9ce52cdb631edcdc271efdf9c0bf587febf563cd",
       "nested_sample_renderer_sha256": "c1b48d36df4e857b2dd640b1374e3aa38fc25c49803f9154adb0d18368663193",
       "nested_section_heading_renderer_sha256": "2bd54e63ee0a3deefcc64bcc1b39d0abed019778eadadb3e299babc4becf208d",
@@ -63,6 +73,7 @@
     ],
     "endpoints": {
       "MEMORIES_SUMMARIZE_ENDPOINT": "/memories/trace_summarize",
+      "REALTIME_CALLS_ENDPOINT": "/realtime/calls",
       "RESPONSES_COMPACT_ENDPOINT": "/responses/compact",
       "RESPONSES_ENDPOINT": "/responses"
     },
@@ -131,47 +142,210 @@
         "TextAndImage"
       ]
     },
-    "model_info_fields": [
-      "additional_speed_tiers",
-      "apply_patch_tool_type",
-      "auto_compact_token_limit",
-      "auto_review_model_override",
-      "availability_nux",
-      "base_instructions",
-      "comp_hash",
-      "context_window",
-      "default_reasoning_level",
-      "default_reasoning_summary",
-      "default_service_tier",
-      "default_verbosity",
-      "description",
-      "display_name",
-      "effective_context_window_percent",
-      "experimental_supported_tools",
-      "include_skills_usage_instructions",
-      "input_modalities",
-      "max_context_window",
-      "model_messages",
-      "multi_agent_version",
-      "priority",
-      "service_tiers",
-      "shell_type",
-      "slug",
-      "support_verbosity",
-      "supported_in_api",
-      "supported_reasoning_levels",
-      "supports_image_detail_original",
-      "supports_parallel_tool_calls",
-      "supports_reasoning_summaries",
-      "supports_search_tool",
-      "tool_mode",
-      "truncation_policy",
-      "upgrade",
-      "use_responses_lite",
-      "used_fallback_model_metadata",
-      "visibility",
-      "web_search_tool_type"
-    ],
+    "model_info_fields": {
+      "additional_speed_tiers": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "Vec<String>"
+      },
+      "apply_patch_tool_type": {
+        "attributes": [],
+        "type": "Option<ApplyPatchToolType>"
+      },
+      "auto_compact_token_limit": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<i64>"
+      },
+      "auto_review_model_override": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<String>"
+      },
+      "availability_nux": {
+        "attributes": [],
+        "type": "Option<ModelAvailabilityNux>"
+      },
+      "base_instructions": {
+        "attributes": [],
+        "type": "String"
+      },
+      "comp_hash": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<String>"
+      },
+      "context_window": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<i64>"
+      },
+      "default_reasoning_level": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<ReasoningEffort>"
+      },
+      "default_reasoning_summary": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "ReasoningSummary"
+      },
+      "default_service_tier": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<String>"
+      },
+      "default_verbosity": {
+        "attributes": [],
+        "type": "Option<Verbosity>"
+      },
+      "description": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "display_name": {
+        "attributes": [],
+        "type": "String"
+      },
+      "effective_context_window_percent": {
+        "attributes": [
+          "#[serde(default = \"default_effective_context_window_percent\")]"
+        ],
+        "type": "i64"
+      },
+      "experimental_supported_tools": {
+        "attributes": [],
+        "type": "Vec<String>"
+      },
+      "include_skills_usage_instructions": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
+      "input_modalities": {
+        "attributes": [
+          "#[serde(default = \"default_input_modalities\")]"
+        ],
+        "type": "Vec<InputModality>"
+      },
+      "max_context_window": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<i64>"
+      },
+      "model_messages": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<ModelMessages>"
+      },
+      "multi_agent_version": {
+        "attributes": [
+          "#[serde( default, skip_serializing_if = \"Option::is_none\", deserialize_with = \"deserialize_optional_model_selector\" )]"
+        ],
+        "type": "Option<MultiAgentVersion>"
+      },
+      "priority": {
+        "attributes": [],
+        "type": "i32"
+      },
+      "service_tiers": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "Vec<ModelServiceTier>"
+      },
+      "shell_type": {
+        "attributes": [],
+        "type": "ConfigShellToolType"
+      },
+      "slug": {
+        "attributes": [],
+        "type": "String"
+      },
+      "support_verbosity": {
+        "attributes": [],
+        "type": "bool"
+      },
+      "supported_in_api": {
+        "attributes": [],
+        "type": "bool"
+      },
+      "supported_reasoning_levels": {
+        "attributes": [],
+        "type": "Vec<ReasoningEffortPreset>"
+      },
+      "supports_image_detail_original": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
+      "supports_parallel_tool_calls": {
+        "attributes": [],
+        "type": "bool"
+      },
+      "supports_reasoning_summary_parameter": {
+        "attributes": [
+          "#[serde(default = \"default_true\", skip_serializing_if = \"is_true\")]"
+        ],
+        "type": "bool"
+      },
+      "supports_search_tool": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
+      "tool_mode": {
+        "attributes": [
+          "#[serde( default, skip_serializing_if = \"Option::is_none\", deserialize_with = \"deserialize_optional_model_selector\" )]"
+        ],
+        "type": "Option<ToolMode>"
+      },
+      "truncation_policy": {
+        "attributes": [],
+        "type": "TruncationPolicyConfig"
+      },
+      "upgrade": {
+        "attributes": [],
+        "type": "Option<ModelInfoUpgrade>"
+      },
+      "use_responses_lite": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
+      "used_fallback_model_metadata": {
+        "attributes": [
+          "#[serde(default, skip_serializing, skip_deserializing)]",
+          "#[schemars(skip)]",
+          "#[ts(skip)]"
+        ],
+        "type": "bool"
+      },
+      "visibility": {
+        "attributes": [],
+        "type": "ModelVisibility"
+      },
+      "web_search_tool_type": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "WebSearchToolType"
+      }
+    },
     "model_messages_fields": {
       "approvals": {
         "attributes": [],
@@ -188,6 +362,24 @@
       "instructions_variables": {
         "attributes": [],
         "type": "Option<ModelInstructionsVariables>"
+      },
+      "permissions": {
+        "attributes": [],
+        "type": "Option<PermissionMessages>"
+      }
+    },
+    "permission_messages_fields": {
+      "danger_full_access": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "read_only": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "workspace_write": {
+        "attributes": [],
+        "type": "Option<String>"
       }
     },
     "reasoning_fields": [
@@ -207,7 +399,7 @@
             "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
             "#[ts(optional)]"
           ],
-          "type": "Option<String>"
+          "type": "Option<ResponseItemId>"
         },
         "internal_chat_message_metadata_passthrough": {
           "attributes": [
@@ -217,6 +409,7 @@
           "type": "Option<InternalChatMessageMetadataPassthrough>"
         }
       },
+      "fallback_predicate_sha256": "fda9fbd9dc7aea1e67d2418618d67636fb6de84b08d05a6a6981d3e4e2677a3f",
       "feature_default_enabled": true,
       "metadata_enums": {
         "CompactionImplementation": [
@@ -239,6 +432,20 @@
           "Memento",
           "PrefixCompaction"
         ]
+      },
+      "output_fields": {
+        "compaction_output": {
+          "attributes": [],
+          "type": "ResponseItem"
+        },
+        "response_id": {
+          "attributes": [],
+          "type": "String"
+        },
+        "token_usage": {
+          "attributes": [],
+          "type": "Option<TokenUsage>"
+        }
       },
       "prompt_sha256": "ab0c334d4faca17e3afbb9b16967c1b2fdcc7242a9a0880af57949fa236d6d07",
       "summary_prefix_sha256": "e9b088e794a6bb9082ac053fcc760bd818d7e720ee4bcdc72c6e480de7b7cb0e",
@@ -294,7 +501,7 @@
         "attributes": [
           "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
         ],
-        "type": "Option<String>"
+        "type": "Option<ResponseItemId>"
       },
       "role": {
         "attributes": [],
@@ -304,6 +511,11 @@
         "attributes": [],
         "type": "Vec<serde_json::Value>"
       }
+    },
+    "response_item_id": {
+      "is_prefixed_sha256": "ba10d67d37f17b87319d1b7126ef746c4fc6a5dcd6fd7380c472017314d394cd",
+      "serde_transparent": true,
+      "with_suffix_sha256": "bc94fe14f9e562559eb3369f920deb62e7af730ce5029881f0ed8d5ad8d619fb"
     },
     "response_item_variants": [
       "AdditionalTools",
@@ -360,7 +572,6 @@
           "max"
         ],
         "supports_parallel_tool_calls": true,
-        "supports_reasoning_summaries": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -385,7 +596,6 @@
           "ultra"
         ],
         "supports_parallel_tool_calls": true,
-        "supports_reasoning_summaries": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -410,7 +620,6 @@
           "ultra"
         ],
         "supports_parallel_tool_calls": true,
-        "supports_reasoning_summaries": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -433,6 +642,22 @@
       "WINDOW_ID_KEY": "window_id",
       "WORKSPACES_KEY": "workspaces"
     },
+    "search_response_fields": {
+      "encrypted_output": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "output": {
+        "attributes": [],
+        "type": "String"
+      },
+      "results": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "Option<Vec<JsonValue>>"
+      }
+    },
     "sse_event_names": [
       "response.completed",
       "response.created",
@@ -447,6 +672,18 @@
       "response.reasoning_summary_text.done",
       "response.reasoning_text.delta"
     ],
+    "sse_input_token_details_fields": {
+      "cache_write_tokens": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "i64"
+      },
+      "cached_tokens": {
+        "attributes": [],
+        "type": "i64"
+      }
+    },
     "stream_options_fields": [
       "reasoning_summary_delivery"
     ],
@@ -505,5 +742,5 @@
       "X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY": "x-codex-ws-stream-request-start-ms"
     }
   },
-  "schema_version": 1
+  "schema_version": 2
 }

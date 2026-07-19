@@ -375,6 +375,20 @@ class TestOpenAIResponsesToolOps:
         assert result["name"] == "get_weather"
         assert json.loads(result["arguments"]) == {"city": "Beijing"}
 
+    def test_ir_tool_call_to_p_omits_item_id_for_empty_tool_call_id(self):
+        """An absent call id must not produce the invalid ``fc_`` item id."""
+        ir_tc = ToolCallPart(
+            type="tool_call",
+            tool_call_id="",
+            tool_name="get_weather",
+            tool_input={"city": "Beijing"},
+        )
+
+        result = OpenAIResponsesToolOps.ir_tool_call_to_p(ir_tc)
+
+        assert "id" not in result
+        assert result["call_id"] == ""
+
     def test_ir_tool_call_to_p_restores_namespace_metadata(self):
         """Responses function_call preserves provider namespace metadata."""
         ir_tc = ToolCallPart(

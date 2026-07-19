@@ -126,7 +126,6 @@ def test_responses_lite_snapshot_keeps_stable_capability_subset():
                         {"effort": "ultra", "description": "also ignored"},
                     ],
                     "default_reasoning_level": "medium",
-                    "supports_reasoning_summaries": True,
                     "default_reasoning_summary": "none",
                     "web_search_tool_type": "text_and_image",
                     "apply_patch_tool_type": "freeform",
@@ -142,7 +141,6 @@ def test_responses_lite_snapshot_keeps_stable_capability_subset():
                     "supports_search_tool": False,
                     "supported_reasoning_levels": [{"effort": "low"}],
                     "default_reasoning_level": "low",
-                    "supports_reasoning_summaries": False,
                     "default_reasoning_summary": "none",
                     "web_search_tool_type": "text",
                     "apply_patch_tool_type": None,
@@ -184,7 +182,7 @@ def test_checked_in_baseline_uses_canonical_serialization():
     baseline = json.loads(baseline_text)
 
     assert baseline_text == snapshot_json(baseline)
-    assert baseline["schema_version"] == 1
+    assert baseline["schema_version"] == 2
     assert baseline["codex_source_commit"]
 
 
@@ -221,7 +219,7 @@ def test_snapshot_classification_always_uses_three_result_categories():
     )
     assert any(
         "contract.model_info_fields" in item
-        for item in classification["possibly_unchanged"]
+        for item in classification["high_confidence_unchanged"]
     )
     assert classification["changed"] == []
     assert "High-confidence unchanged:" in rendered
@@ -232,7 +230,11 @@ def test_snapshot_classification_always_uses_three_result_categories():
 def test_new_complete_value_contracts_are_high_confidence():
     complete_value_contracts = {
         "approval_messages_fields": {"on_request": {"type": "Option<String>"}},
+        "auto_review_messages_fields": {"policy": {"type": "Option<String>"}},
+        "model_info_fields": {"slug": {"type": "String"}},
         "model_messages_fields": {"approvals": {"type": "Option<ApprovalMessages>"}},
+        "permission_messages_fields": {"read_only": {"type": "Option<String>"}},
+        "response_item_id": {"serde_transparent": True},
         "response_item_additional_tools_fields": {
             "tools": {"type": "Vec<serde_json::Value>"}
         },
@@ -244,6 +246,8 @@ def test_new_complete_value_contracts_are_high_confidence():
                 "supported_reasoning_levels": ["low", "ultra"],
             }
         ],
+        "search_response_fields": {"results": {"type": "Option<Vec<JsonValue>>"}},
+        "sse_input_token_details_fields": {"cache_write_tokens": {"type": "i64"}},
         "tool_spec_web_search_fields": {
             "external_web_access": {"type": "Option<bool>"},
             "indexed_web_access": {"type": "Option<bool>"},

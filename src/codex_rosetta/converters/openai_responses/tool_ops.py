@@ -38,6 +38,40 @@ _CHAT_TOOL_NAME_MAX_LEN = 64
 _CHAT_TOOL_NAME_INVALID_CHARS = re.compile(r"[^A-Za-z0-9_-]+")
 
 
+def _responses_function_item_id(tool_call_id: str) -> str | None:
+    """Build a valid optional Responses function-call item ID."""
+    if not tool_call_id:
+        return None
+    if tool_call_id.startswith("fc_"):
+        return tool_call_id
+    if tool_call_id.startswith("call_"):
+        return "fc_" + tool_call_id[5:]
+    return "fc_" + tool_call_id
+
+
+def _responses_function_call_item(
+    *,
+    item_id: str | None,
+    call_id: str,
+    name: str,
+    arguments: str,
+    namespace: Any,
+) -> dict[str, Any]:
+    """Return one function-call item without manufacturing an empty ID suffix."""
+    result: dict[str, Any] = {
+        "type": "function_call",
+        "call_id": call_id,
+        "name": name,
+        "arguments": arguments,
+        "status": "completed",
+    }
+    if item_id:
+        result["id"] = item_id
+    if namespace:
+        result["namespace"] = namespace
+    return result
+
+
 def _sanitize_chat_tool_name_part(value: str, fallback: str) -> str:
     """Return a Chat-compatible tool-name segment."""
     sanitized = _CHAT_TOOL_NAME_INVALID_CHARS.sub("_", value)
@@ -479,28 +513,16 @@ class OpenAIResponsesToolOps(BaseToolOps):
             )
             if native_item is not None:
                 return native_item
-            item_id = metadata.get("responses_item_id")
-            if not item_id:
-                # Cross-format: ensure fc_ prefix required by Responses API
-                if tool_call_id and tool_call_id.startswith("fc_"):
-                    item_id = tool_call_id
-                elif tool_call_id and tool_call_id.startswith("call_"):
-                    item_id = "fc_" + tool_call_id[5:]
-                else:
-                    # Other prefixes (e.g. toolu_ from Anthropic)
-                    item_id = "fc_" + tool_call_id
-            result = {
-                "type": "function_call",
-                "id": item_id,
-                "call_id": tool_call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "status": "completed",
-            }
-            namespace = metadata.get("responses_namespace")
-            if namespace:
-                result["namespace"] = namespace
-            return result
+            item_id = metadata.get("responses_item_id") or _responses_function_item_id(
+                tool_call_id
+            )
+            return _responses_function_call_item(
+                item_id=item_id,
+                call_id=tool_call_id,
+                name=tool_name,
+                arguments=arguments,
+                namespace=metadata.get("responses_namespace"),
+            )
         elif tool_type == "custom":
             # Custom tool calls use plain text 'input' instead of JSON
             # 'arguments'.  If tool_input has a single "input" key, unwrap
@@ -589,9 +611,10 @@ class OpenAIResponsesToolOps(BaseToolOps):
         query = tool_input.get("query", "") if isinstance(tool_input, dict) else ""
         item: dict[str, Any] = {
             "type": "web_search_call",
-            "id": item_id,
             "status": "completed",
         }
+        if item_id:
+            item["id"] = item_id
         if query:
             item["action"] = {"type": "search", "query": query}
         return item

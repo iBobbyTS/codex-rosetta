@@ -17,7 +17,7 @@ MODEL_INFO_FIELDS = frozenset(
     (*MODEL_INFO_STRING_FIELDS, *MODEL_INFO_INTEGER_FIELDS, *MODEL_INFO_LIST_FIELDS)
 )
 MODEL_PRESET_EXTRA_OVERRIDE_FIELDS = frozenset(
-    {"comp_hash", "supports_reasoning_summaries"}
+    {"comp_hash", "supports_reasoning_summary_parameter"}
 )
 MODEL_PRESET_LEGACY_FIELDS = frozenset({"effective_context_window_percent"})
 MODEL_PRESET_IGNORED_CATALOG_FIELDS = frozenset(
@@ -146,7 +146,10 @@ def _normalize_special_preset_overrides(
             raise ValueError(f"{field}.comp_hash must be a non-empty string")
         normalized["comp_hash"] = comp_hash.strip()
 
-    for key in ("supports_reasoning_summaries", "supports_parallel_tool_calls"):
+    for key in (
+        "supports_reasoning_summary_parameter",
+        "supports_parallel_tool_calls",
+    ):
         if key in value:
             item = value[key]
             if not isinstance(item, bool):
