@@ -383,7 +383,9 @@ def test_catalog_defaults_and_namespace_image_policy():
         "custom.apply_patch": "disabled",
         "custom.exec": "disabled",
         "function.test_sync_tool": "disabled",
+        "function.exec_command": "modified",
         "function.view_image": "modified",
+        "function.write_stdin": "modified",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
     assert catalog["preset_profiles"] == [
@@ -529,8 +531,41 @@ def test_catalog_defaults_and_namespace_image_policy():
         for child_id in _namespaces["namespace.multi_agent_v1"]
     )
     assert builtin["namespace.multi_agent_v2"] == "expanded"
-    assert builtin["function.exec_command"] == "passthrough"
-    assert builtin["function.write_stdin"] == "passthrough"
+    assert builtin["function.exec_command"] == "modified"
+    assert builtin["function.write_stdin"] == "modified"
+    assert items["function.exec_command"]["profile_inputs"] == [
+        {
+            "id": "interactive_guidance",
+            "label_i18n": "tools.input.appended_description_guidance",
+            "type": "textarea",
+            "default": "",
+            "visible_when": ["modified"],
+            "readonly": True,
+        }
+    ]
+    assert items["function.exec_command"]["profile_mutations"] == [
+        {
+            "target": "description",
+            "input_id": "interactive_guidance",
+        }
+    ]
+    assert items["function.write_stdin"]["profile_inputs"] == [
+        {
+            "id": "chars_guidance",
+            "label_i18n": "tools.input.appended_description_guidance",
+            "type": "textarea",
+            "default": "",
+            "visible_when": ["modified"],
+            "readonly": True,
+        }
+    ]
+    assert items["function.write_stdin"]["profile_mutations"] == [
+        {
+            "target": "parameter_description",
+            "parameter": "chars",
+            "input_id": "chars_guidance",
+        }
+    ]
     assert builtin["function.test_sync_tool"] == "disabled"
     assert builtin["hosted.web_search"] == "disabled"
     assert items["hosted.web_search"]["note_i18n"] == ("tools.note.web_search_replaced")
@@ -571,8 +606,6 @@ def test_catalog_defaults_and_namespace_image_policy():
         assert items[item_id]["note_i18n"] == note_i18n
         assert items[item_id]["note_visible_when"] == ["modified"]
     for item_id in (
-        "function.exec_command",
-        "function.write_stdin",
         "function.update_plan",
         "function.wait_for_environment",
         "function.request_permissions",

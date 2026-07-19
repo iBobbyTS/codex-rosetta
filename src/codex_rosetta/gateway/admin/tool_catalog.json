@@ -17,7 +17,9 @@
       "custom.apply_patch": "disabled",
       "custom.exec": "disabled",
       "function.test_sync_tool": "disabled",
-      "function.view_image": "modified"
+      "function.exec_command": "modified",
+      "function.view_image": "modified",
+      "function.write_stdin": "modified"
     },
     "inputs": {
       "function.request_user_input": {
@@ -31,6 +33,12 @@
       },
       "function.view_image": {
         "supported_details": "auto,low,high"
+      },
+    "function.write_stdin": {
+      "chars_guidance": "For line-oriented interactive input, include the line terminator in the same non-empty chars value. Example: after exec_command returns session_id 123, call write_stdin with {chars: \"rosetta\\n\", session_id: 123}; this submits one line to the existing process. In the JavaScript string passed to exec, type exactly one backslash before n; do not send the two literal characters backslash+n (chars: \"rosetta\\\\n\"). Omitting chars or sending an empty string only polls; it does not submit input. Reuse the session_id returned by exec_command and do not restart the command."
+    },
+    "function.exec_command": {
+      "interactive_guidance": "When an interactive command returns a session_id, the command is still available for follow-up even if the wrapper reports Script completed; reuse that exact session_id with write_stdin instead of starting the command again. Example: exec_command({cmd: \"python3 scenario.py\", tty: true, yield_time_ms: 1000}) -> {session_id: 123}; then write_stdin({chars: \"rosetta\\n\", session_id: 123}) and use its output. For line-oriented input, send the complete line including the newline in one write_stdin call. In the JavaScript string, use one backslash escape (chars: \"rosetta\\n\"), not the literal two-character sequence backslash+n (chars: \"rosetta\\\\n\"). Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
       },
       "custom.exec": {
         "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...) or image(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
@@ -209,7 +217,25 @@
       "exec_projection": {
         "chat_name": "exec_command",
         "nested_name": "exec_command"
-      }
+      },
+      "profile_inputs": [
+        {
+          "id": "interactive_guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
+          "default": "",
+          "visible_when": [
+            "modified"
+          ],
+          "readonly": true
+        }
+      ],
+      "profile_mutations": [
+        {
+          "target": "description",
+          "input_id": "interactive_guidance"
+        }
+      ]
     },
     {
       "id": "function.write_stdin",
@@ -219,7 +245,26 @@
       "exec_projection": {
         "chat_name": "write_stdin",
         "nested_name": "write_stdin"
-      }
+      },
+      "profile_inputs": [
+        {
+          "id": "chars_guidance",
+          "label_i18n": "tools.input.appended_description_guidance",
+          "type": "textarea",
+          "default": "",
+          "visible_when": [
+            "modified"
+          ],
+          "readonly": true
+        }
+      ],
+      "profile_mutations": [
+        {
+          "target": "parameter_description",
+          "parameter": "chars",
+          "input_id": "chars_guidance"
+        }
+      ]
     },
     {
       "id": "function.shell_command",
