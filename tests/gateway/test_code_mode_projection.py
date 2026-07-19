@@ -365,6 +365,31 @@ def _deferred_exec_description() -> str:
     )
 
 
+def test_alpha23_deferred_only_mcp_description_projects_discovery_tools() -> None:
+    description = """Run JavaScript code to orchestrate/compose tool calls
+
+Some deferred nested tools may be omitted from this description. They are still available on the global `tools` object and listed in `ALL_TOOLS`.
+To find one, filter `ALL_TOOLS` by `name` and `description`.
+
+Shared MCP Types:
+```ts
+type TextContent = { type: "text"; text: string; };
+type CallToolResult = { content: TextContent[]; };
+```"""
+
+    definitions = project_exec_tool_definitions(
+        description,
+        exec_tool_projections_for_route(_route()),
+    )
+
+    assert set(definitions) == {
+        "tool_search",
+        "tool_read",
+        "invoke_deferred_tool",
+    }
+    assert exec_tool_section_names(description) == ()
+
+
 def test_modified_web_run_projects_only_rosetta_supported_capabilities():
     route = _route(
         tool_runtime_capabilities=frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})

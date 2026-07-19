@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from packaging.version import Version
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_release_version.py"
 _ROOT = _SCRIPT.parents[1]
@@ -21,12 +22,22 @@ def test_accepts_matching_codex_rosetta_release_version():
     validate_release_version("0.144.0.r0", "v0.144.0.r0")
 
 
+def test_accepts_matching_codex_prerelease_version():
+    source_version = "0.145.0-alpha.23.r0"
+
+    validate_release_version(source_version, f"v{source_version}")
+
+    assert str(Version(source_version)) == "0.145.0a23.post0"
+
+
 @pytest.mark.parametrize(
     ("source_version", "tag"),
     [
         ("0.144.0", "0.144.0"),
         ("0.144.0.r0", "0.144.0.r0"),
         ("0.144.0.r1", "v0.144.0.r0"),
+        ("0.145.0-alpha..23.r0", "v0.145.0-alpha..23.r0"),
+        ("0.145.0-alpha.23.r0", "v0.145.0-alpha.24.r0"),
     ],
 )
 def test_rejects_invalid_or_mismatched_release_versions(source_version: str, tag: str):

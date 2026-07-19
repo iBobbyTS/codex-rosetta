@@ -6,8 +6,9 @@ import argparse
 import re
 from pathlib import Path
 
-SOURCE_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+\.r\d+$")
-RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+\.r\d+$")
+CODEX_VERSION_PATTERN = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?"
+SOURCE_VERSION_RE = re.compile(rf"^{CODEX_VERSION_PATTERN}\.r\d+$")
+RELEASE_TAG_RE = re.compile(rf"^v{CODEX_VERSION_PATTERN}\.r\d+$")
 SOURCE_LITERAL_RE = re.compile(r'^__version__\s*=\s*"([^"]+)"\s*$', re.MULTILINE)
 DEFAULT_VERSION_FILE = Path("src/codex_rosetta/__init__.py")
 
@@ -24,10 +25,13 @@ def validate_release_version(source_version: str, tag: str) -> None:
     """Require ``v{codex_version}.rN`` tag for a matching source version."""
     if SOURCE_VERSION_RE.fullmatch(source_version) is None:
         raise ValueError(
-            f"source version '{source_version}' must match <major>.<minor>.<patch>.rN"
+            f"source version '{source_version}' must match "
+            "<major>.<minor>.<patch>[-<prerelease>].rN"
         )
     if RELEASE_TAG_RE.fullmatch(tag) is None:
-        raise ValueError(f"tag '{tag}' must match v<major>.<minor>.<patch>.rN")
+        raise ValueError(
+            f"tag '{tag}' must match v<major>.<minor>.<patch>[-<prerelease>].rN"
+        )
     if tag[1:] != source_version:
         raise ValueError(
             f"tag '{tag}' does not match source version '{source_version}'"

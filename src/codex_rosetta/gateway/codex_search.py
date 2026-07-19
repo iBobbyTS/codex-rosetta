@@ -24,6 +24,7 @@ from .codex_search_references import (
     SearchQueryDraft,
     SearchResultDraft,
     StoredSearchBatch,
+    StoredSearchResult,
 )
 from .web_search import (
     TavilyHTTPClient,
@@ -82,6 +83,7 @@ class CodexSearchBridgeResult:
     time_count: int
     search_result_count: int
     search_provider: str
+    results: tuple[dict[str, Any], ...] | None = None
     stored_reference_open_count: int = 0
     search_reference_count: int = 0
     search_cache_hit: bool = False
@@ -95,8 +97,11 @@ class CodexSearchBridgeResult:
         """Return Tavily-only count for backward-compatible trace consumers."""
         return self.search_result_count if self.search_provider == "tavily" else 0
 
-    def response_body(self) -> dict[str, str]:
-        return {"output": self.output}
+    def response_body(self) -> dict[str, Any]:
+        body: dict[str, Any] = {"output": self.output}
+        if self.results is not None:
+            body["results"] = [dict(result) for result in self.results]
+        return body
 
     def trace_summary(self) -> dict[str, Any]:
         used_browser = bool(
@@ -140,6 +145,7 @@ class _SearchExecution:
     result_count: int
     reference_count: int
     cache_hit: bool
+    results: tuple[dict[str, Any], ...] | None
 
 
 def should_use_local_codex_search(
@@ -316,6 +322,7 @@ async def execute_local_codex_search(
         time_count=len(time_offsets),
         search_result_count=search_execution.result_count,
         search_provider=provider,
+        results=search_execution.results,
         stored_reference_open_count=stored_reference_open_count,
         search_reference_count=search_execution.reference_count,
         search_cache_hit=search_execution.cache_hit,
@@ -336,7 +343,7 @@ async def _execute_search_queries(
     scope: CodexSearchReferenceScope | None,
 ) -> _SearchExecution:
     if not queries:
-        return _SearchExecution((), 0, 0, False)
+        return _SearchExecution((), 0, 0, False, None)
 
     fingerprint = _search_request_fingerprint(body)
     if reference_store is not None and scope is not None:
@@ -375,6 +382,7 @@ async def _execute_search_queries(
         result_count=sum(draft.source_result_count for draft in query_drafts),
         reference_count=0,
         cache_hit=False,
+        results=_structured_draft_results(query_drafts),
     )
 
 
@@ -404,7 +412,42 @@ def _stored_search_execution(
             for result in query.results
         ),
         cache_hit=cache_hit,
+        results=_structured_stored_results(batch),
     )
+
+
+def _structured_draft_results(
+    queries: list[SearchQueryDraft],
+) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        _structured_text_result(result) for query in queries for result in query.results
+    )
+
+
+def _structured_stored_results(batch: StoredSearchBatch) -> tuple[dict[str, Any], ...]:
+    return tuple(
+        _structured_text_result(result, ref_id=result.ref_id)
+        for query in batch.queries
+        for result in query.results
+    )
+
+
+def _structured_text_result(
+    result: SearchResultDraft | StoredSearchResult,
+    *,
+    ref_id: str | None = None,
+) -> dict[str, Any]:
+    value: dict[str, Any] = {
+        "type": "text_result",
+        "title": result.title,
+        "url": result.url,
+        "content": result.content,
+    }
+    if ref_id is not None:
+        value["ref_id"] = ref_id
+    if result.score is not None:
+        value["score"] = result.score
+    return value
 
 
 async def _execute_open_operations(

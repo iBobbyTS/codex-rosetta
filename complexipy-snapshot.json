@@ -100,10 +100,6 @@
     "file_name": "tool_ops.py",
     "functions": [
       {
-        "name": "OpenAIResponsesToolOps::ir_tool_call_to_p",
-        "complexity": 30
-      },
-      {
         "name": "OpenAIResponsesToolOps::p_tool_call_to_ir",
         "complexity": 30
       },

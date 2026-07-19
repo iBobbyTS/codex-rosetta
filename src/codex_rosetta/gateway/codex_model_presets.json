@@ -9,7 +9,7 @@
     "supports_image_detail_original": false,
     "truncation_policy": {"mode": "tokens", "limit": 10000},
     "supports_parallel_tool_calls": false,
-    "supports_reasoning_summaries": false,
+    "supports_reasoning_summary_parameter": false,
     "tool_mode": "code_mode_only",
     "multi_agent_version": "v2",
     "use_responses_lite": true,
@@ -126,7 +126,7 @@
       "context_window": 1000000,
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
-      "supports_reasoning_summaries": true,
+      "supports_reasoning_summary_parameter": true,
       "default_reasoning_summary": "none",
       "truncation_policy": {"mode": "bytes", "limit": 10000},
       "comp_hash": "minimax-3"

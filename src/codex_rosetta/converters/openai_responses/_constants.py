@@ -64,9 +64,10 @@ RESPONSES_REASON_TO_INCOMPLETE_REASON: dict[str, str] = {
 # --- ID generation ---
 
 
-def generate_message_id(response_id: str) -> str:
-    """Generate a message item ID from the response ID."""
-    return f"msg_{response_id or ''}"
+def generate_message_id(response_id: str) -> str | None:
+    """Generate a valid prefixed item ID when a stable suffix is available."""
+    suffix = response_id.strip()
+    return f"msg_{suffix}" if suffix else None
 
 
 # --- Preserve-mode echo fields ---

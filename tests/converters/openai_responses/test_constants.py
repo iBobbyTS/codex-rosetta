@@ -103,4 +103,4 @@ class TestGenerateMessageId:
         assert generate_message_id("resp_123") == "msg_resp_123"
 
     def test_with_empty_response_id(self):
-        assert generate_message_id("") == "msg_"
+        assert generate_message_id("") is None

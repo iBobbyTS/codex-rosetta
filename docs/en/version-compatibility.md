@@ -13,7 +13,13 @@ package metadata normalizes it to the PEP 440 equivalent `.postN`.
 
 ## Current Compatibility
 
-Codex-Rosetta `0.144.0.r0` is compatible with Codex CLI `0.144.0`.
+Codex-Rosetta remains at `0.144.0.r0`. The source-first adaptation for Codex
+`0.145.0-alpha.23` is implemented and was tested with a binary built from the
+exact target source, but failed or unavailable live gates prevent package
+adoption. The installed CLI is `0.144.6`; it was not used as evidence for the
+alpha target's behavior.
 
 See the [developer compatibility record](../dev/version-compatibility/README.md)
-for the reviewed Codex source commit, contract checks, and upgrade procedure.
+and the [alpha.23 upgrade report](../dev/version-compatibility/reports/alpha-23-upgrade-review.md)
+for exact source commits, contract failures, open compatibility points, and
+required live gates.

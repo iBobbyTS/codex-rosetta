@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "openai-codex-src"
 DEFAULT_BASELINE = (
     Path(__file__).resolve().parents[1]
@@ -27,14 +27,20 @@ DEFAULT_BASELINE = (
 HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "apply_patch",
     "approval_messages_fields",
+    "auto_review_messages_fields",
     "codex_header_constants",
     "code_mode_exec_shape",
     "endpoints",
     "model_messages_fields",
+    "model_info_fields",
+    "permission_messages_fields",
+    "response_item_id",
     "response_item_additional_tools_fields",
     "remote_compaction_v2",
     "responses_lite_model_fields",
     "responses_metadata_keys",
+    "search_response_fields",
+    "sse_input_token_details_fields",
     "sse_event_names",
     "tool_spec_web_search_fields",
     "tool_spec_wire_types",
@@ -45,6 +51,9 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
 HIGH_CONFIDENCE_DESCRIPTIONS = {
     "apply_patch": "tool name, format, syntax, and grammar SHA-256 match",
     "approval_messages_fields": "ApprovalMessages field names, Rust types, and attributes match",
+    "auto_review_messages_fields": (
+        "AutoReviewMessages field names, Rust types, and attributes match"
+    ),
     "codex_header_constants": "extracted Codex HTTP header names and values match",
     "code_mode_exec_shape": (
         "exec name, nested section/declaration renderers, web tool identity, "
@@ -52,6 +61,13 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     ),
     "endpoints": "extracted endpoint constants match",
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
+    "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
+    "permission_messages_fields": (
+        "PermissionMessages field names, Rust types, and attributes match"
+    ),
+    "response_item_id": (
+        "ResponseItemId serde shape plus constructor and prefix predicate match"
+    ),
     "response_item_additional_tools_fields": (
         "ResponseItem::AdditionalTools field names, Rust types, and attributes match"
     ),
@@ -63,6 +79,12 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
         "use_responses_lite model list and key protocol capability snapshot match"
     ),
     "responses_metadata_keys": "extracted turn metadata key names and values match",
+    "search_response_fields": (
+        "SearchResponse field names, Rust types, and attributes match"
+    ),
+    "sse_input_token_details_fields": (
+        "Responses completed input-token detail fields and cache-write serde defaults match"
+    ),
     "sse_event_names": "SSE parser event name set matches",
     "tool_spec_web_search_fields": (
         "ToolSpec::WebSearch field names, Rust types, and attributes match"
@@ -81,7 +103,6 @@ RESPONSES_LITE_MODEL_CAPABILITY_KEYS = (
     "slug",
     "supported_reasoning_levels",
     "supports_parallel_tool_calls",
-    "supports_reasoning_summaries",
     "supports_search_tool",
     "tool_mode",
     "use_responses_lite",
@@ -105,7 +126,7 @@ def _read(source_root: Path, relative_path: str) -> str:
 
 def _find_declaration(text: str, declaration: str, name: str) -> int:
     pattern = re.compile(
-        rf"\bpub(?:\(crate\))?\s+{re.escape(declaration)}\s+{re.escape(name)}\b"
+        rf"\b(?:pub(?:\(crate\))?\s+)?{re.escape(declaration)}\s+{re.escape(name)}\b"
     )
     match = pattern.search(text)
     if match is None:
@@ -470,6 +491,12 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         source_root, "codex-rs/ext/web-search/web_run_description.md"
     )
     web_run_schema = _read(source_root, "codex-rs/ext/web-search/src/schema.rs")
+    search = _read(source_root, "codex-rs/codex-api/src/search.rs")
+    response_item_id = _read(source_root, "codex-rs/protocol/src/response_item_id.rs")
+    compact_remote_v2 = _read(source_root, "codex-rs/core/src/compact_remote_v2.rs")
+    compact_model_fallback = _read(
+        source_root, "codex-rs/core/src/compact_model_fallback.rs"
+    )
 
     header_constants = _string_constants(
         client,
@@ -511,6 +538,9 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         },
         "approval_messages_fields": _struct_field_contracts(
             openai_models, "ApprovalMessages"
+        ),
+        "auto_review_messages_fields": _struct_field_contracts(
+            openai_models, "AutoReviewMessages"
         ),
         "codex_header_constants": header_constants,
         "code_mode_exec_shape": {
@@ -556,9 +586,12 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
             "Verbosity": _enum_variants(config_types, "Verbosity"),
             "WebSearchToolType": _enum_variants(openai_models, "WebSearchToolType"),
         },
-        "model_info_fields": _struct_fields(openai_models, "ModelInfo"),
+        "model_info_fields": _struct_field_contracts(openai_models, "ModelInfo"),
         "model_messages_fields": _struct_field_contracts(
             openai_models, "ModelMessages"
+        ),
+        "permission_messages_fields": _struct_field_contracts(
+            openai_models, "PermissionMessages"
         ),
         "reasoning_fields": _struct_fields(common, "Reasoning"),
         "response_create_ws_request_fields": _struct_fields(
@@ -566,6 +599,15 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         ),
         "response_event_variants": _enum_variants(common, "ResponseEvent"),
         "response_input_item_variants": _enum_variants(models, "ResponseInputItem"),
+        "response_item_id": {
+            "is_prefixed_sha256": _function_body_sha256(
+                response_item_id, "is_prefixed"
+            ),
+            "serde_transparent": "#[serde(transparent)]" in response_item_id,
+            "with_suffix_sha256": _function_body_sha256(
+                response_item_id, "with_suffix"
+            ),
+        },
         "response_item_additional_tools_fields": _enum_variant_field_contracts(
             models, "ResponseItem", "AdditionalTools"
         ),
@@ -595,10 +637,16 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
                     "CompactionStrategy",
                 )
             },
+            "output_fields": _struct_field_contracts(
+                compact_remote_v2, "RemoteCompactionV2Output"
+            ),
             "prompt_sha256": hashlib.sha256(compact_prompt.encode("utf-8")).hexdigest(),
             "summary_prefix_sha256": hashlib.sha256(
                 compact_summary_prefix.encode("utf-8")
             ).hexdigest(),
+            "fallback_predicate_sha256": _function_body_sha256(
+                compact_model_fallback, "should_retry_with_current_model"
+            ),
             "trigger_variant_present": "CompactionTrigger"
             in _enum_variants(models, "ResponseItem"),
         },
@@ -607,7 +655,11 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         "responses_metadata_keys": _string_constants(
             responses_metadata, r"[A-Z0-9_]+_KEY"
         ),
+        "search_response_fields": _struct_field_contracts(search, "SearchResponse"),
         "sse_event_names": _sse_event_names(sse),
+        "sse_input_token_details_fields": _struct_field_contracts(
+            sse, "ResponseCompletedInputTokensDetails"
+        ),
         "stream_options_fields": _struct_fields(common, "StreamOptions"),
         "tool_spec_web_search_fields": _enum_variant_field_contracts(
             tool_spec, "ToolSpec", "WebSearch"

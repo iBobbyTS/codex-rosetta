@@ -146,7 +146,18 @@ def test_search_query_uses_tavily_with_supported_filters() -> None:
     assert result.time_count == 0
     assert result.tavily_result_count == 1
     assert "https://docs.python.org/3/" in result.output
-    assert result.response_body() == {"output": result.output}
+    assert result.response_body() == {
+        "output": result.output,
+        "results": [
+            {
+                "type": "text_result",
+                "title": "Python documentation",
+                "url": "https://docs.python.org/3/",
+                "content": "The official Python 3 documentation.",
+                "score": 0.99,
+            }
+        ],
+    }
 
 
 def test_time_uses_python_without_tavily() -> None:
@@ -168,8 +179,31 @@ def test_time_uses_python_without_tavily() -> None:
     assert result.search_count == 0
     assert result.open_count == 0
     assert result.time_count == 2
+    assert result.response_body() == {"output": result.output}
     assert "+03:00: 2026-07-12T15:00:00+03:00" in result.output
     assert "-05:30: 2026-07-12T06:30:00-05:30" in result.output
+
+
+def test_search_query_preserves_explicit_empty_structured_results() -> None:
+    class EmptySearchClient:
+        async def search(
+            self,
+            query: str,
+            *,
+            settings: WebSearchSettings,
+        ) -> dict[str, Any]:
+            del query, settings
+            return {"results": []}
+
+    result = asyncio.run(
+        execute_local_codex_search(
+            _body({"search_query": [{"q": "nothing"}]}),
+            {"tavily_api_key": "tvly-test"},
+            client=EmptySearchClient(),
+        )
+    )
+
+    assert result.response_body() == {"output": result.output, "results": []}
 
 
 def test_open_direct_url_returns_line_addressable_static_page() -> None:

@@ -361,8 +361,17 @@ def test_self_hosted_google_preserves_codex_search_response_contract() -> None:
     )
 
     assert response.status_code == 200
-    assert set(json.loads(response.body)) == {"output"}
-    assert "https://docs.python.org/3/" in json.loads(response.body)["output"]
+    body = json.loads(response.body)
+    assert "https://docs.python.org/3/" in body["output"]
+    assert body["results"] == [
+        {
+            "type": "text_result",
+            "title": "Python documentation",
+            "url": "https://docs.python.org/3/",
+            "content": "Python documentation from Google Search.",
+            "ref_id": "turn0search0",
+        }
+    ]
     assert client.search_calls == [("Python documentation", WebSearchSettings())]
     request.app.transport.send_passthrough.assert_not_awaited()
 

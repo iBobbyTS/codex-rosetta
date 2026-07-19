@@ -79,7 +79,7 @@ the native call and a non-error result. Gateway Logs must additionally prove
 the model-facing call name and conversion route.
 
 For the Chat route, expected model-facing names are the unique flattened forms
-`clock.curr_time` and `memories.list`; Rosetta must restore their native
+`clock-curr_time` and `memories-list`; Rosetta must restore their native
 Namespace metadata before Codex executes them. The exact name may differ only
 if the current Codex/Rosetta contract deliberately changes the stable
 flattening scheme, in which case record the observed name and review the

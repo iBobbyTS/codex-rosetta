@@ -10,7 +10,11 @@ Codex 版本时从 `r0` 开始；只包含 Rosetta 修复的后续发布递增 `
 
 ## 当前兼容性
 
-Codex-Rosetta `0.144.0.r0` 兼容 Codex CLI `0.144.0`。
+Codex-Rosetta 当前仍为 `0.144.0.r0`。针对 Codex
+`0.145.0-alpha.23` 的源码优先适配已经实现，并使用精确目标源码构建的二进制完成测试；
+但仍有失败或当前环境不可运行的 live 门禁，因此未批准新的包版本目标。本机安装的 CLI
+是 `0.144.6`，没有被用作 alpha 目标运行行为的证据。
 
-已审查的 Codex 源码 commit、契约检查和升级流程请参阅
-[开发者兼容性记录（英文）](../dev/version-compatibility/README.md)。
+精确源码 commit、契约检查、未解决兼容点和后续真实门禁请参阅
+[开发者兼容性记录（英文）](../dev/version-compatibility/README.md) 和
+[alpha.23 升级报告](../dev/version-compatibility/reports/alpha-23-upgrade-review.md)。

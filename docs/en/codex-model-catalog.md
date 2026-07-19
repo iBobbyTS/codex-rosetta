@@ -1,9 +1,9 @@
 # Codex Model Catalog Field Reference
 
 This document describes the model catalog consumed by Codex and how
-Codex-Rosetta should use it when exposing third-party models. It is based on
-Codex CLI `0.144.4`, source commit
-`8c68d4c87dc54d38861f5114e920c3de2efa5876`, especially:
+Codex-Rosetta should use it when exposing third-party models. The current
+source-first review target is Codex `0.145.0-alpha.23`, source commit
+`655224ffae098a85efeddf8289171ff3bd2624d1`, especially:
 
 - `codex-rs/models-manager/models.json`;
 - `codex-rs/protocol/src/openai_models.rs`;
@@ -11,7 +11,8 @@ Codex CLI `0.144.4`, source commit
 - the consumers under `codex-rs/core`, `codex-rs/tools`, and `codex-rs/ext`.
 
 These are internal Codex contracts, not fields defined by the public OpenAI
-API. Whenever Codex is upgraded, use the centralized
+API. The alpha.23 source-first review found open adaptation gaps, so this page
+is not a compatibility approval. Whenever Codex is upgraded, use the centralized
 [`version-compatibility checklist`](../dev/version-compatibility/upgrade-checklist.md)
 rather than treating this field reference as an upgrade procedure.
 
@@ -39,7 +40,7 @@ Rosetta preserves the upstream catalog asset and applies a runtime-only
 retain their reviewed upstream group value (currently `3000`), as do
 `gpt-5.5`/`5.4`/`5.4-mini` (currently `2911`). The compact third-party presets
 declare reviewed values for DeepSeek V4, GLM 5.2, each Qwen 3.7 variant, MiMo
-V2.5, MiniMax M3, and Kimi K2.7 Code; Rosetta retains built-in fallback groups
+V2.5, MiniMax M3, Kimi K2.7 Code, and Kimi K3; Rosetta retains built-in fallback groups
 for presets that omit the field, as well as `gpt-5.2` and
 `codex-auto-review`. Every group is non-empty; equal groups share a value and
 different groups must not collide. Unknown aliases get the deterministic
@@ -93,34 +94,38 @@ URLs.
 Rosetta also packages Terra-derived presets for `deepseek-v4-pro`,
 `deepseek-v4-flash`, `glm-5.2`, `qwen3.7-plus`, `qwen3.7-max`,
 `qwen3.7-max-2026-06-08`, `mimo-v2.5`, `mimo-v2.5-pro`, `minimax-m3`, and
-`kimi-k2.7-code`.
+`kimi-k2.7-code`, and `kimi-k3`.
 These are materialized only when the exact alias exists in an LLM model group;
 they are not part of the eight-entry upstream catalog. Each preset retains the
 Terra instruction structure with its model identity replaced and declares its
 own context, modalities, reasoning levels, and explicitly selected Codex catalog
 fields. MiniMax M3 additionally overrides reasoning-summary support, the default
-summary, byte-based truncation, and parallel tool calls in its preset.
+summary, and byte-based truncation in its preset. Parallel tool calls remain
+disabled for every third-party preset until their cross-format call/replay
+behavior is independently proven.
 
-The preset resource's `shared_overrides` starts from the 24 client-consumed,
-identity-independent fields in the official Codex `0.145.0-alpha.20`
-`gpt-5.6-terra` catalog. It uses Terra as the reference Codex runtime surface,
-while targeting current flagship third-party models through Rosetta's Chat
-bridge. Shared values follow the Terra runtime surface unless Rosetta's fixed
-Responses Lite/Chat translation requires an intentional protocol-specific
-value. Identity, context, modalities,
-reasoning levels and their default, priority, `comp_hash`, and the
-identity-bearing instruction payloads remain model-specific or are materialized
-through the dedicated identity substitution path. Every key present in
-`shared_overrides` is also accepted on an individual `models[]` entry and takes
-precedence there. `template_slug` provides a forward-compatible fallback only
-for catalog fields that Rosetta does not yet recognize; known client-ignored or
-removed fields are not silently inherited from the template. This scoped
-snapshot does not by itself declare full Codex `0.145` compatibility.
+The current preset resource contains 25 reviewed `shared_overrides`. Alpha.23
+renames the reasoning capability to `supports_reasoning_summary_parameter`; the
+runtime and presets now use that exact field. The third-party snapshot
+deliberately differs from official Terra by keeping service/speed tiers empty,
+original image detail disabled, parallel tool calls disabled, and the reasoning
+summary parameter disabled by default. These values are Rosetta safety claims,
+not copies of capabilities that were only proven for the official model.
 
-The bundled JSON uses 41 distinct keys. `ModelInfo` also accepts
-`effective_context_window_percent`, which all bundled entries omit and
-therefore receive the default value `95`. This reference consequently covers
-42 catalog input fields.
+The design uses Terra as the reference client surface while
+keeping identity, context, modalities, reasoning levels and their default,
+priority, `comp_hash`, and identity-bearing instructions model-specific. Every
+supported shared key is also accepted on an individual `models[]` entry, and
+`template_slug` fills only fields Rosetta does not yet recognize. Known removed
+or ignored fields cannot be resurrected through the template fallback.
+
+The target alpha.23 bundled JSON uses 40 distinct keys. Four are ignored by
+`ModelInfo`, leaving 36 consumed bundled fields. `ModelInfo` additionally
+accepts the omitted defaulted inputs `effective_context_window_percent=95` and
+`supports_reasoning_summary_parameter=true`; `used_fallback_model_metadata` is
+runtime-only and cannot be supplied by catalog JSON. The tables therefore
+document 42 catalog-facing names: 38 accepted inputs and the four ignored
+bundled keys. The runtime-only field is described separately.
 
 Four keys exist in the bundled JSON but are not members of the current Rust
 `ModelInfo` type. Serde ignores them when the bundled file is loaded:
@@ -130,7 +135,8 @@ Four keys exist in the bundled JSON but are not members of the current Rust
 - `prefer_websockets`;
 - `reasoning_summary_format`.
 
-They are marked **ignored in 0.144.4** below. Rosetta omits them from generated
+They are marked **ignored in the reviewed 0.144.x baseline** below. Alpha.23
+still does not consume these four keys. Rosetta omits them from generated
 third-party presets and explicitly blocks `template_slug` from restoring them.
 Rosetta must not implement runtime protocol behavior from them unless a later
 Codex version starts consuming them. `used_fallback_model_metadata` is the
@@ -149,8 +155,8 @@ disabled, so it is not a valid catalog input field.
 | `supported_in_api` | boolean, `true` | Propagates into the model preset's API-support marker. | Set only when the exposed alias can actually be routed by Rosetta. This flag does not validate the upstream API. |
 | `availability_nux` | object or null, `{"message":"New model available."}` | Optional new-user-experience message shown when a model becomes available. | Usually `null` for private aliases. Never use it as a capability switch. |
 | `upgrade` | object or null, `{"model":"replacement","migration_markdown":"Use replacement."}` | Supplies a recommended replacement and migration message for an older model. | Use only for a deliberate alias migration. Keep upstream routing changes in Rosetta configuration, not in this UI hint. |
-| `available_in_plans` | string array, `["plus","team"]` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
-| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
+| `available_in_plans` | string array, `["plus","team"]` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
+| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
 
 ## Reasoning, output, and service tiers
 
@@ -158,9 +164,9 @@ disabled, so it is not a valid catalog input field.
 | --- | --- | --- | --- |
 | `default_reasoning_level` | reasoning effort or null, `"medium"` | Default effort when the user has not selected one. | Choose an effort accepted by the upstream or mapped by Rosetta. It must also appear in `supported_reasoning_levels`. |
 | `supported_reasoning_levels` | object array, `[{"effort":"low","description":"Fast"},{"effort":"high","description":"Deep"}]` | Populates selectable reasoning efforts and their UI descriptions. Current enums include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, subject to version changes. | Advertise only efforts that the upstream accepts or that Rosetta intentionally maps. Do not copy `ultra` merely to obtain delegation behavior. |
-| `supports_reasoning_summaries` | boolean, `false` | Allows Codex to request reasoning summaries. | Use `false` unless the upstream supports the request/response shape or Rosetta reliably converts or strips it. |
+| `supports_reasoning_summary_parameter` | boolean, default `true` | Alpha.23 controls whether Codex may send the Responses `reasoning.summary` parameter. The field is serde-defaulted to true and the old `supports_reasoning_summaries` key is no longer in the target catalog. | Set false only when the target client must omit the summary parameter and the generated catalog is known to be consumed by the matching Codex source. Do not rely on the removed old key. |
 | `default_reasoning_summary` | `"auto"`, `"concise"`, `"detailed"`, or `"none"` | Default summary mode when the user has not configured one. | Prefer `none` for third-party models until summary delivery is verified end to end. |
-| `reasoning_summary_format` | string, `"experimental"` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
+| `reasoning_summary_format` | string, `"experimental"` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
 | `support_verbosity` | boolean, `true` | When true, Codex sends the configured or default Responses `text.verbosity`; when false it omits it. | Enable only when the upstream accepts it or Rosetta strips/maps it. |
 | `default_verbosity` | `"low"`, `"medium"`, `"high"`, or null | Default Responses verbosity when supported and not overridden by the user. | Use a value actually supported by the upstream. `null` is safest when `support_verbosity` is false. |
 | `service_tiers` | object array, `[{"id":"priority","name":"Fast","description":"Higher speed"}]` | Lists allowed service tiers for UI and subagent/model selection; requested tiers are validated against this list. | Keep empty unless the Rosetta provider maps the tier to a real upstream service class. |
@@ -194,14 +200,14 @@ disabled, so it is not a valid catalog input field.
 | `use_responses_lite` | boolean, `true` | Enables Codex's Responses Lite dialect: tools/instructions move into input items, internal headers are used, hosted tools are disabled, and standalone namespace tools are expected. | Keep true. Rosetta owns `input[].type="additional_tools"`, developer instructions, custom `exec`, standalone `/v1/alpha/search`, compact/header behavior, and stream conversion for Chat upstreams. |
 | `multi_agent_version` | `"disabled"`, `"v1"`, `"v2"`, or null | Selects legacy multi-agent, collaboration v2, disabled, or feature/config fallback behavior. It affects tool definitions and subagent lifecycle. | Keep `v2` for the Terra-compatible latest-model profile. Do not add weak-model downgrade presets to this catalog. |
 | `auto_review_model_override` | string or null, `"review-model"` | Redirects command-execution approval review from the selected model to another model. | Set to a Rosetta-exposed alias that is actually routable and suited to approval review. Keep null for ordinary models. |
-| `prefer_websockets` | boolean, `true` | **Ignored in 0.144.4:** not present in `ModelInfo`; omitted from Rosetta third-party presets, and WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
+| `prefer_websockets` | boolean, `true` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets, and WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
 
 ## Instructions and skills
 
 | Field | Type and example | Codex behavior | Rosetta guidance |
 | --- | --- | --- | --- |
 | `base_instructions` | string, `"You are a coding agent..."` | Base model instructions used when no valid instruction template overrides them. | Write instructions for the third-party model's real tool and reasoning behavior. Do not copy a large GPT prompt solely to make Codex expose tools. |
-| `model_messages` | object or null, `{"instructions_template":"... {{ personality }} ...","instructions_variables":{"personality_default":"","personality_friendly":"...","personality_pragmatic":"..."},"approvals":{"on_request":"...","on_request_auto_review":"..."},"auto_review":{"policy":"..."}}` | If `instructions_template` exists, it always replaces `base_instructions`. A `{{ personality }}` placeholder plus complete variables enables personality-specific text. `approvals` supplies approval-mode messages. In 0.144.4, optional `auto_review.policy` supplies the catalog policy for the automatic reviewer and survives instruction-template clearing. | Use null or a small tested template first. If a template is present, keep all critical instructions there because `base_instructions` will not be appended automatically. Treat the auto-review policy as security-sensitive model guidance and copy it only when its behavior has been reviewed. |
+| `model_messages` | object or null, `{"instructions_template":"... {{ personality }} ...","instructions_variables":{"personality_default":"","personality_friendly":"...","personality_pragmatic":"..."},"approvals":{"on_request":"...","on_request_auto_review":"..."},"auto_review":{"policy":"...","policy_template":"..."},"permissions":{"danger_full_access":"...","workspace_write":"...","read_only":"..."}}` | If `instructions_template` exists, it always replaces `base_instructions`. A `{{ personality }}` placeholder plus complete variables enables personality-specific text. `approvals` supplies approval-mode messages. Alpha.23 adds `auto_review.policy_template` and sandbox-specific `permissions` messages. | Use null or a small tested template first. If a template is present, keep all critical instructions there because `base_instructions` will not be appended automatically. Treat approval, auto-review, and permission messages as security-sensitive model guidance and copy them only after their behavior has been reviewed. |
 | `include_skills_usage_instructions` | boolean, `false` | Controls whether Codex appends the full “How to use skills” tutorial to the skills fragment. It does not control whether the available-skills list itself is sent. | Keep false unless the third-party model materially benefits from the longer tutorial and has enough context budget. |
 
 ### `base_instructions` and `model_messages` in bundled models
@@ -242,7 +248,7 @@ Rosetta must then either support that shape or advertise a safer catalog value.
 
 In the Admin model-group dialog, Rosetta checks the configured upstream model
 name first, or the exposed model name when no upstream mapping is present. An
-exact slug match in either `codex_models_0_144_4.json` or
+exact slug match in the unified `codex_models.json` catalog or
 `codex_model_presets.json` displays the model's `display_name` and derives
 text/vision badges from `input_modalities`; partial or suffixed names do not
 match. Gateway-side image filtering is narrower: it reads `input_modalities`
@@ -273,7 +279,7 @@ its mandatory Responses Lite request shape to the configured Chat protocol.
 | Parallel calls | `supports_parallel_tool_calls: false` | Concurrent call IDs, result association, replay, and model behavior are stable. |
 | Collaboration | `multi_agent_version: "v2"` | Use the current collaboration namespace and lifecycle. |
 | Vision | Per-model `input_modalities`, shared `supports_image_detail_original: false` | Model entries declare whether image input is available; original-detail handling remains a protocol-specific shared choice. |
-| Reasoning summaries | `supports_reasoning_summaries: false`, `default_reasoning_summary: "none"` | Request mapping, streamed summaries, encrypted content, and later turns remain valid. |
+| Reasoning summaries | `supports_reasoning_summary_parameter: false` (only when intentionally disabled), `default_reasoning_summary: "none"` | Alpha.23 defaults the parameter capability to true when omitted. Verify request mapping, streamed summaries, encrypted content, and later turns instead of using the removed old field. |
 | Verbosity | `support_verbosity: true`, `default_verbosity: "low"` | Preserve Terra's client behavior. The current Responses→Chat converter does not forward `text.verbosity`, so this is client-surface metadata until an upstream mapping is added. |
 | Search | `supports_search_tool: true`, `web_search_tool_type: "text_and_image"` | Responses Lite uses standalone `web.run`; the hosted-search type remains Terra-compatible but dormant. |
 | Context | Real provider limits, `auto_compact_token_limit: null` | Long sessions compact and resume before the upstream rejects the request. |
@@ -317,7 +323,7 @@ identity, limits, modalities, reasoning levels, and hash remain model-specific:
   "base_instructions": "You are a coding agent. Use the provided tools exactly as specified.",
   "model_messages": null,
   "include_skills_usage_instructions": false,
-  "supports_reasoning_summaries": false,
+  "supports_reasoning_summary_parameter": false,
   "default_reasoning_summary": "none",
   "support_verbosity": true,
   "default_verbosity": "low",
@@ -341,8 +347,10 @@ identity, limits, modalities, reasoning levels, and hash remain model-specific:
 }
 ```
 
-The four currently ignored bundled keys are omitted deliberately. Adding them
-would not change Codex 0.144.4 runtime behavior.
+The four currently ignored bundled keys are omitted deliberately. The
+alpha.23 reasoning field rename and permission-message additions must be
+reviewed against the exact target source before this example is used for
+compatibility claims.
 
 ## Upgrade review requirements
 

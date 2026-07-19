@@ -49,6 +49,13 @@ High-confidence unchanged rows may record the live API result as "not triggered 
 
 ## Current documentation baseline
 
-- [`range-coverage-review.md`](range-coverage-review.md): full
-  code-to-document inventory and `0.142.0`–`0.144.6` coverage validation. It is
-  documentation-only and does not approve `0.144.6`.
+- [`alpha-23-upgrade-review.md`](alpha-23-upgrade-review.md): full
+  source-first inventory and implementation review for `0.145.0-alpha.23`,
+  including direct comparison with `0.142.0` and `0.144.6`, deterministic
+  checks, and the complete available live-agent matrix. The adaptation is
+  recorded, but failed/unavailable live gates keep adoption pending.
+- [`alpha-23-live-evidence.md`](alpha-23-live-evidence.md): per-attempt route,
+  thread, evaluation, and cache-continuation evidence for that review.
+- [`range-coverage-review.md`](range-coverage-review.md): historical
+  full code-to-document inventory and `0.142.0`–`0.144.6` coverage
+  validation. It is documentation-only and does not approve `0.144.6`.

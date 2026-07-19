@@ -487,15 +487,17 @@ class OpenAIResponsesConverter(BaseConverter):
                     )
 
             if text_parts:
+                message_item = {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": text_parts,
+                }
+                if msg_item_id is not None:
+                    message_item["id"] = msg_item_id
                 provider_response["output"].insert(
                     0,
-                    {
-                        "id": msg_item_id,
-                        "type": "message",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": text_parts,
-                    },
+                    message_item,
                 )
 
             # Set finish reason
@@ -537,6 +539,10 @@ class OpenAIResponsesConverter(BaseConverter):
         if p_input_details:
             if "cached_tokens" in p_input_details:
                 usage_info["cache_read_tokens"] = p_input_details["cached_tokens"]
+            if "cache_write_tokens" in p_input_details:
+                usage_info["cache_creation_tokens"] = p_input_details[
+                    "cache_write_tokens"
+                ]
         p_output_details = p_usage.get("output_tokens_details")
         if p_output_details:
             if "reasoning_tokens" in p_output_details:
@@ -552,6 +558,7 @@ class OpenAIResponsesConverter(BaseConverter):
             "total_tokens": ir_usage.get("total_tokens") or 0,
             "input_tokens_details": {
                 "cached_tokens": ir_usage.get("cache_read_tokens", 0),
+                "cache_write_tokens": ir_usage.get("cache_creation_tokens", 0),
             },
             "output_tokens_details": {
                 "reasoning_tokens": ir_usage.get("reasoning_tokens", 0),
@@ -2015,7 +2022,7 @@ class OpenAIResponsesConverter(BaseConverter):
         )
 
     @staticmethod
-    def _build_finish_usage(pending_usage: dict[str, Any]) -> dict[str, Any]:
+    def _build_finish_usage(pending_usage: Mapping[str, Any]) -> dict[str, Any]:
         """Build usage dict for the finish response from pending IR usage."""
         usage: dict[str, Any] = {
             "input_tokens": pending_usage.get("prompt_tokens") or 0,
@@ -2023,8 +2030,10 @@ class OpenAIResponsesConverter(BaseConverter):
             "total_tokens": pending_usage.get("total_tokens") or 0,
         }
         cache_read = pending_usage.get("cache_read_tokens")
+        cache_creation = pending_usage.get("cache_creation_tokens")
         usage["input_tokens_details"] = {
-            "cached_tokens": cache_read if cache_read is not None else 0
+            "cached_tokens": cache_read if cache_read is not None else 0,
+            "cache_write_tokens": (cache_creation if cache_creation is not None else 0),
         }
         reasoning = pending_usage.get("reasoning_tokens")
         usage["output_tokens_details"] = {
@@ -2299,11 +2308,7 @@ class OpenAIResponsesConverter(BaseConverter):
         resp: dict[str, Any] = {
             "status": "completed",
             "output": [],
-            "usage": {
-                "input_tokens": usage.get("prompt_tokens") or 0,
-                "output_tokens": usage.get("completion_tokens") or 0,
-                "total_tokens": usage.get("total_tokens") or 0,
-            },
+            "usage": self._build_finish_usage(usage),
         }
         return {
             "type": ResponsesEventType.RESPONSE_COMPLETED,

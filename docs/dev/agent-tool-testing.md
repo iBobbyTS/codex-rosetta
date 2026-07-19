@@ -288,7 +288,7 @@ For Namespace-tool tasks, verify every required native Namespace call and
 successful result in the isolated rollout. Use Gateway Logs to record the
 model-facing call name: native Responses routes retain Namespace calls, while
 Responses-to-Chat routes expose unique flattened names such as
-`memories.list` and Rosetta must reconstruct the original Namespace before
+`memories-list` and Rosetta must reconstruct the original Namespace before
 Codex executes it. A textual mention, a shell substitute, or a local file read
 does not count.
 

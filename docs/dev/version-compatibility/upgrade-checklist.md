@@ -202,7 +202,6 @@ src/codex_rosetta/gateway/web_run_sidecar.py
 src/codex_rosetta/gateway/web_run_supervisor.py
 src/codex_rosetta/gateway/local_mode.py
 src/codex_rosetta/gateway/cli.py
-src/codex_rosetta/gateway/codex_models_0_144_4.json
 src/codex_rosetta/gateway/codex_models.json
 src/codex_rosetta/gateway/codex_models_version.md
 src/codex_rosetta/gateway/codex_model_presets.json
@@ -231,7 +230,8 @@ After completing the source diff and automated contract report, copy every
 fields. The number of report rows must match the registry. Save reports under a
 descriptive date-free name such as
 `docs/dev/version-compatibility/reports/range-coverage-review.md`, then put
-the date followed by `Codex version: 0.144.0` directly below the title:
+the date followed by the target label, for example
+`Codex version: 0.145.0-alpha.23`, directly below the title:
 
 | ID and compatibility point | Classification | Source code/contract evidence | Fix or review plan | Automation results | Real API results |
 | --- | --- | --- | --- | --- | --- |
@@ -298,9 +298,9 @@ Three categories of results must be retained each time a check is performed:
 
 You can't incorporate "probably no changes" into the pass, and you can't omit these three categories just because unified diff is empty. The automated final exit code only expresses whether there is a blocking change/extraction error and does not replace the review of the second category.
 
-Still to be implemented: field types, nested model-catalog structs, serde rename/default/skip strategy, instruction-template precedence, full bundled model values and consumer mapping, SSE match arm digest, full generic tool schema, tool_search defaults, and model fallback initializer. The extractor currently covers the `ModelInfo` field set, key model enums, and a Responses Lite capability subset only. Therefore, the current baseline cannot claim complete model-catalog compatibility.
+Still to be implemented: field types, nested model-catalog structs, serde rename/default/skip strategy, instruction-template precedence, full bundled model values and consumer mapping, SSE match arm digest, full generic tool schema, tool_search defaults, and model fallback initializer. The extractor currently covers the `ModelInfo` field set, key model enums, and a Responses Lite capability subset only. Alpha.23 additionally renames the reasoning-summary capability, adds permission-message fields, types response-item IDs, adds structured Search results and cache-write usage, and changes Code Mode and Realtime contracts. The current baseline therefore cannot claim complete target compatibility, and the extractor must be adapted before baseline refresh.
 
-The `0.144.6` range audit proves why the manual catalog step is mandatory:
+The `0.144.6` range audit and the alpha.23 source review prove why the manual catalog step is mandatory:
 Codex changed only bundled Sol/Terra/Luna instruction and context-window values,
 while the extracted content groups still matched the `0.144.4` baseline. For
 every routine or full review, diff the complete target `models.json` values
@@ -357,7 +357,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 - Responses Namespace children expand to canonical regex-safe `namespace-function` names; streaming and non-streaming return paths restore hyphenated names, unique `namespace_function` and `namespace.function` compatible names, and unique bare children, while ordinary Function conflicts, shared child names, and alias collisions remain flat and fail closed;
 - Responses→Chat converts `agent_message` into model-visible user content, including its inter-agent `encrypted_content` payload, without exposing encrypted content from ordinary message or reasoning items;
 - Verify model-group Tool Profiles on direct Responses, Chat, Anthropic, and Google routes, including all four Admin categories, Disabled filtering, Modified handling, input persistence, immutable bundled delivery states, and endpoint selection. Verify the four bundled Profile names and states: Chat Default retains its established mapping; 透传 leaves every native tool Passthrough with synthetic injections Disabled; web.run 注入 differs from 透传 only by Modified `web.run`; 工具映射 inherits Chat Default. Verify new model groups choose 透传 for OpenAI Official, web.run 注入 for OpenAI Custom and Custom + Custom Responses, 工具映射 for listed-provider Responses, and Chat Default for Chat plus the intentionally separate fallback branch. All Responses choices must use identical direct protocol handling;
-- Verify model-group rows prefer an exact upstream-model slug, fall back to the exposed model name, search both `codex_models_0_144_4.json` and `codex_model_presets.json`, reject partial/suffixed matches, display modalities from matched catalog metadata, and always expose the right-side manual model-info editor. Confirm gateway image filtering uses only exact compact-preset `input_modalities`, while full-catalog and saved `model_info` values do not impose runtime restrictions; matched rows prefill all compact editable fields, unmatched rows start empty, saved `model_info` survives reload, and the exposed alias remains the generated catalog slug;
+- Verify model-group rows prefer an exact upstream-model slug, fall back to the exposed model name, search the unified `codex_models.json` resource and `codex_model_presets.json`, reject partial/suffixed matches, display modalities from matched catalog metadata, and always expose the right-side manual model-info editor. Confirm gateway image filtering uses only exact compact-preset `input_modalities`, while full-catalog and saved `model_info` values do not impose runtime restrictions; matched rows prefill all compact editable fields, unmatched rows start empty, saved `model_info` survives reload, and the exposed alias remains the generated catalog slug;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
 - The order of `response.created`, item added/delta/done, completed/failed/incomplete;

@@ -699,12 +699,16 @@ class TestOpenAIResponsesConverter:
                 "input_tokens": 10,
                 "output_tokens": 20,
                 "total_tokens": 30,
-                "input_tokens_details": {"cached_tokens": 5},
+                "input_tokens_details": {
+                    "cached_tokens": 5,
+                    "cache_write_tokens": 3,
+                },
                 "output_tokens_details": {"reasoning_tokens": 8},
             },
         }
         result = self.converter.response_from_provider(provider_response)
         assert result["usage"]["cache_read_tokens"] == 5
+        assert result["usage"]["cache_creation_tokens"] == 3
         assert result["usage"]["reasoning_tokens"] == 8
 
     def test_response_from_provider_with_service_tier(self):
@@ -782,6 +786,32 @@ class TestOpenAIResponsesConverter:
         assert result["output"][0]["type"] == "message"
         assert result["output"][0]["content"][0]["type"] == "output_text"
         assert result["output"][0]["content"][0]["text"] == "Hello!"
+
+    def test_response_to_provider_omits_message_item_id_for_empty_response_id(self):
+        """An absent response id must not produce the invalid ``msg_`` id."""
+        ir_response = cast(
+            IRResponse,
+            {
+                "id": "",
+                "object": "response",
+                "created": 1000,
+                "model": "gpt-4o",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "text", "text": "Hello!"}],
+                        },
+                        "finish_reason": {"reason": "stop"},
+                    }
+                ],
+            },
+        )
+
+        result = self.converter.response_to_provider(ir_response)
+
+        assert "id" not in result["output"][0]
 
     def test_response_to_provider_with_tool_calls(self):
         """Test IRResponse with tool calls -> provider response."""
@@ -913,6 +943,7 @@ class TestOpenAIResponsesConverter:
                     "completion_tokens": 20,
                     "total_tokens": 30,
                     "cache_read_tokens": 5,
+                    "cache_creation_tokens": 3,
                     "reasoning_tokens": 8,
                 },
             },
@@ -922,6 +953,7 @@ class TestOpenAIResponsesConverter:
         assert result["usage"]["output_tokens"] == 20
         assert result["usage"]["total_tokens"] == 30
         assert result["usage"]["input_tokens_details"]["cached_tokens"] == 5
+        assert result["usage"]["input_tokens_details"]["cache_write_tokens"] == 3
         assert result["usage"]["output_tokens_details"]["reasoning_tokens"] == 8
 
     def test_response_to_provider_with_reasoning(self):
