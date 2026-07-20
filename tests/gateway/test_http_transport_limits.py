@@ -27,6 +27,7 @@ from codex_rosetta.gateway.transport import (
 )
 from codex_rosetta.gateway.transport.http import transport as transport_module
 from codex_rosetta.gateway.transport.http.transport import (
+    BoundedHttpResponse,
     HttpTransport,
     HttpUpstreamStream,
     request_bounded_response,
@@ -1261,6 +1262,63 @@ def test_tavily_real_loopback_normal_json_forces_identity(
 
     assert result == {"ok": True}
     assert server.accept_encoding == "identity"
+
+
+def test_tavily_removes_reflected_token_from_documented_success_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "tvly-audit-secret"
+    payload = {
+        "answer": f"reflected {token}",
+        "results": [
+            {
+                "title": token,
+                "url": f"https://example.test/{token}",
+                "content": f"content {token}",
+            }
+        ],
+        "token": token,
+    }
+
+    async def _fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        return BoundedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=json.dumps(payload).encode(),
+        )
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", _fake_request)
+
+    result = asyncio.run(
+        TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
+    )
+
+    assert token not in json.dumps(result)
+    assert result["answer"] == "reflected [REDACTED]"
+    assert result["token"] == "[REDACTED]"
+
+
+def test_tavily_removes_reflected_token_from_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "tvly-audit-secret"
+
+    async def _fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        return BoundedHttpResponse(
+            status_code=401,
+            headers={"content-type": "application/json"},
+            content=json.dumps({"error": f"invalid token {token}"}).encode(),
+        )
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", _fake_request)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(
+            TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
+        )
+
+    assert token not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
 
 
 @pytest.mark.parametrize(

@@ -186,6 +186,10 @@ Admin **联网搜索**页面允许基础搜索选择 Tavily 凭据，或现有 s
 模型请求复用同一个五秒健康缓存；Modified `web.run` 只有在缓存状态在线且
 `browser_ready=true` 时才声明浏览器命令。并发刷新会合并，配置热重载会使缓存失效。
 
+Tavily credential 只通过 Bearer Authorization header 发送。在 Tavily 成功或错误响应
+进入模型、Search 客户端或诊断边界之前，网关会移除其中回显的已配置 Token；这同样
+覆盖文档定义的 `answer` 与 `results` 字段。
+
 Self-hosted Bing RSS 读取 Bing 的 XML 结果表示；Self-hosted Bing Browser
 则在 sidecar 的 Patchright 浏览器中加载交互式 HTML 结果页。两者可独立选择，
 不会静默相互回退，并保持相同的结果数量与 domain 边界。运维方仍需确保使用方式
