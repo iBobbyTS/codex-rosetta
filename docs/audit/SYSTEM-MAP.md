@@ -1,7 +1,7 @@
 # Audit System Map
 
 Last reconciled: 2026-07-20
-Repository base: `baa57887a4c6ee99b5c9d10995a2959e76f0682a`; targeted remediation re-audit `20260720-1107` is in the working tree
+Repository base: `804efef03d91f72771f27228bde26003d6ba40fa`; targeted omission-remediation re-audit `20260720-1239` is in the working tree
 Profile status: Approved
 Map owner: Bobby (project owner)
 
@@ -22,7 +22,7 @@ Map owner: Bobby (project owner)
 | Component / domain | Purpose | Owner | Criticality | Entry points | Data/state | Dependencies | Runtime/deployment | Evidence/source |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Public library + IR | Any-to-any provider conversion through shared IR | Project | High | `codex_rosetta.convert`, converter classes, `ConversionPipeline` | In-memory request/response/stream state | stdlib; optional SDK types | Python package | `src/codex_rosetta/__init__.py`, `pipeline.py`, `converters/`, `types/ir/` |
-| Provider shims | URL/protocol-derived provider identity, defaults, transforms | Project | High | shim registry and `GatewayConfig` resolution | In-memory registry/config; URL is option authority and `api_type` is required | bundled YAML/Python shims | Package resources | `shims/`, config/Admin tests |
+| Provider shims | URL/protocol-derived provider identity, defaults, transforms | Project | High | shim registry and `GatewayConfig` resolution | In-memory registry/config; URL is option authority; missing `api_type` is inferred in memory with a warning | bundled YAML/Python shims | Package resources | `shims/`, config/Admin tests |
 | Gateway HTTP app | Authenticated Codex API, health, model routes, admin registration | Project | Critical | `create_app`, `/v1/responses`, `/v1/models`, `/health*`, `/admin/*` | request-local context; app stores; auth state | vendored HTTP server/client | local process or Docker | `gateway/app.py`, `gateway/auth.py`, admin routes |
 | Gateway proxy/conversion | Route, convert, stream, tool/compaction adaptation, upstream forwarding | Project | Critical | `_proxy_handler`, `handle_non_streaming`, `handle_streaming` | stream state, metadata stores, mappings | `pipeline`, transport, persistence | local/LAN upstream calls | `gateway/proxy.py`, `transport/`, gateway tests |
 | Provider transport | URL/auth header construction, key rotation, client pool/SSE | Project | High | `ProviderInfo`, `HttpTransport`, SSE formatter | connection pools, key ring | vendored HTTP client | local process/container | `gateway/transport/`, `providers.py` |
@@ -39,7 +39,7 @@ Map owner: Bobby (project owner)
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | IF-01 | Codex downstream client | Gateway | OpenAI Responses JSON/SSE `/v1/responses` | current reviewed Codex source/catalog; target version can drift | Gateway API key; input/tool/provider output untrusted | Gateway + compatibility owner | `gateway/app.py`, `proxy.py`, compatibility docs |
 | IF-02 | Codex downstream client | Gateway | model catalog `/v1/models`, local mode settings | bundled Codex catalog and preset overlays | Gateway API key | Compatibility owner | `codex_models.json`, `local_mode.py`, tests |
-| IF-03 | Gateway | upstream provider | OpenAI Chat/Responses, Anthropic Messages, Google GenAI HTTP | explicit `api_type`; URL-authoritative preset or custom endpoint | provider credential egress; arbitrary custom HTTP(S) egress accepted only within local/LAN scope; provider response untrusted | Gateway/provider owner | `config.py`, `providers.py`, `transport/`, converters |
+| IF-03 | Gateway | upstream provider | OpenAI Chat/Responses, Anthropic Messages, Google GenAI HTTP | explicit or runtime-inferred `api_type`; URL-authoritative preset or custom endpoint | provider credential egress; arbitrary custom HTTP(S) egress accepted only within local/LAN scope; redirects prohibited; provider response untrusted | Gateway/provider owner | `config.py`, `providers.py`, `transport/`, converters |
 | IF-04 | Admin browser/client | Admin routes | login/session, config/key/provider/model/observability APIs | current JSONC/config schema | Admin password/session token; CORS boundary | Gateway owner | `gateway/admin/routes/`, auth/session tests |
 | IF-05 | Converter A | IR | request/response/stream typed dictionaries and events | internal current IR; no Rosetta-version migration guarantee | in-process trusted code, provider payloads untrusted at ingress | Core owner | `types/ir/`, converter tests |
 | IF-06 | Gateway | SQLite persistence | request logs, error dumps, encrypted tool mappings, compaction mappings | current column/constraint/index shape; incompatible old schemas/files are rejected, not migrated | principal-scoped state; local filesystem | Observability owner | `observability/persistence.py`, schema contract tests |
@@ -67,7 +67,7 @@ Map owner: Bobby (project owner)
 | `/v1/*` request | Codex client/API-key principal | request body, headers, tool content | configured Gateway API key | response/tool state for same principal | route/conversion and provider calls | none beyond API key | `create_auth_hook`, auth tests |
 | Admin API mutation | single Admin | browser JSON/config | Admin password → session/header token | all config/log/metrics/admin data | provider/key/model/config mutation, reload, deletion | Admin credential | `check_admin_auth`, admin route tests |
 | Internal Admin test request | Gateway internal token | Admin test task | internal token generated per app | provider route/config as task requires | local request path with reserved principal | Admin initiated | `auth.py`, admin testing routes |
-| Provider egress | Gateway process | converted request/model/config | provider API key in configured provider | prompt/tool payload and provider credential | outbound HTTP to configured preset or arbitrary custom HTTP(S) base URL/proxy | operator configuration; custom egress risk explicitly accepted for local/LAN only | `GatewayConfig`, `ProviderInfo`, transport, profile |
+| Provider egress | Gateway process | converted request/model/config | provider API key in configured provider | prompt/tool payload and provider credential | one outbound HTTP request to configured preset or arbitrary custom HTTP(S) base URL/proxy; redirects fail closed | operator configuration; custom egress risk explicitly accepted for local/LAN only | `GatewayConfig`, `ProviderInfo`, redirect regression test, profile |
 | Persistence read/write | Gateway process | logs/mappings/compaction data | principal scope for mappings; process filesystem access | prompt/tool/history and token metadata | local DB read/write, cleanup | none | `PersistenceManager`, scopes |
 | Live API test | developer-approved agent/harness | live test prompt/config | explicit developer approval per test | real provider/Codex credentials and transcripts | external API calls and local artifacts | required by profile; prohibited in audit | `tests/live_agent`, profile |
 | Release publication | project owner | built wheel/tag/release notes | manual GitHub Release | package artifact and source | publish/release | human only | Makefile/release docs |
@@ -107,7 +107,7 @@ Map owner: Bobby (project owner)
 | SCN-06 | Correctness/reliability | Codex compaction trigger/resume/fork | compaction state machine, summary mapping | native or Rosetta mode selected; token rehydrates only owned live mapping | compaction tests; no live summary call in audit | Critical | Compatibility |
 | SCN-07 | Reliability/security | Repeated large diagnostic/compaction/tool payloads | request logs, trace, mapping/compaction stores | configured caps/TTL/cleanup prevent uncontrolled state growth | size/capacity tests and source evidence | High | Observability |
 | SCN-08 | Security/operability | Admin login, reload, key/provider/model mutation | Admin auth/session/CORS/config atomic write | only single Admin mutates; invalid config fails without partial live state | admin/config tests | Critical | Gateway |
-| SCN-09 | Security/compatibility | Provider URL edited or unmatched custom path configured | registry/shim/config/admin UI | exact preset URL renders preset; unmatched URL renders allowed `custom`; URL remains routing authority | config/admin tests + docs comparison | High | Gateway/product |
+| SCN-09 | Security/compatibility | Provider URL edited, `api_type` omitted, or unmatched custom path configured | registry/shim/config/admin UI/transport | exact preset URL renders preset and first supported protocol; unmatched URL renders allowed `custom` and defaults to Responses; warning emitted; redirects rejected | config/admin/transport tests + docs comparison | High | Gateway/product |
 | SCN-10 | Supply chain/operability | Build wheel/Docker/manual release | pyproject, Makefile, Docker, CI, version checks | artifact comes from current source and release is manually gated | lint/test/build/contract/release checks | High | Release |
 | SCN-11 | Agent safety | Agent or test invokes real API from repository | live harness/scripts/instructions | audit never calls real API; development live call requires explicit approval | harness/config/source review | High | Project owner |
 
@@ -116,7 +116,7 @@ Map owner: Bobby (project owner)
 | From node | To coverage/scenario | Why dependent | Change types that invalidate | Boundary/stop condition |
 | --- | --- | --- | --- | --- |
 | `gateway/auth.py` | SCN-01/02/08, mapping coverage | identity gates every stateful route | auth, headers, admin session, config credential changes | stop outside auth and principal scope |
-| `GatewayConfig`/provider resolution | SCN-03/09/10 | route and egress depend on parsed config | config schema, provider/shim registry, admin writes | stop at provider URL/auth boundary |
+| `GatewayConfig`/provider resolution/transport | SCN-03/09/10 | route, protocol inference, and credential egress depend on parsed config and redirect policy | config schema, provider/shim registry, admin writes, HTTP client behavior | stop at provider URL/auth boundary |
 | `proxy.py` + `pipeline.py` | SCN-03/04/05/06 | conversion/stream/tool state path | converter, route, stream, tool adaptation, Codex contract changes | stop at unchanged provider-independent IR tests |
 | `observability/persistence.py` + crypto | SCN-02/05/06/07 | durable state ownership, cleanup, replay | schema, key, retention, mapping/compaction changes | stop at unaffected metrics/request-log paths only when proven |
 | Codex compatibility resources/docs | SCN-03/04/06/11 | client contract and catalog semantics | Codex source, model catalog, local-mode, compact/tool changes | stop at provider-agnostic converter surfaces |
@@ -131,5 +131,5 @@ Map owner: Bobby (project owner)
 | Real Codex/provider behavior unavailable by audit policy | stochastic/tool/stream/model behavior may diverge from fixtures | developer-approved live run outside audit | Open / Unknown |
 | External GitHub settings, branch protections, action pinning state not locally observable | CI/release privilege assumptions may be incomplete | owner or GitHub review | Open / Unknown |
 | No formal legal/privacy/retention contract | data lifecycle requirements may change | owner decision if deployment scope changes | Open / Unknown |
-| Arbitrary custom HTTP(S) provider egress is accepted only for local/LAN use | SSRF, internal-target access, and provider-key disclosure remain possible under operator configuration | project owner; revisit before any public deployment/security claim | Risk Accepted in `20260720-1107` |
+| Direct arbitrary custom HTTP(S) provider egress is accepted only for local/LAN use; redirects are prohibited | SSRF, internal-target access, and provider-key disclosure remain possible for the configured URL/proxy | project owner; revisit before any public deployment/security claim | Risk Accepted, redirect scope narrowed in `20260720-1239` |
 | Rosetta-version migration compatibility is intentionally unsupported | old state/config is rejected rather than migrated; protocol compatibility remains explicit | owner-approved remediation wave and regression tests | Fresh (deterministic); reopen on new migration path |
