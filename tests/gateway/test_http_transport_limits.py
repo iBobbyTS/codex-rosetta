@@ -228,6 +228,34 @@ class _LocalUpstreamServer(ThreadingHTTPServer):
     slow_delay: float
 
 
+class _RedirectUpstreamHandler(BaseHTTPRequestHandler):
+    def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
+        del format, args
+
+    def do_POST(self) -> None:
+        server = cast(_RedirectUpstreamServer, self.server)
+        if self.path == "/redirect-target":
+            server.redirect_target_hit = True
+            payload = b'{"followed":true}'
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        self.send_response(302)
+        self.send_header(
+            "Location",
+            f"http://127.0.0.1:{server.server_address[1]}/redirect-target",
+        )
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+class _RedirectUpstreamServer(ThreadingHTTPServer):
+    redirect_target_hit: bool = False
+
+
 @pytest.fixture
 def local_upstream() -> Iterator[tuple[_LocalUpstreamServer, str]]:
     server = _LocalUpstreamServer(("127.0.0.1", 0), _LocalUpstreamHandler)
@@ -320,6 +348,33 @@ def test_real_header_and_trailer_overflow_map_to_safety_error(
             await transport.close()
 
     asyncio.run(_scenario())
+
+
+def test_real_client_rejects_redirect_without_following_target() -> None:
+    server = _RedirectUpstreamServer(("127.0.0.1", 0), _RedirectUpstreamHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    transport = HttpTransport()
+    try:
+        with pytest.raises(
+            transport_module.UpstreamConnectionError,
+            match="Too many redirects",
+        ):
+            asyncio.run(
+                transport.send_request(
+                    _provider(base_url),
+                    "openai_chat",
+                    {"model": "test", "case": "redirect"},
+                    "test",
+                )
+            )
+        assert server.redirect_target_hit is False
+    finally:
+        asyncio.run(transport.close())
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
 
 
 def test_content_length_rejects_oversized_success_before_read(
