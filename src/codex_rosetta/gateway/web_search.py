@@ -112,7 +112,7 @@ class TavilyHTTPClient:
                 )
             except Exception as exc:
                 safe_error = self._redactor.redact(str(exc))
-                raise RuntimeError(f"Tavily request failed: {safe_error}") from exc
+                raise RuntimeError(f"Tavily request failed: {safe_error}") from None
 
         if response.status_code >= 400:
             body = self._redactor.redact(response.text[:500])
