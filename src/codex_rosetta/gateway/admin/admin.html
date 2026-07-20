@@ -154,6 +154,7 @@ tr:hover td { background: var(--bg-hover); }
   background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); padding: 16px;
 }
+.provider-card.config-error { border-color: var(--red); }
 .provider-card .name { font-size: 15px; font-weight: 600; margin-bottom: 8px; }
 .provider-card .field { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
 .provider-card .field code {
@@ -314,6 +315,7 @@ canvas { width: 100%; height: 160px; }
 .model-info-checkbox-group { min-height:38px;padding:8px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius); }
 .model-group-list { display:flex;flex-direction:column;gap:12px;margin-bottom:14px; }
 .model-group-card { border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-card);overflow:hidden; }
+.model-group-card.config-error { border-color: var(--red); }
 .model-group-head { display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border); }
 .model-group-title { font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px;min-width:0; }
 .model-group-title code { font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
@@ -1391,6 +1393,10 @@ function _providerPresetUrlFor(providerId, apiType) {
     : '';
 }
 
+function _normalizeProviderUrl(value) {
+  return String(value || '').trim().replace(/\/+$/, '');
+}
+
 function _providerProtocolsFor(providerId, variantId) {
   const resolvedProviderId = _providerResolvedProviderId(providerId, variantId);
   const preset = _providerPresetsById()[resolvedProviderId] || _providerPresetsById().custom;
@@ -1404,10 +1410,11 @@ function _providerSelectionUrlFor(providerId, variantId, apiType) {
 }
 
 function _providerPresetForUrl(apiType, baseUrl) {
-  if (!baseUrl) return '';
+  const normalizedBaseUrl = _normalizeProviderUrl(baseUrl);
+  if (!normalizedBaseUrl) return '';
   for (const preset of PROVIDER_PRESETS) {
     if (preset.id === 'custom') continue;
-    if (_providerPresetUrlFor(preset.id, apiType) === baseUrl) return preset.id;
+    if (_normalizeProviderUrl(_providerPresetUrlFor(preset.id, apiType)) === normalizedBaseUrl) return preset.id;
   }
   return '';
 }
@@ -1419,57 +1426,19 @@ function _setProviderBaseUrl(value) {
 }
 
 function _inferProviderSelection(cfg) {
-  const apiTypeByBase = {
-    openai_responses: 'responses',
-    open_responses: 'responses',
-    openai_chat: 'chat',
-    openai: 'chat',
-    anthropic: 'anthropic',
-    google: 'google',
-  };
-  const providerByLegacyType = {
-    anthropic: 'anthropic',
-    deepseek: 'deepseek',
-    google: 'google',
-    'minimax--anthropic': 'minimax_china',
-    'minimax--openai_chat': 'minimax_china',
-    moonshot: 'moonshot_china',
-    openai: 'openai',
-    openai_responses: 'openai',
-    openrouter: 'openrouter',
-    'openrouter--anthropic': 'openrouter',
-    'openrouter--openai_chat': 'openrouter',
-    qwen: 'qwen',
-    zhipu: 'zhipu',
-  };
-  const apiTypeByLegacyType = {
-    anthropic: 'anthropic',
-    deepseek: 'chat',
-    google: 'google',
-    'minimax--anthropic': 'anthropic',
-    'minimax--openai_chat': 'chat',
-    moonshot: 'chat',
-    openai: 'chat',
-    openai_responses: 'responses',
-    open_responses: 'responses',
-    openrouter: 'chat',
-    'openrouter--anthropic': 'anthropic',
-    'openrouter--openai_chat': 'chat',
-    qwen: 'chat',
-    zhipu: 'chat',
-  };
-
-  const legacyType = cfg.type || cfg.shim || '';
-  const configuredApiType = cfg.api_type;
-  const apiType = configuredApiType || apiTypeByLegacyType[legacyType] || apiTypeByBase[legacyType] || 'chat';
-  const genericLegacyType = ['openai', 'openai_chat', 'openai_responses', 'open_responses'].includes(legacyType);
-  const resolvedProviderId = cfg.provider || (genericLegacyType ? _providerPresetForUrl(apiType, cfg.base_url) : '') || providerByLegacyType[legacyType] || 'custom';
+  const apiType = typeof cfg.api_type === 'string' ? cfg.api_type : '';
+  // Vendor and variant are presentation state, never persisted config. The
+  // configured base URL is authoritative: exact preset matches render the
+  // matching preset; every other URL renders the generic custom option.
+  const resolvedProviderId = apiType
+    ? (_providerPresetForUrl(apiType, cfg.base_url) || 'custom')
+    : 'custom';
   const vendor = _providerVendorForResolvedProvider(resolvedProviderId);
   const exactVariant = (vendor.variants || []).find(v => v.providerId === resolvedProviderId && v.id !== 'custom');
   const officialUrl = exactVariant ? _providerPresetUrlFor(resolvedProviderId, apiType) : '';
-  const isCustomUrl = !!cfg.base_url && cfg.base_url !== officialUrl;
+  const isCustomUrl = !officialUrl || _normalizeProviderUrl(cfg.base_url) !== _normalizeProviderUrl(officialUrl);
   const variantId = isCustomUrl ? 'custom' : (exactVariant ? exactVariant.id : _providerDefaultVariant(vendor.id).id);
-  return {providerId: vendor.id, variantId, apiType, resolvedProviderId};
+  return {providerId: vendor.id, variantId, apiType, resolvedProviderId, validationError: apiType ? '' : 'config: provider must declare api_type'};
 }
 
 function _providerVariantDisplayName(providerId, variantId) {
@@ -1481,21 +1450,24 @@ function _providerDisplayInfo(name, cfg) {
   const selection = _inferProviderSelection(cfg || {});
   const vendor = _providerVendorsById()[selection.providerId] || _providerVendorsById().custom;
   const protocolLabels = _protocolLabelsByValue();
-  const legacyType = (cfg && (cfg.type || cfg.shim)) || '';
   const variantName = _providerVariantDisplayName(selection.providerId, selection.variantId);
-  const providerName = selection.variantId === 'official' || selection.providerId === 'custom'
+  const providerName = selection.validationError
+    ? t('provider.invalidConfig')
+    : selection.variantId === 'official' || selection.providerId === 'custom'
     ? _providerLabel(vendor)
     : `${_providerLabel(vendor)} (${variantName})`;
-  const protocolName = protocolLabels[selection.apiType] || selection.apiType;
+  const protocolName = selection.validationError
+    ? t('provider.missingApiType')
+    : protocolLabels[selection.apiType] || selection.apiType;
   return {
     providerId: selection.providerId,
     variantId: selection.variantId,
     apiType: selection.apiType,
     providerName,
     protocolName,
-    legacyType,
     displayType: `${providerName} / ${protocolName}`,
     logoUrl: _providerLogoUrl(selection.providerId),
+    validationError: cfg?.validation_error || selection.validationError,
   };
 }
 
@@ -2470,21 +2442,7 @@ function _modelGroupProviderUsesToolProfiles() {
 
 function _defaultToolProfileForProvider(providerName) {
   const provider = configData?.providers?.[providerName] || {};
-  const apiType = provider.api_type || 'chat';
-  if (apiType === 'responses') {
-    const baseUrl = String(provider.base_url || '').replace(/\/$/, '');
-    if (provider.provider === 'openai' && baseUrl === 'https://api.openai.com/v1') {
-      return 'openai-responses-tool-mapping-only';
-    }
-    if (provider.provider === 'openai' || provider.provider === 'custom') {
-      return 'web-run-injection';
-    }
-    return 'responses-tool-mapping';
-  }
-  if (apiType === 'chat') return 'builtin';
-  // Intentionally separate from the Chat branch so future protocols can get
-  // an independent default without changing established Chat behavior.
-  return 'builtin';
+  return provider.default_tool_profile || 'builtin';
 }
 
 function onModelGroupProviderChange() {
@@ -2985,7 +2943,7 @@ function renderProviders() {
         info.providerName.toLowerCase().includes(query) ||
         info.protocolName.toLowerCase().includes(query) ||
         info.apiType.toLowerCase().includes(query) ||
-        (info.legacyType || '').toLowerCase().includes(query) ||
+        (info.validationError || '').toLowerCase().includes(query) ||
         (cfg.base_url || '').toLowerCase().includes(query);
     });
   }
@@ -3008,7 +2966,11 @@ function renderProviders() {
   grid.innerHTML = entries.map(([name, cfg]) => {
     const enabled = cfg.enabled !== false;
     const info = _providerDisplayInfo(name, cfg);
+    const configError = info.validationError || '';
     const logoHtml = info.logoUrl ? `<img class="provider-logo" src="${escAttr(info.logoUrl)}" alt="">` : '';
+    const errorHtml = configError
+      ? `<span class="badge badge-error" title="${escAttr(configError)}">${esc(t('provider.configError'))}</span>`
+      : '';
     // In list view, always output fixed columns (Provider/Protocol, Base URL, API Key) for alignment
     const fieldsHtml = isList
       ? `<div class="field" title="${escAttr(info.displayType)}"><code>${esc(info.displayType)}</code></div>
@@ -3020,9 +2982,9 @@ function renderProviders() {
          ${_credentialVisible ? `<div class="field">API Key: <code>${esc(cfg.api_key || '')}</code></div>` : ''}
          ${cfg.proxy ? `<div class="field">Proxy: <code>${esc(cfg.proxy)}</code></div>` : ''}`;
     return `
-    <div class="provider-card${enabled ? '' : ' disabled'}">
+    <div class="provider-card${enabled ? '' : ' disabled'}${configError ? ' config-error' : ''}">
       <div class="card-header">
-        <div class="name">${logoHtml}${esc(name)}</div>
+        <div class="name">${logoHtml}${esc(name)} ${errorHtml}</div>
         <label class="toggle" title="${enabled ? t('provider.enabled') : t('provider.disabled')}">
           <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleProvider(${handlerArg(name)})">
           <span class="slider"></span>
@@ -3164,6 +3126,7 @@ function renderModels() {
     if (!query && modelEntries.length === 0) return '';
     groupShownCount += modelEntries.length;
     const providerDisabled = disabledProviders.has(provider);
+    const validationError = group.validation_error || '';
     const collapsed = _collapsedModelGroups.has(groupName);
     const rows = modelEntries.map(([modelName, info]) => {
       const modalities = _modelModalities(info);
@@ -3175,11 +3138,14 @@ function renderModels() {
         <td style="text-align:right;white-space:nowrap">${_modelTestControls(modelName, modalities)}</td>
       </tr>`;
     }).join('');
-    return `<div class="model-group-card${collapsed ? ' collapsed' : ''}">
+    const errorBadge = validationError
+      ? `<span class="badge badge-error" title="${escAttr(validationError)}">${esc(t('modelGroup.configError'))}</span>`
+      : '';
+    return `<div class="model-group-card${collapsed ? ' collapsed' : ''}${validationError ? ' config-error' : ''}">
       <div class="model-group-head">
         <div class="model-group-title">
           <button type="button" class="key-btn model-group-toggle" onclick="toggleModelGroup(${handlerArg(groupName)})" aria-expanded="${collapsed ? 'false' : 'true'}">${collapsed ? '&#9656;' : '&#9662;'}</button>
-          <code>${esc(groupName)}</code><span class="model-group-meta">${esc([group.type, provider, ...(group.tool_profile ? [group.tool_profile] : []), String(modelEntries.length)].join(' · '))}</span>
+          <code>${esc(groupName)}</code>${errorBadge}<span class="model-group-meta">${esc([group.type, provider, ...(group.tool_profile ? [group.tool_profile] : []), String(modelEntries.length)].join(' · '))}</span>
         </div>
         <div class="model-group-actions">
           <button class="btn btn-sm" onclick="openModelGroupModal(${handlerArg(groupName)})">${t('btn.edit')}</button>
@@ -3201,15 +3167,14 @@ function renderModels() {
 
 async function saveProvider() {
   const name = document.getElementById('provName').value.trim();
-  const providerId = document.getElementById('provProvider').value;
-  const variantId = document.getElementById('provProviderVariant').value;
-  const provider = _providerResolvedProviderId(providerId, variantId);
   const apiType = document.getElementById('provApiType').value;
   const baseUrl = document.getElementById('provBaseUrl').value.trim();
   const apiKey = _getKeyFieldValue();
   const proxy = document.getElementById('provProxy').value.trim();
-  if (!name || !provider || !apiType || apiType === PROTOCOL_DIVIDER_VALUE || !baseUrl) { showToast(t('error.fieldsRequired'), 'error'); return; }
-  const body = {provider, api_type: apiType, base_url: baseUrl, proxy};
+  if (!name || !apiType || apiType === PROTOCOL_DIVIDER_VALUE || !baseUrl) { showToast(t('error.fieldsRequired'), 'error'); return; }
+  // Provider vendor/variant is derived from base_url at runtime. Persist only
+  // the transport protocol and URL; custom endpoints remain valid.
+  const body = {api_type: apiType, base_url: baseUrl, proxy};
   // When api_key is empty and we're editing, omit it so backend keeps the original
   if (apiKey) body.api_key = apiKey;
   // If editing and name changed, include rename_from so backend updates model references

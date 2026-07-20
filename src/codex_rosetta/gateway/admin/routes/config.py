@@ -17,6 +17,7 @@ from ...config import (
     normalize_local_mode_settings,
     normalize_web_search,
     provider_supports_tool_profiles,
+    resolve_provider_config_type_and_shim,
 )
 from ...local_mode import config_toml_has_model_catalog
 from ...model_presets import (
@@ -232,6 +233,7 @@ def _normalize_models_for_admin(
 def _normalize_model_groups_for_admin(
     raw_model_groups: dict[str, Any],
     raw_providers: dict[str, Any],
+    provider_errors: dict[str, str],
 ) -> dict[str, Any]:
     """Normalize model group config for admin UI consumption."""
     groups: dict[str, Any] = {}
@@ -259,6 +261,9 @@ def _normalize_model_groups_for_admin(
             "type": group_type,
             "models": models,
         }
+        provider_error = provider_errors.get(provider)
+        if provider_error:
+            normalized_group["validation_error"] = provider_error
         if group_type == "llm" and provider_supports_tool_profiles(
             raw_providers.get(provider)
         ):
@@ -373,16 +378,28 @@ async def get_config(request: Any) -> Response:
     except Exception as exc:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
-    # Mask API keys and keep legacy type fallback only for legacy entries.
+    # Mask API keys. Provider vendor/variant is derived at runtime from the
+    # authoritative base URL; it is not persisted as UI metadata.
     providers = raw.get("providers", {})
     masked_providers: dict[str, Any] = {}
+    provider_errors: dict[str, str] = {}
     for name, cfg in providers.items():
         masked = dict(cfg)
         if "api_key" in masked:
             masked["api_key"] = _mask_api_key(masked["api_key"])
-        # Ensure old provider-name-as-shim configs remain editable in the UI.
-        if "api_type" not in masked and "type" not in masked and "shim" not in masked:
-            masked["type"] = name
+        masked.pop("provider", None)
+        masked.pop("shim", None)
+        masked.pop("type", None)
+        masked.pop("validation_error", None)
+        masked.pop("default_tool_profile", None)
+        try:
+            resolve_provider_config_type_and_shim(name, cfg)
+        except ValueError as exc:
+            error = str(exc)
+            provider_errors[name] = error
+            masked["validation_error"] = error
+        else:
+            masked["default_tool_profile"] = default_tool_profile_for_provider(cfg)
         masked_providers[name] = masked
 
     # ``models`` is an effective read-only runtime view. ``model_groups`` is
@@ -390,7 +407,9 @@ async def get_config(request: Any) -> Response:
     raw_model_groups = raw.get("model_groups", {}) or {}
     expanded_raw_models = GatewayConfig._expand_model_groups(raw_model_groups)
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
-    model_groups = _normalize_model_groups_for_admin(raw_model_groups, providers)
+    model_groups = _normalize_model_groups_for_admin(
+        raw_model_groups, providers, provider_errors
+    )
     tool_profiles = normalize_tool_profile_documents(raw.get("tool_profiles"))
     tool_profile_input_overrides = normalize_tool_profile_input_overrides(
         raw.get("tool_profile_input_overrides")

@@ -12,7 +12,7 @@ from codex_rosetta.observability.retention import MAX_REQUEST_LOG_RETENTION
 
 
 @pytest.mark.parametrize("value", [True, "10", -1, MAX_REQUEST_LOG_RETENTION + 1])
-@pytest.mark.parametrize("field", ["success_max", "error_max", "max_entries"])
+@pytest.mark.parametrize("field", ["success_max", "error_max"])
 def test_gateway_config_rejects_invalid_retention_caps(
     monkeypatch: pytest.MonkeyPatch,
     field: str,
@@ -55,7 +55,16 @@ def test_gateway_config_rejects_non_object_request_log(
         GatewayConfig({"server": {"request_log": False}})
 
 
-def test_gateway_config_resolves_env_explicit_legacy_zero_and_max(
+def test_gateway_config_rejects_removed_retention_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX", raising=False)
+    monkeypatch.delenv("REQUEST_LOG_ERROR_MAX", raising=False)
+    with pytest.raises(ValueError, match="unsupported fields"):
+        GatewayConfig({"server": {"request_log": {"max_entries": 7}}})
+
+
+def test_gateway_config_resolves_env_explicit_zero_and_max(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("REQUEST_LOG_SUCCESS_MAX", "0")
@@ -68,7 +77,6 @@ def test_gateway_config_resolves_env_explicit_legacy_zero_and_max(
                 "request_log": {
                     "success_max": 10,
                     "error_max": 20,
-                    "max_entries": 30,
                 },
             }
         }
@@ -79,17 +87,17 @@ def test_gateway_config_resolves_env_explicit_legacy_zero_and_max(
 
     monkeypatch.delenv("REQUEST_LOG_SUCCESS_MAX")
     monkeypatch.delenv("REQUEST_LOG_ERROR_MAX")
-    legacy = GatewayConfig(
+    config = GatewayConfig(
         {
             "server": {
                 "admin_password": "test-admin-password",
                 "api_keys": [{"id": "test", "key": "test-key", "label": "test"}],
-                "request_log": {"max_entries": 7},
+                "request_log": {"success_max": 7},
             }
         }
     )
-    assert legacy.request_log_success_max == 7
-    assert legacy.request_log_error_max == 10_000
+    assert config.request_log_success_max == 7
+    assert config.request_log_error_max == 10_000
 
 
 @pytest.mark.parametrize("value", [False, "1", -1, MAX_REQUEST_LOG_RETENTION + 1])

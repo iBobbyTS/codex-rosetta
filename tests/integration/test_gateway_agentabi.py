@@ -6,6 +6,11 @@ cross-format conversion behavior regardless of inbound API format.
 
 import os
 import sys
+
+from codex_rosetta.gateway.live_gate import require_live_call_approval
+
+require_live_call_approval()
+
 from agentabi import run_sync
 
 BASE_URL = os.environ.get("ROSETTA_DEV_TEST_BASE_URL", "")

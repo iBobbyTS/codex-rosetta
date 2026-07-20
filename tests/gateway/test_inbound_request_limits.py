@@ -23,7 +23,7 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
                 "test-provider": {
                     "api_key": "sk-upstream-test",
                     "base_url": "https://api.example.test/v1",
-                    "type": "openai",
+                    "api_type": "chat",
                 }
             },
             "model_groups": {

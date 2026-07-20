@@ -1,12 +1,113 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pytest
+
+from codex_rosetta.gateway.live_gate import (
+    LIVE_CALL_APPROVAL_ENV,
+    LIVE_CALL_APPROVAL_VALUE,
+    require_live_call_approval,
+)
+
 
 LIVE_AGENT = Path(__file__).parent
+REPO_ROOT = LIVE_AGENT.parents[1]
+
+
+def test_live_call_gate_fails_closed_without_developer_approval(monkeypatch) -> None:
+    monkeypatch.delenv(LIVE_CALL_APPROVAL_ENV, raising=False)
+    with pytest.raises(RuntimeError, match="live API calls are disabled"):
+        require_live_call_approval()
+
+
+def test_live_call_gate_accepts_only_explicit_non_secret_marker(monkeypatch) -> None:
+    monkeypatch.setenv(LIVE_CALL_APPROVAL_ENV, LIVE_CALL_APPROVAL_VALUE)
+    require_live_call_approval()
+
+
+@pytest.mark.parametrize(
+    ("relative_path", "first_sensitive_operation"),
+    [
+        ("tests/integration/test_anthropic_rest_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_anthropic_sdk_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_google_genai_rest_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_google_genai_sdk_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_openai_chat_rest_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_openai_chat_sdk_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_openai_responses_rest_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_openai_responses_sdk_e2e.py", "dotenv.load_dotenv"),
+        ("tests/integration/test_gateway_agentabi.py", "from agentabi import run_sync"),
+        ("tests/integration/gpt_relay/run.py", "raw = load_config_raw("),
+        ("tests/integration/gpt_relay/capture_proxy.py", "raw = load_config_raw("),
+    ],
+)
+def test_every_python_live_entrypoint_gates_before_sensitive_work(
+    relative_path: str, first_sensitive_operation: str
+) -> None:
+    source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+    assert (
+        "from codex_rosetta.gateway.live_gate import require_live_call_approval"
+        in source
+    )
+    assert source.index("require_live_call_approval()") < source.index(
+        first_sensitive_operation
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path",
+    [
+        "scripts/run_gateway_integration.sh",
+        "scripts/rosetta-test-codex.sh",
+        "scripts/rosetta-test-claude-code.sh",
+        "scripts/rosetta-test-opencode.sh",
+    ],
+)
+def test_every_shell_live_entrypoint_uses_shared_gate(relative_path: str) -> None:
+    source = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+    gate = '. "$SCRIPT_DIR/require_live_call_approval.sh"'
+
+    assert gate in source
+    sensitive_offsets = [
+        offset
+        for marker in ("API_KEY=", "exec codex", "exec claude", "exec opencode")
+        if (offset := source.find(marker)) >= 0
+    ]
+    assert sensitive_offsets
+    assert source.index(gate) < min(sensitive_offsets)
+
+
+def test_shell_live_gate_fails_closed_and_accepts_only_exact_marker() -> None:
+    gate = REPO_ROOT / "scripts/require_live_call_approval.sh"
+    environment = os.environ.copy()
+    environment.pop(LIVE_CALL_APPROVAL_ENV, None)
+
+    blocked = subprocess.run(
+        ["bash", str(gate)],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert blocked.returncode == 2
+    assert "live API calls are disabled by default" in blocked.stderr
+
+    environment[LIVE_CALL_APPROVAL_ENV] = LIVE_CALL_APPROVAL_VALUE
+    approved = subprocess.run(
+        ["bash", str(gate)],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert approved.returncode == 0
 
 
 def _runtime_contract() -> dict[str, Any]:

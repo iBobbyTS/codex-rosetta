@@ -4,21 +4,23 @@
   "providers": {
     "openai_chat": {
       "api_key": "${OPENAI_API_KEY}",
-      "base_url": "https://api.openai.com/v1"
+      "base_url": "https://api.openai.com/v1",
+      "api_type": "chat"
     },
     "openai_responses": {
       "api_key": "${OPENAI_API_KEY}",
       "base_url": "https://api.openai.com/v1",
-      "provider": "openai",
-      "api_type": "responses_passthrough"
+      "api_type": "responses"
     },
     "anthropic": {
       "api_key": "${ANTHROPIC_API_KEY}",
-      "base_url": "https://api.anthropic.com"
+      "base_url": "https://api.anthropic.com",
+      "api_type": "anthropic"
     },
     "google": {
       "api_key": "${GOOGLE_API_KEY}",
-      "base_url": "https://generativelanguage.googleapis.com"
+      "base_url": "https://generativelanguage.googleapis.com",
+      "api_type": "google"
     }
   },
 

@@ -357,7 +357,7 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
                 "private-provider": {
                     "api_key": "sk-provider-secret",
                     "base_url": "https://api.example.test/v1",
-                    "type": "openai",
+                    "api_type": "chat",
                 }
             },
             "model_groups": {

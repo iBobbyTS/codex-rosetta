@@ -46,7 +46,8 @@ root. After copying the user's gateway configuration, prepare only that isolated
 copy and Codex home:
 
 ```bash
-conda run -n llm-rosetta python "$SUITE/prepare_run.py" \
+CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
+  conda run -n llm-rosetta python "$SUITE/prepare_run.py" \
   --run-root "$RUN_ROOT" \
   --gateway-log-root "$GATEWAY_LOG_ROOT" \
   --port 18765 \

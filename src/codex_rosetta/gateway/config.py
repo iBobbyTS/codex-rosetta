@@ -51,29 +51,10 @@ API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
     "google": "google",
 }
 
-PROVIDER_API_TYPE_SHIMS: dict[tuple[str, str], str] = {
-    ("anthropic", "anthropic"): "anthropic",
-    ("deepseek", "chat"): "deepseek",
-    ("google", "google"): "google",
-    ("minimax_china", "anthropic"): "minimax--anthropic",
-    ("minimax_china", "chat"): "minimax--openai_chat",
-    ("minimax_international", "anthropic"): "minimax--anthropic",
-    ("minimax_international", "chat"): "minimax--openai_chat",
-    ("moonshot_china", "chat"): "moonshot",
-    ("moonshot_international", "chat"): "moonshot",
-    ("openai", "chat"): "openai",
-    ("openai", "responses"): "openai_responses",
-    ("openrouter", "anthropic"): "openrouter--anthropic",
-    ("openrouter", "chat"): "openrouter--openai_chat",
-    ("qwen", "chat"): "qwen",
-    ("zhipu", "chat"): "zhipu",
-}
-
 CHAT_DEFAULT_TOOL_PROFILE = BUILTIN_TOOL_PROFILE
 RESPONSES_PASSTHROUGH_TOOL_PROFILE = "openai-responses-tool-mapping-only"
 WEB_RUN_INJECTION_TOOL_PROFILE = "web-run-injection"
 RESPONSES_TOOL_MAPPING_PROFILE = "responses-tool-mapping"
-OPENAI_OFFICIAL_RESPONSES_BASE_URL = "https://api.openai.com/v1"
 
 MAX_API_KEY_LABEL_LENGTH = 128
 REQUEST_BODY_LIMIT_OPTIONS_MB = (64, 128, 256, 512, 1024)
@@ -86,6 +67,37 @@ SELF_HOSTED_WEB_SEARCH_PROVIDERS = frozenset(
 )
 WEB_SEARCH_PROVIDERS = frozenset({"tavily", *SELF_HOSTED_WEB_SEARCH_PROVIDERS})
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
+
+# Provider vendor/variant is intentionally not persisted. These exact URL
+# matches are the runtime source of truth for selecting a bundled shim. Any
+# other URL remains an allowed custom endpoint for the selected protocol.
+_PRESET_SHIMS_BY_URL: dict[tuple[str, str], str] = {
+    ("chat", "https://api.deepseek.com"): "deepseek",
+    ("chat", "https://open.bigmodel.cn/api/paas/v4"): "zhipu",
+    ("chat", "https://api.moonshot.cn/v1"): "moonshot",
+    ("chat", "https://api.moonshot.ai/v1"): "moonshot",
+    ("chat", "https://api.minimaxi.com/v1"): "minimax--openai_chat",
+    ("anthropic", "https://api.minimaxi.com/anthropic"): "minimax--anthropic",
+    ("chat", "https://dashscope.aliyuncs.com/compatible-mode/v1"): "qwen",
+    ("chat", "https://api.openai.com/v1"): "openai",
+    ("responses", "https://api.openai.com/v1"): "openai_responses",
+    ("google", "https://generativelanguage.googleapis.com"): "google",
+    ("anthropic", "https://api.anthropic.com"): "anthropic",
+    ("chat", "https://openrouter.ai/api/v1"): "openrouter--openai_chat",
+    ("anthropic", "https://openrouter.ai/api"): "openrouter--anthropic",
+}
+
+
+def _provider_shim_for_url(api_type: str, base_url: Any) -> str | None:
+    if not isinstance(base_url, str) or not base_url.strip():
+        return None
+    normalized = base_url.strip().rstrip("/")
+    shim_name = _PRESET_SHIMS_BY_URL.get((api_type, normalized))
+    if shim_name is None:
+        return None
+    from codex_rosetta.shims import get_shim
+
+    return shim_name if get_shim(shim_name) is not None else None
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -334,15 +346,11 @@ def default_tool_profile_for_provider(cfg: Any) -> str:
         return CHAT_DEFAULT_TOOL_PROFILE
 
     api_type = cfg.get("api_type")
-    provider = cfg.get("provider")
     if api_type == "responses":
-        normalized_base_url = str(cfg.get("base_url") or "").rstrip("/")
-        if (
-            provider == "openai"
-            and normalized_base_url == OPENAI_OFFICIAL_RESPONSES_BASE_URL
-        ):
+        shim_name = _provider_shim_for_url(api_type, cfg.get("base_url"))
+        if shim_name == "openai_responses":
             return RESPONSES_PASSTHROUGH_TOOL_PROFILE
-        if provider in {"openai", "custom"}:
+        if shim_name is None:
             return WEB_RUN_INJECTION_TOOL_PROFILE
         return RESPONSES_TOOL_MAPPING_PROFILE
     if api_type == "chat":
@@ -386,19 +394,6 @@ def resolve_model_tool_profile_names(
     return result
 
 
-def derive_provider_shim_name(provider: Any, api_type: Any) -> str | None:
-    """Return the registered shim for a provider/protocol pair, when available."""
-    if not provider or not api_type:
-        return None
-    shim_name = PROVIDER_API_TYPE_SHIMS.get((str(provider), str(api_type)))
-    if not shim_name:
-        return None
-
-    from codex_rosetta.shims import get_shim
-
-    return shim_name if get_shim(shim_name) is not None else None
-
-
 def resolve_provider_config_type_and_shim(
     name: str, cfg: dict[str, Any]
 ) -> tuple[str, str | None]:
@@ -408,15 +403,14 @@ def resolve_provider_config_type_and_shim(
         if str(api_type) not in API_TYPE_TO_PROVIDER_TYPE:
             raise ValueError(f"config: unsupported provider api_type {api_type!r}")
         provider_type = api_type_to_provider_type(api_type) or str(api_type)
-        return provider_type, derive_provider_shim_name(cfg.get("provider"), api_type)
+        return provider_type, _provider_shim_for_url(str(api_type), cfg.get("base_url"))
 
-    from codex_rosetta.shims import resolve_base
-
-    if "shim" in cfg:
-        return resolve_base(cfg["shim"]), cfg["shim"]
-    if "type" in cfg:
-        return resolve_base(cfg["type"]), cfg["type"]
-    return name, name
+    if "shim" in cfg or "type" in cfg:
+        raise ValueError(
+            "config: provider shim/type options are unsupported; "
+            "declare api_type and base_url"
+        )
+    raise ValueError(f"config: provider {name!r} must declare api_type")
 
 
 # ---------------------------------------------------------------------------
@@ -753,18 +747,12 @@ class GatewayConfig:
         self.stream_trace: StreamTraceConfig = StreamTraceConfig.from_mapping(
             _server.get("stream_trace", {})
         )
-        # Multi-key auth: server.api_keys takes precedence over server.api_key
+        if "api_key" in _server:
+            raise ValueError(
+                "config: server.api_key is unsupported; use server.api_keys"
+            )
+        # Multi-key auth is the only supported persisted shape.
         self.api_keys: list[dict[str, str]] = _server.get("api_keys", [])
-        if not self.api_keys and _server.get("api_key"):
-            # Backward compat: single api_key → synthetic entry
-            self.api_keys = [
-                {
-                    "id": "default",
-                    "key": _server["api_key"],
-                    "label": "default",
-                    "created": "",
-                }
-            ]
         # Sensitive body logging option (config + env-var override)
         _debug = raw.get("debug", {})
         self.log_bodies: bool = _debug.get("log_bodies", False) or os.environ.get(
@@ -856,13 +844,7 @@ class GatewayConfig:
     def _resolve_provider_types(
         raw_providers: dict[str, dict[str, str]],
     ) -> tuple[dict[str, str], dict[str, str | None]]:
-        """Resolve each provider's API standard type via admin protocol or shim.
-
-        Resolution order per provider:
-          1. ``api_type`` field → resolve to a base protocol and derive shim
-          2. ``shim`` field → resolve via shim registry
-          3. ``type`` field → resolve via shim registry
-          4. provider name itself (backward-compatible fallback)
+        """Resolve each provider's explicit protocol and URL-derived shim.
 
         Returns:
             Tuple of (provider_types, provider_shim_names).

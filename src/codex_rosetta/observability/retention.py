@@ -44,8 +44,15 @@ def resolve_request_log_caps(
     if not isinstance(request_log, Mapping):
         raise ValueError("config: server.request_log must be an object")
 
+    unsupported = set(request_log) - {"success_max", "error_max"}
+    if unsupported:
+        raise ValueError(
+            "config: server.request_log contains unsupported fields: "
+            f"{sorted(unsupported)}"
+        )
+
     configured: dict[str, int] = {}
-    for key in ("success_max", "error_max", "max_entries"):
+    for key in ("success_max", "error_max"):
         if key in request_log:
             configured[key] = validate_retention_cap(
                 request_log[key],
@@ -58,7 +65,7 @@ def resolve_request_log_caps(
 
     success = success_env
     if success is None:
-        success = configured.get("success_max", configured.get("max_entries"))
+        success = configured.get("success_max")
     error = error_env
     if error is None:
         error = configured.get("error_max")

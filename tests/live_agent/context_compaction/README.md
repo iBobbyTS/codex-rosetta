@@ -31,8 +31,13 @@ model substitution for a lower-cost native wire smoke test. The default
 `user_requested` path as the interactive `/compact` command:
 
 ```bash
-conda run -n llm-rosetta python tests/live_agent/context_compaction/run_live.py
+CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
+  conda run -n llm-rosetta python tests/live_agent/context_compaction/run_live.py
 ```
+
+The environment variable is a deliberate developer-approval gate. Without it
+the runner fails before creating a run root, reading credentials, starting the
+Gateway, or starting Codex.
 
 The command prints the timestamped run root and writes a credential-free
 `artifacts/automation-result.json`. Success requires exactly one in-band

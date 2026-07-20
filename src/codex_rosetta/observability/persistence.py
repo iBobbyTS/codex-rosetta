@@ -1,8 +1,9 @@
 """SQLite-based persistence for observability data.
 
 Stores request log entries and metrics counters in a single SQLite
-database (``gateway.db``) using WAL journal mode.  Automatically
-migrates legacy JSONL/JSON files on first startup.
+database (``gateway.db``) using WAL journal mode. The pre-release system
+does not provide a compatibility migration layer; incompatible legacy data
+must be removed or rebuilt by the operator before startup.
 
 This module is framework-agnostic and can be used by any consumer
 (the codex-rosetta gateway, argo-proxy, or standalone scripts).
@@ -10,14 +11,12 @@ This module is framework-agnostic and can be used by any consumer
 
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 import os
 import sqlite3
 import threading
-import warnings
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +41,15 @@ DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_BYTES = 256 * 1024 * 1024
 DEFAULT_TOOL_MAPPING_MAX_GLOBAL_ROWS = 32_768
 DEFAULT_TOOL_MAPPING_MAX_GLOBAL_BYTES = 512 * 1024 * 1024
 
+# Remote-compaction summaries are plaintext prompt-derived state. Keep their
+# rolling TTL, but also enforce explicit row/byte ceilings so a valid client
+# cannot grow the shared SQLite store without bound.
+DEFAULT_CODEX_COMPACTION_MAX_ROW_BYTES = 1 * 1024 * 1024
+DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_ROWS = 1_024
+DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_BYTES = 64 * 1024 * 1024
+DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_ROWS = 8_192
+DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_BYTES = 512 * 1024 * 1024
+
 _TOOL_MAPPING_SQL_BYTES = """
     8
     + length(CAST(principal_id AS BLOB))
@@ -62,9 +70,102 @@ _TOOL_MAPPING_SQL_BYTES = """
 _LEGACY_LOG = "request_log.jsonl"
 _LEGACY_METRICS = "metrics.json"
 
+# SQLite does not repair an existing table when CREATE TABLE IF NOT EXISTS is
+# used. Validate the complete supported shape so incompatible pre-release state
+# fails during startup instead of on the first write.
+_EXPECTED_SCHEMA_COLUMNS: dict[str, tuple[tuple[str, str, int, int], ...]] = {
+    "request_log": (
+        ("id", "TEXT", 0, 1),
+        ("timestamp", "TEXT", 1, 0),
+        ("model", "TEXT", 1, 0),
+        ("source_provider", "TEXT", 1, 0),
+        ("target_provider", "TEXT", 1, 0),
+        ("is_stream", "INTEGER", 1, 0),
+        ("status_code", "INTEGER", 1, 0),
+        ("duration_ms", "REAL", 1, 0),
+        ("error_detail", "TEXT", 0, 0),
+        ("api_key_label", "TEXT", 0, 0),
+        ("target_provider_name", "TEXT", 0, 0),
+        ("client_ip", "TEXT", 0, 0),
+        ("profile", "TEXT", 0, 0),
+    ),
+    "metrics": (("key", "TEXT", 0, 1), ("value", "TEXT", 1, 0)),
+    "dump_bodies": (
+        ("hash", "TEXT", 0, 1),
+        ("data", "BLOB", 1, 0),
+        ("orig_bytes", "INTEGER", 1, 0),
+        ("created", "TEXT", 1, 0),
+    ),
+    "error_dumps": (
+        ("id", "TEXT", 0, 1),
+        ("request_log_id", "TEXT", 0, 0),
+        ("timestamp", "TEXT", 1, 0),
+        ("model", "TEXT", 0, 0),
+        ("source_provider", "TEXT", 0, 0),
+        ("target_provider", "TEXT", 0, 0),
+        ("provider_name", "TEXT", 0, 0),
+        ("status_code", "INTEGER", 0, 0),
+        ("error_phase", "TEXT", 0, 0),
+        ("body_hash", "TEXT", 0, 0),
+        ("response_text", "TEXT", 0, 0),
+        ("upstream_url", "TEXT", 0, 0),
+        ("converted_body_hash", "TEXT", 0, 0),
+    ),
+    "tool_call_mappings": (
+        ("principal_id", "TEXT", 1, 1),
+        ("provider_name", "TEXT", 1, 2),
+        ("model", "TEXT", 1, 3),
+        ("session_id", "TEXT", 1, 4),
+        ("tool_call_id", "TEXT", 1, 5),
+        ("payload_version", "INTEGER", 1, 0),
+        ("key_id", "TEXT", 1, 0),
+        ("nonce", "BLOB", 1, 0),
+        ("encrypted_payload", "BLOB", 1, 0),
+        ("mapping_bytes", "INTEGER", 1, 0),
+        ("expire_at", "TEXT", 1, 0),
+        ("created_at", "TEXT", 1, 0),
+        ("updated_at", "TEXT", 1, 0),
+    ),
+    "codex_compaction_mappings": (
+        ("principal_id", "TEXT", 1, 1),
+        ("token_hash", "TEXT", 1, 2),
+        ("replacement_text", "TEXT", 1, 0),
+        ("replacement_bytes", "INTEGER", 1, 0),
+        ("source_model", "TEXT", 1, 0),
+        ("reason", "TEXT", 1, 0),
+        ("prompt_sha256", "TEXT", 1, 0),
+        ("created_at", "TEXT", 1, 0),
+        ("expires_at", "TEXT", 1, 0),
+    ),
+}
+
+_EXPECTED_SCHEMA_INDEXES: dict[str, dict[str, tuple[str, ...]]] = {
+    "request_log": {
+        "idx_rl_timestamp": ("timestamp",),
+        "idx_rl_status": ("status_code",),
+    },
+    "error_dumps": {
+        "idx_ed_timestamp": ("timestamp",),
+        "idx_ed_request_log": ("request_log_id",),
+    },
+    "tool_call_mappings": {
+        "idx_tcm_expire_at": ("expire_at",),
+        "idx_tcm_principal": ("principal_id",),
+        "idx_tcm_session": ("principal_id", "provider_name", "model", "session_id"),
+    },
+    "codex_compaction_mappings": {
+        "idx_ccm_expire_at": ("expires_at",),
+        "idx_ccm_principal": ("principal_id",),
+    },
+}
+
 
 class ToolMappingCapacityError(RuntimeError):
     """Encrypted executable tool history exceeded a configured hard budget."""
+
+
+class CompactionMappingCapacityError(RuntimeError):
+    """Plaintext remote-compaction state exceeded a configured hard budget."""
 
 
 def _positive_tool_mapping_limit(value: int, *, field: str) -> int:
@@ -108,9 +209,6 @@ class PersistenceManager:
             retain.  Defaults to :data:`DEFAULT_SUCCESS_MAX`.
         error_max: Maximum number of error request log entries to retain
             (status_code >= 400).  Defaults to :data:`DEFAULT_ERROR_MAX`.
-        max_entries: Deprecated.  When provided and ``success_max`` is
-            not, used as the success cap for backward compatibility.
-            Emits a :class:`DeprecationWarning`.
         token_values: Exact API-token values to redact from newly persisted
             diagnostics. Non-token diagnostic data is retained.
         tool_mapping_max_row_bytes: Maximum ciphertext plus metadata bytes per row.
@@ -120,6 +218,11 @@ class PersistenceManager:
         tool_mapping_max_principal_bytes: Maximum bytes owned by one principal.
         tool_mapping_max_global_rows: Maximum encrypted mapping rows in the database.
         tool_mapping_max_global_bytes: Maximum encrypted mapping bytes in the database.
+        codex_compaction_max_row_bytes: Maximum replacement bytes per compaction row.
+        codex_compaction_max_principal_rows: Maximum compaction rows per principal.
+        codex_compaction_max_principal_bytes: Maximum compaction bytes per principal.
+        codex_compaction_max_global_rows: Maximum compaction rows in the database.
+        codex_compaction_max_global_bytes: Maximum compaction bytes in the database.
     """
 
     def __init__(
@@ -128,7 +231,6 @@ class PersistenceManager:
         success_max: int | None = None,
         error_max: int | None = None,
         *,
-        max_entries: int | None = None,
         token_values: Iterable[str] = (),
         tool_mapping_max_row_bytes: int = DEFAULT_TOOL_MAPPING_MAX_ROW_BYTES,
         tool_mapping_max_session_rows: int = DEFAULT_TOOL_MAPPING_MAX_SESSION_ROWS,
@@ -137,17 +239,12 @@ class PersistenceManager:
         tool_mapping_max_principal_bytes: int = DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_BYTES,
         tool_mapping_max_global_rows: int = DEFAULT_TOOL_MAPPING_MAX_GLOBAL_ROWS,
         tool_mapping_max_global_bytes: int = DEFAULT_TOOL_MAPPING_MAX_GLOBAL_BYTES,
+        codex_compaction_max_row_bytes: int = DEFAULT_CODEX_COMPACTION_MAX_ROW_BYTES,
+        codex_compaction_max_principal_rows: int = DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_ROWS,
+        codex_compaction_max_principal_bytes: int = DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_BYTES,
+        codex_compaction_max_global_rows: int = DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_ROWS,
+        codex_compaction_max_global_bytes: int = DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_BYTES,
     ) -> None:
-        if max_entries is not None:
-            warnings.warn(
-                "PersistenceManager(max_entries=...) is deprecated; "
-                "use success_max= (and optionally error_max=) instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            if success_max is None:
-                success_max = max_entries
-
         self._data_dir = Path(data_dir)
         self._success_max = validate_retention_cap(
             success_max if success_max is not None else DEFAULT_SUCCESS_MAX,
@@ -190,6 +287,26 @@ class PersistenceManager:
             tool_mapping_max_global_bytes,
             field="tool_mapping_max_global_bytes",
         )
+        self._codex_compaction_max_row_bytes = _positive_tool_mapping_limit(
+            codex_compaction_max_row_bytes,
+            field="codex_compaction_max_row_bytes",
+        )
+        self._codex_compaction_max_principal_rows = _positive_tool_mapping_limit(
+            codex_compaction_max_principal_rows,
+            field="codex_compaction_max_principal_rows",
+        )
+        self._codex_compaction_max_principal_bytes = _positive_tool_mapping_limit(
+            codex_compaction_max_principal_bytes,
+            field="codex_compaction_max_principal_bytes",
+        )
+        self._codex_compaction_max_global_rows = _positive_tool_mapping_limit(
+            codex_compaction_max_global_rows,
+            field="codex_compaction_max_global_rows",
+        )
+        self._codex_compaction_max_global_bytes = _positive_tool_mapping_limit(
+            codex_compaction_max_global_bytes,
+            field="codex_compaction_max_global_bytes",
+        )
         self._data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self._data_dir, 0o700)
 
@@ -207,7 +324,7 @@ class PersistenceManager:
             )
             self._validate_encrypted_tool_mappings()
             self._secure_storage_paths()
-            self._migrate_legacy()
+            self._reject_legacy_files()
             self._prune()
         except BaseException:
             self._conn.close()
@@ -337,7 +454,8 @@ class PersistenceManager:
                 error_detail    TEXT,
                 api_key_label   TEXT,
                 target_provider_name TEXT,
-                client_ip       TEXT
+                client_ip       TEXT,
+                profile         TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_rl_timestamp
                 ON request_log(timestamp DESC);
@@ -415,21 +533,61 @@ class PersistenceManager:
             CREATE INDEX IF NOT EXISTS idx_ccm_principal
                 ON codex_compaction_mappings(principal_id);
         """)
-        self._migrate_add_columns()
-        self._migrate_tool_call_mapping_encryption()
-        self._migrate_tool_call_mapping_accounting()
+        self._validate_schema()
 
-    def _migrate_add_columns(self) -> None:
-        """Add nullable columns missing from older schema versions."""
-        cursor = self._conn.execute("PRAGMA table_info(request_log)")
-        columns = {row[1] for row in cursor.fetchall()}
-        added = False
-        for col in ("target_provider_name", "client_ip", "profile"):
-            if col not in columns:
-                self._conn.execute(f"ALTER TABLE request_log ADD COLUMN {col} TEXT")
-                added = True
-        if added:
-            self._conn.commit()
+    def _validate_schema(self) -> None:
+        """Reject incompatible databases instead of migrating them in place."""
+        for table, expected in _EXPECTED_SCHEMA_COLUMNS.items():
+            rows = self._conn.execute(f"PRAGMA table_info({table})").fetchall()
+            observed = tuple(
+                (str(row[1]), str(row[2]).upper(), int(row[3]), int(row[5]))
+                for row in rows
+            )
+            if observed != expected:
+                raise RuntimeError(
+                    f"incompatible gateway.db schema for {table}: column/type/"
+                    "constraint shape differs from the supported schema; rebuild "
+                    "the data directory because Rosetta-version migration is unsupported"
+                )
+
+        for table, expected_indexes in _EXPECTED_SCHEMA_INDEXES.items():
+            observed_names = {
+                str(row[1])
+                for row in self._conn.execute(f"PRAGMA index_list({table})").fetchall()
+            }
+            for index_name, expected_columns in expected_indexes.items():
+                if index_name not in observed_names:
+                    raise RuntimeError(
+                        f"incompatible gateway.db schema for {table}: missing index "
+                        f"{index_name!r}; rebuild the data directory because "
+                        "Rosetta-version migration is unsupported"
+                    )
+                observed_columns = tuple(
+                    str(row[2])
+                    for row in self._conn.execute(
+                        f"PRAGMA index_info({index_name})"
+                    ).fetchall()
+                )
+                if observed_columns != expected_columns:
+                    raise RuntimeError(
+                        f"incompatible gateway.db schema for {table}: index "
+                        f"{index_name!r} has unexpected columns; rebuild the data "
+                        "directory because Rosetta-version migration is unsupported"
+                    )
+
+    def _reject_legacy_files(self) -> None:
+        """Fail closed when pre-SQLite persistence files are still present."""
+        legacy_names = [
+            _LEGACY_LOG,
+            _LEGACY_METRICS,
+            *(f"request_log.{i}.jsonl.gz" for i in range(1, 4)),
+        ]
+        present = [name for name in legacy_names if (self._data_dir / name).exists()]
+        if present:
+            raise RuntimeError(
+                "legacy persistence files are unsupported; rebuild the data "
+                f"directory before startup: {present}"
+            )
 
     def _migrate_tool_call_mapping_encryption(self) -> None:
         """Replace legacy plaintext/lossy mappings with encrypted schema v1.
@@ -728,34 +886,6 @@ class PersistenceManager:
                 tool_call_id=row[4],
             ),
         )
-
-    def backfill_provider_names(self, model_to_provider: Mapping[str, str]) -> int:
-        """Backfill target_provider_name for old entries using the model→provider mapping.
-
-        Only updates rows where target_provider_name is NULL and the
-        model exists in the current config.
-
-        Args:
-            model_to_provider: Mapping from model name to provider name
-                (e.g. ``{"argo:claude-opus-4.6": "Argo Claude"}``).
-
-        Returns:
-            Number of rows updated.
-        """
-        if not model_to_provider:
-            return 0
-        total = 0
-        for model_name, provider_name in model_to_provider.items():
-            cursor = self._conn.execute(
-                "UPDATE request_log SET target_provider_name = ? "
-                "WHERE model = ? AND target_provider_name IS NULL",
-                (provider_name, model_name),
-            )
-            total += cursor.rowcount
-        # Even zero-row UPDATE statements open a SQLite transaction. Always
-        # close it so a subsequent atomic config activation can BEGIN IMMEDIATE.
-        self._conn.commit()
-        return total
 
     # ------------------------------------------------------------------
     # Request log
@@ -1283,24 +1413,99 @@ class PersistenceManager:
         """Persist one plaintext Rosetta remote-compaction replacement."""
         replacement_bytes = len(replacement_text.encode("utf-8"))
         with self._compaction_mapping_lock:
-            self._conn.execute(
-                "INSERT INTO codex_compaction_mappings "
-                "(principal_id, token_hash, replacement_text, replacement_bytes, "
-                "source_model, reason, prompt_sha256, created_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    principal_id,
-                    token_hash,
-                    replacement_text,
-                    replacement_bytes,
-                    source_model,
-                    reason,
-                    prompt_sha256,
-                    created_at,
-                    expires_at,
-                ),
-            )
-            self._conn.commit()
+            if replacement_bytes > self._codex_compaction_max_row_bytes:
+                raise CompactionMappingCapacityError(
+                    "compaction replacement exceeds row byte limit "
+                    f"({self._codex_compaction_max_row_bytes})"
+                )
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    "DELETE FROM codex_compaction_mappings WHERE expires_at <= ?",
+                    (datetime.now(timezone.utc).isoformat(),),
+                )
+                existing = self._conn.execute(
+                    "SELECT replacement_bytes FROM codex_compaction_mappings "
+                    "WHERE principal_id = ? AND token_hash = ?",
+                    (principal_id, token_hash),
+                ).fetchone()
+                row_delta = 0 if existing is not None else 1
+                byte_delta = replacement_bytes - (int(existing[0]) if existing else 0)
+                principal_rows, principal_bytes = self._compaction_mapping_usage_locked(
+                    principal_id
+                )
+                global_rows, global_bytes = self._compaction_mapping_usage_locked()
+                limits = (
+                    (
+                        "principal row count",
+                        principal_rows + row_delta,
+                        self._codex_compaction_max_principal_rows,
+                    ),
+                    (
+                        "principal bytes",
+                        principal_bytes + byte_delta,
+                        self._codex_compaction_max_principal_bytes,
+                    ),
+                    (
+                        "global row count",
+                        global_rows + row_delta,
+                        self._codex_compaction_max_global_rows,
+                    ),
+                    (
+                        "global bytes",
+                        global_bytes + byte_delta,
+                        self._codex_compaction_max_global_bytes,
+                    ),
+                )
+                for label, observed, limit in limits:
+                    if observed > limit:
+                        raise CompactionMappingCapacityError(
+                            f"compaction mapping {label} exceeds limit ({limit})"
+                        )
+                self._conn.execute(
+                    "INSERT INTO codex_compaction_mappings "
+                    "(principal_id, token_hash, replacement_text, replacement_bytes, "
+                    "source_model, reason, prompt_sha256, created_at, expires_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                    "ON CONFLICT(principal_id, token_hash) DO UPDATE SET "
+                    "replacement_text = excluded.replacement_text, "
+                    "replacement_bytes = excluded.replacement_bytes, "
+                    "source_model = excluded.source_model, reason = excluded.reason, "
+                    "prompt_sha256 = excluded.prompt_sha256, created_at = excluded.created_at, "
+                    "expires_at = excluded.expires_at",
+                    (
+                        principal_id,
+                        token_hash,
+                        replacement_text,
+                        replacement_bytes,
+                        source_model,
+                        reason,
+                        prompt_sha256,
+                        created_at,
+                        expires_at,
+                    ),
+                )
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def _compaction_mapping_usage_locked(
+        self, principal_id: str | None = None
+    ) -> tuple[int, int]:
+        """Return row count and replacement bytes under the compaction lock."""
+        if principal_id is None:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(replacement_bytes), 0) "
+                "FROM codex_compaction_mappings"
+            ).fetchone()
+        else:
+            row = self._conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(replacement_bytes), 0) "
+                "FROM codex_compaction_mappings WHERE principal_id = ?",
+                (principal_id,),
+            ).fetchone()
+        return (int(row[0]), int(row[1])) if row else (0, 0)
 
     def get_codex_compaction_mapping(
         self,
@@ -1772,90 +1977,3 @@ class PersistenceManager:
             else:
                 d[col] = val
         return d
-
-    # ------------------------------------------------------------------
-    # Legacy migration
-    # ------------------------------------------------------------------
-
-    def _migrate_legacy(self) -> None:
-        """Import data from legacy JSONL/JSON files if present."""
-        migrated_anything = False
-
-        # Migrate request log
-        log_path = self._data_dir / _LEGACY_LOG
-        if log_path.exists():
-            entries: list[dict[str, Any]] = []
-            # Read compressed backups first (oldest)
-            for i in range(3, 0, -1):
-                gz_path = self._data_dir / f"request_log.{i}.jsonl.gz"
-                if gz_path.exists():
-                    entries.extend(_read_jsonl_gz(gz_path))
-                    gz_path.rename(gz_path.parent / (gz_path.name + ".migrated"))
-            # Then current log
-            entries.extend(_read_jsonl(log_path))
-            if entries:
-                self.insert_log_entries(entries)
-                logger.info(
-                    "Migrated %d request log entries from legacy files",
-                    len(entries),
-                )
-            log_path.rename(log_path.with_suffix(".migrated"))
-            migrated_anything = True
-
-        # Migrate metrics
-        metrics_path = self._data_dir / _LEGACY_METRICS
-        if metrics_path.exists():
-            try:
-                data = json.loads(metrics_path.read_text(encoding="utf-8"))
-                self.save_metrics(data)
-                logger.info("Migrated metrics from legacy JSON file")
-            except Exception as exc:
-                logger.warning("Failed to migrate metrics: %s", exc)
-            metrics_path.rename(metrics_path.with_suffix(".migrated"))
-            migrated_anything = True
-
-        if migrated_anything:
-            logger.info("Legacy file migration complete")
-
-
-# ------------------------------------------------------------------
-# JSONL readers (used for legacy migration only)
-# ------------------------------------------------------------------
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    """Read a JSONL file, skipping malformed lines."""
-    if not path.exists():
-        return []
-    entries: list[dict[str, Any]] = []
-    try:
-        with open(path, encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except OSError as exc:
-        logger.warning("Failed to read %s: %s", path, exc)
-    return entries
-
-
-def _read_jsonl_gz(path: Path) -> list[dict[str, Any]]:
-    """Read a gzipped JSONL file, skipping malformed lines."""
-    entries: list[dict[str, Any]] = []
-    try:
-        with gzip.open(path, "rt", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-    except (OSError, gzip.BadGzipFile) as exc:
-        logger.warning("Failed to read %s: %s", path, exc)
-    return entries

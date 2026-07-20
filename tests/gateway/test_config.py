@@ -11,6 +11,7 @@ import pytest
 
 import codex_rosetta.gateway.config as gateway_config
 from codex_rosetta.gateway.cli import (
+    _cmd_add_provider,
     _cmd_add_model,
     _cmd_add_model_group,
     _cmd_init,
@@ -43,6 +44,15 @@ def test_default_config_search_only_uses_xdg_directory() -> None:
     assert config_path_for_dir(expected) == os.path.join(expected, "config.jsonc")
 
 
+def test_legacy_single_api_key_field_is_rejected() -> None:
+    raw = _minimal_raw()
+    raw["server"].pop("api_keys")
+    raw["server"]["api_key"] = "legacy-key"
+
+    with pytest.raises(ValueError, match="server.api_key is unsupported"):
+        GatewayConfig(raw)
+
+
 def test_discover_config_resolves_explicit_directory() -> None:
     assert discover_config("/tmp/gateway") == "/tmp/gateway/config.jsonc"
 
@@ -67,7 +77,7 @@ def test_discover_config_resolves_explicit_directory() -> None:
             "qwen",
             "responses",
             "https://qwen.example/v1",
-            "responses-tool-mapping",
+            "web-run-injection",
         ),
         ("custom", "chat", "https://chat.example/v1", "builtin"),
         ("custom", "anthropic", "https://messages.example", "builtin"),
@@ -81,6 +91,19 @@ def test_provider_selection_chooses_expected_builtin_tool_profile(
             {"provider": provider, "api_type": api_type, "base_url": base_url}
         )
         == expected
+    )
+
+
+def test_provider_option_does_not_override_url_derived_profile() -> None:
+    assert (
+        default_tool_profile_for_provider(
+            {
+                "provider": "custom",
+                "api_type": "responses",
+                "base_url": "https://api.openai.com/v1",
+            }
+        )
+        == "openai-responses-tool-mapping-only"
     )
 
 
@@ -102,11 +125,7 @@ def test_provider_selection_chooses_expected_builtin_tool_profile(
             "https://relay.example",
             "web-run-injection",
         ),
-        (
-            "qwen",
-            "https://qwen.example/v1",
-            "responses-tool-mapping",
-        ),
+        ("qwen", "https://qwen.example/v1", "web-run-injection"),
     ],
 )
 def test_unified_responses_protocol_resolves_direct_profile(
@@ -203,7 +222,7 @@ def _minimal_raw(**server_overrides) -> dict:
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
-                "type": "openai",
+                "api_type": "chat",
             }
         },
         "model_groups": {
@@ -752,6 +771,54 @@ class TestProviderApiTypeResolution:
         assert route.tool_profile_name == "web-run-injection"
         assert route.tool_profile["namespace.web.run"] == "modified"
 
+    def test_provider_shim_is_derived_from_authoritative_preset_url(self):
+        raw = {
+            "providers": {
+                "DeepSeek": {
+                    "api_key": "sk-test",
+                    "base_url": "https://api.deepseek.com/",
+                    "api_type": "chat",
+                }
+            },
+            "model_groups": {
+                "DeepSeek": {
+                    "provider": "DeepSeek",
+                    "type": "llm",
+                    "models": {"deepseek-test": {}},
+                }
+            },
+            "server": _secure_server(),
+        }
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.provider_types["DeepSeek"] == "openai_chat"
+        assert cfg.provider_shim_names["DeepSeek"] == "deepseek"
+
+    def test_custom_url_is_allowed_without_persisted_provider_option(self):
+        raw = {
+            "providers": {
+                "Relay": {
+                    "api_key": "sk-test",
+                    "base_url": "https://relay.example/v1",
+                    "api_type": "chat",
+                }
+            },
+            "model_groups": {
+                "Relay": {
+                    "provider": "Relay",
+                    "type": "llm",
+                    "models": {"relay-test": {}},
+                }
+            },
+            "server": _secure_server(),
+        }
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.provider_types["Relay"] == "openai_chat"
+        assert cfg.provider_shim_names["Relay"] is None
+
     def test_listed_responses_provider_uses_direct_mode(self):
         raw = {
             "providers": {
@@ -787,16 +854,31 @@ class TestProviderApiTypeResolution:
         with pytest.raises(ValueError, match="unsupported provider api_type"):
             GatewayConfig(raw)
 
-    def test_legacy_type_config_still_resolves(self):
+    def test_legacy_type_config_is_rejected(self):
         raw = _minimal_raw()
+        raw["providers"]["test"].pop("api_type")
+        raw["providers"]["test"]["type"] = "openai"
 
-        cfg = GatewayConfig(raw)
-        route, _provider = cfg.resolve("openai_responses", "gpt-test")
+        with pytest.raises(ValueError, match="shim/type options are unsupported"):
+            GatewayConfig(raw)
 
-        assert cfg.provider_types["test"] == "openai_chat"
-        assert cfg.provider_shim_names["test"] == "openai"
-        assert route.target_provider == "openai_chat"
-        assert route.shim_name == "openai"
+    def test_unknown_provider_without_explicit_protocol_is_rejected(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"] = {
+            "api_key": "sk-test",
+            "base_url": "https://provider.example",
+        }
+
+        with pytest.raises(ValueError, match="must declare api_type"):
+            GatewayConfig(raw)
+
+    def test_known_provider_without_explicit_protocol_is_rejected(self):
+        raw = _minimal_raw()
+        raw["providers"]["openai"] = raw["providers"].pop("test")
+        raw["providers"]["openai"].pop("api_type")
+
+        with pytest.raises(ValueError, match="provider 'openai' must declare api_type"):
+            GatewayConfig(raw)
 
 
 class TestModelGroups:
@@ -895,7 +977,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
                     "test": {
                         "api_key": "sk-test",
                         "base_url": "https://api.example.test",
-                        "type": "openai",
+                        "api_type": "chat",
                     }
                 },
                 "model_groups": {},
@@ -926,6 +1008,25 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
         "type": "llm",
         "tool_profile": "builtin",
         "models": {"gpt-test": {}},
+    }
+
+
+def test_cli_add_provider_persists_explicit_protocol(tmp_path):
+    _cmd_add_provider(
+        Namespace(
+            config=str(tmp_path),
+            name="relay",
+            api_key="sk-test",
+            base_url="https://relay.example/v1",
+            api_type="responses",
+        )
+    )
+
+    saved = json.loads((tmp_path / "config.jsonc").read_text(encoding="utf-8"))
+    assert saved["providers"]["relay"] == {
+        "api_key": "sk-test",
+        "base_url": "https://relay.example/v1",
+        "api_type": "responses",
     }
 
 

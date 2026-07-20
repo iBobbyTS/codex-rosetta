@@ -115,14 +115,13 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert "request_conversion_ms" not in profile
 
 
-def test_listed_provider_responses_changes_only_profile_selected_tools():
-    """A listed Provider must not enable Responses protocol conversion."""
+def test_unmatched_provider_url_renders_custom_responses_behavior():
+    """An unmatched URL uses the custom protocol profile, not the preset shim."""
     raw = {
         "providers": {
             "Qwen": {
                 "api_key": "sk-test",
                 "base_url": "https://qwen.example.test/v1",
-                "provider": "qwen",
                 "api_type": "responses",
             }
         },
@@ -186,10 +185,7 @@ def test_listed_provider_responses_changes_only_profile_selected_tools():
         )
     )
 
-    assert captured_body == {
-        **body,
-        "tools": [{"type": "function", "name": "update_plan", "parameters": {}}],
-    }
+    assert captured_body == body
     assert response.body == upstream_raw
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile

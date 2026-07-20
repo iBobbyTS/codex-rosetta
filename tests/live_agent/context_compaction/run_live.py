@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_rosetta.gateway.config import _strip_jsonc_comments
+from codex_rosetta.gateway.live_gate import require_live_call_approval
 
 
 SUITE = Path(__file__).resolve().parent
@@ -508,6 +509,7 @@ def _run_manual_compact(
 
 
 def main() -> int:
+    require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--task-id", default=DEFAULT_TASK_ID)

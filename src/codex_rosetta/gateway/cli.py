@@ -142,14 +142,17 @@ def _create_initial_config(config_path: str) -> None:
             "openai_chat": {
                 "api_key": "${OPENAI_API_KEY}",
                 "base_url": "https://api.openai.com/v1",
+                "api_type": "chat",
             },
             "anthropic": {
                 "api_key": "${ANTHROPIC_API_KEY}",
                 "base_url": "https://api.anthropic.com",
+                "api_type": "anthropic",
             },
             "google": {
                 "api_key": "${GOOGLE_API_KEY}",
                 "base_url": "https://generativelanguage.googleapis.com",
+                "api_type": "google",
             },
         },
         "model_groups": {
@@ -232,7 +235,11 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    data.setdefault("providers", {})[name] = {"api_key": api_key, "base_url": base_url}
+    data.setdefault("providers", {})[name] = {
+        "api_key": api_key,
+        "base_url": base_url,
+        "api_type": args.api_type,
+    }
     _write_jsonc(path, data)
     print(f"Added provider '{name}' to {path}")
 
@@ -555,6 +562,12 @@ def main() -> None:
         "--api-key", default=None, help="API key or ${ENV_VAR} placeholder"
     )
     prov_parser.add_argument("--base-url", default=None, help="Provider base URL")
+    prov_parser.add_argument(
+        "--api-type",
+        required=True,
+        choices=["responses", "chat", "anthropic", "google"],
+        help="Explicit upstream wire protocol",
+    )
 
     group_parser = add_sub.add_parser("model-group", help="Add a model group")
     group_parser.add_argument("name", help="Model group name")

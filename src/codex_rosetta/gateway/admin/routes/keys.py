@@ -31,16 +31,6 @@ async def get_api_keys(request: Any) -> Response:
 
     server = data.get("server", {})
     keys = list(server.get("api_keys", []))
-    # Backward compat: expose legacy single key as a synthetic entry
-    if not keys and server.get("api_key"):
-        keys = [
-            {
-                "id": "default",
-                "key": server["api_key"],
-                "label": "default",
-                "created": "",
-            }
-        ]
 
     masked = [{**entry, "key": _mask_api_key(entry.get("key", ""))} for entry in keys]
     return JSONResponse({"keys": masked})
@@ -77,13 +67,6 @@ async def create_api_key(request: Any) -> Response:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
     server = data.setdefault("server", {})
-
-    # Migrate legacy single key → api_keys array
-    if "api_key" in server and "api_keys" not in server:
-        old_key = server.pop("api_key")
-        server["api_keys"] = [
-            {"id": "default", "key": old_key, "label": "default", "created": ""}
-        ]
 
     server.setdefault("api_keys", []).append(entry)
 
