@@ -2,7 +2,7 @@
 
 Status: Approved
 Owner: Bobby (project owner)
-Last reviewed: 2026-07-19
+Last reviewed: 2026-07-20
 Review cadence: Every supported Codex source/CLI compatibility update, and after any material change to gateway auth, state, provider routing, persistence, agent tooling, or release controls
 
 ## 1. System Context
@@ -23,7 +23,7 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 - Deployment environments: local Python process; local Docker/Compose; trusted LAN deployment. No current production deployment exists.
 - Legal, privacy, regulatory, or contractual constraints: None supplied. Treat as unknown if a later deployment introduces such obligations.
 - Compatibility boundary: current Codex/provider wire compatibility remains in scope. No project-version migration layer for old Rosetta config, persistence, or internal APIs is promised; incompatible legacy config/state is rejected and must be rebuilt.
-- Provider configuration semantics: vendor/variant selections are presentation-only and are not persisted. The configured base URL is authoritative at runtime: an exact preset URL renders the matching preset; any other URL renders the selected protocol's `custom` option and is allowed. `api_type` remains persisted because one URL can serve multiple wire protocols. A missing `api_type` is invalid: the provider and every model group that references it render an error and the Gateway refuses to activate that provider. Arbitrary HTTP(S) custom URLs are intentionally allowed to receive upstream API keys; this is an owner-accepted local/LAN SSRF and egress-risk boundary, not a preset-only egress guarantee.
+- Provider configuration semantics: vendor/variant selections are presentation-only and are not persisted. The configured base URL is authoritative at runtime: an exact preset URL renders the matching preset; any other URL renders `custom` and is allowed. Explicit `api_type` remains supported because one URL can serve multiple wire protocols. If it is missing, runtime selects the first protocol supported by the exact preset URL in `responses`, `chat`, `anthropic`, `google` order; unmatched custom URLs default to `responses`. The inferred value is rendered and logged as a warning but is not written back. Arbitrary HTTP(S) custom URLs may receive upstream API keys within the accepted local/LAN boundary, but upstream redirects are always prohibited.
 
 ## 2. Risk And Impact Classification
 
@@ -64,7 +64,7 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 
 - Target ASVS or equivalent level: No formal ASVS claim; use risk-based gateway controls for the supported local/LAN boundary.
 - Required threat model or abuse-case coverage: credential leakage, Admin/API-key bypass, cross-principal state access, untrusted tool/provider content, SSRF/unsafe provider URL configuration, local/LAN misuse, denial-of-wallet/disk growth, and agent prompt injection/tool abuse.
-- Required security controls: mandatory Admin password and at least one Gateway API key; fail-closed `/v1` auth; strict Admin auth/CORS; stable principal scoping; token-only redaction; owner-only secret/database paths; bounded request/tool state; URL-authoritative preset/custom provider routing; missing `api_type` is invalid and propagates an Admin provider/model-group error; arbitrary HTTP(S) custom egress is explicitly accepted within the local/LAN boundary; no live API calls in audit; live runners fail closed without explicit developer approval.
+- Required security controls: mandatory Admin password and at least one Gateway API key; fail-closed `/v1` auth; strict Admin auth/CORS; stable principal scoping; token-only redaction; owner-only secret/database paths; bounded request/tool state; URL-authoritative preset/custom provider routing; runtime-only missing-`api_type` inference with a terminal warning; arbitrary HTTP(S) custom egress accepted within the local/LAN boundary; no upstream redirects; no live API calls in audit; live runners fail closed without explicit developer approval.
 - Secure-development expectations: repository `AGENTS.md`, deterministic local checks, no `_vendor` edits, source/installed/target Codex identity separation, and explicit developer approval before development tests that make real provider calls.
 - Vulnerability disclosure, triage, and response expectations: Not defined; record future requirements as profile changes when a public release or external deployment requires them.
 
