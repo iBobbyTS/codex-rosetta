@@ -145,11 +145,8 @@ def resolve_provider_api_type(
 ) -> str:
     """Return explicit or URL-inferred protocol without changing persisted config."""
     api_type = cfg.get("api_type")
-    if api_type:
-        value = str(api_type)
-        if value not in API_TYPE_TO_PROVIDER_TYPE:
-            raise ValueError(f"config: unsupported provider api_type {api_type!r}")
-        return value
+    if isinstance(api_type, str) and api_type in API_TYPE_TO_PROVIDER_TYPE:
+        return api_type
 
     if "shim" in cfg or "type" in cfg:
         raise ValueError(
@@ -160,8 +157,10 @@ def resolve_provider_api_type(
     inferred = _infer_provider_api_type(cfg.get("base_url"))
     if warn_on_default:
         logger.warning(
-            "config: provider %r missing api_type; defaulting to %r for base_url %r",
+            "config: provider %r has missing or unsupported api_type %r; "
+            "defaulting to %r for base_url %r",
             name,
+            api_type,
             inferred,
             cfg.get("base_url"),
         )
@@ -398,9 +397,9 @@ def normalize_admin_cors_origins(value: Any) -> list[str]:
 
 def api_type_to_provider_type(api_type: Any) -> str | None:
     """Return the base gateway provider type for an admin protocol value."""
-    if not api_type:
+    if not isinstance(api_type, str):
         return None
-    return API_TYPE_TO_PROVIDER_TYPE.get(str(api_type))
+    return API_TYPE_TO_PROVIDER_TYPE.get(api_type)
 
 
 def provider_supports_tool_profiles(cfg: Any) -> bool:

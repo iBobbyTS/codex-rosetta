@@ -846,13 +846,38 @@ class TestProviderApiTypeResolution:
         assert route.target_provider == "openai_responses"
         assert is_responses_passthrough(route)
 
-    @pytest.mark.parametrize("api_type", ["responses_passthrough", "responses_rosetta"])
-    def test_removed_responses_api_types_are_rejected(self, api_type):
+    @pytest.mark.parametrize(
+        "api_type",
+        [
+            "responses_passthrough",
+            "responses_rosetta",
+            "unknown",
+            " responses ",
+            "",
+            None,
+            False,
+            True,
+            0,
+            [],
+            {},
+        ],
+    )
+    def test_unrecognized_api_types_are_treated_as_missing(self, api_type, caplog):
         raw = _minimal_raw()
         raw["providers"]["test"]["api_type"] = api_type
 
-        with pytest.raises(ValueError, match="unsupported provider api_type"):
-            GatewayConfig(raw)
+        with caplog.at_level("WARNING", logger="codex-rosetta-gateway"):
+            cfg = GatewayConfig(raw)
+
+        assert cfg.provider_types["test"] == "openai_responses"
+        assert raw["providers"]["test"]["api_type"] == api_type
+        assert (
+            sum(
+                "provider 'test' has missing or unsupported api_type" in record.message
+                for record in caplog.records
+            )
+            == 1
+        )
 
     def test_legacy_type_config_is_rejected(self):
         raw = _minimal_raw()
@@ -878,7 +903,7 @@ class TestProviderApiTypeResolution:
         assert "api_type" not in raw["providers"]["test"]
         assert (
             sum(
-                "provider 'test' missing api_type" in record.message
+                "provider 'test' has missing or unsupported api_type" in record.message
                 for record in caplog.records
             )
             == 1
@@ -901,7 +926,8 @@ class TestProviderApiTypeResolution:
         assert "api_type" not in raw["providers"]["openai"]
         assert (
             sum(
-                "provider 'openai' missing api_type" in record.message
+                "provider 'openai' has missing or unsupported api_type"
+                in record.message
                 for record in caplog.records
             )
             == 1
