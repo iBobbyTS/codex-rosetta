@@ -1093,6 +1093,29 @@ def test_get_config_renders_inferred_provider_api_type_and_group(tmp_path):
     assert "api_type" not in persisted["providers"]["openai"]
 
 
+def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["api_type"] = "removed-protocol"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(config),
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode("utf-8"))
+    assert body["providers"]["openai"]["api_type"] == "responses"
+    assert "validation_error" not in body["providers"]["openai"]
+    assert "validation_error" not in body["model_groups"]["OpenAI"]
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["providers"]["openai"]["api_type"] == "removed-protocol"
+
+
 @pytest.mark.parametrize(
     ("base_url", "expected_profile"),
     [
