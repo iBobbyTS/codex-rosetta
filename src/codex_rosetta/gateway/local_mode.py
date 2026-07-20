@@ -796,18 +796,11 @@ def ensure_codex_api_key(raw_config: dict[str, Any]) -> bool:
     if not isinstance(server, dict):
         raise ValueError("config: server must be an object")
     api_keys = server.get("api_keys")
+    if "api_key" in server:
+        raise ValueError("config: server.api_key is unsupported; use server.api_keys")
     changed = False
     if api_keys is None:
         api_keys = []
-        legacy_key = server.pop("api_key", None)
-        if legacy_key is not None:
-            api_keys.append(
-                {
-                    "id": "default",
-                    "label": "default",
-                    "key": legacy_key,
-                }
-            )
         server["api_keys"] = api_keys
         changed = True
     if not isinstance(api_keys, list):

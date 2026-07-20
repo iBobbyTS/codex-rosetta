@@ -28,7 +28,7 @@ def _config(
                 f"provider-{label}": {
                     "api_key": f"sk-{label}",
                     "base_url": f"https://{label}.example.test/v1",
-                    "type": "openai",
+                    "api_type": "chat",
                 }
             },
             "model_groups": {

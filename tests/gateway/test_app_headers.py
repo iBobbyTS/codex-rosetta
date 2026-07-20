@@ -30,7 +30,7 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
             "test-provider": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
-                "type": "openai",
+                "api_type": "chat",
             }
         },
         "model_groups": {

@@ -38,12 +38,18 @@ Use the repository's Python 3.14 environment. Run one scenario per minute so
 every cell receives its own `tmp/agent_testing_workspace/YYYYMMDDHHMM` root:
 
 ```bash
+CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
 conda run -n llm-rosetta python -m tests.integration.gpt_relay.run \
   --scenario C2 \
   --provider-name TURNING \
   --gateway-config ~/.config/codex-rosetta-gateway/config.jsonc \
   --model gpt-5.6-terra
 ```
+
+The exact environment marker is a developer-approval gate. Without it, both
+the relay runner and its capture proxy fail before reading the selected
+provider credential or starting a subprocess. Audit and deterministic tests do
+not set the marker.
 
 Run C0 through C5 separately. C1 and C2 copy
 `tests/agent_workspace/command_execution/01`, adding a small real agent/tool

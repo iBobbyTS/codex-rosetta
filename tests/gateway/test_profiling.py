@@ -1,5 +1,7 @@
 """Tests for ProfilerState and profiling admin routes."""
 
+import pytest
+
 from codex_rosetta.gateway.admin.routes.profiling import ProfilerState
 
 
@@ -306,8 +308,8 @@ class TestPersistenceProfile:
         pm.update_entry_profile("nonexistent", {"foo": 1})
         pm.close()
 
-    def test_migration_adds_profile_column(self, tmp_path):
-        """Verify the profile column is added by migration."""
+    def test_incompatible_schema_is_rejected_without_migration(self, tmp_path):
+        """The pre-release persistence layer rejects old schemas."""
         import sqlite3
 
         db_path = tmp_path / "gateway.db"
@@ -332,11 +334,7 @@ class TestPersistenceProfile:
         """)
         conn.close()
 
-        # PersistenceManager should add the profile column via migration
         from codex_rosetta.gateway.admin.persistence import PersistenceManager
 
-        pm = PersistenceManager(str(tmp_path))
-        cursor = pm._conn.execute("PRAGMA table_info(request_log)")
-        columns = {row[1] for row in cursor.fetchall()}
-        assert "profile" in columns
-        pm.close()
+        with pytest.raises(RuntimeError, match="incompatible gateway.db schema"):
+            PersistenceManager(str(tmp_path))

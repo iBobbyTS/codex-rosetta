@@ -53,7 +53,7 @@ def _config_data() -> dict[str, Any]:
     return {
         "providers": {
             "openai": {
-                "type": "openai",
+                "api_type": "chat",
                 "base_url": "https://api.example.com",
                 "api_key": "sk-test",
             }
@@ -900,8 +900,8 @@ def test_get_config_never_returns_admin_password(
     assert runtime_password not in response.body.decode("utf-8")
 
 
-def test_put_provider_persists_provider_and_api_type(tmp_path):
-    """New admin provider saves use provider/api_type instead of legacy type."""
+def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_path):
+    """Admin provider options are derived from URL instead of persisted."""
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
 
@@ -927,7 +927,6 @@ def test_put_provider_persists_provider_and_api_type(tmp_path):
     assert saved["providers"]["DeepSeek"] == {
         "api_key": "sk-new",
         "base_url": "https://api.deepseek.com",
-        "provider": "deepseek",
         "api_type": "chat",
     }
     assert "type" not in saved["providers"]["DeepSeek"]
@@ -998,8 +997,8 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["DeepSeek"]["api_key"] == "sk-1234567890"
-    assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
     assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
+    assert "provider" not in saved["providers"]["DeepSeek"]
     assert "type" not in saved["providers"]["DeepSeek"]
 
 
@@ -1032,6 +1031,8 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["provider"] == "openai"
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
+    assert body["providers"]["openai"]["default_tool_profile"] == "builtin"
+    assert "validation_error" not in body["providers"]["openai"]
     assert body["tool_profile_presets"] == [
         {
             "id": "builtin",
@@ -1060,6 +1061,62 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         "grouped-upstream"
     )
     assert body["models"]["grouped"]["provider"] == "openai"
+
+
+def test_get_config_marks_missing_provider_api_type_and_referencing_group(tmp_path):
+    valid_config = _config_data()
+    runtime_config = GatewayConfig(valid_config)
+    invalid_config = json.loads(json.dumps(valid_config))
+    invalid_config["providers"]["openai"].pop("api_type")
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(invalid_config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=runtime_config,
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    body = json.loads(response.body.decode("utf-8"))
+    error = "config: provider 'openai' must declare api_type"
+    assert body["providers"]["openai"]["validation_error"] == error
+    assert "default_tool_profile" not in body["providers"]["openai"]
+    assert body["model_groups"]["OpenAI"]["validation_error"] == error
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected_profile"),
+    [
+        (
+            "https://api.openai.com/v1/",
+            "openai-responses-tool-mapping-only",
+        ),
+        ("https://relay.example/v1", "web-run-injection"),
+    ],
+)
+def test_get_config_derives_responses_default_profile_from_authoritative_url(
+    tmp_path, base_url, expected_profile
+):
+    config = _config_data()
+    config["providers"]["openai"].update(
+        {"api_type": "responses", "base_url": base_url}
+    )
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(config),
+        )
+    )
+
+    response = _run(get_config(request))
+
+    body = json.loads(response.body.decode("utf-8"))
+    assert body["providers"]["openai"]["default_tool_profile"] == expected_profile
 
 
 def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
@@ -1587,10 +1644,10 @@ def test_admin_html_shows_model_group_profile_for_all_llm_protocols():
     assert "_modelGroupProviderUsesToolProfiles() ? '' : 'none'" in html
     assert "if (_modelGroupProviderUsesToolProfiles())" in html
     assert "function _defaultToolProfileForProvider(providerName)" in html
-    assert "return 'openai-responses-tool-mapping-only';" in html
-    assert "return 'web-run-injection';" in html
-    assert "return 'responses-tool-mapping';" in html
-    assert "Intentionally separate from the Chat branch" in html
+    assert "return provider.default_tool_profile || 'builtin';" in html
+    assert "provider.provider" not in html
+    assert "group.validation_error || ''" in html
+    assert "cfg?.validation_error || selection.validationError" in html
 
 
 def test_admin_html_exposes_request_body_limit_options():
@@ -1700,13 +1757,10 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
     assert i18n["en"]["provider.zhipu"] == "Zhipu (GLM)"
     assert i18n["zh"]["provider.zhipu"] == "智谱 GLM"
     assert "protocol.unsupportedSuffix" in html
-    assert (
-        "const body = {provider, api_type: apiType, base_url: baseUrl, proxy}" in html
-    )
+    assert "const body = {api_type: apiType, base_url: baseUrl, proxy}" in html
     assert 'id="provType"' not in html
     assert "variantSel.value = 'custom'" in html
     assert "document.getElementById('provProvider').value = 'custom'" not in html
-    assert "const provider = _providerResolvedProviderId(providerId, variantId)" in html
 
     provider_order = [
         "{id: 'deepseek', label:",

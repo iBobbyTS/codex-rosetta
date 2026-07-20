@@ -32,7 +32,11 @@ from .error_dump import (
     offload_images,
 )
 from .metrics import MetricsCollector
-from .persistence import PersistenceManager, ToolMappingCapacityError
+from .persistence import (
+    CompactionMappingCapacityError,
+    PersistenceManager,
+    ToolMappingCapacityError,
+)
 from .profiling import ProfilerState
 from .request_log import RequestLog, RequestLogEntry
 from .retention import (
@@ -48,6 +52,7 @@ __all__ = [
     "DEFAULT_SUCCESS_MAX",
     "MAX_REQUEST_LOG_RETENTION",
     "MetricsCollector",
+    "CompactionMappingCapacityError",
     "PersistenceManager",
     "ProfilerState",
     "RequestLog",

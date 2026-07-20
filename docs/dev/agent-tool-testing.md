@@ -5,6 +5,18 @@ Codex-Rosetta keeps deterministic agent workspaces under
 after protocol conversion. They are not benchmarks of reasoning, coding,
 instruction following in general, or answer quality.
 
+Every repository runner that can start a real provider, Codex, SDK, agentabi,
+or relay process is fail-closed unless the developer explicitly approves the
+call with:
+
+```bash
+export CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS
+```
+
+The audit and deterministic test suite never sets this marker. The same gate
+is applied to the standalone integration scripts, GPT relay, and shell
+launchers under `scripts/`.
+
 All Gateway-backed live cells share one authentication contract, recorded in
 [`tests/live_agent/runtime-contract.json`](../../tests/live_agent/runtime-contract.json).
 Run the isolated Gateway in local mode with Provider ID `codex_rosetta`,

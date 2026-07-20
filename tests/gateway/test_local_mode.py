@@ -867,6 +867,13 @@ def test_ensure_codex_api_key_reuses_existing_named_label() -> None:
     assert len(raw["server"]["api_keys"]) == 1
 
 
+def test_ensure_codex_api_key_rejects_legacy_single_key() -> None:
+    raw = {"server": {"api_key": "legacy-key"}}
+
+    with pytest.raises(ValueError, match="server.api_key is unsupported"):
+        ensure_codex_api_key(raw)
+
+
 def test_clear_removes_only_rosetta_catalog_and_toml_assignments(
     tmp_path: Path,
 ) -> None:

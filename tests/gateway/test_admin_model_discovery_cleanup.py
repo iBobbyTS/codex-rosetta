@@ -24,7 +24,7 @@ def _request() -> SimpleNamespace:
                 "test-provider": {
                     "api_key": "sk-test",
                     "base_url": "https://api.example.test/v1",
-                    "type": "openai",
+                    "api_type": "chat",
                 }
             },
             "model_groups": {

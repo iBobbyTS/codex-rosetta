@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from codex_rosetta.gateway.config import _strip_jsonc_comments
+from codex_rosetta.gateway.live_gate import require_live_call_approval
 
 
 TASK_IDS = ("01", "02", "03", "04", "05", "06", "07")
@@ -206,6 +207,7 @@ def _provision_capability(run_root: Path, task_id: str) -> None:
 
 
 def main() -> None:
+    require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--gateway-log-root", type=Path, required=True)

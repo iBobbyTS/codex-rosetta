@@ -22,7 +22,8 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 - External systems and third-party dependencies: Codex source/CLI as compatibility authority; configured upstream providers from the bundled provider/shim preset surface; optional web-run sidecar/Tavily; Python SDKs and cryptography; GitHub Actions and manual GitHub Releases.
 - Deployment environments: local Python process; local Docker/Compose; trusted LAN deployment. No current production deployment exists.
 - Legal, privacy, regulatory, or contractual constraints: None supplied. Treat as unknown if a later deployment introduces such obligations.
-- Compatibility boundary: current Codex/provider wire compatibility remains in scope. No project-version migration layer for old Rosetta config, persistence, or internal APIs is promised; retained legacy paths are audit candidates, not supported requirements.
+- Compatibility boundary: current Codex/provider wire compatibility remains in scope. No project-version migration layer for old Rosetta config, persistence, or internal APIs is promised; incompatible legacy config/state is rejected and must be rebuilt.
+- Provider configuration semantics: vendor/variant selections are presentation-only and are not persisted. The configured base URL is authoritative at runtime: an exact preset URL renders the matching preset; any other URL renders the selected protocol's `custom` option and is allowed. `api_type` remains persisted because one URL can serve multiple wire protocols. A missing `api_type` is invalid: the provider and every model group that references it render an error and the Gateway refuses to activate that provider. Arbitrary HTTP(S) custom URLs are intentionally allowed to receive upstream API keys; this is an owner-accepted local/LAN SSRF and egress-risk boundary, not a preset-only egress guarantee.
 
 ## 2. Risk And Impact Classification
 
@@ -53,7 +54,7 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 - Recently changed or high-churn areas at this baseline: Codex alpha.23 compatibility, model/catalog overlays, compaction, deferred MCP/tool dispatch, live-agent contracts, gateway auth/headers, stream tracing, and provider/model configuration.
 - Public entry points and external interfaces: `create_app`, `/v1/responses`, `/v1/models`, `/health*`, `/admin/*`, local CLI, Python conversion API, model catalog resources, Docker/Compose, CI workflows, and manual release tag checks.
 - Auth, authorization, tenant/data isolation, and trust boundaries: one Admin identity; multiple API-key principals; internal Admin token; provider API-key egress; prompt/tool/provider responses as untrusted content; local/LAN network boundary; agent/test harness permissions.
-- Persistence, migrations, retention, deletion, backup, and restore: SQLite request logs/metrics/error dumps; encrypted tool-call mappings; plaintext compaction replacement mappings with TTL; legacy migration code; no backup/restore guarantee and no deployed data set.
+- Persistence, migrations, retention, deletion, backup, and restore: SQLite request logs/metrics/error dumps; encrypted tool-call mappings; compaction replacement mappings with TTL plus transactional row/byte bounds; incompatible old state is rejected rather than migrated; no backup/restore guarantee and no deployed data set.
 - Background jobs, queues, retries, concurrency, and idempotency: stream generators/cleanup, per-request and per-window stores, tool/compaction cleanup, provider key rotation, sidecar supervision, retries/timeouts, and Admin test tasks.
 - Release, deployment, rollback, configuration, and feature flags: JSONC/env substitution and atomic writes; local/Docker/Compose; manual GitHub Release; Codex contract/version gates; CI permissions and mutable build inputs.
 - Observability, alerts, runbooks, and incident recovery: request/error/stream trace, metrics, health/readiness, Admin diagnostics, local logs; no production alerting or recovery exercise exists.
@@ -63,7 +64,7 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 
 - Target ASVS or equivalent level: No formal ASVS claim; use risk-based gateway controls for the supported local/LAN boundary.
 - Required threat model or abuse-case coverage: credential leakage, Admin/API-key bypass, cross-principal state access, untrusted tool/provider content, SSRF/unsafe provider URL configuration, local/LAN misuse, denial-of-wallet/disk growth, and agent prompt injection/tool abuse.
-- Required security controls: mandatory Admin password and at least one Gateway API key; fail-closed `/v1` auth; strict Admin auth/CORS; stable principal scoping; token-only redaction; owner-only secret/database paths; bounded request/tool state; typed/allowlisted provider routing where supported; no live API calls in audit.
+- Required security controls: mandatory Admin password and at least one Gateway API key; fail-closed `/v1` auth; strict Admin auth/CORS; stable principal scoping; token-only redaction; owner-only secret/database paths; bounded request/tool state; URL-authoritative preset/custom provider routing; missing `api_type` is invalid and propagates an Admin provider/model-group error; arbitrary HTTP(S) custom egress is explicitly accepted within the local/LAN boundary; no live API calls in audit; live runners fail closed without explicit developer approval.
 - Secure-development expectations: repository `AGENTS.md`, deterministic local checks, no `_vendor` edits, source/installed/target Codex identity separation, and explicit developer approval before development tests that make real provider calls.
 - Vulnerability disclosure, triage, and response expectations: Not defined; record future requirements as profile changes when a public release or external deployment requires them.
 
@@ -79,7 +80,7 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 
 - Dependency and license policy: MIT project; core has no required runtime dependencies; optional provider/gateway/dev dependencies follow `pyproject.toml` and require future review for version/provenance drift.
 - Lockfile, vendoring, and generated-code policy: no general lockfile; `_vendor` is managed and must not be edited directly; generated/catalog artifacts must retain their source/target identity.
-- Build provenance, artifact integrity, and release-signing expectations: manual GitHub Release only; no current signing/SBOM/provenance guarantee. Missing controls remain supply-chain debt, not a release automation claim.
+- Build provenance, artifact integrity, and release-signing expectations: manual GitHub Release only for local/trusted-LAN use; no public deployment or public artifact-integrity guarantee is made. Signing/SBOM/provenance remain deferred supply-chain debt and are not release claims.
 - CI/CD permission and secret boundaries: CI should remain read-only except explicitly scoped scheduled compatibility issue creation; no release secrets are expected in PR workflows.
 - SBOM or dependency inventory expectations: Not currently defined; inventory and immutable pinning are rotation priorities.
 

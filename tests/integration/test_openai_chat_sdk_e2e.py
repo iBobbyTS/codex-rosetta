@@ -22,6 +22,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../.."))
 
+from codex_rosetta.gateway.live_gate import require_live_call_approval
+
+require_live_call_approval()
+
 import dotenv
 from openai import OpenAI
 

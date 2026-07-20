@@ -17,7 +17,10 @@ from codex_rosetta.gateway.admin.persistence import (
     PersistenceManager,
 )
 from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
-from codex_rosetta.observability.persistence import ToolMappingCapacityError
+from codex_rosetta.observability.persistence import (
+    CompactionMappingCapacityError,
+    ToolMappingCapacityError,
+)
 from codex_rosetta.observability.tool_mapping_crypto import (
     KEY_ENV_VAR,
     KEY_FILENAME,
@@ -92,6 +95,39 @@ class TestCodexCompactionMappings:
             == 1
         )
         assert pm.count_codex_compaction_mappings() == 0
+        pm.close()
+
+    def test_enforces_row_and_aggregate_quotas_transactionally(self, tmp_path):
+        pm = PersistenceManager(
+            str(tmp_path),
+            codex_compaction_max_row_bytes=8,
+            codex_compaction_max_principal_rows=1,
+            codex_compaction_max_principal_bytes=8,
+            codex_compaction_max_global_rows=2,
+            codex_compaction_max_global_bytes=16,
+        )
+
+        def store(principal: str, token: str, text: str) -> None:
+            pm.store_codex_compaction_mapping(
+                principal_id=principal,
+                token_hash=token,
+                replacement_text=text,
+                source_model="model",
+                reason="test",
+                prompt_sha256="b" * 64,
+                created_at="2027-07-01T00:00:00+00:00",
+                expires_at="2027-07-08T00:00:00+00:00",
+            )
+
+        store("client-a", "a" * 64, "12345678")
+        with pytest.raises(CompactionMappingCapacityError, match="row byte limit"):
+            store("client-a", "b" * 64, "123456789")
+        with pytest.raises(CompactionMappingCapacityError, match="principal row count"):
+            store("client-a", "b" * 64, "1234")
+        store("client-b", "b" * 64, "12345678")
+        with pytest.raises(CompactionMappingCapacityError, match="global row count"):
+            store("client-c", "c" * 64, "1234")
+        assert pm.count_codex_compaction_mappings() == 2
         pm.close()
 
 
@@ -186,6 +222,51 @@ class TestPersistenceManagerSchema:
         ).fetchone()
         assert row[0] == "tool_call_mappings"
         pm.close()
+
+    def test_rejects_same_compaction_columns_without_required_primary_key(
+        self, tmp_path
+    ):
+        conn = sqlite3.connect(tmp_path / "gateway.db")
+        conn.execute("""
+            CREATE TABLE codex_compaction_mappings (
+                principal_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                replacement_text TEXT NOT NULL,
+                replacement_bytes INTEGER NOT NULL,
+                source_model TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                prompt_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
+        conn.close()
+
+        with pytest.raises(RuntimeError, match="column/type/constraint shape differs"):
+            PersistenceManager(str(tmp_path))
+
+    def test_rejects_existing_required_index_with_wrong_columns(self, tmp_path):
+        conn = sqlite3.connect(tmp_path / "gateway.db")
+        conn.executescript("""
+            CREATE TABLE codex_compaction_mappings (
+                principal_id TEXT NOT NULL,
+                token_hash TEXT NOT NULL,
+                replacement_text TEXT NOT NULL,
+                replacement_bytes INTEGER NOT NULL,
+                source_model TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                prompt_sha256 TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                PRIMARY KEY (principal_id, token_hash)
+            );
+            CREATE INDEX idx_ccm_principal
+                ON codex_compaction_mappings(token_hash);
+        """)
+        conn.close()
+
+        with pytest.raises(RuntimeError, match="has unexpected columns"):
+            PersistenceManager(str(tmp_path))
 
 
 class TestPersistenceManagerToolCallMappings:
@@ -577,24 +658,8 @@ class TestPersistenceManagerToolCallMappings:
         """)
         conn.close()
 
-        with caplog.at_level("WARNING"):
-            pm = PersistenceManager(str(tmp_path))
-
-        assert pm.count_tool_call_mappings() == 0
-        assert (
-            pm._conn.execute(
-                "SELECT value FROM metrics WHERE key = 'sentinel'"
-            ).fetchone()[0]
-            == '{"ok": true}'
-        )
-        assert "cannot be migrated to exact encrypted replay" in caplog.text
-        columns = {
-            row[1] for row in pm._conn.execute("PRAGMA table_info(tool_call_mappings)")
-        }
-        assert "encrypted_payload" in columns
-        assert "original_tool_call" not in columns
-        assert not (tmp_path / KEY_FILENAME).exists()
-        pm.close()
+        with pytest.raises(RuntimeError, match="incompatible gateway.db schema"):
+            PersistenceManager(str(tmp_path))
 
     def test_row_byte_limit_rejects_before_durable_mutation(self, tmp_path):
         pm = PersistenceManager(str(tmp_path), tool_mapping_max_row_bytes=128)
@@ -818,19 +883,8 @@ class TestPersistenceManagerToolCallMappings:
         conn.commit()
         conn.close()
 
-        pm = PersistenceManager(str(tmp_path))
-
-        columns = {
-            row[1] for row in pm._conn.execute("PRAGMA table_info(tool_call_mappings)")
-        }
-        assert "mapping_bytes" in columns
-        rows = pm.query_tool_call_mappings(
-            **_TOOL_SCOPE,
-            now="2026-01-01T00:00:00+00:00",
-        )
-        assert rows[0]["original_tool_call"]["payload"] == "original"
-        assert rows[0]["codex_tool_call"]["payload"] == "codex"
-        pm.close()
+        with pytest.raises(RuntimeError, match="incompatible gateway.db schema"):
+            PersistenceManager(str(tmp_path))
 
     def test_query_rejects_abnormal_oversized_session_before_loading(self, tmp_path):
         pm = PersistenceManager(str(tmp_path), tool_mapping_max_session_rows=2)
@@ -899,7 +953,6 @@ class TestPersistenceManagerRequestLog:
     def test_zero_row_provider_backfill_closes_transaction(self, tmp_path):
         pm = PersistenceManager(str(tmp_path))
 
-        assert pm.backfill_provider_names({"missing-model": "provider"}) == 0
         assert pm._conn.in_transaction is False
 
         prepared = pm.prepare_update((), success_max=10, error_max=10)
@@ -1037,9 +1090,7 @@ class TestPersistenceManagerRequestLog:
         pm.close()
 
     def test_prune(self, tmp_path):
-        # Legacy max_entries=N caps successes only; emits DeprecationWarning.
-        with pytest.warns(DeprecationWarning):
-            pm = PersistenceManager(str(tmp_path), max_entries=10)
+        pm = PersistenceManager(str(tmp_path), success_max=10)
         # Insert 150 successful entries in batches to trigger prune.
         for batch in range(3):
             entries = [_make_entry_dict(model=f"m-{batch}-{i}") for i in range(50)]
@@ -1062,20 +1113,6 @@ class TestPersistenceManagerRetention:
         pm = PersistenceManager(str(tmp_path), success_max=123, error_max=45)
         assert pm.success_max == 123
         assert pm.error_max == 45
-        pm.close()
-
-    def test_legacy_max_entries_maps_to_success(self, tmp_path):
-        with pytest.warns(DeprecationWarning, match="success_max"):
-            pm = PersistenceManager(str(tmp_path), max_entries=77)
-        assert pm.success_max == 77
-        assert pm.error_max == DEFAULT_ERROR_MAX
-        pm.close()
-
-    def test_legacy_does_not_override_explicit_success_max(self, tmp_path):
-        with pytest.warns(DeprecationWarning):
-            pm = PersistenceManager(str(tmp_path), success_max=200, max_entries=77)
-        # Explicit success_max wins over legacy alias.
-        assert pm.success_max == 200
         pm.close()
 
     def test_errors_not_evicted_by_success_flood(self, tmp_path):
@@ -1362,8 +1399,8 @@ class TestPersistenceManagerMetrics:
 # -- Legacy migration tests --
 
 
-class TestLegacyMigration:
-    def test_migrate_jsonl(self, tmp_path):
+class TestLegacyPersistenceRejected:
+    def test_legacy_jsonl_is_rejected(self, tmp_path):
         # Write legacy JSONL
         entries = [_make_entry_dict(model=f"legacy-{i}") for i in range(3)]
         jsonl_path = tmp_path / "request_log.jsonl"
@@ -1371,28 +1408,19 @@ class TestLegacyMigration:
             for e in entries:
                 f.write(json.dumps(e) + "\n")
 
-        pm = PersistenceManager(str(tmp_path))
-        assert pm.count_log_entries() == 3
+        with pytest.raises(RuntimeError, match="legacy persistence files"):
+            PersistenceManager(str(tmp_path))
+        assert jsonl_path.exists()
 
-        # Legacy file renamed
-        assert not jsonl_path.exists()
-        assert (tmp_path / "request_log.migrated").exists()
-        pm.close()
-
-    def test_migrate_metrics_json(self, tmp_path):
+    def test_legacy_metrics_json_is_rejected(self, tmp_path):
         metrics_path = tmp_path / "metrics.json"
         metrics_path.write_text(json.dumps({"total_requests": 99}))
 
-        pm = PersistenceManager(str(tmp_path))
-        loaded = pm.load_metrics()
-        assert loaded is not None
-        assert loaded["total_requests"] == 99
+        with pytest.raises(RuntimeError, match="legacy persistence files"):
+            PersistenceManager(str(tmp_path))
+        assert metrics_path.exists()
 
-        assert not metrics_path.exists()
-        assert (tmp_path / "metrics.migrated").exists()
-        pm.close()
-
-    def test_migrate_gzip_backups(self, tmp_path):
+    def test_legacy_gzip_backups_are_rejected(self, tmp_path):
         # Write gzipped backup
         entries = [_make_entry_dict(model=f"gz-{i}") for i in range(5)]
         gz_path = tmp_path / "request_log.1.jsonl.gz"
@@ -1402,10 +1430,9 @@ class TestLegacyMigration:
         # Also need the main file to trigger migration
         (tmp_path / "request_log.jsonl").write_text("")
 
-        pm = PersistenceManager(str(tmp_path))
-        assert pm.count_log_entries() == 5
-        assert not gz_path.exists()
-        pm.close()
+        with pytest.raises(RuntimeError, match="legacy persistence files"):
+            PersistenceManager(str(tmp_path))
+        assert gz_path.exists()
 
     def test_no_migration_when_clean(self, tmp_path):
         # No legacy files — should just start clean

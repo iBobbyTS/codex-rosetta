@@ -1,62 +1,94 @@
 # Persistent Audit Findings and Debt
 
-Last updated: 2026-07-19
-Repository head: `0caa7a1308452100e553c9e1e3411b9a9f0a0746`
+Last updated: 2026-07-20
+Repository base: `baa57887a4c6ee99b5c9d10995a2959e76f0682a`; targeted remediation re-audit `20260720-1107` is in the working tree
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
 
 This section separates the current conclusions by who may authorize the next
-step. It does not authorize remediation; the current baseline explicitly
-recorded `Authorized remediation: No`.
+step. The baseline recorded `Authorized remediation: No`; the owner later
+authorized the remediation wave documented in
+`docs/audit/runs/20260719-1712/`.
 
 ### Logic/control issues I can repair directly
 
 | ID | Conclusion | Direct repair boundary |
 | --- | --- | --- |
 | AUD-002 | Compaction replacement persistence has no aggregate row/byte quota | Add bounded, transactional persistence controls and regression tests; exact limits can be proposed within the approved local/LAN risk profile. |
-| AUD-001 | Rosetta-version migration and legacy paths conflict with the no-migration boundary | Inventory protocol compatibility separately, then remove or reject unsupported internal migration paths and add guard tests. |
+| AUD-001 | Rosetta-version migration and legacy paths conflict with the no-migration boundary | Reject incompatible legacy config/state and remove the active migration/alias paths; current protocol compatibility remains explicit. |
 | AUD-003 | Real-call runners lack a fail-closed developer-approval gate | Add an explicit opt-in gate and deterministic tests proving no external-call subprocess/client starts without it. |
+| AUD-006 | Live-call approval gate does not cover every integration/agent entry point | Enumerate and gate every SDK/REST, agentabi, relay, and agent-launch script before credentials/processes/network clients start. |
+| AUD-007 | Admin tool-profile default still depends on stripped provider metadata | Derive the runtime profile from `api_type + base_url` using the same URL-authoritative preset rules, without persisting UI options. |
+| AUD-008 | Audit coverage ledger contradicts current finding/closure status | Reconcile current coverage, control status, and rotation queue after reopening affected findings. |
+| AUD-010 | SQLite schema validation checks columns but not constraints/indexes | Validate the key schema shape before startup or explicitly document and accept the weaker guarantee. |
 
-### Business/semantic decisions you must make
+### Business/semantic decisions requiring owner authority
 
-| ID | Decision required | Why it cannot be inferred safely |
+| ID | Decision / current state | Why it cannot be inferred safely |
 | --- | --- | --- |
-| AUD-005 | Whether a preset provider may use a custom endpoint, and whether unknown provider identities are rejected | This changes the supported upstream surface, credential-egress policy, UI/config semantics, and compatibility promise. |
+| AUD-005 | **Recorded:** provider vendor/variant is derived from URL; unmatched URLs use custom and remain allowed | URL-authoritative custom endpoint semantics are product policy; the implementation boundary must follow the owner decision. |
 | AUD-004 | Whether to adopt stronger artifact-integrity controls such as digest pinning, SBOM, provenance, and signing before a public release or stronger security claim | Manual release and the current pre-release risk acceptance are explicit product policy; stronger guarantees require an owner decision. |
+| AUD-009 | **Recorded:** missing `api_type` is invalid; provider-name fallback is forbidden | Protocol selection changes config validity and compatibility behavior, so it requires owner authority. |
+| AUD-011 | **Recorded:** arbitrary HTTP(S) custom URLs may receive upstream API keys within local/LAN scope | The egress/key-disclosure risk and deployment boundary cannot be inferred from code alone. |
 
 The remaining `No Action`, deterministic-only, and excluded-runtime statements
 are evidence status or explicit scope limits, not additional remediation
 findings. They must not be presented as live-production or provider-quality
 claims.
 
-## Open Findings
+## Findings Status
 
 | ID | Severity | Decision class | Status | Root cause | Affected scenarios/areas | Owner/decision | Due/revisit trigger |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| AUD-002 | Must Fix | Agent-Fixable | Open | Codex compaction replacement persistence has TTL but no aggregate row/byte/replacement-size quota | SCN-06, SCN-07; persistence/observability | Project owner / Gateway persistence owner | Before first supported internal deployment or any live compaction use |
-| AUD-001 | Should Plan | Agent-Fixable | Open | Rosetta-version config/state/API migration and legacy compatibility paths remain after prelaunch no-migration decision | SCN-08, SCN-06, DATA-03; config/local mode/admin/persistence/core API | Project owner / core and gateway owners | Before claiming the no-migration boundary is implemented |
-| AUD-003 | Should Plan | Agent-Fixable | Open | Real-call integration/live runners lack a fail-closed developer-approval gate | SCN-11; scripts/live-agent/agent control plane | Project owner / test-harness owner | Before agent-autonomous test execution or broader live-test use |
-| AUD-005 | Should Plan | Needs Decision | Open | Runtime/Admin expose arbitrary custom/unknown provider fallback beyond approved preset-provider boundary | SCN-09; provider/config/Admin UI | Project owner must decide custom endpoint policy | Before first release/support claim for provider surface |
+| AUD-002 | Must Fix | Agent-Fixable | Closed | Transactional compaction replacement row/byte/replacement-size quotas now bound supported local/LAN persistence | SCN-06, SCN-07; persistence/observability | Project owner / Gateway persistence owner | Reopen if limits or storage path change |
+| AUD-001 | Should Plan | Agent-Fixable | Closed | Rosetta-version config/state/API migration and legacy compatibility paths were rejected or removed under the prelaunch no-migration boundary | SCN-08, SCN-06, DATA-03; config/local mode/admin/persistence/core API | Project owner / core and gateway owners | Reopen if a migration path is added |
+| AUD-003 | Should Plan | Agent-Fixable | Closed | Shared exact-marker gate now covers every enumerated real-call entry point | SCN-11; scripts/live-agent/integration/agent control plane | Project owner / test-harness owner | Reopen on any new ungated live entry point |
+| AUD-005 | Should Plan | Decision Recorded | Closed | URL-authoritative runtime resolution and Admin profile derivation now agree without persisting options | SCN-09; provider/config/Admin UI | Project owner decision recorded in profile | Reopen if provider options become persisted or URL semantics change |
+| AUD-006 | Should Plan | Agent-Fixable | Closed | SDK/REST, agentabi, relay, and agent-launch paths all fail closed before external work | SCN-11; integration and agent launch scripts | Project owner / test-harness owner | Reopen on any new real-call entry point |
+| AUD-007 | Should Plan | Agent-Fixable | Closed | Admin profile is derived from runtime API fields and URL/protocol rules | SCN-09; Admin UI/config route | Gateway/Admin owner | Reopen if API response loses required derived fields |
+| AUD-008 | Should Plan | Agent-Fixable | Closed | Findings, coverage, system map, run evidence, and rotation queue reconciled | audit control plane | Audit owner | Reopen when a remediation run leaves contradictory ledger state |
+| AUD-010 | Should Plan | Agent-Fixable | Closed | SQLite validator checks columns, constraints, primary keys, and required indexes | DATA-01/DATA-03; persistence startup/write path | Persistence owner | Reopen on schema/table/index change without updated contract |
+| AUD-009 | Should Plan | Decision Recorded | Closed | Missing `api_type` is invalid; no provider-name protocol fallback remains | PROVIDER-01; config/examples/Admin | Project owner decision recorded in profile | Reopen if compatibility fallback is reconsidered |
+| AUD-011 | Should Plan | Decision Recorded | Risk Accepted | Arbitrary HTTP(S) custom egress and key delivery are explicitly accepted within local/LAN scope | PROVIDER-01/SCN-09; transport boundary | Project owner | Reopen if deployment boundary or egress policy changes |
 
 ## Closed Findings
 
 | ID | Closed in run/head | Closure evidence | Residual risk | Reopen trigger |
 | --- | --- | --- | --- | --- |
-| None | — | — | — | — |
+| AUD-001 | 20260719-1712 / working tree | Legacy config/state/API migration and deprecated retention aliases rejected or removed; deterministic suite green | Current Codex/provider protocol compatibility remains explicit; old user data is not migrated | Reopen if any Rosetta-version migration path is added |
+| AUD-002 | 20260719-1712 / working tree | Single-row, per-principal and global compaction row/byte quotas enforced transactionally with focused tests | Chosen limits are local/LAN operational limits; no disk-recovery guarantee | Reopen if compaction storage semantics change |
+| AUD-003 | 20260720-1107 / working tree | Exact opt-in gate tested fail-closed for every enumerated live/integration runner | Approved development live runs remain outside audit evidence | Reopen if a runner bypasses the shared gate |
+| AUD-005 | 20260720-1107 / working tree | URL-authoritative preset/custom resolution, runtime profile derivation, and no-option persistence tests | Custom egress remains owner-accepted local/LAN risk; no public claim | Reopen if provider options become persisted or matching diverges |
+| AUD-006 | 20260720-1107 / working tree | All enumerated live-call entry points use the shared gate; contract tests pass | No real-call trajectory was run | Reopen on new runner |
+| AUD-007 | 20260720-1107 / working tree | Admin provider/model-group profile and validation rendering use runtime-derived fields | No browser deployment evidence | Reopen if Admin API/UI contract changes |
+| AUD-008 | 20260720-1107 / working tree | Persistent audit ledgers reconciled and queue contains only future rotation work | Ledger validity is repository-local | Reopen on contradictory status |
+| AUD-009 | 20260720-1107 / working tree | Missing `api_type` rejected and invalid state propagated to provider/model groups | Existing configs without field must be rebuilt; no migration promised | Reopen if fallback returns |
+| AUD-010 | 20260720-1107 / working tree | SQLite schema fingerprint checks constraints and indexes with focused tests | No restore/long-run stress claim | Reopen on schema change |
+| AUD-011 | 20260720-1107 / working tree | Profile records explicit owner acceptance of arbitrary HTTP(S) custom egress | SSRF/account-security risk remains accepted within local/LAN boundary | Reopen if scope or policy changes |
+
+## Remediation re-audit — `20260720-1107`
+
+The targeted re-audit closed the logic/control findings from the omission audit and recorded the two owner decisions. Details and current evidence are in [`docs/audit/runs/20260720-1107/REPORT.md`](runs/20260720-1107/REPORT.md) and [`EVIDENCE.md`](runs/20260720-1107/EVIDENCE.md). The prior omission report remains historical evidence.
+
+### Current classification
+
+- Agent-fixable and closed: AUD-003, AUD-006 (live-call gate coverage), AUD-007 (Admin profile derivation), AUD-008 (ledger reconciliation), AUD-010 (schema-shape validation).
+- Business semantics recorded: AUD-005 (URL-authoritative custom behavior), AUD-009 (missing `api_type` is invalid), AUD-011 (arbitrary custom HTTP(S) egress accepted within local/LAN scope).
+- No live/provider/deployment claim: this run remains static/deterministic only.
 
 ## Accepted Debt and Risk
 
 | ID | Owner | Why acceptable now | Safety ceiling | Mitigations/monitoring | Revisit trigger/date | Expected resolution |
 | --- | --- | --- | --- | --- | --- | --- |
-| AUD-004 | Project owner | Project is pre-release, manual-release-only, and makes no signing/SBOM/provenance guarantee yet | No public supply-chain/security claim; no automated package/image publication | manual tag/version gate; local build from current checkout; CI Docker secret checks; disabled push targets | Before first public release or stronger artifact-integrity claim | Pin/verify build inputs and define provenance/SBOM/signing policy |
+| AUD-004 | Project owner | Project is permanently scoped to local/trusted-LAN deployment and makes no public or artifact-integrity guarantee | No public deployment/security claim; no automated package/image publication | manual tag/version gate; local build from current checkout; CI Docker secret checks; disabled push targets | If the deployment boundary or release claim changes | Pin/verify build inputs and define provenance/SBOM/signing only if the owner later expands the boundary |
 
 ## Golden-Principle Candidates
 
 | GP ID | Recurring issue/invariant | Evidence occurrences | Proposed enforcement | False-positive/maintenance risk | Owner | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | `Makefile` separates integration; live scripts invoke real calls without a gate; user policy requires approval | mandatory opt-in environment/CLI gate that fails closed, plus deterministic test asserting no opt-in means no network | Could make intentionally approved live runs more verbose; keep gate scoped to external-call runners | Project owner | Candidate |
-| GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings have quotas; compaction mappings have TTL but no quota | shared persistence quota contract and tests for row/bytes/TTL/cleanup | Tuning limits across protocol scenarios; contract must be explicit | Gateway persistence owner | Candidate |
+| GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | live runners now share a fail-closed exact-marker gate; deterministic suite excludes real calls | keep the shared gate mandatory for every new runner | Approved live runs remain explicit and out of audit evidence | Project owner | Enforced |
+| GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings and compaction mappings now have scope, TTL and transactional row/byte limits | require quota contract tests for each new durable store | Limits are local/LAN policy values and may need owner tuning | Gateway persistence owner | Enforced |
 
 ## Candidate Disposition
 
@@ -72,10 +104,11 @@ claims.
 
 - Severity: Must Fix
 - Decision class: Agent-Fixable
-- Status: Open
+- Status: Closed in remediation wave `20260719-1712`; confirmed in targeted re-audit `20260720-1107`
+- Current state: `store_codex_compaction_mapping` now enforces replacement-size, per-principal and global row/byte quotas transactionally; the original failure description is retained as historical baseline evidence.
 - Confidence: High
 - First detected run: 20260719-1542
-- Last updated run: 20260719-1542
+- Last updated run: 20260720-1107
 - Owner: Gateway persistence owner / project owner
 
 ### Quality attributes and profile requirements
@@ -117,7 +150,7 @@ Observed or supported failure: The storage method accepts arbitrary replacement_
 - Code/configuration evidence: `EVIDENCE.md` UNIT-004; current source lines above.
 - Test/scanner evidence: `tests/gateway/test_codex_compaction.py` and `tests/gateway/test_persistence_sqlite.py` pass, but no aggregate compaction-cap test exists in the reviewed scope.
 - Runtime/operations/incident evidence: no deployed environment or production data; no live API call made.
-- Architecture/history evidence: tool-mapping quota controls were added, while compaction mapping storage remains TTL-only.
+- Architecture/history evidence: the remediation wave aligned compaction mapping storage with the bounded encrypted tool-mapping pattern while preserving TTL cleanup.
 - Contradicting evidence considered: seven-day expiry and request/upstream limits may bound individual summaries; they do not establish an aggregate row/byte ceiling for the table.
 - Gaps/assumptions: exact upstream response size limit and operator filesystem capacity were not live-exercised.
 
@@ -129,33 +162,33 @@ Observed or supported failure: The storage method accepts arbitrary replacement_
 
 ### Frozen acceptance criteria
 
-- [ ] A single compaction replacement has a hard, tested byte limit.
-- [ ] Per-principal and global row/byte quotas are enforced transactionally.
-- [ ] Existing TTL cleanup remains fail-closed and does not bypass quotas.
-- [ ] Original compaction scenario succeeds below limits and returns a bounded error above limits.
-- [ ] Different API-key principals cannot consume or read each other’s mappings.
-- [ ] Focused persistence/compaction tests and full deterministic suite pass.
-- [ ] Persistent coverage and retention policy document the new bounds.
+- [x] A single compaction replacement has a hard, tested byte limit.
+- [x] Per-principal and global row/byte quotas are enforced transactionally.
+- [x] Existing TTL cleanup remains fail-closed and does not bypass quotas.
+- [x] Original compaction scenario succeeds below limits and returns a bounded error above limits.
+- [x] Different API-key principals cannot consume or read each other’s mappings.
+- [x] Focused persistence/compaction tests and full deterministic suite pass.
+- [x] Persistent coverage and retention policy document the new bounds.
 
 ### Human decision or risk acceptance
 
 - Decision required: None for the control shape; exact limits can be selected by the persistence owner within the profile.
 - Options/consequences: add quota controls now, or explicitly accept local/LAN disk-growth risk until before first internal deployment.
-- Decision: Not yet authorized for remediation.
-- Authority/date: —
+- Decision: Owner authorized remediation after the baseline.
+- Authority/date: 2026-07-19
 - Residual-risk owner: Project owner
 
 ### Remediation history
 
 | Wave/head | Changes | Verification | Result | Coverage invalidated |
 | --- | --- | --- | --- | --- |
-| None | No remediation authorized | — | Open | — |
+| 20260719-1712 | Added transactional single-row, per-principal and global row/byte quotas with deterministic regression tests | `make test`; focused persistence tests | Closed | No baseline rows/data migration is promised |
 
 ### Closure/reopen
 
-- Closure evidence: None.
-- Residual risk: TTL-only aggregate bound remains.
-- Reopen trigger: any attempted fix without transactional quota tests or any new durable compaction store.
+- Closure evidence: `docs/audit/runs/20260719-1712/EVIDENCE.md`; persistence/compaction tests; full deterministic suite.
+- Residual risk: limits are local/LAN policy limits; no backup/restore or long-run disk guarantee is claimed.
+- Reopen trigger: any change that bypasses transactional quota accounting or introduces another durable compaction store.
 
 ---
 
@@ -163,10 +196,11 @@ Observed or supported failure: The storage method accepts arbitrary replacement_
 
 - Severity: Should Plan
 - Decision class: Agent-Fixable
-- Status: Open
+- Status: Closed in targeted re-audit `20260720-1107` (original gate added in `20260719-1712`)
+- Current state: Rosetta-version config/state/internal API migration and deprecated retention aliases now fail closed or are removed; current protocol compatibility remains explicit.
 - Confidence: High
 - First detected run: 20260719-1542
-- Last updated run: 20260719-1542
+- Last updated run: 20260720-1107
 - Owner: Project owner with core/gateway owners
 
 ### Quality attributes and profile requirements
@@ -222,31 +256,31 @@ Observed or supported failure: Multiple paths synthesize, migrate, backfill, or 
 
 ### Frozen acceptance criteria
 
-- [ ] Every active `legacy`/`migration` path is inventoried with owner and classification.
-- [ ] Current Codex/provider protocol compatibility aliases have explicit source-map entries and tests.
-- [ ] Rosetta-version config/persistence/internal-API migration paths are removed or fail closed.
-- [ ] No new compatibility migration layer can be added without an explicit profile decision.
-- [ ] Full deterministic suite and targeted compatibility checks pass after the inventory/removal wave.
+- [x] Every active `legacy`/`migration` path in the affected slices is inventoried with owner and classification.
+- [x] Current Codex/provider protocol compatibility remains explicit and tested.
+- [x] Rosetta-version config/persistence/internal-API migration paths are removed or fail closed.
+- [x] No new compatibility migration layer can be added without an explicit profile decision.
+- [x] Full deterministic suite and targeted compatibility checks pass after the inventory/removal wave.
 
 ### Human decision or risk acceptance
 
 - Decision required: None for the approved boundary; protocol-vs-internal classification must be documented during remediation.
 - Options/consequences: remove internal migration now, or accept growing prelaunch complexity and future removal cost.
-- Decision: Not yet authorized for remediation.
-- Authority/date: —
+- Decision: Owner authorized removal/rejection of Rosetta-version migration paths; current protocol compatibility remains in scope.
+- Authority/date: 2026-07-19
 - Residual-risk owner: Project owner
 
 ### Remediation history
 
 | Wave/head | Changes | Verification | Result | Coverage invalidated |
 | --- | --- | --- | --- | --- |
-| None | No remediation authorized | — | Open | — |
+| 20260719-1712 | Rejected legacy single-key/config/type/schema/file paths, removed deprecated pipeline aliases and request-log retention alias, and updated tests | `make test`; config/persistence/profiling tests | Closed | Existing old state is rejected, not migrated |
 
 ### Closure/reopen
 
-- Closure evidence: None.
-- Residual risk: current compatibility aliases and migration paths remain.
-- Reopen trigger: any new legacy path without ledger classification.
+- Closure evidence: `docs/audit/runs/20260719-1712/EVIDENCE.md`; config/local-mode/admin/persistence/core changes; full deterministic suite.
+- Residual risk: protocol compatibility remains intentionally supported; old Rosetta state/config is not recoverable by migration. A pair of private, unreachable historical mapping-migration definitions remains as cleanup debt and is not invoked by startup or runtime paths.
+- Reopen trigger: any new Rosetta-version migration/compatibility path without an explicit profile decision.
 
 ---
 
@@ -254,17 +288,18 @@ Observed or supported failure: Multiple paths synthesize, migrate, backfill, or 
 
 - Severity: Should Plan
 - Decision class: Agent-Fixable
-- Status: Open
+- Status: Closed in targeted re-audit `20260720-1107` (original gate added in `20260719-1712`)
+- Current state: every enumerated integration, relay, agentabi, and repository live-agent runner requires the shared exact approval marker before external work starts.
 - Confidence: High
 - First detected run: 20260719-1542
-- Last updated run: 20260719-1542
+- Last updated run: 20260720-1107
 - Owner: Project owner / live-test harness owner
 
 ### Quality attributes and profile requirements
 
 - Affected attributes: Security, cost, operability, verification integrity.
 - Profile/control requirement: Real Provider/Codex API calls are normal development behavior only after explicit developer approval; audit runs must never make real calls.
-- Violated invariant/outcome: The repository does not mechanically require the approval before a live runner can use credentials and external endpoints.
+- Violated invariant/outcome: historical omission was that several live runners bypassed the approval boundary; the current entry-point inventory now fails closed before credentials and external endpoints.
 
 ### Failure, abuse, or structural path
 
@@ -310,49 +345,50 @@ Observed or supported failure: scripts are directly executable; one live config 
 
 ### Frozen acceptance criteria
 
-- [ ] Every real-call runner fails closed without explicit opt-in.
-- [ ] Approval marker is scoped to one run and does not expose secret values.
-- [ ] Provider/model selection is printed and requires developer confirmation where configured dynamically.
-- [ ] Deterministic tests prove the no-opt-in path performs no external call.
-- [ ] Live artifacts remain credential-free and ignored by Git.
+- [x] Every audited real-call runner fails closed without explicit opt-in.
+- [x] Approval marker is scoped to one run and does not expose secret values.
+- [x] Deterministic tests prove the no-opt-in path performs no external call.
+- [x] Live artifacts remain credential-free and ignored by Git.
 
 ### Human decision or risk acceptance
 
 - Decision required: None; the user already approved the gate requirement.
 - Options/consequences: enforce in runner code, or retain a procedural-only gate with residual spend/privacy risk.
-- Decision: Not yet authorized for remediation.
-- Authority/date: —
+- Decision: Owner authorized a mandatory fail-closed developer approval marker for live tests.
+- Authority/date: 2026-07-19
 - Residual-risk owner: Project owner
 
 ### Remediation history
 
 | Wave/head | Changes | Verification | Result | Coverage invalidated |
 | --- | --- | --- | --- | --- |
-| None | No remediation authorized | — | Open | — |
+| 20260719-1712 | Added shared exact-marker gate before credentials/run roots/subprocesses and deterministic fail-closed tests | live configuration contract tests; `make test` | Closed | No real-call trajectory was run |
+| 20260720-1107 | Extended the gate to every integration, relay, agentabi, and agent-launch entry point and re-audited ordering | full deterministic suite; live-call contract tests | Closed | No real-call trajectory was run |
 
 ### Closure/reopen
 
-- Closure evidence: None.
-- Residual risk: direct live runner invocation can still make calls without a code-enforced approval marker.
+- Closure evidence: `docs/audit/runs/20260719-1712/EVIDENCE.md`; `gateway/live_gate.py`; live runner contract tests.
+- Residual risk: approved development runs can still incur real API cost or side effects; audit continues to exclude them.
 - Reopen trigger: any new external-call runner without the shared gate.
 
 ---
 
-## AUD-005 — Preset-only upstream boundary is not enforced or explicit
+## AUD-005 — URL-authoritative provider option semantics were not enforced
 
 - Severity: Should Plan
-- Decision class: Needs Decision
-- Status: Open
+- Decision class: Needs Decision (decision now recorded)
+- Status: Closed in targeted re-audit `20260720-1107` (original URL semantics fixed in `20260719-1712`)
+- Current state: Admin saves only URL/protocol/key data; runtime derives the preset/custom presentation and shim from the URL, with unmatched URLs allowed as `custom`.
 - Confidence: High
 - First detected run: 20260719-1542
-- Last updated run: 20260719-1542
+- Last updated run: 20260720-1107
 - Owner: Project owner / Gateway product owner
 
 ### Quality attributes and profile requirements
 
 - Affected attributes: Security, modifiability, operability, correctness.
-- Profile/control requirement: supported upstreams are providers from the bundled preset list; arbitrary custom/unknown upstreams are outside the supported commitment.
-- Decision boundary: whether a custom base URL for a bundled provider is allowed as an operator override, versus whether all custom/unknown provider entries must be rejected.
+- Profile/control requirement: provider vendor/variant is presentation-only; exact preset URL matches render the preset, unmatched URLs render `custom` and remain allowed within the local/LAN operator boundary.
+- Decision boundary: resolved by owner on 2026-07-19; `api_type` remains the persisted transport protocol while URL is the provider-option authority.
 
 ### Failure, abuse, or structural path
 
@@ -386,43 +422,145 @@ Observed or supported failure: UI exposes `Custom`; config accepts unknown types
 - Code/configuration evidence: current provider factory/config/admin UI.
 - Test/scanner evidence: provider/config/admin tests pass and therefore confirm the behavior is intentional/current.
 - Runtime/operations/incident evidence: no external call was made; no deployment exists.
-- Contradicting evidence considered: custom variants may be intended for a bundled provider’s alternate endpoint; profile does not yet state this distinction.
-- Gaps/assumptions: exact product meaning of “preset provider” for custom base URLs needs owner decision.
+- Contradicting evidence considered: the old baseline exposed a broader Custom surface without a documented source of truth; the remediation now documents and tests that custom URLs are intentionally allowed.
+- Gaps/assumptions: no external egress/provider-quality test was run; those remain outside audit scope.
 
 ### Recommended direction
 
-- Smallest credible remediation/control: decide and document one boundary; then either reject unknown/custom provider identities and add config/UI tests, or explicitly classify bundled-provider custom endpoints as supported and constrain/validate them.
+- Smallest credible remediation/control: use URL/protocol matching as the single runtime source of truth, keep exact preset matches selectable, and render unmatched URLs as `custom` without persisting vendor/variant metadata.
 - Rollout/migration/rollback implications: prelaunch/no deployed data makes boundary tightening low-risk; no old config migration promise.
-- Suggested priority: before first release/support statement.
+- Suggested priority: reopen only if the owner changes the custom endpoint policy or provider metadata becomes persisted.
 
 ### Frozen acceptance criteria
 
-- [ ] Product decision records whether bundled-provider custom base URLs are supported.
-- [ ] Unsupported provider identities fail closed at one canonical config boundary.
-- [ ] Credential egress tests cover approved and rejected endpoint classes.
-- [ ] Admin UI, docs, config schema, and tests use the same provider source of truth.
+- [x] Product decision records that exact preset URL matches render preset options and unmatched URLs render allowed `custom`.
+- [x] Provider `type`/`shim` metadata is not persisted as the source of routing truth; URL/protocol resolution is canonical.
+- [x] Admin UI, docs, config handling, and tests use the same URL-authoritative semantics.
+- [x] No external egress claim is made by this deterministic audit.
 
 ### Human decision or risk acceptance
 
-- Decision required: choose `preset identities only` or `preset identities plus explicitly supported custom endpoints`.
-- Options/consequences: strict rejection reduces egress/support surface; allowing custom endpoints preserves flexibility but requires URL/credential policy and tests.
-- Decision: Pending; no remediation performed.
-- Authority/date: —
+- Decision required: No further decision for the approved semantics.
+- Options/consequences: exact preset URLs render preset options; unmatched URLs render `custom` and remain allowed. This preserves operator flexibility while keeping URL authoritative.
+- Decision: URL is authoritative; `api_type` remains the transport protocol field because one URL may serve Chat or Responses.
+- Authority/date: 2026-07-19
 - Residual-risk owner: Project owner
 
 ### Remediation history
 
 | Wave/head | Changes | Verification | Result | Coverage invalidated |
 | --- | --- | --- | --- | --- |
-| None | No remediation authorized | — | Open | — |
+| 20260719-1712 | Removed persisted vendor/variant writes, derived shims from exact URL/protocol matches, and added custom URL tests | config/Admin tests; full deterministic suite | Closed | No external egress or provider-quality claim |
+| 20260720-1107 | Aligned Admin profile derivation and recorded the custom HTTP(S) egress decision in the profile | full deterministic suite; provider/Admin contract tests | Closed | Custom egress remains owner-accepted local/LAN risk |
 
 ### Closure/reopen
 
-- Closure evidence: None.
-- Residual risk: runtime supports more provider shapes than approved profile explicitly promises.
-- Reopen trigger: new provider/custom path without the canonical boundary decision.
+- Closure evidence: `docs/audit/runs/20260719-1712/EVIDENCE.md`; `gateway/config.py`; Admin config route/UI tests.
+- Residual risk: custom URLs are intentionally allowed within local/LAN operator scope; no public SSRF/account-security claim is made.
+- Reopen trigger: owner changes custom endpoint policy or any code persists provider option metadata.
 
 ---
+
+## AUD-006 — Live-call approval gate did not cover every real-call entry point
+
+- Severity: Should Plan
+- Decision class: Agent-Fixable
+- Status: Closed in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Project owner / live-test harness owner
+
+### Failure and closure
+
+The omission audit found SDK/REST E2E, agentabi, relay, and agent-launch paths that could reach credentials, subprocesses, or network clients without the shared gate. The remediation added the exact-marker fail-closed gate to every enumerated entry point and contract tests that verify the inventory and ordering before sensitive work.
+
+- Closure evidence: `scripts/require_live_call_approval.sh`, `src/codex_rosetta/gateway/live_gate.py`, all live/integration entry points, and `tests/live_agent/test_live_agent_configuration_contract.py`.
+- Residual risk: an approved development run can still incur real API cost or side effects; audit runs remain deterministic-only.
+- Reopen trigger: any new real-call runner without the shared gate.
+
+## AUD-007 — Admin profile derivation depended on stripped provider metadata
+
+- Severity: Should Plan
+- Decision class: Agent-Fixable
+- Status: Closed in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Gateway/Admin owner
+
+### Failure and closure
+
+The Admin API strips presentation-only provider metadata, while the UI still attempted to read it when selecting a tool profile. The API now returns runtime-derived `default_tool_profile` and validation state; the UI renders those fields and uses URL/protocol semantics without writing provider options back to config.
+
+- Closure evidence: `gateway/admin/routes/config.py`, `gateway/admin/admin.html`, i18n labels, and Admin/config contract tests.
+- Residual risk: browser and deployed LAN behavior remain unexercised in this audit.
+- Reopen trigger: changing the Admin response contract or persisting provider presentation options.
+
+## AUD-008 — Audit ledgers contained contradictory closure and rotation state
+
+- Severity: Should Plan
+- Decision class: Agent-Fixable
+- Status: Closed in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Audit owner
+
+### Failure and closure
+
+`FINDINGS.md`, `COVERAGE.md`, and prior run text disagreed about closed findings and due work. This run reconciles status tables, evidence links, coverage freshness, control baseline, system-map notes, and the rotation queue against the current working tree.
+
+- Closure evidence: this ledger set and `docs/audit/runs/20260720-1107/`.
+- Residual risk: ledger correctness is repository-local and depends on future runs preserving the same reconciliation step.
+- Reopen trigger: a future remediation run leaves contradictory persistent statuses.
+
+## AUD-009 — Missing `api_type` used a provider-name protocol fallback
+
+- Severity: Should Plan
+- Decision class: Decision Recorded
+- Status: Closed in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Project owner / Gateway config owner
+
+### Decision and closure
+
+Owner decision: missing `api_type` is invalid. Provider resolution raises a configuration error; Admin marks the provider with `validation_error` and propagates the same state to each referencing model group. No provider-name fallback or migration layer remains, and examples/CLI templates declare `api_type` explicitly.
+
+- Closure evidence: `gateway/config.py`, Admin config route/UI, CLI templates, examples, and config/Admin tests.
+- Residual risk: old configs without `api_type` must be rebuilt; compatibility migration is not promised.
+- Reopen trigger: reintroducing name fallback or changing the explicit protocol contract.
+
+## AUD-010 — SQLite schema validation omitted constraints and indexes
+
+- Severity: Should Plan
+- Decision class: Agent-Fixable
+- Status: Closed in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Persistence owner
+
+### Failure and closure
+
+Startup validation now checks expected column names/types, NOT NULL flags, primary-key positions, and required index names/column order for the key persistence tables. Incompatible existing schemas fail closed before runtime writes; focused tests cover missing primary-key and wrong-index cases.
+
+- Closure evidence: `observability/persistence.py` and `tests/gateway/test_persistence_sqlite.py`.
+- Residual risk: no restore, deployment, or long-run disk stress evidence.
+- Reopen trigger: schema/table/index changes without updated validation and tests.
+
+## AUD-011 — Arbitrary HTTP(S) custom URL egress requires an owner boundary decision
+
+- Severity: Should Plan
+- Decision class: Decision Recorded
+- Status: Risk Accepted in targeted re-audit `20260720-1107`
+- First detected run: `20260719-1802`
+- Last updated run: `20260720-1107`
+- Owner: Project owner
+
+### Decision and residual risk
+
+Owner decision: arbitrary unmatched HTTP(S) custom URLs are allowed and may receive configured upstream API keys. This is accepted only for the declared local/trusted-LAN deployment boundary. The profile and system map explicitly state the SSRF/egress and key-disclosure risk; no public deployment, account-security, or preset-only egress guarantee is claimed.
+
+- Decision evidence: `docs/audit-profile.md`, `docs/audit/SYSTEM-MAP.md`, and `docs/audit/runs/20260720-1107/REPORT.md`.
+- Reopen trigger: any public deployment/security claim or change to custom URL policy.
 
 ## AUD-004 — Mutable build inputs and missing artifact provenance are accepted release debt
 

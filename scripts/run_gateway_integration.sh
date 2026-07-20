@@ -20,6 +20,10 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/require_live_call_approval.sh
+. "$SCRIPT_DIR/require_live_call_approval.sh"
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SUBMOD="$REPO_ROOT/llm_api_simple_tests"
 

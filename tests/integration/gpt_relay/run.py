@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from codex_rosetta.gateway.config import load_config_raw
+from codex_rosetta.gateway.live_gate import require_live_call_approval
 
 from .evaluate import evaluate, read_events
 
@@ -179,6 +180,7 @@ def _run_harness(
 
 
 def main() -> int:
+    require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario", choices=[f"C{i}" for i in range(6)], required=True

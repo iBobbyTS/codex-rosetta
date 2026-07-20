@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover - Python < 3.14 is unsupported by this r
     zstd = None
 
 from codex_rosetta.gateway.config import load_config_raw
+from codex_rosetta.gateway.live_gate import require_live_call_approval
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
 HOP_BY_HOP = {
@@ -349,6 +350,7 @@ class CaptureServer(ThreadingHTTPServer):
 
 
 def main() -> int:
+    require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--provider-name", required=True)

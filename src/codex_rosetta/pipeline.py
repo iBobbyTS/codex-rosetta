@@ -45,24 +45,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def configure_context(
-    ctx: ConversionContext,
-    shim: ProviderShim | str | None,
-    *,
-    model: str | None = None,
-    config_override: dict[str, Any] | None = None,
-) -> None:
-    """Deprecated: use :func:`codex_rosetta.capabilities.enforce_reasoning`."""
-    import warnings
-
-    warnings.warn(
-        "configure_context is deprecated; use capabilities.enforce_reasoning()",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    enforce_reasoning(ctx, shim, model=model, config_override=config_override)
-
-
 def apply_ir_transforms(
     ir_request: dict[str, Any],
     shim: ProviderShim | str | None,
@@ -101,35 +83,6 @@ def apply_ir_transforms(
         request_id=request_id,
     )
     return _apply_ir_transforms_exec(resolved.ir_transforms, ir_request, ctx)
-
-
-# ---------------------------------------------------------------------------
-# Deprecated aliases (backward compatibility with v0.6.x)
-# ---------------------------------------------------------------------------
-
-
-def setup_shim_context(*args: Any, **kwargs: Any) -> None:
-    """Deprecated: use :func:`configure_context`."""
-    import warnings
-
-    warnings.warn(
-        "setup_shim_context is deprecated; use configure_context()",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return configure_context(*args, **kwargs)
-
-
-def apply_shim_to_ir(*args: Any, **kwargs: Any) -> dict[str, Any]:
-    """Deprecated: use :func:`apply_ir_transforms`."""
-    import warnings
-
-    warnings.warn(
-        "apply_shim_to_ir is deprecated; use apply_ir_transforms()",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return apply_ir_transforms(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
