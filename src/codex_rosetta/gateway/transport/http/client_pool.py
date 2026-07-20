@@ -26,6 +26,7 @@ class HttpClientPool:
         if proxy_url not in self._clients:
             self._clients[proxy_url] = AsyncClient(
                 timeout=self._timeout,
+                max_redirects=0,
                 proxy=proxy_url,
             )
         return self._clients[proxy_url]
