@@ -231,6 +231,11 @@ Modified `web.run` advertises browser commands only while the cached status is
 online with `browser_ready=true`. Concurrent refreshes are coalesced, and config
 hot reload invalidates the cached status.
 
+Tavily credentials are sent only in the Bearer authorization header. Before a
+Tavily success or error response can reach a model, Search client, or diagnostic
+boundary, the gateway removes any reflected occurrence of the configured token,
+including occurrences inside documented `answer` and `results` fields.
+
 Self-hosted Bing RSS reads Bing's XML result representation. Self-hosted Bing
 Browser instead loads the interactive HTML result page in the sidecar's
 Patchright browser. They are separately selectable and never silently fall back

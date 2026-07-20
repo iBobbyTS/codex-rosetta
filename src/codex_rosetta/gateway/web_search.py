@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from codex_rosetta._vendor.httpclient import AsyncClient
+from codex_rosetta.observability.redaction import SecretRedactor
 
 from .transport.http.transport import request_bounded_response
 
@@ -77,6 +78,7 @@ class TavilyHTTPClient:
     def __init__(self, api_key: str, *, timeout: float = 30.0) -> None:
         self.api_key = api_key
         self.timeout = timeout
+        self._redactor = SecretRedactor([api_key])
 
     async def search(
         self,
@@ -109,16 +111,18 @@ class TavilyHTTPClient:
                     headers=headers,
                 )
             except Exception as exc:
-                raise RuntimeError(f"Tavily request failed: {exc}") from exc
+                safe_error = self._redactor.redact(str(exc))
+                raise RuntimeError(f"Tavily request failed: {safe_error}") from exc
 
         if response.status_code >= 400:
-            body = response.text[:500]
+            body = self._redactor.redact(response.text[:500])
             raise RuntimeError(f"Tavily returned HTTP {response.status_code}: {body}")
         try:
             parsed = response.json()
         except Exception as exc:
             raise RuntimeError("Tavily returned invalid JSON") from exc
-        return parsed if isinstance(parsed, dict) else {"result": parsed}
+        safe_result = self._redactor.redact(parsed)
+        return safe_result if isinstance(safe_result, dict) else {"result": safe_result}
 
 
 class WebSearchRuntime:
