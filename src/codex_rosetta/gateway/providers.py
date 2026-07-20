@@ -88,7 +88,7 @@ def known_provider_types() -> list[str]:
 
 def build_provider_info(
     provider_type: str,
-    cfg: dict[str, str],
+    cfg: dict[str, Any],
     *,
     global_proxy: str | None = None,
 ) -> ProviderInfo:
@@ -156,6 +156,9 @@ def build_provider_info(
 
     # Per-provider proxy overrides global proxy
     proxy_url = cfg.get("proxy") or global_proxy or None
+    allow_redirects = cfg.get("allow_redirects", False)
+    if not isinstance(allow_redirects, bool):
+        raise ValueError("config: provider allow_redirects must be a boolean")
 
     return ProviderInfo(
         name=provider_type,
@@ -165,4 +168,5 @@ def build_provider_info(
         url_template=url_tpl,
         stream_url_template=stream_tpl,
         proxy_url=proxy_url,
+        allow_redirects=allow_redirects,
     )

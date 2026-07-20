@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pytest
 
+from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.gateway.transport import (
     ProviderInfo,
     UpstreamContentEncodingError,
@@ -30,6 +31,7 @@ from codex_rosetta.gateway.transport.http.transport import (
     HttpUpstreamStream,
     request_bounded_response,
 )
+from codex_rosetta.gateway.transport.http.client_pool import HttpClientPool
 from codex_rosetta.gateway.web_search import TavilyHTTPClient, WebSearchSettings
 import codex_rosetta.gateway.web_search as web_search_module
 
@@ -92,6 +94,21 @@ def _provider(base_url: str = "https://upstream.example/v1") -> ProviderInfo:
     )
 
 
+def test_client_pool_isolates_redirect_policy() -> None:
+    pool = HttpClientPool()
+
+    blocked = pool.get(None)
+    allowed = pool.get(None, allow_redirects=True)
+
+    assert blocked is pool.get(None)
+    assert allowed is pool.get(None, allow_redirects=True)
+    assert blocked is not allowed
+    assert blocked._max_redirects == 0
+    assert allowed._max_redirects > 0
+
+    asyncio.run(pool.close_all())
+
+
 def _transport(
     monkeypatch: pytest.MonkeyPatch,
     response: _FakeStreamingResponse,
@@ -103,7 +120,10 @@ def _transport(
     )
     client = _FakeClient(response)
     transport = HttpTransport()
-    transport._pool = cast(Any, SimpleNamespace(get=lambda _proxy=None: client))
+    transport._pool = cast(
+        Any,
+        SimpleNamespace(get=lambda _proxy=None, allow_redirects=False: client),
+    )
     return transport, client
 
 
@@ -251,6 +271,19 @@ class _RedirectUpstreamHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
+    def do_GET(self) -> None:
+        server = cast(_RedirectUpstreamServer, self.server)
+        if self.path != "/redirect-target":
+            self.send_error(404)
+            return
+        server.redirect_target_hit = True
+        payload = b'{"followed":true}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
 
 class _RedirectUpstreamServer(ThreadingHTTPServer):
     redirect_target_hit: bool = False
@@ -372,6 +405,60 @@ def test_real_client_rejects_redirect_without_following_target() -> None:
         assert server.redirect_target_hit is False
     finally:
         asyncio.run(transport.close())
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_real_client_follows_redirect_only_when_provider_allows_it() -> None:
+    server = _RedirectUpstreamServer(("127.0.0.1", 0), _RedirectUpstreamHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base_url = f"http://127.0.0.1:{server.server_address[1]}"
+    provider = _provider(base_url)
+    provider.allow_redirects = True
+    transport = HttpTransport()
+    try:
+        result = asyncio.run(
+            transport.send_request(
+                provider,
+                "openai_chat",
+                {"model": "test", "case": "redirect"},
+                "test",
+            )
+        )
+        assert result.status_code == 200
+        assert server.redirect_target_hit is True
+    finally:
+        asyncio.run(transport.close())
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_auxiliary_real_client_rejects_redirect_before_target() -> None:
+    server = _RedirectUpstreamServer(("127.0.0.1", 0), _RedirectUpstreamHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/models"
+
+    async def _request() -> None:
+        async with AsyncClient() as client:
+            with pytest.raises(
+                transport_module.UpstreamConnectionError,
+                match="Too many redirects",
+            ):
+                await request_bounded_response(
+                    client,
+                    "POST",
+                    url,
+                    headers={"Authorization": "Bearer audit-sentinel"},
+                )
+
+    try:
+        asyncio.run(_request())
+        assert server.redirect_target_hit is False
+    finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -834,7 +921,9 @@ def test_stream_open_timeout_returns_connection_error(
     transport = HttpTransport(stream_open_timeout=0.01)
     transport._pool = cast(
         Any,
-        SimpleNamespace(get=lambda _proxy=None: _BlockingClient()),
+        SimpleNamespace(
+            get=lambda _proxy=None, allow_redirects=False: _BlockingClient()
+        ),
     )
 
     with pytest.raises(
@@ -863,7 +952,9 @@ def test_stream_open_cancellation_cancels_upstream_operation() -> None:
     transport = HttpTransport(stream_open_timeout=5)
     transport._pool = cast(
         Any,
-        SimpleNamespace(get=lambda _proxy=None: _BlockingClient()),
+        SimpleNamespace(
+            get=lambda _proxy=None, allow_redirects=False: _BlockingClient()
+        ),
     )
 
     async def _cancel() -> None:
@@ -985,6 +1076,41 @@ def test_auxiliary_reader_enforces_explicit_four_mib_boundary_without_partial_re
         assert result.content == b"x" * limit
 
     assert response.closed is True
+
+
+@pytest.mark.parametrize(
+    ("allow_redirects", "expected_max_redirects"),
+    [(False, 0), (True, 10)],
+)
+def test_auxiliary_reader_enforces_explicit_redirect_policy(
+    monkeypatch: pytest.MonkeyPatch,
+    allow_redirects: bool,
+    expected_max_redirects: int,
+) -> None:
+    response = _FakeStreamingResponse(200, [b"{}"])
+    monkeypatch.setattr(
+        transport_module,
+        "HttpStreamingResponse",
+        _FakeStreamingResponse,
+    )
+    observed: dict[str, Any] = {}
+
+    class _AuxClient:
+        async def request(self, *args: Any, **kwargs: Any) -> _FakeStreamingResponse:
+            observed.update(kwargs)
+            return response
+
+    asyncio.run(
+        request_bounded_response(
+            _AuxClient(),
+            "GET",
+            "https://upstream.example/models",
+            headers={"Authorization": "Bearer sentinel"},
+            allow_redirects=allow_redirects,
+        )
+    )
+
+    assert observed["max_redirects"] == expected_max_redirects
 
 
 @pytest.mark.parametrize(

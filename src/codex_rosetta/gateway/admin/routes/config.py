@@ -945,6 +945,7 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
                 "GET",
                 models_url,
                 headers=headers,
+                allow_redirects=pinfo.allow_redirects,
             )
     except asyncio.CancelledError:
         raise

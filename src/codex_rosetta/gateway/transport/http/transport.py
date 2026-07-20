@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from codex_rosetta._vendor.httpclient import (
+    DEFAULT_MAX_REDIRECTS,
     HttpClientError,
     HttpResponseLimitError,
     StreamingResponse as HttpStreamingResponse,
@@ -246,6 +247,7 @@ async def request_bounded_response(
     headers: dict[str, str] | None = None,
     max_success_bytes: int | None = None,
     max_error_bytes: int | None = None,
+    allow_redirects: bool = False,
     **kwargs: Any,
 ) -> BoundedHttpResponse:
     """Send one auxiliary request through the primary response safety envelope."""
@@ -261,6 +263,7 @@ async def request_bounded_response(
             raise ValueError(f"{name} must be a positive integer")
     request_headers = dict(headers or {})
     _force_identity_encoding(request_headers)
+    kwargs["max_redirects"] = DEFAULT_MAX_REDIRECTS if allow_redirects else 0
     try:
         resp = await client.request(
             method,
@@ -510,7 +513,10 @@ class HttpTransport:
             stream=False,
             extra_headers=extra_headers,
         )
-        client = self._pool.get(provider_info.proxy_url)
+        client = self._pool.get(
+            provider_info.proxy_url,
+            allow_redirects=provider_info.allow_redirects,
+        )
         try:
             resp = await client.post(
                 url,
@@ -566,7 +572,10 @@ class HttpTransport:
             headers.update(provider_info.auth_headers())
             _force_identity_encoding(headers)
             request_payload = {"data": wire_body}
-        client = self._pool.get(provider_info.proxy_url)
+        client = self._pool.get(
+            provider_info.proxy_url,
+            allow_redirects=provider_info.allow_redirects,
+        )
         try:
             resp = await _await_with_deadline(
                 client.post(
@@ -627,7 +636,10 @@ class HttpTransport:
             headers.update(extra_headers)
         _force_identity_encoding(headers)
 
-        client = self._pool.get(provider_info.proxy_url)
+        client = self._pool.get(
+            provider_info.proxy_url,
+            allow_redirects=provider_info.allow_redirects,
+        )
         try:
             resp = await client.post(
                 url,

@@ -17,7 +17,7 @@ from codex_rosetta.gateway.admin.routes import config as config_routes
 from codex_rosetta.gateway.config import GatewayConfig
 
 
-def _request() -> SimpleNamespace:
+def _request(*, allow_redirects: bool = False) -> SimpleNamespace:
     config = GatewayConfig(
         {
             "providers": {
@@ -25,6 +25,7 @@ def _request() -> SimpleNamespace:
                     "api_key": "sk-test",
                     "base_url": "https://api.example.test/v1",
                     "api_type": "chat",
+                    "allow_redirects": allow_redirects,
                 }
             },
             "model_groups": {
@@ -103,6 +104,7 @@ def test_model_discovery_closes_client_on_every_exit_path(
 
     async def _fake_bounded_request(client, method, url, **kwargs):
         assert method == "GET"
+        assert kwargs.pop("allow_redirects") is False
         return await client.get(url, **kwargs)
 
     monkeypatch.setattr(
@@ -125,3 +127,37 @@ def test_model_discovery_closes_client_on_every_exit_path(
     assert len(instances) == 1
     assert instances[0].enter_count == 1
     assert instances[0].exit_count == 1
+
+
+def test_model_discovery_uses_provider_redirect_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+    async def _fake_bounded_request(client, method, url, **kwargs):
+        observed.update(kwargs)
+        return SimpleNamespace(status_code=200, json=lambda: {"data": []})
+
+    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        config_routes,
+        "request_bounded_response",
+        _fake_bounded_request,
+    )
+
+    response = asyncio.run(
+        config_routes.fetch_upstream_models(_request(allow_redirects=True))
+    )
+
+    assert response.status_code == 200
+    assert observed["allow_redirects"] is True

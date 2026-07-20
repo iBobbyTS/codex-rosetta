@@ -1004,6 +1004,19 @@ class TestModelGroups:
         cfg = GatewayConfig(raw)
         assert cfg.models == {}
 
+    @pytest.mark.parametrize("value", [1, "true", None, []])
+    def test_provider_allow_redirects_requires_boolean(self, value):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["allow_redirects"] = value
+
+        with pytest.raises(ValueError, match="allow_redirects must be a boolean"):
+            GatewayConfig(raw)
+
+    def test_provider_redirects_default_disabled(self):
+        cfg = GatewayConfig(_minimal_raw())
+
+        assert cfg.providers["test"].allow_redirects is False
+
 
 def test_cli_add_model_group_then_grouped_model(tmp_path):
     config_path = tmp_path / "config.jsonc"
