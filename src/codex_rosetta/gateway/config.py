@@ -717,10 +717,10 @@ class GatewayConfig:
     def __init__(self, raw: dict[str, Any]) -> None:
         self.token_values = collect_token_values(raw)
         self.codex = normalize_codex_settings(raw.get("codex"))
-        all_providers: dict[str, dict[str, str]] = raw.get("providers", {})
+        all_providers: dict[str, dict[str, Any]] = raw.get("providers", {})
 
         # Filter out disabled providers (enabled defaults to True)
-        self._raw_providers: dict[str, dict[str, str]] = {
+        self._raw_providers: dict[str, dict[str, Any]] = {
             name: dict(cfg)
             for name, cfg in all_providers.items()
             if cfg.get("enabled", True) is not False
@@ -907,7 +907,7 @@ class GatewayConfig:
 
     @staticmethod
     def _resolve_provider_types(
-        raw_providers: dict[str, dict[str, str]],
+        raw_providers: dict[str, dict[str, Any]],
     ) -> tuple[dict[str, str], dict[str, str | None]]:
         """Resolve each provider's explicit protocol and URL-derived shim.
 
@@ -917,6 +917,12 @@ class GatewayConfig:
         provider_types: dict[str, str] = {}
         provider_shim_names: dict[str, str | None] = {}
         for name, cfg in raw_providers.items():
+            allow_redirects = cfg.get("allow_redirects", False)
+            if not isinstance(allow_redirects, bool):
+                raise ValueError(
+                    f"config: provider '{name}' allow_redirects must be a boolean"
+                )
+            cfg["allow_redirects"] = allow_redirects
             api_type = resolve_provider_api_type(name, cfg, warn_on_default=True)
             cfg["api_type"] = api_type
             provider_type, shim_name = resolve_provider_config_type_and_shim(name, cfg)
@@ -1014,7 +1020,7 @@ class GatewayConfig:
     def _parse_models(
         cls,
         raw_models: dict[str, Any],
-        raw_providers: dict[str, dict[str, str]],
+        raw_providers: dict[str, dict[str, Any]],
     ) -> tuple[dict[str, ProviderType], dict[str, list[str] | None], dict[str, str]]:
         """Parse model routing entries from config.
 

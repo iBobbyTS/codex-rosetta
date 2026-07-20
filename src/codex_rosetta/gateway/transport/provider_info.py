@@ -70,6 +70,7 @@ class ProviderInfo:
         url_template: str,
         stream_url_template: str | None = None,
         proxy_url: str | None = None,
+        allow_redirects: bool = False,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError(
@@ -83,6 +84,7 @@ class ProviderInfo:
         self._url_template = url_template
         self._stream_url_template = stream_url_template
         self.proxy_url = proxy_url
+        self.allow_redirects = allow_redirects
 
     # -- public helpers used by the proxy -----------------------------------
 

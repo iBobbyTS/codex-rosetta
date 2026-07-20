@@ -918,6 +918,7 @@ def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_p
         "api_type": "chat",
         "base_url": "https://api.deepseek.com",
         "api_key": "sk-new",
+        "allow_redirects": True,
     }
 
     response = _run(put_provider(request))
@@ -928,10 +929,12 @@ def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_p
         "api_key": "sk-new",
         "base_url": "https://api.deepseek.com",
         "api_type": "chat",
+        "allow_redirects": True,
     }
     assert "type" not in saved["providers"]["DeepSeek"]
     assert app.gateway_config.provider_types["DeepSeek"] == "openai_chat"
     assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
+    assert app.gateway_config.providers["DeepSeek"].allow_redirects is True
 
 
 def test_put_provider_persists_direct_responses_protocol(tmp_path):
@@ -958,6 +961,7 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["Qwen"]["api_type"] == "responses"
     assert app.gateway_config.provider_types["Qwen"] == "openai_responses"
+    assert app.gateway_config.providers["Qwen"].allow_redirects is False
 
 
 def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
@@ -1743,6 +1747,7 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
     assert 'id="provProvider"' in html
     assert 'id="provProviderVariant"' in html
     assert 'id="provApiType"' in html
+    assert 'id="provAllowRedirects"' in html
     assert "const PROVIDER_PRESETS" in html
     assert "const PROVIDER_VENDOR_PRESETS" in html
     assert "PROTOCOL_DIVIDER_VALUE" in html
@@ -1759,7 +1764,12 @@ def test_admin_html_exposes_provider_preset_protocol_controls():
     assert i18n["en"]["provider.zhipu"] == "Zhipu (GLM)"
     assert i18n["zh"]["provider.zhipu"] == "智谱 GLM"
     assert "protocol.unsupportedSuffix" in html
-    assert "const body = {api_type: apiType, base_url: baseUrl, proxy}" in html
+    assert (
+        "const body = {api_type: apiType, base_url: baseUrl, proxy, "
+        "allow_redirects: allowRedirects}" in html
+    )
+    assert i18n["en"]["label.allowRedirects"] == "Allow redirects"
+    assert i18n["zh"]["label.allowRedirects"] == "允许重定向"
     assert 'id="provType"' not in html
     assert "variantSel.value = 'custom'" in html
     assert "document.getElementById('provProvider').value = 'custom'" not in html

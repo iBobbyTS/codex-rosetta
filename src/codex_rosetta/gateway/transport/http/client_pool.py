@@ -7,7 +7,7 @@ same upstream reuse the same connection pool.
 
 from __future__ import annotations
 
-from codex_rosetta._vendor.httpclient import AsyncClient
+from codex_rosetta._vendor.httpclient import AsyncClient, DEFAULT_MAX_REDIRECTS
 
 
 class HttpClientPool:
@@ -18,18 +18,24 @@ class HttpClientPool:
     """
 
     def __init__(self, *, timeout: float = 300.0) -> None:
-        self._clients: dict[str | None, AsyncClient] = {}
+        self._clients: dict[tuple[str | None, bool], AsyncClient] = {}
         self._timeout = timeout
 
-    def get(self, proxy_url: str | None = None) -> AsyncClient:
-        """Get or create an ``AsyncClient`` for the given proxy URL."""
-        if proxy_url not in self._clients:
-            self._clients[proxy_url] = AsyncClient(
+    def get(
+        self,
+        proxy_url: str | None = None,
+        *,
+        allow_redirects: bool = False,
+    ) -> AsyncClient:
+        """Get a client isolated by proxy and explicit redirect policy."""
+        key = (proxy_url, allow_redirects)
+        if key not in self._clients:
+            self._clients[key] = AsyncClient(
                 timeout=self._timeout,
-                max_redirects=0,
+                max_redirects=DEFAULT_MAX_REDIRECTS if allow_redirects else 0,
                 proxy=proxy_url,
             )
-        return self._clients[proxy_url]
+        return self._clients[key]
 
     async def close_all(self) -> None:
         """Close all pooled HTTP clients."""

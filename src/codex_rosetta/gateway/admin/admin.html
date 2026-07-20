@@ -1047,6 +1047,9 @@ body { padding-bottom: 26px; }
       <label data-i18n="label.proxyUrl">Proxy URL (optional, overrides global)<span class="hint-icon">?<span class="hint-popup" data-i18n="hint.docker">In Docker, "localhost" refers to the container itself. Use "host.docker.internal" (macOS/Windows) or "172.17.0.1" (Linux) to reach the host machine.</span></span></label>
       <input id="provProxy" placeholder="e.g. http://127.0.0.1:7890">
     </div>
+    <div class="form-group checkbox-group">
+      <label><input id="provAllowRedirects" type="checkbox"><span data-i18n="label.allowRedirects">Allow redirects</span></label>
+    </div>
     <div class="modal-actions">
       <button class="btn" onclick="closeModal('providerModal')" data-i18n="btn.cancel">Cancel</button>
       <button class="btn btn-primary" onclick="saveProvider()" data-i18n="btn.save">Save</button>
@@ -2377,6 +2380,7 @@ function openProviderModal(name, providerConfig) {
     _syncKeyField();
   }
   document.getElementById('provProxy').value = cfg.proxy || '';
+  document.getElementById('provAllowRedirects').checked = cfg.allow_redirects === true;
   if (window._detectedHostIp) document.getElementById('provProxy').placeholder = `e.g. http://${window._detectedHostIp}:7890`;
   document.getElementById('providerModal').classList.add('open');
   // When editing, fetch the real (unmasked) key
@@ -3171,10 +3175,11 @@ async function saveProvider() {
   const baseUrl = document.getElementById('provBaseUrl').value.trim();
   const apiKey = _getKeyFieldValue();
   const proxy = document.getElementById('provProxy').value.trim();
+  const allowRedirects = document.getElementById('provAllowRedirects').checked;
   if (!name || !apiType || apiType === PROTOCOL_DIVIDER_VALUE || !baseUrl) { showToast(t('error.fieldsRequired'), 'error'); return; }
   // Provider vendor/variant is derived from base_url at runtime. Persist only
   // the transport protocol and URL; custom endpoints remain valid.
-  const body = {api_type: apiType, base_url: baseUrl, proxy};
+  const body = {api_type: apiType, base_url: baseUrl, proxy, allow_redirects: allowRedirects};
   // When api_key is empty and we're editing, omit it so backend keeps the original
   if (apiKey) body.api_key = apiKey;
   // If editing and name changed, include rename_from so backend updates model references
