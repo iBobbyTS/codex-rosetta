@@ -1321,6 +1321,26 @@ def test_tavily_removes_reflected_token_from_error(
     assert "[REDACTED]" in str(exc_info.value)
 
 
+def test_tavily_detaches_transport_error_that_reflects_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "tvly-audit-secret"
+
+    async def _fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        raise RuntimeError(f"transport reflected {token}")
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", _fake_request)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(
+            TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
+        )
+
+    assert token not in str(exc_info.value)
+    assert "[REDACTED]" in str(exc_info.value)
+    assert exc_info.value.__cause__ is None
+
+
 @pytest.mark.parametrize(
     ("case", "limit_name", "error_match"),
     [
