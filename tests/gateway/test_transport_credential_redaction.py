@@ -639,6 +639,77 @@ def test_raw_sse_blocks_whitespace_padded_argument_reconstruction() -> None:
     assert asyncio.run(run()) == b""
 
 
+def test_raw_sse_chat_tool_index_mapping_is_stable_when_arrivals_are_out_of_order():
+    """Chat tool-call fragments must resolve by wire index, not arrival order."""
+    events = [
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "id": "call-1",
+                                "function": {"arguments": '{"value":"\\u00'},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-0",
+                                "function": {"arguments": '{"value":"ordinary"}'},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        {
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 1,
+                                "function": {"arguments": '73ecret"}'},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    ]
+    payload = b"".join(
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    )
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret"), "openai_chat", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    assert asyncio.run(run()) == b""
+
+
 def test_raw_sse_responses_mapping_unifies_item_only_then_call_only_deltas() -> None:
     events = [
         {

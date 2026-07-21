@@ -70,7 +70,9 @@ class ProviderCredentialSemanticGate:
         self._max_argument_identities = max_argument_identities
         self._buffers: dict[tuple[Any, ...], _ArgumentBuffer] = {}
         self._responses_item_to_call: dict[str, str] = {}
-        self._chat_tool_order: list[str] = []
+        self._chat_index_to_call: dict[int, str] = {}
+        self._chat_call_to_index: dict[str, int] = {}
+        self._chat_call_ids: set[str] = set()
         self._live_bytes = 0
         self._live_fragments = 0
 
@@ -149,7 +151,9 @@ class ProviderCredentialSemanticGate:
     def _clear_all(self) -> None:
         self._buffers.clear()
         self._responses_item_to_call.clear()
-        self._chat_tool_order.clear()
+        self._chat_index_to_call.clear()
+        self._chat_call_to_index.clear()
+        self._chat_call_ids.clear()
         self._live_bytes = 0
         self._live_fragments = 0
 
@@ -158,7 +162,7 @@ class ProviderCredentialSemanticGate:
         self._clear_all()
 
     def _identity_count(self) -> int:
-        return len(self._responses_item_to_call) + len(self._chat_tool_order)
+        return len(self._responses_item_to_call) + len(self._chat_call_ids)
 
     def _reserve_identity(self) -> None:
         if self._identity_count() >= self._max_argument_identities:
@@ -246,15 +250,35 @@ class ProviderCredentialSemanticGate:
 
     def _chat_call_id(self, tool_call: Any) -> str | None:
         call_id = _only(tool_call, "id")
-        if isinstance(call_id, str) and call_id:
-            if call_id not in self._chat_tool_order:
-                self._reserve_identity()
-                self._chat_tool_order.append(call_id)
-            return call_id
         tool_index = _only(tool_call, "index")
-        if isinstance(tool_index, int) and 0 <= tool_index < len(self._chat_tool_order):
-            return self._chat_tool_order[tool_index]
-        return None
+        has_index = (
+            isinstance(tool_index, int)
+            and not isinstance(tool_index, bool)
+            and tool_index >= 0
+        )
+
+        if isinstance(call_id, str) and call_id:
+            if call_id not in self._chat_call_ids:
+                self._reserve_identity()
+                self._chat_call_ids.add(call_id)
+            if has_index:
+                mapped_call_id = self._chat_index_to_call.get(tool_index)
+                if mapped_call_id is not None and mapped_call_id != call_id:
+                    self._clear_all()
+                    raise SecretCollisionError
+                mapped_index = self._chat_call_to_index.get(call_id)
+                if mapped_index is not None and mapped_index != tool_index:
+                    self._clear_all()
+                    raise SecretCollisionError
+                self._chat_index_to_call[tool_index] = call_id
+                self._chat_call_to_index[call_id] = tool_index
+            return call_id
+        if has_index:
+            mapped_call_id = self._chat_index_to_call.get(tool_index)
+            if mapped_call_id is not None:
+                return mapped_call_id
+        self._clear_all()
+        raise SecretCollisionError
 
     def _inspect_chat_event(self, event: Any) -> None:
         for choice in _items(event, "choices"):
