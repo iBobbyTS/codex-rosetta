@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.transport._base import (
     UpstreamConnectionError,
     UpstreamCredentialCollisionError,
@@ -18,7 +19,11 @@ from codex_rosetta.gateway.transport._base import (
 from codex_rosetta.gateway.transport.credential_redaction import (
     CredentialRedactingTransport,
 )
+from codex_rosetta.gateway.transport.credential_semantics import (
+    ProviderCredentialSemanticGate,
+)
 from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
+from codex_rosetta.observability.redaction import SecretCollisionError, SecretRedactor
 
 
 def _provider(keys: str = "first-key, prefix, prefix-long, final-key") -> ProviderInfo:
@@ -305,6 +310,99 @@ def test_non_streaming_raw_json_blocks_semantically_escaped_credential() -> None
     asyncio.run(run())
 
 
+@pytest.mark.parametrize(
+    "raw_content",
+    [
+        b'{"value":"\\u0073ecret","value":"ordinary"}',
+        json.dumps(
+            {
+                "output": [
+                    {
+                        "type": "function_call",
+                        "arguments": '{"value":"\\u0073ecret"}',
+                    }
+                ]
+            },
+            separators=(",", ":"),
+        ).encode(),
+        json.dumps(
+            {
+                "output": [
+                    {
+                        "type": "custom_tool_call",
+                        "input": '{"value":"\\u0073ecret"}',
+                    }
+                ]
+            },
+            separators=(",", ":"),
+        ).encode(),
+        json.dumps(
+            {
+                "output": [
+                    {
+                        "type": "shell_call",
+                        "arguments": '{"value":"\\u0073ecret"}',
+                    }
+                ]
+            },
+            separators=(",", ":"),
+        ).encode(),
+        json.dumps(
+            {
+                "output": [
+                    {
+                        "type": "code_interpreter_call",
+                        "arguments": '{"value":"\\u0073ecret"}',
+                    }
+                ]
+            },
+            separators=(",", ":"),
+        ).encode(),
+    ],
+)
+def test_non_streaming_blocks_duplicate_members_and_known_argument_json(
+    raw_content: bytes,
+) -> None:
+    class _RawTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content),
+                raw_content=raw_content,
+            )
+
+    async def run() -> None:
+        with pytest.raises(UpstreamCredentialCollisionError):
+            await CredentialRedactingTransport.wrap(_RawTransport()).send_request(
+                _provider("secret"), "openai_responses", {}, "test"
+            )
+
+    asyncio.run(run())
+
+
+def test_non_streaming_does_not_parse_unknown_json_strings_twice() -> None:
+    raw_content = json.dumps(
+        {"output": [{"type": "message", "content": '{"value":"\\u0073ecret"}'}]},
+        separators=(",", ":"),
+    ).encode()
+
+    class _RawTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content),
+                raw_content=raw_content,
+            )
+
+    async def run() -> UpstreamResponse:
+        return await CredentialRedactingTransport.wrap(_RawTransport()).send_request(
+            _provider("secret"), "openai_responses", {}, "test"
+        )
+
+    response = asyncio.run(run())
+    assert response.raw_content == raw_content
+
+
 def test_raw_sse_collision_blocks_every_cross_chunk_split_without_leaking():
     token = b"raw-stream-secret"
     provider = _provider(token.decode())
@@ -379,6 +477,281 @@ def test_raw_sse_without_collision_is_byte_identical() -> None:
         return b"".join([chunk async for chunk in raw])
 
     assert asyncio.run(run()) == payload
+
+
+def test_raw_sse_safe_duplicate_members_are_byte_identical() -> None:
+    payload = (
+        b'data: {"type":"ordinary","type":"response.function_call_arguments.delta",'
+        b'"item_id":"call-1","delta":"{\\"x\\":",'
+        b'"delta":"{\\"value\\":\\"ordinary\\"}"}\n\n'
+    )
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload[:17], payload[17:]]))
+        ).send_streaming(_provider("unrelated-secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        return b"".join([chunk async for chunk in raw])
+
+    assert asyncio.run(run()) == payload
+
+
+@pytest.mark.parametrize(
+    ("target_provider", "events"),
+    [
+        (
+            "openai_responses",
+            [
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "item_id": "item-1",
+                    "call_id": "call-1",
+                    "output_index": 0,
+                    "delta": '{"value":"\\u00',
+                },
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "call_id": "call-1",
+                    "output_index": 0,
+                    "delta": '73ecret"}',
+                },
+            ],
+        ),
+        (
+            "openai_responses",
+            [
+                {
+                    "type": "response.output_item.added",
+                    "output_index": 0,
+                    "item": {
+                        "type": "custom_tool_call",
+                        "id": "item-1",
+                        "call_id": "call-1",
+                        "name": "exec",
+                        "input": "",
+                    },
+                },
+                {
+                    "type": "response.custom_tool_call_input.delta",
+                    "item_id": "item-1",
+                    "delta": '{"value":"\\u00',
+                },
+                {
+                    "type": "response.custom_tool_call_input.delta",
+                    "call_id": "call-1",
+                    "delta": '73ecret"}',
+                },
+            ],
+        ),
+        (
+            "openai_chat",
+            [
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "id": "call-1",
+                                        "function": {"arguments": '{"value":"\\u00'},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "function": {"arguments": '73ecret"}'},
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                },
+            ],
+        ),
+    ],
+)
+def test_raw_sse_blocks_cross_event_argument_reconstruction(
+    target_provider: ProviderType,
+    events: list[dict[str, Any]],
+) -> None:
+    payload = b"".join(
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    )
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret"), target_provider, {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    assert asyncio.run(run()) == b""
+
+
+def test_raw_sse_blocks_whitespace_padded_argument_reconstruction() -> None:
+    """Leading/trailing JSON whitespace must not bypass semantic inspection."""
+    events = [
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-1",
+            "delta": '  {"value":"\\u00',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-1",
+            "delta": '73ecret"}  ',
+        },
+    ]
+    payload = b"".join(
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    )
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    assert asyncio.run(run()) == b""
+
+
+def test_raw_sse_responses_mapping_unifies_item_only_then_call_only_deltas() -> None:
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "function_call",
+                "id": "item-1",
+                "call_id": "call-1",
+                "name": "tool",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "item_id": "item-1",
+            "delta": '{"value":"\\u00',
+        },
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-1",
+            "delta": '73ecret"}',
+        },
+    ]
+    payload = b"".join(
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    )
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    assert b"secret" not in asyncio.run(run())
+
+
+def test_raw_sse_initial_bom_does_not_bypass_semantic_check() -> None:
+    payload = b'\xef\xbb\xbfdata: {"value":"\\u0073ecret"}\n\n'
+
+    async def run() -> None:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [chunk async for chunk in raw]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("max_bytes", "max_fragments", "fragments"),
+    [
+        (4, 10, ["12345"]),
+        (100, 2, ["1", "2", "3"]),
+    ],
+)
+def test_argument_accumulator_limits_fail_closed(
+    max_bytes: int,
+    max_fragments: int,
+    fragments: list[str],
+) -> None:
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_responses",
+        max_argument_bytes=max_bytes,
+        max_argument_fragments=max_fragments,
+    )
+
+    with pytest.raises(SecretCollisionError):
+        for fragment in fragments:
+            gate.inspect_stream_event(
+                {
+                    "type": "response.function_call_arguments.delta",
+                    "call_id": "call-1",
+                    "delta": fragment,
+                }
+            )
+
+
+def test_responses_identity_mapping_limit_and_done_cleanup() -> None:
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_responses",
+        max_argument_identities=1,
+    )
+
+    def item_event(suffix: str, event_type: str) -> dict[str, Any]:
+        return {
+            "type": event_type,
+            "item": {
+                "type": "function_call",
+                "id": f"item-{suffix}",
+                "call_id": f"call-{suffix}",
+                "arguments": "{}",
+            },
+        }
+
+    gate.inspect_stream_event(item_event("1", "response.output_item.added"))
+    gate.inspect_stream_event(item_event("1", "response.output_item.done"))
+    gate.inspect_stream_event(item_event("2", "response.output_item.added"))
+
+    with pytest.raises(SecretCollisionError):
+        gate.inspect_stream_event(item_event("3", "response.output_item.added"))
 
 
 @pytest.mark.parametrize("token", ["data", "a", "1"])
