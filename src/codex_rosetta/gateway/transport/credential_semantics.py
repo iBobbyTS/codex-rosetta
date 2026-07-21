@@ -18,6 +18,23 @@ from codex_rosetta.observability.redaction import (
 
 _RESPONSES_TYPES = {"openai_responses", "open_responses"}
 
+# Keep this inventory explicit: these provider text consumers concatenate
+# deltas by wire identity, while unknown Responses strings remain opaque.
+_RESPONSES_TEXT_DELTA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "response.reasoning_text.delta": (
+        "reasoning_text",
+        ("item_id", "output_index", "content_index"),
+    ),
+    "response.refusal.delta": (
+        "refusal",
+        ("item_id", "output_index", "content_index"),
+    ),
+    "response.code_interpreter_call_code.delta": (
+        "code_interpreter_code",
+        ("item_id", "output_index"),
+    ),
+}
+
 
 def _values(value: Any, name: str) -> tuple[Any, ...]:
     if isinstance(value, dict):
@@ -302,6 +319,42 @@ class ProviderCredentialSemanticGate:
                 values.append((field_name, value))
         return tuple(values) or (("default", 0),)
 
+    def _responses_text_identity(
+        self,
+        event: Any,
+        *field_names: str,
+    ) -> tuple[tuple[str, Any], ...]:
+        values: list[tuple[str, Any]] = []
+        for field_name in field_names:
+            value = _only(event, field_name)
+            valid = (
+                isinstance(value, str) and bool(value)
+                if field_name == "item_id"
+                else isinstance(value, int)
+                and not isinstance(value, bool)
+                and value >= 0
+            )
+            if not valid:
+                self._clear_all()
+                raise SecretCollisionError
+            values.append((field_name, value))
+        return tuple(values)
+
+    def _inspect_responses_text_delta(
+        self,
+        event: Any,
+        field_name: str,
+        identity_fields: tuple[str, ...],
+    ) -> None:
+        deltas = _values(event, "delta")
+        if not deltas or not isinstance(deltas[-1], str):
+            return
+        identity = self._responses_text_identity(event, *identity_fields)
+        self._append_text(
+            ("responses", field_name, identity),
+            deltas[-1],
+        )
+
     def _inspect_responses_mcp_event(self, event: Any, event_type: Any) -> None:
         if event_type == ResponsesEventType.MCP_CALL_ARGS_DELTA:
             identity = self._responses_mcp_identity(event)
@@ -340,6 +393,10 @@ class ProviderCredentialSemanticGate:
     def _inspect_responses_event(self, event: Any) -> None:
         event_types = _values(event, "type")
         event_type = event_types[-1] if event_types else None
+        text_spec = _RESPONSES_TEXT_DELTA_FIELDS.get(event_type)
+        if text_spec is not None:
+            self._inspect_responses_text_delta(event, *text_spec)
+            return
         if event_type in {
             ResponsesEventType.MCP_CALL_ARGS_DELTA,
             ResponsesEventType.MCP_CALL_ARGS_DONE,

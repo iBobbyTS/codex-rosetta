@@ -790,6 +790,69 @@ def test_stream_blocks_split_text_credentials_for_every_provider(
     asyncio.run(run_raw())
 
 
+@pytest.mark.parametrize(
+    ("event_type", "identity"),
+    [
+        (
+            "response.reasoning_text.delta",
+            {"item_id": "reasoning-1", "output_index": 0, "content_index": 0},
+        ),
+        (
+            "response.refusal.delta",
+            {"item_id": "refusal-1", "output_index": 0, "content_index": 1},
+        ),
+        (
+            "response.code_interpreter_call_code.delta",
+            {"item_id": "code-1", "output_index": 1},
+        ),
+    ],
+)
+def test_stream_blocks_split_responses_text_delta_credentials(
+    event_type: str,
+    identity: dict[str, Any],
+) -> None:
+    """Known Responses text consumers retain their own wire identity."""
+    token = "secret-token"
+    first = {"type": event_type, **identity, "delta": "secret-"}
+    other_identity = {**identity, "item_id": f"{identity['item_id']}-other"}
+    middle = {"type": event_type, **other_identity, "delta": "ordinary"}
+    second = {"type": event_type, **identity, "delta": "token"}
+    events = [first, middle, second]
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=events))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        emitted: list[dict[str, Any]] = []
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for event in stream:
+                emitted.append(event)
+        return emitted
+
+    frames = [
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    ]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=frames))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    parsed = asyncio.run(run_parsed())
+    raw = asyncio.run(run_raw())
+    assert token not in json.dumps(parsed, separators=(",", ":"))
+    assert token.encode() not in raw
+    assert all(event.get("delta") != "token" for event in parsed)
+
+
 def test_raw_sse_blocks_whitespace_padded_argument_reconstruction() -> None:
     """Leading/trailing JSON whitespace must not bypass semantic inspection."""
     events = [
