@@ -3,10 +3,13 @@
 import pytest
 
 from codex_rosetta.converters.openai_responses._constants import (
+    RESPONSES_EMBEDDED_JSON_FIELDS,
     RESPONSES_INCOMPLETE_REASON_TO_IR,
     RESPONSES_REASON_TO_INCOMPLETE_REASON,
     RESPONSES_REASON_TO_STATUS,
     RESPONSES_STATUS_TO_REASON,
+    RESPONSES_TOOL_CALL_ITEM_TYPES,
+    RESPONSES_TOOL_RESULT_ITEM_TYPES,
     ResponsesEventType,
     generate_message_id,
 )
@@ -96,6 +99,28 @@ class TestResponsesEventType:
             assert value.startswith("response."), (
                 f"{attr} = '{value}' does not start with 'response.'"
             )
+
+
+def test_embedded_json_inventory_is_the_result_dispatch_contract():
+    result_types = {
+        "function_call_output",
+        "custom_tool_call_output",
+        "mcp_call_output",
+    }
+
+    assert RESPONSES_TOOL_RESULT_ITEM_TYPES == result_types
+    assert result_types.isdisjoint(RESPONSES_TOOL_CALL_ITEM_TYPES)
+    for item_type in result_types:
+        assert RESPONSES_EMBEDDED_JSON_FIELDS[item_type] == ("output",)
+
+    assert RESPONSES_TOOL_CALL_ITEM_TYPES >= {
+        "function_call",
+        "mcp_call",
+        "custom_tool_call",
+        "shell_call",
+        "code_interpreter_call",
+        "computer_call",
+    }
 
 
 class TestGenerateMessageId:

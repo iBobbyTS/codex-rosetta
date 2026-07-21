@@ -9,6 +9,8 @@ import pytest
 
 from codex_rosetta.converters.openai_responses._constants import (
     RESPONSES_EMBEDDED_JSON_FIELDS,
+    RESPONSES_TOOL_CALL_ITEM_TYPES,
+    RESPONSES_TOOL_RESULT_ITEM_TYPES,
 )
 from codex_rosetta.converters.openai_responses.tool_ops import OpenAIResponsesToolOps
 from codex_rosetta.types.ir import (
@@ -522,7 +524,11 @@ class TestOpenAIResponsesToolOps:
 
     @pytest.mark.parametrize(
         ("item_type", "field_name"),
-        list(RESPONSES_EMBEDDED_JSON_FIELDS.items()),
+        [
+            (item_type, field_names)
+            for item_type, field_names in RESPONSES_EMBEDDED_JSON_FIELDS.items()
+            if item_type in RESPONSES_TOOL_CALL_ITEM_TYPES
+        ],
     )
     def test_embedded_json_security_inventory_matches_converter_consumers(
         self, item_type: str, field_name: tuple[str, ...]
@@ -738,15 +744,41 @@ class TestOpenAIResponsesToolOps:
         assert result["tool_call_id"] == "call_456"
         assert result["result"] == "Result data"
 
-    def test_p_tool_result_to_ir_json_output(self):
+    @pytest.mark.parametrize("item_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+    def test_p_tool_result_to_ir_json_output(self, item_type: str):
         """Test p_tool_result_to_ir parses JSON output."""
         provider_tr = {
-            "type": "function_call_output",
+            "type": item_type,
             "call_id": "call_json",
             "output": '{"temp": 25}',
         }
         result = OpenAIResponsesToolOps.p_tool_result_to_ir(provider_tr)
         assert result["result"] == {"temp": 25}
+
+    def test_p_tool_result_to_ir_parses_json_content_list_output(self):
+        """Registered result output fields decode content-list JSON once."""
+        provider_tr = {
+            "type": "mcp_call_output",
+            "call_id": "call_content",
+            "output": json.dumps([{"type": "input_text", "text": "ordinary output"}]),
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_result_to_ir(provider_tr)
+
+        assert result["result"] == [{"type": "text", "text": "ordinary output"}]
+
+    def test_p_tool_result_to_ir_keeps_unregistered_output_opaque(self):
+        """Unknown Responses item types do not opt into embedded JSON parsing."""
+        output = '{"value":"\\u0073ecret"}'
+        provider_tr = {
+            "type": "unregistered_tool_result",
+            "call_id": "call_unknown",
+            "output": output,
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_result_to_ir(provider_tr)
+
+        assert result["result"] == output
 
     def test_p_tool_result_to_ir_with_error(self):
         """Test p_tool_result_to_ir with is_error flag."""

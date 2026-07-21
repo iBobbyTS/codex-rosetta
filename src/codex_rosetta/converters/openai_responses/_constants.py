@@ -39,10 +39,26 @@ RESPONSES_EMBEDDED_JSON_FIELDS: dict[str, tuple[str, ...]] = {
     "custom_tool_call": ("input",),
     "shell_call": ("arguments",),
     "code_interpreter_call": ("arguments",),
+    "function_call_output": ("output",),
+    "custom_tool_call_output": ("output",),
+    "mcp_call_output": ("output",),
 }
 
+RESPONSES_TOOL_RESULT_ITEM_TYPES = frozenset(
+    item_type
+    for item_type, field_names in RESPONSES_EMBEDDED_JSON_FIELDS.items()
+    if "output" in field_names
+)
+
 RESPONSES_TOOL_CALL_ITEM_TYPES = frozenset(
-    {*RESPONSES_EMBEDDED_JSON_FIELDS, "computer_call"}
+    {
+        *(
+            item_type
+            for item_type in RESPONSES_EMBEDDED_JSON_FIELDS
+            if item_type not in RESPONSES_TOOL_RESULT_ITEM_TYPES
+        ),
+        "computer_call",
+    }
 )
 
 
