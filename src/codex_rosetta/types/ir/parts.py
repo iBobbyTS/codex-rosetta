@@ -117,6 +117,7 @@ class ToolCallPart(TypedDict):
             "web_search",
             "code_interpreter",
             "file_search",
+            "computer_use",
         ]
     ]  # 默认为 "function" Default is "function"
     provider_metadata: NotRequired[

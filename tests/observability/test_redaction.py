@@ -236,3 +236,11 @@ def test_contains_json_semantic_preserves_invalid_and_unrelated_content() -> Non
 
     assert not redactor.contains_json_semantic(b'{"value":"ordinary"}')
     assert not redactor.contains_json_semantic(b'{"value":"\\u0073ecret"')
+
+
+def test_contains_json_semantic_checks_duplicate_object_members() -> None:
+    redactor = SecretRedactor({"secret"})
+
+    assert redactor.contains_json_semantic(
+        b'{"value":"\\u0073ecret","value":"ordinary"}'
+    )

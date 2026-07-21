@@ -1,7 +1,7 @@
 # Persistent Audit Findings and Debt
 
 Last updated: 2026-07-21
-Repository head: `04efc74e0425c42bb906581b61c0c0be6976841` + current remediation working tree; targeted re-audit `20260721-1232`
+Repository head: current remediation working tree; targeted re-audit `20260721-1428`
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
@@ -32,6 +32,9 @@ provider/API call or deployment was authorized.
 | AUD-021 | **Open:** canonical `computer_call` itself round-trips, but `computer_call_output` is silently discarded (AUD-024) | Reopen after the owner selects explicit rejection or complete native output support and the contract is verified. |
 | AUD-022 | Responses stream argument semantic gate can skip a completed JSON value with leading whitespace | Normalize JSON whitespace before semantic inspection and add raw/parsed SSE regressions; no business decision is required. |
 | AUD-023 | Chat stream tool identity uses arrival order instead of the wire `index` | Use a stable index-to-call mapping and fail closed on conflicts; no business decision is required. |
+| AUD-025 | Stream credential gate omitted split ordinary text/reasoning/refusal and provider-specific argument fields | Extend the bounded, identity-aware semantic accumulator across every currently supported provider stream field and add raw/parsed regressions. |
+| AUD-026 | Responses completion handling stopped scanning after the first tool-loop item | Scan and reject every completed output item before computing the finish event. |
+| AUD-027 | Non-streaming Responses tool-call output retained `finish_reason=stop` | Infer `tool_calls` from normalized IR tool-call content, matching the existing streaming contract. |
 
 ### Business/semantic decisions requiring owner authority
 
@@ -59,6 +62,9 @@ claims.
 | AUD-022 | Must Fix | Agent-Fixable | Closed | The bounded argument gate strips both leading and trailing JSON whitespace before semantic credential inspection | PROVIDER-01/SCN-03/SCN-04/CTRL-03; raw and parsed SSE | Gateway transport/security owner | Reopen if embedded JSON inventory, parser, or stream framing changes |
 | AUD-023 | Must Fix | Agent-Fixable | Closed | Chat tool fragments use bounded index-to-call mappings, detect remaps/conflicts, and fail closed on missing identity | PROVIDER-01/SCN-03/SCN-04/CTRL-03; Chat SSE | Gateway transport/security owner | Reopen on Chat wire-schema, identity, or state-bound changes |
 | AUD-024 | Must Fix | Decision Recorded | Closed | `computer_call_output` is rejected with a stable `NotImplementedError` before unknown-item handling can drop it | TOOL-01/SCN-03/SCN-05/IF-05; computer-use history | Project owner decision recorded: explicit rejection; Responses-only non-streaming scope retained | Reopen if native result support is authorized |
+| AUD-025 | Must Fix | Agent-Fixable | Closed | The bounded semantic gate now accumulates split text, reasoning, refusal, MCP, and provider-specific stream fields by stable event identity for Responses, Chat, Anthropic, and Google | PROVIDER-01/STREAM-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03; raw and parsed streams | Gateway transport/security owner | Reopen on a new stream field, provider schema, consumer identity, or credential-boundary change |
+| AUD-026 | Must Fix | Agent-Fixable | Closed | Responses completion events scan all output items and reject unsupported `computer_call` even when a prior function/tool item selected `tool_calls` | TOOL-01/SCN-03/SCN-05/IF-05; Responses stream dispatch | Gateway converter owner | Reopen if unsupported-item policy or completion dispatch changes |
+| AUD-027 | Must Fix | Agent-Fixable | Closed | Non-streaming Responses infers `tool_calls` from normalized IR tool-call content when status alone would map to `stop` | PROVIDER-01/TOOL-01/SCN-03/SCN-05; non-stream pipeline | Gateway converter owner | Reopen if finish-reason precedence or tool-loop mapping changes |
 | AUD-020 | Must Fix | Decision Recorded | Closed | Active-provider/client credential inventory is the authoritative return-gate domain; global configured-token inventory remains diagnostic-only | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; provider and auxiliary return-domain ownership | Project owner decision recorded in profile | Reopen if deployment boundary or credential-domain ownership changes |
 | AUD-017 | Must Fix | Agent-Fixable | Closed | Credential-bearing return boundaries now preserve credential-free values byte-for-byte and fail closed on exact collisions; raw passthrough releases only complete safe SSE events and terminates from a valid event boundary | PROVIDER-01/SIDE-01/SCN-03/SCN-04/CTRL-03; provider, sidecar, search, SSE, and JSON return boundaries | Owner decision recorded; Gateway transport/security owner | Reopen if credential syntax, return clients, parsing, or stream framing changes |
 | AUD-018 | Should Plan | Agent-Fixable | Closed | Admin model discovery validates the provider-specific root, collection, member, and identifier schema before normalization and returns a stable controlled error on mismatch | AUTH-02/SCN-08/SCN-09; Admin provider/model operation | Gateway/Admin owner | Reopen if model-list schema, shim ID ownership, or Admin error handling changes |
@@ -1463,6 +1469,59 @@ support. The negative converter regression and full deterministic suite pass.
 Commit: `04efc74`.
 
 ### Reopen/closure criteria
+
+## AUD-025 — Split stream fields bypass the credential semantic gate
+
+- Severity: Must Fix
+- Decision class: Agent-Fixable
+- Status: Closed
+- First detected run: `20260721-1232` omission audit
+- Owner: Gateway transport/security owner
+
+### Evidence and closure
+
+The independent audit reconstructed an active credential across multiple text,
+reasoning, refusal, MCP, and provider-specific stream events. The semantic gate
+now uses bounded identity-aware accumulators for Responses, Chat, Anthropic, and
+Google fields, in both raw-byte and parsed-event stream wrappers. The regression
+matrix covers split credentials for every supported provider without real calls.
+
+Closure evidence: focused transport/converter suite `185 passed`; full
+deterministic suite `3629 passed, 5 skipped`; ruff, format, and ty checks pass.
+Residual risk remains limited to unsupported/covert encodings and real provider
+timing, which are outside the approved audit boundary.
+
+## AUD-026 — Responses completion scan stops after the first tool item
+
+- Severity: Must Fix
+- Decision class: Agent-Fixable
+- Status: Closed
+- First detected run: `20260721-1232` omission audit
+- Owner: Gateway converter owner
+
+### Evidence and closure
+
+`response.completed` now scans every output item and runs the existing explicit
+unsupported-item rejection before selecting `tool_calls`. A mixed
+`function_call` followed by `computer_call` therefore raises the controlled
+unsupported-item error instead of emitting a finish event and dropping the later
+item. The regression is covered in the Responses stream suite.
+
+## AUD-027 — Non-streaming Responses tool calls report `stop`
+
+- Severity: Must Fix
+- Decision class: Agent-Fixable
+- Status: Closed
+- First detected run: `20260721-1232` omission audit
+- Owner: Gateway converter owner
+
+### Evidence and closure
+
+After provider output is normalized to IR content, a completed non-streaming
+Responses response containing a tool-call part now reports
+`finish_reason=tool_calls`; ordinary completed assistant messages remain `stop`.
+The existing non-streaming tool-call regression now asserts the finish reason,
+covering the cross-format pipeline boundary without a real provider call.
 
 Closure is satisfied by the recorded explicit-rejection decision, the fail-closed
 negative regression, retained positive `computer_call` round-trip coverage, and

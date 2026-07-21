@@ -295,6 +295,11 @@ class AnthropicToolOps(BaseToolOps):
         tool_type = ir_tool_call.get("tool_type", "function")
         tool_input = ir_tool_call.get("tool_input", {})
 
+        if tool_type == "computer_use":
+            raise NotImplementedError(
+                "Anthropic conversion does not support Responses computer_use tool calls"
+            )
+
         if tool_type == "web_search":
             result = {
                 "type": "server_tool_use",

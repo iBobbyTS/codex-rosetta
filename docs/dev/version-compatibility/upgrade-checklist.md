@@ -353,7 +353,7 @@ The following behavior can be automatically verified using the fixed Codex reque
 
 - The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields and credential-free response JSON/SSE bytes remain unchanged below the transport safety envelope. Any return containing a configured Provider credential fails closed before semantic conversion or persistence; raw passthrough releases only complete credential-free SSE events and emits a source-compatible terminal error from a valid event boundary on collision. Unchanged attested streaming requests retain their original compressed body and allowlisted Codex wire headers; any request mutation rebuilds JSON without stale attestation. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
 - header allowlists for ordinary metadata and exact attested-wire passthrough; Provider-owned Authorization on every upstream request; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
-- Responses request → IR/adapter → Chat/Anthropic/Google upstream request;
+- Responses request → IR/adapter → Chat/Anthropic/Google upstream request; canonical `computer_call` remains structurally lossless through the non-streaming Responses IR round trip, while Chat/Anthropic/Google targets and streaming bridge conversion reject it explicitly instead of inventing a function call or silently dropping it. `computer_call_output` remains an open contract item after the 20260721-1148 omission audit: until the owner chooses explicit rejection or complete native output/screenshot support, do not claim lossless computer-call history;
 - Responses Namespace children expand to canonical regex-safe `namespace-function` names; streaming and non-streaming return paths restore hyphenated names, unique `namespace_function` and `namespace.function` compatible names, and unique bare children, while ordinary Function conflicts, shared child names, and alias collisions remain flat and fail closed;
 - Responses→Chat converts `agent_message` into model-visible user content, including its inter-agent `encrypted_content` payload, without exposing encrypted content from ordinary message or reasoning items;
 - Verify model-group Tool Profiles on direct Responses, Chat, Anthropic, and Google routes, including all four Admin categories, Disabled filtering, Modified handling, input persistence, immutable bundled delivery states, and endpoint selection. Verify the four bundled Profile names and states: Chat Default retains its established mapping; 透传 leaves every native tool Passthrough with synthetic injections Disabled; web.run 注入 differs from 透传 only by Modified `web.run`; 工具映射 inherits Chat Default. Verify new model groups choose 透传 for OpenAI Official, web.run 注入 for OpenAI Custom and Custom + Custom Responses, 工具映射 for listed-provider Responses, and Chat Default for Chat plus the intentionally separate fallback branch. All Responses choices must use identical direct protocol handling;
@@ -385,8 +385,16 @@ The following behavior can be automatically verified using the fixed Codex reque
   byte-identical when credential-free; verify active Provider credential
   collisions at every chunk position fail closed without emitting a partial
   risk event; verify semantically equivalent Unicode, surrogate, and solidus
-  JSON escapes are also blocked while safe raw bytes remain identical, and
-  that overflow closes the upstream; verify a credential configured only for
+  JSON escapes are also blocked while safe raw bytes remain identical; verify
+  duplicate JSON members, every converter-decoded embedded JSON-string field
+  (`function_call.arguments`, `mcp_call.arguments`, `custom_tool_call.input`,
+  `shell_call.arguments`, and `code_interpreter_call.arguments`), and multiple
+  Responses/Chat argument or custom-input delta events cannot be
+  consumed or reconstructed into the active credential after individually safe
+  units are released; verify call/item/index identity changes follow the actual
+  converter consumers, the 1 MiB/4096-fragment/4096-identity bounds fail closed,
+  invalid or unrelated strings are not recursively parsed, and overflow closes
+  the upstream; verify a credential configured only for
   another Provider remains outside the active return gate while global
   diagnostics still redact it;
 - Inbound request-body default, fixed tiers, Admin persistence/hot reload,

@@ -516,20 +516,26 @@ class ResponseComputerToolCall(TypedDict, total=False):
     Reference: openai.types.responses.ResponseComputerToolCall
     """
 
-    type: Literal["computer_tool_call"]
-    """Output item type, always 'computer_tool_call'."""
+    type: Literal["computer_call"]
+    """Output item type, always 'computer_call'."""
 
     id: str
     """Unique ID for this computer tool call."""
 
-    action: str
-    """The computer action to perform."""
+    call_id: str
+    """Correlation ID for this computer call."""
 
-    parameters: dict[str, Any]
-    """Action parameters."""
+    pending_safety_checks: list[dict[str, Any]]
+    """Safety checks that must be acknowledged before execution."""
 
-    status: str | None
+    status: Literal["in_progress", "completed", "incomplete"]
     """Execution status."""
+
+    action: dict[str, Any] | None
+    """The single computer action to perform."""
+
+    actions: list[dict[str, Any]] | None
+    """A sequence of computer actions to perform."""
 
 
 # ============================================================================

@@ -485,6 +485,7 @@ class TestOpenAIResponsesConverter:
         assert tc["type"] == "tool_call"
         assert tc["tool_name"] == "get_weather"
         assert tc["tool_call_id"] == "call_1"
+        assert choice["finish_reason"]["reason"] == "tool_calls"
 
     def test_response_from_provider_with_custom_tool_call(self):
         """End-to-end: a ``custom_tool_call`` response item is converted to IR.

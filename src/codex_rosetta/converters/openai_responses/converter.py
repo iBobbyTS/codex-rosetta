@@ -78,6 +78,8 @@ RESPONSES_TOOL_LOOP_PASSTHROUGH_OUTPUT_ITEM_TYPES = frozenset(
     }
 )
 
+RESPONSES_UNSUPPORTED_BRIDGE_OUTPUT_ITEM_TYPES = frozenset({"computer_call"})
+
 
 class OpenAIResponsesConverter(BaseConverter):
     """OpenAI Responses API converter.
@@ -400,6 +402,12 @@ class OpenAIResponsesConverter(BaseConverter):
             elif isinstance(ir_item, dict) and "type" in ir_item:
                 # It's an extension item (system_event etc.) - skip for choices
                 pass
+
+        if finish_reason_val == "stop" and any(
+            isinstance(part, dict) and part.get("type") == "tool_call"
+            for part in message_content
+        ):
+            finish_reason_val = "tool_calls"
 
         if message_content:
             choices.append(
@@ -1097,6 +1105,13 @@ class OpenAIResponsesConverter(BaseConverter):
             )
         )
 
+    @staticmethod
+    def _reject_unsupported_bridge_item(item_type: Any) -> None:
+        if item_type in RESPONSES_UNSUPPORTED_BRIDGE_OUTPUT_ITEM_TYPES:
+            raise NotImplementedError(
+                "Streaming conversion of Responses computer_call items is not supported"
+            )
+
     def _handle_output_item_added_from_p(
         self,
         chunk: dict[str, Any],
@@ -1106,6 +1121,8 @@ class OpenAIResponsesConverter(BaseConverter):
         item = chunk.get("item", {})
         if isinstance(item, dict):
             item_type = item.get("type", "")
+
+            self._reject_unsupported_bridge_item(item_type)
 
             if item_type in ("function_call", "custom_tool_call"):
                 call_id = item.get("call_id", "")
@@ -1214,6 +1231,7 @@ class OpenAIResponsesConverter(BaseConverter):
         if not isinstance(item, dict):
             return
         item_type = item.get("type", "")
+        self._reject_unsupported_bridge_item(item_type)
         if item_type == "function_call":
             if context is not None:
                 call_id = item.get("call_id", "")
@@ -1334,6 +1352,7 @@ class OpenAIResponsesConverter(BaseConverter):
                 if not isinstance(item, dict):
                     continue
                 item_type = item.get("type")
+                self._reject_unsupported_bridge_item(item_type)
                 if item_type in RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES and isinstance(
                     context, OpenAIResponsesStreamContext
                 ):
@@ -1342,7 +1361,6 @@ class OpenAIResponsesConverter(BaseConverter):
                     item_type in RESPONSES_TOOL_LOOP_PASSTHROUGH_OUTPUT_ITEM_TYPES
                 ):
                     reason = "tool_calls"
-                    break
 
         # Emit UsageEvent before FinishEvent so that downstream
         # converters can store usage in context.pending_usage before

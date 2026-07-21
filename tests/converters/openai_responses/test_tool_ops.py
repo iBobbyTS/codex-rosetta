@@ -5,6 +5,11 @@ OpenAI Responses ToolOps unit tests.
 import json
 from typing import Any, cast
 
+import pytest
+
+from codex_rosetta.converters.openai_responses._constants import (
+    RESPONSES_EMBEDDED_JSON_FIELDS,
+)
 from codex_rosetta.converters.openai_responses.tool_ops import OpenAIResponsesToolOps
 from codex_rosetta.types.ir import (
     ToolCallConfig,
@@ -514,6 +519,45 @@ class TestOpenAIResponsesToolOps:
         result = OpenAIResponsesToolOps.p_tool_call_to_ir(provider_tc)
         assert result["type"] == "tool_call"
         assert result["tool_type"] == "code_interpreter"
+
+    @pytest.mark.parametrize(
+        ("item_type", "field_name"),
+        list(RESPONSES_EMBEDDED_JSON_FIELDS.items()),
+    )
+    def test_embedded_json_security_inventory_matches_converter_consumers(
+        self, item_type: str, field_name: tuple[str, ...]
+    ) -> None:
+        assert field_name in {("arguments",), ("input",)}
+        provider_item = {
+            "type": item_type,
+            "id": "item_inventory",
+            "call_id": "call_inventory",
+            "name": "inventory_tool",
+            field_name[0]: '{"semantic_value":"decoded"}',
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_call_to_ir(provider_item)
+
+        assert result["tool_input"] == {"semantic_value": "decoded"}
+
+    def test_computer_call_round_trip_preserves_native_item(self):
+        """Canonical computer_call survives the Responses IR round trip."""
+        original = {
+            "type": "computer_call",
+            "id": "comp_123",
+            "call_id": "call_comp_123",
+            "action": {"type": "click", "x": 100, "y": 200, "button": "left"},
+            "pending_safety_checks": [],
+            "status": "completed",
+        }
+
+        ir = OpenAIResponsesToolOps.p_tool_call_to_ir(original)
+        restored = OpenAIResponsesToolOps.ir_tool_call_to_p(ir)
+
+        assert ir["tool_type"] == "computer_use"
+        assert ir["tool_call_id"] == "call_comp_123"
+        assert ir["tool_input"]["action"] == original["action"]
+        assert restored == original
 
     def test_p_tool_call_to_ir_invalid_json(self):
         """Test p_tool_call_to_ir handles invalid JSON arguments."""

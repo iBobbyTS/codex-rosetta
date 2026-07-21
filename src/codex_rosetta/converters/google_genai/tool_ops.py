@@ -226,6 +226,11 @@ class GoogleGenAIToolOps(BaseToolOps):
         Returns:
             Google function_call Part dict.
         """
+        if ir_tool_call.get("tool_type") == "computer_use":
+            raise NotImplementedError(
+                "Google GenAI does not support Responses computer_use tool calls"
+            )
+
         tool_name = ir_tool_call.get("tool_name", ir_tool_call.get("name", ""))
         tool_input = ir_tool_call.get("tool_input", ir_tool_call.get("arguments", {}))
 

@@ -4,6 +4,8 @@ OpenAI Responses API stream converter unit tests.
 
 from typing import Any, cast
 
+import pytest
+
 from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
 from codex_rosetta.converters.openai_responses.stream_context import (
@@ -103,6 +105,32 @@ class TestStreamResponseFromProvider:
         events = self.converter.stream_response_from_provider(event)
         assert events == []
 
+    @pytest.mark.parametrize(
+        "event",
+        [
+            {
+                "type": "response.output_item.added",
+                "item": {"type": "computer_call", "call_id": "call_comp_1"},
+            },
+            {
+                "type": "response.output_item.done",
+                "item": {"type": "computer_call", "call_id": "call_comp_1"},
+            },
+            {
+                "type": "response.completed",
+                "response": {
+                    "status": "completed",
+                    "output": [{"type": "computer_call", "call_id": "call_comp_1"}],
+                },
+            },
+        ],
+    )
+    def test_computer_call_stream_bridge_rejects_explicitly(
+        self, event: dict[str, Any]
+    ) -> None:
+        with pytest.raises(NotImplementedError, match="computer_call"):
+            self.converter.stream_response_from_provider(event)
+
     def test_tool_call_start_no_output_index(self):
         """ToolCallStartEvent without output_index omits tool_call_index."""
         event = {
@@ -185,6 +213,30 @@ class TestStreamResponseFromProvider:
         events = cast(list[Any], self.converter.stream_response_from_provider(event))
         finish_events = [e for e in events if e["type"] == "finish"]
         assert finish_events[0]["finish_reason"]["reason"] == "tool_calls"
+
+    def test_response_completed_rejects_unsupported_items_after_tool_call(self):
+        """Unsupported output items must not be hidden by an earlier tool call."""
+        event = {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "call_id": "call_1",
+                        "name": "search",
+                        "arguments": "{}",
+                    },
+                    {
+                        "type": "computer_call",
+                        "call_id": "call_comp_1",
+                        "action": {"type": "screenshot"},
+                    },
+                ],
+            },
+        }
+        with pytest.raises(NotImplementedError, match="computer_call"):
+            self.converter.stream_response_from_provider(event)
 
     def test_response_completed_incomplete_max_tokens(self):
         """response.completed with incomplete status and max_output_tokens reason."""
