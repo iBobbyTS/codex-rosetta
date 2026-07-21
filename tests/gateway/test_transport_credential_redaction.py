@@ -236,6 +236,47 @@ def test_stream_http_error_blocks_json_escaped_credential() -> None:
     assert json.loads(blocked)["error"]["message"].endswith("response blocked")
 
 
+@pytest.mark.parametrize(
+    ("token", "error"),
+    [
+        ("secret", '{"error":"\\u0073ecret"}'),
+        ("a/b", '{"error":"a\\/b"}'),
+    ],
+)
+def test_stream_http_error_blocks_semantically_escaped_credential(
+    token: str,
+    error: str,
+) -> None:
+    async def run() -> str:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(error=error, status_code=400))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        return await stream.read_error()
+
+    blocked = asyncio.run(run())
+
+    assert token not in blocked
+    assert json.loads(blocked)["error"]["message"].endswith("response blocked")
+
+
+def test_non_streaming_raw_json_blocks_semantically_escaped_credential() -> None:
+    class _SemanticRawTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=500,
+                body=None,
+                raw_content=b'{"error":"\\u0073ecret"}',
+            )
+
+    async def run() -> None:
+        with pytest.raises(UpstreamCredentialCollisionError):
+            await CredentialRedactingTransport.wrap(
+                _SemanticRawTransport()
+            ).send_request(_provider("secret"), "openai_responses", {}, "test")
+
+    asyncio.run(run())
+
+
 def test_raw_sse_collision_blocks_every_cross_chunk_split_without_leaking():
     token = b"raw-stream-secret"
     provider = _provider(token.decode())
@@ -264,6 +305,36 @@ def test_raw_sse_collision_blocks_every_cross_chunk_split_without_leaking():
     emitted = asyncio.run(run([bytes([value]) for value in payload]))
     assert token not in emitted
     assert payload.startswith(emitted)
+
+
+@pytest.mark.parametrize(
+    ("token", "encoded"),
+    [
+        ("secret", b"\\u0073ecret"),
+        ("a/b", b"a\\/b"),
+        ("emoji-\U0001f600", b"emoji-\\ud83d\\ude00"),
+    ],
+)
+def test_raw_sse_blocks_semantically_escaped_credentials_across_all_splits(
+    token: str,
+    encoded: bytes,
+) -> None:
+    payload = b'event: message\ndata: {"value":"' + encoded + b'"}\n\n'
+
+    async def run(chunks: list[bytes]) -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=chunks))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    for split in range(len(payload) + 1):
+        assert asyncio.run(run([payload[:split], payload[split:]])) == b""
 
 
 def test_raw_sse_without_collision_is_byte_identical() -> None:

@@ -123,6 +123,17 @@ class SecretRedactor:
         """Return whether raw or JSON-escaped configured bytes occur in *value*."""
         return any(pattern in value for pattern in self._wire_token_values)
 
+    def contains_json_semantic(self, value: str | bytes) -> bool:
+        """Return whether JSON text decodes to a configured credential."""
+        raw = value.encode("utf-8") if isinstance(value, str) else value
+        if self.contains_wire_bytes(raw):
+            return True
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError, UnicodeDecodeError:
+            return False
+        return self.contains_exact(parsed)
+
     def streaming_redactor(self) -> StreamingSecretRedactor:
         """Create an independent exact-value redactor for a chunked byte stream."""
         return StreamingSecretRedactor(self._wire_token_values)

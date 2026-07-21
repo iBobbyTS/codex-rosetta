@@ -55,6 +55,24 @@ def _credential_collision_error() -> UpstreamCredentialCollisionError:
 _SSE_EVENT_BOUNDARY = re.compile(rb"(?:\r\n|\r|\n)(?:\r\n|\r|\n)")
 
 
+def _sse_frame_contains_credential(
+    redactor: SecretRedactor,
+    frame: bytes,
+) -> bool:
+    """Check raw SSE bytes and the decoded JSON value of joined data fields."""
+    if redactor.contains_wire_bytes(frame):
+        return True
+    data_lines: list[bytes] = []
+    for line in frame.splitlines():
+        if not line.startswith(b"data:"):
+            continue
+        value = line[5:]
+        if value.startswith(b" "):
+            value = value[1:]
+        data_lines.append(value)
+    return bool(data_lines) and redactor.contains_json_semantic(b"\n".join(data_lines))
+
+
 class _SSECredentialGate:
     """Release only complete SSE events proven free of configured credentials."""
 
@@ -74,7 +92,9 @@ class _SSECredentialGate:
         offset = 0
         while match := _SSE_EVENT_BOUNDARY.search(data, offset):
             frame = data[offset : match.end()]
-            if self._redactor.contains_wire_bytes(self._held_frame + frame):
+            if self._redactor.contains_wire_bytes(
+                self._held_frame + frame
+            ) or _sse_frame_contains_credential(self._redactor, frame):
                 self._clear()
                 raise SecretCollisionError
             if self._held_frame:
@@ -94,7 +114,10 @@ class _SSECredentialGate:
             return b""
         self._finished = True
         output = self._held_frame + self._buffer
-        if self._redactor.contains_wire_bytes(output):
+        if self._redactor.contains_wire_bytes(output) or _sse_frame_contains_credential(
+            self._redactor,
+            self._buffer,
+        ):
             self._clear()
             raise SecretCollisionError
         self._clear()
@@ -145,7 +168,7 @@ class CredentialRedactingStream(UpstreamStream):
             value = ""
         if error is not None:
             raise error from None
-        if self._redactor.contains_wire_bytes(value.encode("utf-8")):
+        if self._redactor.contains_json_semantic(value):
             return (
                 '{"error":{"message":"Upstream response contains a configured '
                 'credential; response blocked"}}'
@@ -313,7 +336,7 @@ class CredentialRedactingTransport:
         response: UpstreamResponse,
     ) -> UpstreamResponse:
         redactor = _provider_redactor(provider_info)
-        if redactor.contains_exact(response.body) or redactor.contains_wire_bytes(
+        if redactor.contains_exact(response.body) or redactor.contains_json_semantic(
             response.raw_content
         ):
             raise _credential_collision_error()

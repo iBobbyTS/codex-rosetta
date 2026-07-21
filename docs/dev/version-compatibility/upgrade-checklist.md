@@ -384,7 +384,9 @@ The following behavior can be automatically verified using the fixed Codex reque
   4xx/5xx and retry boundaries; verify that below-limit raw Responses SSE is
   byte-identical when credential-free; verify configured Provider credential
   collisions at every chunk position fail closed without emitting a partial
-  risk event, and that overflow closes the upstream;
+  risk event; verify semantically equivalent Unicode, surrogate, and solidus
+  JSON escapes are also blocked while safe raw bytes remain identical, and
+  that overflow closes the upstream;
 - Inbound request-body default, fixed tiers, Admin persistence/hot reload,
   rollback, unlimited mapping, and a real Codex image-history request above the
   former 50 MB ceiling;

@@ -179,6 +179,41 @@ def test_sidecar_search_blocks_nested_credential_collision(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("method", ["execute", "search"])
+def test_sidecar_blocks_semantically_escaped_credential(
+    monkeypatch,
+    method: str,
+) -> None:
+    async def fake_request(*args, **kwargs):
+        del args, kwargs
+        content = (
+            b'{"output":"\\u0073ecret"}'
+            if method == "execute"
+            else b'{"results":[{"content":"\\u0073ecret"}]}'
+        )
+        return BoundedHttpResponse(200, {}, content)
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+    client = WebRunSidecarHTTPClient("http://web-run:8080", "secret")
+
+    with pytest.raises(WebRunSidecarError, match="response blocked"):
+        if method == "execute":
+            asyncio.run(
+                client.execute(
+                    session_id="a" * 64,
+                    operation="open",
+                    arguments={},
+                )
+            )
+        else:
+            asyncio.run(
+                client.search(
+                    "query",
+                    settings=WebSearchSettings(),
+                )
+            )
+
+
+@pytest.mark.parametrize("method", ["execute", "search"])
 def test_sidecar_transport_exception_is_redacted_and_cause_free(
     monkeypatch,
     method: str,
