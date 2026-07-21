@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import AsyncIterator
 from typing import Any
 
 from codex_rosetta.auto_detect import ProviderType
-from codex_rosetta.observability.redaction import SecretRedactor
+from codex_rosetta.observability.redaction import SecretCollisionError, SecretRedactor
 
 from ._base import (
     UpstreamConnectionError,
+    UpstreamCredentialCollisionError,
     UpstreamResponse,
     UpstreamStream,
     UpstreamTransport,
@@ -41,6 +43,66 @@ def _sanitized_transport_error(
     error.__cause__ = None
     error.__context__ = None
     return error
+
+
+def _credential_collision_error() -> UpstreamCredentialCollisionError:
+    """Return a stable error for an ambiguous provider-return collision."""
+    return UpstreamCredentialCollisionError(
+        "Upstream response contains a configured credential; response blocked"
+    )
+
+
+_SSE_EVENT_BOUNDARY = re.compile(rb"(?:\r\n|\r|\n)(?:\r\n|\r|\n)")
+
+
+class _SSECredentialGate:
+    """Release only complete SSE events proven free of configured credentials."""
+
+    def __init__(self, redactor: SecretRedactor) -> None:
+        self._redactor = redactor
+        self._buffer = b""
+        self._held_frame = b""
+        self._finished = False
+
+    def feed(self, chunk: bytes) -> bytes:
+        """Consume raw bytes while retaining one frame for cross-frame detection."""
+        if self._finished:
+            raise RuntimeError("SSE credential gate is already finished")
+
+        data = self._buffer + chunk
+        output: list[bytes] = []
+        offset = 0
+        while match := _SSE_EVENT_BOUNDARY.search(data, offset):
+            frame = data[offset : match.end()]
+            if self._redactor.contains_wire_bytes(self._held_frame + frame):
+                self._clear()
+                raise SecretCollisionError
+            if self._held_frame:
+                output.append(self._held_frame)
+            self._held_frame = frame
+            offset = match.end()
+
+        self._buffer = data[offset:]
+        if self._redactor.contains_wire_bytes(self._held_frame + self._buffer):
+            self._clear()
+            raise SecretCollisionError
+        return b"".join(output)
+
+    def finish(self) -> bytes:
+        """Release the final safe frame and suffix without changing wire bytes."""
+        if self._finished:
+            return b""
+        self._finished = True
+        output = self._held_frame + self._buffer
+        if self._redactor.contains_wire_bytes(output):
+            self._clear()
+            raise SecretCollisionError
+        self._clear()
+        return output
+
+    def _clear(self) -> None:
+        self._held_frame = b""
+        self._buffer = b""
 
 
 class CredentialRedactingStream(UpstreamStream):
@@ -83,16 +145,25 @@ class CredentialRedactingStream(UpstreamStream):
             value = ""
         if error is not None:
             raise error from None
-        return self._redactor.redact_wire_bytes(value.encode("utf-8")).decode("utf-8")
+        if self._redactor.contains_wire_bytes(value.encode("utf-8")):
+            return (
+                '{"error":{"message":"Upstream response contains a configured '
+                'credential; response blocked"}}'
+            )
+        return value
 
     def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
         async def redacted_events() -> AsyncIterator[dict[str, Any]]:
             error: UpstreamConnectionError | None = None
             try:
                 async for event in self._stream:
-                    yield self._redactor.redact_exact(event)
+                    if self._redactor.contains_exact(event):
+                        raise _credential_collision_error()
+                    yield event
             except asyncio.CancelledError, GeneratorExit:
                 raise
+            except SecretCollisionError:
+                error = _credential_collision_error()
             except Exception as exc:
                 error = _sanitized_transport_error(self._provider_info, exc)
             if error is not None:
@@ -106,18 +177,20 @@ class CredentialRedactingStream(UpstreamStream):
             return None
 
         async def redacted_bytes() -> AsyncIterator[bytes]:
-            redactor = self._redactor.streaming_redactor()
+            gate = _SSECredentialGate(self._redactor)
             error: UpstreamConnectionError | None = None
             try:
                 async for chunk in raw_stream:
-                    safe = redactor.feed(chunk)
+                    safe = gate.feed(chunk)
                     if safe:
                         yield safe
-                tail = redactor.finish()
+                tail = gate.finish()
                 if tail:
                     yield tail
             except asyncio.CancelledError, GeneratorExit:
                 raise
+            except SecretCollisionError:
+                error = _credential_collision_error()
             except Exception as exc:
                 error = _sanitized_transport_error(self._provider_info, exc)
             if error is not None:
@@ -240,10 +313,14 @@ class CredentialRedactingTransport:
         response: UpstreamResponse,
     ) -> UpstreamResponse:
         redactor = _provider_redactor(provider_info)
+        if redactor.contains_exact(response.body) or redactor.contains_wire_bytes(
+            response.raw_content
+        ):
+            raise _credential_collision_error()
         return UpstreamResponse(
             status_code=response.status_code,
-            body=redactor.redact_exact(response.body),
-            raw_content=redactor.redact_wire_bytes(response.raw_content),
+            body=response.body,
+            raw_content=response.raw_content,
         )
 
 

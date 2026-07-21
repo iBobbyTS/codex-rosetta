@@ -11,6 +11,7 @@ import pytest
 
 from codex_rosetta.gateway.transport._base import (
     UpstreamConnectionError,
+    UpstreamCredentialCollisionError,
     UpstreamResponse,
     UpstreamStream,
 )
@@ -81,32 +82,25 @@ class _ReflectingTransport:
         return None
 
 
-def test_non_streaming_redacts_every_rotation_position_on_success_and_error():
+def test_non_streaming_blocks_every_rotation_position_on_success_and_error():
     provider = _provider()
     transport = CredentialRedactingTransport.wrap(_ReflectingTransport())
-    credentials = set(provider.credential_values)
 
-    async def run() -> list[UpstreamResponse]:
-        responses = []
+    async def run() -> None:
         for status in (200, 401, 200, 429):
-            responses.append(
+            with pytest.raises(UpstreamCredentialCollisionError) as caught:
                 await transport.send_request(
                     provider,
                     "openai_responses",
                     {"status": status},
                     "test",
                 )
+            assert str(caught.value).endswith("response blocked")
+            assert all(
+                token not in str(caught.value) for token in provider.credential_values
             )
-        return responses
 
-    responses = asyncio.run(run())
-
-    assert [response.status_code for response in responses] == [200, 401, 200, 429]
-    for response in responses:
-        rendered = repr(response.body) + response.raw_content.decode()
-        assert credentials.isdisjoint(rendered.split())
-        assert all(token not in rendered for token in credentials)
-        assert "stable-before [REDACTED] stable-after" in rendered
+    asyncio.run(run())
 
 
 class _ErrorTransport(_ReflectingTransport):
@@ -189,7 +183,7 @@ class _StreamingTransport(_ReflectingTransport):
         return self.stream
 
 
-def test_stream_redacts_parsed_events_http_errors_and_stream_exceptions():
+def test_stream_blocks_parsed_events_and_http_errors_without_leaking():
     token = "stream-secret"
     provider = _provider(token)
 
@@ -199,9 +193,8 @@ def test_stream_redacts_parsed_events_http_errors_and_stream_exceptions():
                 _Stream(events=[{"nested": {"text": f"before {token} after"}}])
             )
         ).send_streaming(provider, "openai_responses", {}, "test")
-        assert [event async for event in parsed] == [
-            {"nested": {"text": "before [REDACTED] after"}}
-        ]
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [event async for event in parsed]
 
         http_error = await CredentialRedactingTransport.wrap(
             _StreamingTransport(
@@ -209,7 +202,9 @@ def test_stream_redacts_parsed_events_http_errors_and_stream_exceptions():
             )
         ).send_streaming(provider, "openai_responses", {}, "test")
         assert http_error.status_code == 401
-        assert await http_error.read_error() == '{"error":"[REDACTED]"}'
+        safe_error = await http_error.read_error()
+        assert token not in safe_error
+        assert json.loads(safe_error)["error"]["message"].endswith("response blocked")
 
         failure = UpstreamConnectionError(f"stream disconnected near {token}")
         failed = await CredentialRedactingTransport.wrap(
@@ -224,7 +219,7 @@ def test_stream_redacts_parsed_events_http_errors_and_stream_exceptions():
     asyncio.run(run())
 
 
-def test_stream_http_error_redacts_json_escaped_credential() -> None:
+def test_stream_http_error_blocks_json_escaped_credential() -> None:
     token = 'stream-"escaped\\credential'
     provider = _provider(token)
     error = json.dumps({"error": {"message": token}}, separators=(",", ":"))
@@ -235,17 +230,17 @@ def test_stream_http_error_redacts_json_escaped_credential() -> None:
         ).send_streaming(provider, "openai_responses", {}, "test")
         return await stream.read_error()
 
-    redacted = asyncio.run(run())
+    blocked = asyncio.run(run())
 
-    assert json.loads(redacted) == {"error": {"message": "[REDACTED]"}}
+    assert token not in blocked
+    assert json.loads(blocked)["error"]["message"].endswith("response blocked")
 
 
-def test_raw_sse_redaction_handles_every_cross_chunk_split_without_other_changes():
+def test_raw_sse_collision_blocks_every_cross_chunk_split_without_leaking():
     token = b"raw-stream-secret"
     provider = _provider(token.decode())
     payload = b'event: response.output_text.delta\ndata: {"delta":"before '
     payload += token + b' after"}\n\n'
-    expected = payload.replace(token, b"[REDACTED]")
 
     async def run(chunks: list[bytes]) -> bytes:
         stream = await CredentialRedactingTransport.wrap(
@@ -253,11 +248,70 @@ def test_raw_sse_redaction_handles_every_cross_chunk_split_without_other_changes
         ).send_streaming(provider, "openai_responses", {}, "test")
         raw = stream.aiter_raw_bytes()
         assert raw is not None
-        return b"".join([chunk async for chunk in raw])
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
 
     token_start = payload.index(token)
     for offset in range(len(token) + 1):
         split = token_start + offset
-        assert asyncio.run(run([payload[:split], payload[split:]])) == expected
+        emitted = asyncio.run(run([payload[:split], payload[split:]]))
+        assert token not in emitted
+        assert payload.startswith(emitted)
 
-    assert asyncio.run(run([bytes([value]) for value in payload])) == expected
+    emitted = asyncio.run(run([bytes([value]) for value in payload]))
+    assert token not in emitted
+    assert payload.startswith(emitted)
+
+
+def test_raw_sse_without_collision_is_byte_identical() -> None:
+    payload = b'event: message\ndata: {"text":"ordinary output"}\n\n'
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(
+                _Stream(chunks=[payload[:7], payload[7:19], payload[19:]])
+            )
+        ).send_streaming(_provider("unrelated-secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        return b"".join([chunk async for chunk in raw])
+
+    assert asyncio.run(run()) == payload
+
+
+@pytest.mark.parametrize("token", ["data", "a", "1"])
+def test_short_or_common_credentials_fail_closed(token: str) -> None:
+    redactor = CredentialRedactingTransport.wrap(
+        _StreamingTransport(_Stream(events=[{"data": "value", "count": 1}]))
+    )
+
+    async def run() -> None:
+        stream = await redactor.send_streaming(
+            _provider(token), "openai_responses", {}, "test"
+        )
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [event async for event in stream]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("token", ["data", "event", '"'])
+def test_short_wire_syntax_credential_fails_closed(token: str) -> None:
+    payload = b'event: message\ndata: {"value":"ordinary"}\n\n'
+
+    async def run() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    assert asyncio.run(run()) == b""

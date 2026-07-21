@@ -21,6 +21,7 @@ def _request(
     *,
     allow_redirects: bool = False,
     api_key: str = "sk-test",
+    api_type: str = "chat",
 ) -> SimpleNamespace:
     config = GatewayConfig(
         {
@@ -28,7 +29,7 @@ def _request(
                 "test-provider": {
                     "api_key": api_key,
                     "base_url": "https://api.example.test/v1",
-                    "api_type": "chat",
+                    "api_type": api_type,
                     "allow_redirects": allow_redirects,
                 }
             },
@@ -168,7 +169,7 @@ def test_model_discovery_uses_provider_redirect_policy(
 
 
 @pytest.mark.parametrize("outcome", ["success", "connection_error"])
-def test_model_discovery_redacts_rotated_wire_key(
+def test_model_discovery_blocks_rotated_wire_key(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     outcome: str,
@@ -213,8 +214,97 @@ def test_model_discovery_redacts_rotated_wire_key(
     assert first_key not in response_text
     assert wire_key not in response_text
     if outcome == "success":
-        assert json.loads(response.body)["models"] == ["model-[REDACTED]"]
+        assert json.loads(response.body)["error"].endswith("response blocked")
     else:
         assert "connection rejected credential=[REDACTED]" in response_text
         assert wire_key not in caplog.text
         assert "connection rejected credential=[REDACTED]" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("api_type", "payload"),
+    [
+        ("chat", []),
+        ("chat", None),
+        ("chat", "scalar"),
+        ("chat", 7),
+        ("chat", {}),
+        ("chat", {"data": None}),
+        ("chat", {"data": {"id": "not-a-list"}}),
+        ("chat", {"data": [None]}),
+        ("chat", {"data": [{"id": 7}]}),
+        ("google", {}),
+        ("google", {"models": None}),
+        ("google", {"models": {"name": "models/not-a-list"}}),
+        ("google", {"models": [None]}),
+        ("google", {"models": [{"name": 7}]}),
+    ],
+)
+def test_model_discovery_rejects_wrong_shape_json(
+    monkeypatch: pytest.MonkeyPatch,
+    api_type: str,
+    payload: Any,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+    async def _fake_bounded_request(*args: Any, **kwargs: Any):
+        del args, kwargs
+        return SimpleNamespace(status_code=200, json=lambda: payload)
+
+    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        config_routes,
+        "request_bounded_response",
+        _fake_bounded_request,
+    )
+
+    response = asyncio.run(
+        config_routes.fetch_upstream_models(_request(api_type=api_type))
+    )
+
+    assert json.loads(response.body) == {
+        "error": "Upstream returned an invalid model list"
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "id_field", "body", "expected"),
+    [
+        ("openai_chat", None, {"data": [{"id": "z"}, {"id": "a"}]}, ["a", "z"]),
+        ("anthropic", None, {"data": [{"id": "claude-test"}]}, ["claude-test"]),
+        (
+            "google",
+            None,
+            {"models": [{"name": "models/gemini-test", "__class__": "ignored"}]},
+            ["gemini-test"],
+        ),
+        (
+            "openai_chat",
+            "internal_id",
+            {"data": [{"id": "public", "internal_id": "private"}]},
+            ["private"],
+        ),
+    ],
+)
+def test_normalize_upstream_model_ids_preserves_supported_schemas(
+    provider_type: str,
+    id_field: str | None,
+    body: dict[str, Any],
+    expected: list[str],
+) -> None:
+    assert (
+        config_routes._normalize_upstream_model_ids(
+            body,
+            provider_type=provider_type,
+            id_field=id_field,
+        )
+        == expected
+    )

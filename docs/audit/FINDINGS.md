@@ -1,7 +1,7 @@
 # Persistent Audit Findings and Debt
 
 Last updated: 2026-07-20
-Repository head: `26b7558b1b54160c201ed9cedb1e80a1aa188d95`; fourth independent omission audit `20260720-1606`
+Repository head: `6d1bc7affdb02c3c928c84ee49b321011363aea4`; fifth independent omission audit `20260720-1859`
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
@@ -26,6 +26,7 @@ authorized the remediation wave documented in
 | AUD-014 | Tavily responses or exceptions could reflect the configured API key | Remove the configured key from success, error, and transport-exception data before model/client/diagnostic exposure. |
 | AUD-015 | Provider and web-run sidecar return paths can reflect configured credentials | Enforce configured-token redaction at every credential-bearing outbound return boundary while preserving non-secret response/error semantics. |
 | AUD-016 | Rotated provider wire keys are absent from the exact-value redaction inventory | Parse provider credentials once and register every actual trimmed wire key, plus the raw configured value where useful, for all runtime redactors. |
+| AUD-018 | Admin model discovery trusts syntactically valid upstream JSON without validating its schema | Validate the root object, collection fields, members, and model identifiers before normalization; return a stable non-sensitive Admin error for every mismatch. |
 
 ### Business/semantic decisions requiring owner authority
 
@@ -35,6 +36,7 @@ authorized the remediation wave documented in
 | AUD-004 | Whether to adopt stronger artifact-integrity controls such as digest pinning, SBOM, provenance, and signing before a public release or stronger security claim | Manual release and the current pre-release risk acceptance are explicit product policy; stronger guarantees require an owner decision. |
 | AUD-009 | **Recorded:** only exact backend-supported `api_type` values count as present; every other value is inferred from exact preset URL support order, custom defaults to Responses, and no write-back occurs | Protocol selection changes routing behavior, so its fallback order requires owner authority. |
 | AUD-011 | **Recorded:** arbitrary HTTP(S) custom URLs may receive upstream API keys within local/LAN scope; redirects default off but may be explicitly enabled per provider | The egress/key-disclosure boundary and opt-in redirect expansion require owner authority; policy enforcement remains a repairable transport control. |
+| AUD-017 | **Recorded:** configured credentials have no minimum-length requirement; Rosetta still requires a configured Gateway API key and has no unauthenticated mode; ambiguous return collisions must fail closed rather than leak credentials or silently emit corrupted SSE/JSON | Identical bytes cannot always be classified as reflection versus legitimate content, so the owner selected controlled failure while retaining both the no-leak and protocol-integrity requirements. |
 
 The remaining `No Action`, deterministic-only, and excluded-runtime statements
 are evidence status or explicit scope limits, not additional remediation
@@ -45,6 +47,8 @@ claims.
 
 | ID | Severity | Decision class | Status | Root cause | Affected scenarios/areas | Owner/decision | Due/revisit trigger |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| AUD-017 | Must Fix | Agent-Fixable | Closed | Credential-bearing return boundaries now preserve credential-free values byte-for-byte and fail closed on exact collisions; raw passthrough releases only complete safe SSE events and terminates from a valid event boundary | PROVIDER-01/SIDE-01/SCN-03/SCN-04/CTRL-03; provider, sidecar, search, SSE, and JSON return boundaries | Owner decision recorded; Gateway transport/security owner | Reopen if credential syntax, return clients, parsing, or stream framing changes |
+| AUD-018 | Should Plan | Agent-Fixable | Closed | Admin model discovery validates the provider-specific root, collection, member, and identifier schema before normalization and returns a stable controlled error on mismatch | AUTH-02/SCN-08/SCN-09; Admin provider/model operation | Gateway/Admin owner | Reopen if model-list schema, shim ID ownership, or Admin error handling changes |
 | AUD-002 | Must Fix | Agent-Fixable | Closed | Transactional compaction replacement row/byte/replacement-size quotas now bound supported local/LAN persistence | SCN-06, SCN-07; persistence/observability | Project owner / Gateway persistence owner | Reopen if limits or storage path change |
 | AUD-001 | Should Plan | Agent-Fixable | Closed | Rosetta-version config/state/API migration and legacy compatibility paths were rejected or removed under the prelaunch no-migration boundary | SCN-08, SCN-06, DATA-03; config/local mode/admin/persistence/core API | Project owner / core and gateway owners | Reopen if a migration path is added |
 | AUD-003 | Should Plan | Agent-Fixable | Closed | Shared exact-marker gate now covers every enumerated real-call entry point | SCN-11; scripts/live-agent/integration/agent control plane | Project owner / test-harness owner | Reopen on any new ungated live entry point |
@@ -54,8 +58,8 @@ claims.
 | AUD-008 | Should Plan | Agent-Fixable | Closed | Findings, coverage, system map, run evidence, and rotation queue reconciled to the third omission baseline | audit control plane | Audit owner | Reopen when a remediation run leaves contradictory ledger state |
 | AUD-010 | Should Plan | Agent-Fixable | Closed | SQLite validator checks columns, constraints, primary keys, required index columns, uniqueness, origin, and partial flag | DATA-01/DATA-03; persistence startup/write path | Persistence owner | Reopen on schema/table/index change without updated contract |
 | AUD-012 | Must Fix | Agent-Fixable | Closed | Provider redirects are denied by default and isolated by policy; auxiliary HTTP requests force no-follow; provider opt-in is explicit | PROVIDER-01/SCN-09; transport boundary | Gateway transport owner | Reopen if redirect behavior or HTTP client changes |
-| AUD-014 | Must Fix | Agent-Fixable | Closed | Tavily success/error data and detached transport exceptions redact the configured API key before exposure | SIDE-01/CTRL-03; search/diagnostic boundary | Gateway search owner | Reopen if Tavily client or redaction boundary changes |
-| AUD-015 | Must Fix | Agent-Fixable | Closed | Provider, sidecar, Admin model-discovery, parsed-object, raw-byte, stream, and exception return boundaries now remove every configured provider credential before exposure | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; downstream, model, trace, and diagnostic boundaries | Gateway transport and search owners | Reopen on any credential-bearing client, return path, dict-key handling, stream framing, or exception propagation change |
+| AUD-014 | Must Fix | Agent-Fixable | Closed | Tavily credential collisions are blocked before success/error data exposure; detached transport exceptions remain exactly redacted and cause-free | SIDE-01/CTRL-03; search/diagnostic boundary | Gateway search owner | Reopen if Tavily client or redaction boundary changes |
+| AUD-015 | Must Fix | Agent-Fixable | Closed | Provider, sidecar, Admin model-discovery, parsed-object, raw-byte, stream, and exception return boundaries prevent every configured provider credential from reaching downstream consumers; AUD-017 defines the collision-safe semantics | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; downstream, model, trace, and diagnostic boundaries | Gateway transport and search owners | Reopen on any credential-bearing client, return path, dict-key handling, stream framing, or exception propagation change |
 | AUD-016 | Must Fix | Agent-Fixable | Closed | `ProviderInfo` exposes the canonical `KeyRing` rotation sequence and `GatewayConfig` registers both the raw CSV and every selectable trimmed key with all runtime redactors | PROVIDER-01/DATA-01/CTRL-03; logs, traces, metrics, persistence, and response redaction | Gateway config, transport, and observability owners | Reopen on credential syntax, parsing, selection, startup/hot-reload propagation, or redactor-consumer changes |
 | AUD-009 | Should Plan | Decision Recorded | Closed | Only exact backend-supported `api_type` strings are present; all other values infer in memory using `responses`, `chat`, `anthropic`, `google` order; custom defaults to Responses; warning emitted | PROVIDER-01; config/Admin | Project owner decision recorded in profile | Reopen if support list, fallback order, or persistence semantics change |
 | AUD-011 | Should Plan | Decision Recorded | Risk Accepted | Direct arbitrary HTTP(S) custom egress and key delivery are accepted within local/LAN scope; provider redirect expansion requires explicit opt-in | PROVIDER-01/SCN-09; transport boundary | Project owner | Reopen if deployment boundary, direct-egress policy, or redirect policy changes |
@@ -78,6 +82,8 @@ claims.
 | AUD-014 | 20260720-1554 / `b7542d2`, `de9c96b` | Success, HTTP error, and transport-exception reflection tests prove the configured Tavily key is absent and the original exception cause is detached | No real Tavily response was exercised | Reopen if Tavily response/error handling changes |
 | AUD-015 | 20260720-1606 / working tree | Shared provider-return decorator, sidecar and Admin model-discovery redaction, cause detachment, arbitrary raw-SSE split coverage, and adversarial dict-key tests; independent focused/lint/full verification green | Deterministic fake-only evidence; no real provider, sidecar, external sink, or production runtime exercised | Reopen on a new credential-bearing client/return path, raw-stream implementation, dict-key serialization, exception propagation, or diagnostic sink |
 | AUD-016 | 20260720-1606 / working tree | Canonical `KeyRing` values feed rotation and `GatewayConfig.token_values`; startup/hot-reload/rollback tests cover every rotated dummy key and runtime redactor; independent focused/lint/full verification green | Comma remains the credential-list syntax; no live rotation or external log/persistence sink exercised | Reopen on credential syntax/parser, provider construction, selection order, config activation/rollback, or redactor propagation changes |
+| AUD-017 | 20260720-1859 / working tree | Provider/auxiliary/Tavily/sidecar/Admin boundaries block collisions; parsed JSON is not rewritten; raw SSE is held by complete event and tested across arbitrary splits, short/common tokens, rotation and framing; focused `187 passed`, full `3576 passed, 5 skipped`, lint and compatibility checks green | Exact matching does not detect encoded, hashed, or covert exfiltration; short/common credentials can intentionally make responses fail closed; no real upstream was exercised | Reopen on credential syntax, client inventory, return parsing, SSE framing, or collision policy change |
+| AUD-018 | 20260720-1859 / working tree | Provider-specific model-list normalization rejects list/scalar/null roots, missing/wrong collections, invalid members/IDs, and preserves OpenAI/Anthropic/Google/custom-ID success cases; focused `187 passed`, full `3576 passed, 5 skipped` | Browser/LAN UX and real provider pagination remain unverified | Reopen on provider model-list schema, shim `model_id_field`, or Admin error contract change |
 
 ## Omission-remediation re-audit — `20260720-1239`
 
@@ -109,6 +115,17 @@ This pass independently challenged the credential-return, redirect, and live-run
 - Business semantics remain unchanged: the approved profile already requires configured-token redaction and does not tolerate credential leakage, so neither finding requires a new owner decision.
 - No Action at current HEAD: semantic live-runner inventory and redirect/direct-HTTP falsification found no reachable bypass. No real API or agent call was made.
 
+## Fifth independent omission audit - `20260720-1859`
+
+This pass challenged the fourth audit's non-secret preservation oracle and the Admin model-discovery response boundary at current HEAD `6d1bc7a`. Details are in [`docs/audit/runs/20260720-1859/REPORT.md`](runs/20260720-1859/REPORT.md) and [`EVIDENCE.md`](runs/20260720-1859/EVIDENCE.md).
+
+### Current classification
+
+- Closed after authorized remediation and phase-separated deterministic verification: AUD-017 and AUD-018.
+- Credentials retain no minimum-length requirement, Rosetta remains Gateway-API-key authenticated, and exact return collisions fail closed without rewriting legitimate JSON or emitting a partial SSE event.
+- Admin model discovery rejects syntactically valid but schema-invalid provider JSON with one stable controlled error while preserving supported OpenAI/Anthropic/Google/custom-ID normalization.
+- Historical AUD-015/AUD-016 closure evidence remains preserved. No real API/agent call occurred; browser/LAN and external-provider behavior remain unverified.
+
 ## Accepted Debt and Risk
 
 | ID | Owner | Why acceptable now | Safety ceiling | Mitigations/monitoring | Revisit trigger/date | Expected resolution |
@@ -121,7 +138,7 @@ This pass independently challenged the credential-return, redirect, and live-run
 | --- | --- | --- | --- | --- | --- | --- |
 | GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | live runners now share a fail-closed exact-marker gate; deterministic suite excludes real calls | keep the shared gate mandatory for every new runner | Approved live runs remain explicit and out of audit evidence | Project owner | Enforced |
 | GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings and compaction mappings now have scope, TTL and transactional row/byte limits | require quota contract tests for each new durable store | Limits are local/LAN policy values and may need owner tuning | Gateway persistence owner | Enforced |
-| GP-003 | Every credential-bearing outbound client must register the credentials actually sent on the wire and remove them from all untrusted return channels | Tavily required AUD-014; provider/sidecar siblings now require AUD-015; CSV key rotation requires AUD-016 | central credential parser plus an executable client matrix covering success, HTTP error, stream, and exception/cause boundaries | Exact-value redaction can alter legitimate content equal to a configured credential, which is required by the approved no-leak profile | Gateway transport/security owner | Candidate |
+| GP-003 | Every credential-bearing outbound client must register the credentials actually sent on the wire and block untrusted return collisions without silently corrupting the supported wire/application protocol | Tavily required AUD-014; provider/sidecar siblings required AUD-015; CSV key rotation required AUD-016; AUD-017 established collision-safe fail-closed semantics | canonical exact collision detection, complete-event raw SSE gating, stable controlled errors, and an executable client matrix covering success/error/stream/exception paths, framing, schema, rotations, and short/common credentials | arbitrary short/common credentials may make some responses fail closed when no safe output exists | Gateway transport/security owner | Enforced |
 
 ## Candidate Disposition
 
@@ -133,6 +150,187 @@ This pass independently challenged the credential-return, redirect, and live-run
 | AUD-013: reject model groups that reference missing/disabled providers | 20260720-1239 / config routing | Rejected by owner | Current silent-skip behavior is proportionate to this Gateway's scale; no new validation/error-propagation state machine is introduced. Revisit only if routing scale or operability requirements change. |
 
 ---
+
+## AUD-017 — Exact credential replacement can corrupt legitimate protocols and content
+
+- Severity: Must Fix
+- Decision class: Agent-Fixable after owner decision
+- Status: Closed
+- Confidence: High
+- First detected run: `20260720-1859`
+- Last updated run: `20260720-1859`
+- Owner: Gateway transport/security owner; project-owner semantics recorded 2026-07-20
+
+### Quality attributes and profile requirements
+
+- Affected attributes: Correctness, security, interoperability, reliability, operability.
+- Profile/control requirement: configured credentials must not be returned, while Codex Responses/SSE semantics, framing, ordering, schemas, and non-secret content remain compatible.
+- Violated invariant/outcome: every currently accepted credential value is treated as a context-free substring, so a legitimate protocol/content occurrence is indistinguishable from reflection and may be silently rewritten.
+
+### Failure, abuse, or structural path
+
+```text
+Stimulus/trigger: Configure a custom/local provider credential equal to a short or common
+                  protocol/content string such as "data", "id", or "a".
+Environment/preconditions: Supported local/LAN Gateway; provider configuration is otherwise valid;
+                           passthrough/converted response or stream crosses the credential redactor.
+Path/components: GatewayConfig/build_provider_info -> KeyRing.credential_values -> SecretRedactor ->
+                 CredentialRedactingTransport parsed/raw return -> downstream Codex/Admin/model consumer.
+Expected response: The configured credential is not disclosed and legitimate response schema/framing/content is preserved.
+Observed failure: Unconditional substring replacement rewrites SSE field names, event text, JSON keys,
+                  scalar values, or raw JSON syntax even when the occurrence is legitimate content.
+```
+
+### Impact and risk basis
+
+- User/business/mission impact: core Codex response streams can become unparsable or semantically wrong under a configuration the Gateway currently accepts.
+- Security/privacy/data/reliability impact: the security control creates silent protocol corruption; attempts to avoid corruption without a credential contract can reintroduce credential disclosure.
+- Likelihood/exploitability: requires a credential that overlaps legitimate output. Custom/local endpoints often use operator-chosen development tokens, and the code accepts every non-empty segment.
+- Blast radius: every return using the affected provider/sidecar/search credential, including success, error, parsed, and raw-stream paths.
+- Reversibility/recovery: operator can change the credential or disable the client; existing responses cannot be recovered after transformation.
+- Systemic reach: shared `SecretRedactor` and credential-bearing client matrix.
+
+### Scope and occurrences
+
+| Component/path/symbol/workflow | Evidence | Why affected |
+| --- | --- | --- |
+| `gateway/transport/provider_info.py:35-50,87,94-103` | `KeyRing` accepts every non-empty comma-delimited segment | no minimum length, entropy, or safe-alphabet contract bounds exact matching |
+| `observability/redaction.py:69-89,153-229` | credentials become raw/JSON-escaped byte regex alternatives and string replacements | replacement is context-free across keys, values, syntax, and stream framing |
+| `gateway/transport/credential_redaction.py:90-126,237-247` | exact replacement is applied to parsed events, raw SSE, and raw response bodies | critical downstream boundary consumes the unsafe transform |
+| Tavily and web-run sidecar clients | both reuse `SecretRedactor` with unconstrained configured tokens | parsed result/error/model text can be altered for the same root cause |
+
+### Evidence
+
+- Code/configuration evidence: current accepted credential domain and shared exact replacement path above.
+- Test/scanner evidence: related focused suite reports `22 passed`, but raw-stream tests use a long unique token and define compatibility as unconditional `payload.replace(token, b"[REDACTED]")`.
+- Runtime/operations/incident evidence: deterministic probe with a real `GatewayConfig` and `api_key="data"` changes standard `data:` framing to `[REDACTED]:`; `framing_preserved=False`. Additional probes show `a` rewriting event/payload text and `id` rewriting a JSON key.
+- Architecture/history evidence: AUD-015 required status, schema, framing, ordering, and non-secret content compatibility; AUD-017 is a distinct root cause that invalidates that conclusion for the unconstrained credential domain without deleting the historical closure evidence.
+- Contradicting evidence considered: arbitrary chunk-split tests prove match detection, not legitimate-content preservation; long production-like keys reduce likelihood but are not a current contract.
+- Gaps/assumptions: no real provider was called. Encoded, hashed, or covert malicious-provider exfiltration is not solved by exact-value redaction and remains outside any deterministic literal-reflection claim.
+
+### Recommended direction
+
+- Smallest credible remediation/control: retain arbitrary configured credential lengths, make raw/parsed redaction protocol/schema-aware, and return a controlled fail-closed error whenever a credential collision cannot be removed without risking disclosure or malformed SSE/JSON.
+- Rollout/migration/rollback implications: no credential-length migration or unauthenticated mode is introduced. Some short/common credentials may cause a request or stream to fail closed when safe output is impossible; diagnostics must identify the configuration problem without echoing the credential.
+- Suggested priority: before release compatibility or credential-return closure is claimed.
+
+### Frozen acceptance criteria
+
+- [x] The project owner records that credentials have no minimum-length requirement, Rosetta remains API-key authenticated, and ambiguous collisions must fail closed without credential disclosure or silent protocol corruption; the profile and config contract agree.
+- [x] Every credential accepted by the resulting contract has a defined, testable collision behavior that cannot silently break SSE field names/events, JSON syntax/schema, status/error structure, or non-secret scalar content.
+- [x] Provider passthrough/converted, parsed/raw, streaming/non-streaming, Admin model discovery, Tavily, web-run sidecar, and image/auxiliary provider paths use the same canonical contract.
+- [x] Regression tests cover one-character/common/numeric tokens, JSON keys/values, SSE `data`/`event` fields, arbitrary chunk splits, rotations, prefixes/overlap, and the existing startup/hot-reload credential inventory.
+- [x] The original literal-reflection cases from AUD-014/AUD-015/AUD-016 remain secret-free under the approved fail-closed semantics.
+- [x] Targeted tests, full deterministic suite, lint/type checks, compatibility checks, audit ledgers, and CodeGraph are updated; no live-call result is required for deterministic closure.
+
+### Human decision or risk acceptance
+
+- Decision required: resolved.
+- Options/consequences: the owner rejected a minimum credential length and rejected unauthenticated Rosetta access. The remaining approved control is protocol-aware removal with controlled failure when a collision is ambiguous; neither credential leakage nor silently corrupted output is accepted.
+- Decision: configured credentials have no minimum-length requirement; Rosetta always requires a configured Gateway API key; ambiguous collisions fail closed.
+- Authority/date: Project owner / 2026-07-20.
+- Residual-risk owner: Project owner and Gateway transport/security owner.
+
+### Remediation history
+
+| Wave/head | Changes | Verification | Result | Coverage invalidated |
+| --- | --- | --- | --- | --- |
+| `20260720-1859` / `6d1bc7a` | owner decision recorded; no implementation change | source trace, direct GatewayConfig/redactor probes, related 22-test focused suite | Open / agent-fixable | PROVIDER-01, SIDE-01, SCN-03, SCN-04, CTRL-03, GP-003 |
+| `20260720-1859` / working tree | replaced semantic rewriting with canonical collision detection; added complete-event raw SSE gating and source-compatible terminal errors; applied the same fail-closed contract to provider, auxiliary, Tavily, sidecar, and Admin return paths | focused `187 passed`; full `3576 passed, 5 skipped, 11 warnings`; lint and compatibility checks green; no live calls | Closed | None; deterministic coverage refreshed |
+
+### Closure/reopen
+
+- Closure evidence: canonical collision checks preserve credential-free objects/bytes unchanged; complete-event raw SSE gating prevents partial risk-event emission; every credential-bearing client path returns a controlled non-sensitive failure; focused/full/lint/compatibility evidence is green.
+- Residual risk: exact-value detection cannot prevent arbitrary reversible/covert encoding by a malicious credential-bearing upstream. Very short/common credentials may intentionally cause supported responses to fail closed.
+- Reopen trigger after future closure: credential syntax, parser, exact matching, replacement marker, SSE/raw handling, parsed-key handling, client inventory, or profile no-leak semantics change.
+
+## AUD-018 — Admin model discovery trusts unvalidated upstream JSON shapes
+
+- Severity: Should Plan
+- Decision class: Agent-Fixable
+- Status: Closed
+- Confidence: High
+- First detected run: `20260720-1859`
+- Last updated run: `20260720-1859`
+- Owner: Gateway/Admin owner
+
+### Quality attributes and profile requirements
+
+- Affected attributes: Reliability, security, operability, correctness.
+- Profile/control requirement: provider content is untrusted; Admin provider/model operations are always-on critical surfaces and malformed upstream behavior must fail with bounded, non-sensitive errors.
+- Violated invariant/outcome: syntactically valid JSON is treated as a valid provider model-list schema without checking its root, collection, member, or identifier types.
+
+### Failure, abuse, or structural path
+
+```text
+Stimulus/trigger: Configured provider returns HTTP 200 with a syntactically valid JSON list,
+                  scalar, object with non-list data/models, or a list containing non-object members.
+Environment/preconditions: Authenticated Admin invokes upstream model discovery.
+Path/components: fetch_upstream_models -> response.json -> redact_exact -> body.get -> m.get -> sort.
+Expected response: Return a stable, non-sensitive Admin error and perform no partial mutation.
+Observed failure: Type assumptions raise uncaught AttributeError/TypeError instead of the route's controlled error response.
+```
+
+### Impact and risk basis
+
+- User/business/mission impact: Admin cannot complete model discovery and receives an internal failure for an ordinary untrusted-provider contract violation.
+- Security/privacy/data/reliability impact: no secret exposure or persistent mutation was demonstrated; the primary risk is reliability and trust-boundary erosion.
+- Likelihood/exploitability: malformed/custom provider responses are realistic; a malicious configured provider can trigger the path deterministically.
+- Blast radius: one Admin request/provider discovery operation.
+- Reversibility/recovery: retry after provider/config correction; no durable corruption shown.
+- Systemic reach: bounded to Admin model-list normalization, with provider-specific OpenAI/Anthropic/Google branches.
+
+### Scope and occurrences
+
+| Component/path/symbol/workflow | Evidence | Why affected |
+| --- | --- | --- |
+| `gateway/admin/routes/config.py:975-1004` | catches JSON parse failure, then directly calls `body.get()` and `m.get()` | wrong-but-valid JSON escapes the intended error boundary |
+| `tests/gateway/test_admin_model_discovery_cleanup.py` | covers invalid JSON, connection/cancellation, redirect, lifecycle, and credential reflection | no root/member/schema negative cases exist |
+
+### Evidence
+
+- Code/configuration evidence: no explicit mapping/list/string checks before normalization and sorting.
+- Test/scanner evidence: related focused suite passes `22` tests while omitting valid-JSON/wrong-schema cases.
+- Runtime/operations/incident evidence: monkeypatched bounded response returning `[{'id': 'm'}]` causes `AttributeError: 'list' object has no attribute 'get'` from `fetch_upstream_models`.
+- Architecture/history evidence: IF-03 provider responses are untrusted; IF-04 Admin APIs should bound errors.
+- Contradicting evidence considered: server middleware may convert the exception to a generic 500, but that does not satisfy the route-level controlled provider-error contract or give actionable Admin feedback.
+- Gaps/assumptions: no browser/LAN or real provider exercise.
+
+### Recommended direction
+
+- Smallest credible remediation/control: validate the root mapping, provider-specific collection list, each member mapping, selected ID field string, and final homogeneous model-ID list; return one stable non-sensitive schema error for mismatches.
+- Rollout/migration/rollback implications: none; valid provider responses retain current output. Avoid exposing raw malformed provider content in the error.
+- Suggested priority: before relying on custom-provider Admin model discovery.
+
+### Frozen acceptance criteria
+
+- [x] Root JSON must be an object; otherwise return a stable non-sensitive Admin error without raising.
+- [x] `data`/`models` must be arrays; every consumed member must be an object; missing/wrong types return the same bounded error class.
+- [x] Provider-specific and shim-specific ID fields must resolve to strings; invalid/mixed values cannot reach `.startswith()`, sorting, or response serialization unchecked.
+- [x] OpenAI-compatible, Anthropic, Google, and custom `model_id_field` success cases retain normalized output.
+- [x] Tests cover list/scalar/null roots, missing/wrong collection types, null/scalar members, wrong ID types, ignored untrusted extra keys, and credential-reflecting payloads.
+- [x] Connection, cancellation, redirect, size-limit, credential handling, client cleanup, and no-partial-mutation behavior remain intact; targeted and full deterministic checks pass.
+
+### Human decision or risk acceptance
+
+- Decision required: None.
+- Options/consequences: N/A; existing trust-boundary policy supplies the intended outcome.
+- Decision: Agent-fixable after remediation authorization.
+- Authority/date: Existing approved profile / 2026-07-20.
+- Residual-risk owner: Gateway/Admin owner.
+
+### Remediation history
+
+| Wave/head | Changes | Verification | Result | Coverage invalidated |
+| --- | --- | --- | --- | --- |
+| `20260720-1859` / `6d1bc7a` | discovery only; no implementation change | source trace, fake root-list probe, related 22-test focused suite | Open | AUTH-02, SCN-08, SCN-09 model-discovery slice |
+| `20260720-1859` / working tree | added one provider-schema normalizer with stable mismatch response; validated object root, expected collection, object members, string fallback/shim IDs, and collision handling before Admin rendering | focused `187 passed`; full `3576 passed, 5 skipped, 11 warnings`; lint and compatibility checks green | Closed | None; deterministic Admin slice refreshed |
+
+### Closure/reopen
+
+- Closure evidence: negative-schema matrix returns the stable Admin error without exceptions, while supported provider/shim schemas remain normalized and sorted; full deterministic checks are green.
+- Residual risk: browser/LAN UX, real provider pagination, and live external payloads remain unverified.
+- Reopen trigger after future closure: provider model-list schema, shim `model_id_field`, Admin error contract, or model-discovery transport changes.
 
 ## AUD-002 — Compaction replacement persistence has no aggregate quota
 

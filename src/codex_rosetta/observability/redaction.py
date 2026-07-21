@@ -101,6 +101,28 @@ class SecretRedactor:
         stream = self.streaming_redactor()
         return stream.feed(value) + stream.finish()
 
+    def contains_exact(self, value: Any) -> bool:
+        """Return whether a configured value occurs anywhere in a structure."""
+        if isinstance(value, str):
+            return any(token in value for token in self._token_values)
+        if isinstance(value, bytes):
+            return self.contains_wire_bytes(value)
+        if isinstance(value, dict):
+            return any(
+                self.contains_exact(key) or self.contains_exact(item)
+                for key, item in value.items()
+            )
+        if isinstance(value, list | tuple):
+            return any(self.contains_exact(item) for item in value)
+        if value is None or isinstance(value, bool | int | float):
+            serialized = json.dumps(value, ensure_ascii=False)
+            return any(token in serialized for token in self._token_values)
+        return False
+
+    def contains_wire_bytes(self, value: bytes) -> bool:
+        """Return whether raw or JSON-escaped configured bytes occur in *value*."""
+        return any(pattern in value for pattern in self._wire_token_values)
+
     def streaming_redactor(self) -> StreamingSecretRedactor:
         """Create an independent exact-value redactor for a chunked byte stream."""
         return StreamingSecretRedactor(self._wire_token_values)
@@ -227,3 +249,10 @@ class StreamingSecretRedactor:
         output = self._pattern.sub(REDACTED.encode("ascii"), self._pending)
         self._pending = b""
         return output
+
+
+class SecretCollisionError(ValueError):
+    """Raised when untrusted return data contains a configured credential."""
+
+    def __init__(self) -> None:
+        super().__init__("Upstream response contains a configured credential")

@@ -123,7 +123,7 @@ def test_sidecar_client_sends_bounded_self_hosted_search(
 
 
 @pytest.mark.parametrize("status_code", [200, 400, 500])
-def test_sidecar_execute_redacts_credential_from_success_and_http_errors(
+def test_sidecar_execute_blocks_credential_in_success_and_http_errors(
     monkeypatch,
     status_code: int,
 ) -> None:
@@ -142,23 +142,13 @@ def test_sidecar_execute_redacts_credential_from_success_and_http_errors(
     monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
     client = WebRunSidecarHTTPClient("http://web-run:8080", token)
 
-    if status_code == 200:
-        output = asyncio.run(
-            client.execute(session_id="a" * 64, operation="open", arguments={})
-        )
-        assert output == "before [REDACTED] after"
-    else:
-        error_type = (
-            WebRunSidecarInvalidRequest if status_code == 400 else WebRunSidecarError
-        )
-        with pytest.raises(error_type) as caught:
-            asyncio.run(
-                client.execute(session_id="a" * 64, operation="open", arguments={})
-            )
-        assert token not in str(caught.value)
+    with pytest.raises(WebRunSidecarError) as caught:
+        asyncio.run(client.execute(session_id="a" * 64, operation="open", arguments={}))
+    assert token not in str(caught.value)
+    assert str(caught.value).endswith("response blocked")
 
 
-def test_sidecar_search_redacts_nested_success_payload(monkeypatch) -> None:
+def test_sidecar_search_blocks_nested_credential_collision(monkeypatch) -> None:
     token = "sidecar-search-secret"
 
     async def fake_request(*args, **kwargs):
@@ -172,18 +162,20 @@ def test_sidecar_search_redacts_nested_success_payload(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
-    result = asyncio.run(
-        WebRunSidecarHTTPClient("http://web-run:8080", token).search(
-            "query",
-            settings=WebSearchSettings(
-                max_results=3,
-                search_depth="basic",
-                include_domains=(),
-            ),
+    with pytest.raises(WebRunSidecarError) as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", token).search(
+                "query",
+                settings=WebSearchSettings(
+                    max_results=3,
+                    search_depth="basic",
+                    include_domains=(),
+                ),
+            )
         )
-    )
 
-    assert result["results"][0]["content"] == "before [REDACTED] after"
+    assert token not in str(caught.value)
+    assert str(caught.value).endswith("response blocked")
 
 
 @pytest.mark.parametrize("method", ["execute", "search"])
@@ -225,7 +217,7 @@ def test_sidecar_transport_exception_is_redacted_and_cause_free(
     assert caught.value.__context__ is None
 
 
-def test_sidecar_invalid_payload_diagnostic_drops_sensitive_json_cause(
+def test_sidecar_non_json_credential_collision_is_blocked_before_parsing(
     monkeypatch,
 ) -> None:
     token = "sidecar-invalid-json-secret"
@@ -245,6 +237,7 @@ def test_sidecar_invalid_payload_diagnostic_drops_sensitive_json_cause(
             )
         )
 
-    assert str(caught.value) == "web-run sidecar returned invalid JSON"
+    assert token not in str(caught.value)
+    assert str(caught.value).endswith("response blocked")
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None

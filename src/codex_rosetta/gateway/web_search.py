@@ -114,15 +114,18 @@ class TavilyHTTPClient:
                 safe_error = self._redactor.redact(str(exc))
                 raise RuntimeError(f"Tavily request failed: {safe_error}") from None
 
+        if self._redactor.contains_wire_bytes(response.content):
+            raise RuntimeError(
+                "Tavily response contains a configured credential; response blocked"
+            )
         if response.status_code >= 400:
-            body = self._redactor.redact(response.text[:500])
+            body = response.text[:500]
             raise RuntimeError(f"Tavily returned HTTP {response.status_code}: {body}")
         try:
             parsed = response.json()
         except Exception as exc:
             raise RuntimeError("Tavily returned invalid JSON") from exc
-        safe_result = self._redactor.redact(parsed)
-        return safe_result if isinstance(safe_result, dict) else {"result": safe_result}
+        return parsed if isinstance(parsed, dict) else {"result": parsed}
 
 
 class WebSearchRuntime:
