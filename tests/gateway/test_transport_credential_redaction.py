@@ -10,6 +10,10 @@ from typing import Any
 import pytest
 
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.converters.openai_responses._constants import (
+    RESPONSES_TOOL_RESULT_ITEM_TYPES,
+    ResponsesEventType,
+)
 from codex_rosetta.gateway.transport._base import (
     UpstreamConnectionError,
     UpstreamCredentialCollisionError,
@@ -401,6 +405,246 @@ def test_non_streaming_does_not_parse_unknown_json_strings_twice() -> None:
 
     response = asyncio.run(run())
     assert response.raw_content == raw_content
+
+
+@pytest.mark.parametrize("result_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+@pytest.mark.parametrize("source", ("body", "raw"))
+def test_non_streaming_blocks_registered_result_output_json(
+    result_type: str,
+    source: str,
+) -> None:
+    output = '{"value":"\\u0073ecret"}'
+    payload = {
+        "output": [
+            {
+                "type": result_type,
+                "call_id": "call-result",
+                "output": output,
+            }
+        ]
+    }
+    raw_content = json.dumps(payload, separators=(",", ":")).encode()
+
+    class _ResultTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content) if source == "body" else None,
+                raw_content=raw_content if source == "raw" else b"{}",
+            )
+
+    async def run() -> None:
+        with pytest.raises(UpstreamCredentialCollisionError):
+            await CredentialRedactingTransport.wrap(_ResultTransport()).send_request(
+                _provider("secret"),
+                "openai_responses",
+                {},
+                "test",
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("result_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+def test_non_streaming_blocks_registered_result_content_list_json(
+    result_type: str,
+) -> None:
+    output = '[{"type":"input_text","text":"\\u0073ecret"}]'
+    payload = {
+        "output": [{"type": result_type, "call_id": "call-content", "output": output}]
+    }
+    raw_content = json.dumps(payload, separators=(",", ":")).encode()
+
+    class _ResultTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content),
+                raw_content=raw_content,
+            )
+
+    async def run() -> None:
+        with pytest.raises(UpstreamCredentialCollisionError):
+            await CredentialRedactingTransport.wrap(_ResultTransport()).send_request(
+                _provider("secret"),
+                "openai_responses",
+                {},
+                "test",
+            )
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("result_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+@pytest.mark.parametrize(
+    "output",
+    ("ordinary output", '{"value":"other-provider-secret"}'),
+)
+def test_non_streaming_releases_ordinary_and_inactive_result_output(
+    result_type: str,
+    output: str,
+) -> None:
+    payload = {
+        "output": [{"type": result_type, "call_id": "call-safe", "output": output}]
+    }
+    raw_content = json.dumps(payload, separators=(",", ":")).encode()
+
+    class _ResultTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content),
+                raw_content=raw_content,
+            )
+
+    async def run() -> UpstreamResponse:
+        return await CredentialRedactingTransport.wrap(_ResultTransport()).send_request(
+            _provider("active-secret"),
+            "openai_responses",
+            {},
+            "test",
+        )
+
+    response = asyncio.run(run())
+    assert response.body == payload
+    assert response.raw_content == raw_content
+
+
+def test_non_streaming_keeps_unregistered_result_output_opaque() -> None:
+    output = '{"value":"\\u0073ecret"}'
+    payload = {
+        "output": [
+            {
+                "type": "unregistered_tool_result",
+                "call_id": "call-unknown",
+                "output": output,
+            }
+        ]
+    }
+    raw_content = json.dumps(payload, separators=(",", ":")).encode()
+
+    class _ResultTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            return UpstreamResponse(
+                status_code=200,
+                body=json.loads(raw_content),
+                raw_content=raw_content,
+            )
+
+    async def run() -> UpstreamResponse:
+        return await CredentialRedactingTransport.wrap(_ResultTransport()).send_request(
+            _provider("secret"),
+            "openai_responses",
+            {},
+            "test",
+        )
+
+    response = asyncio.run(run())
+    assert response.body == payload
+    assert response.raw_content == raw_content
+
+
+@pytest.mark.parametrize("result_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+@pytest.mark.parametrize(
+    "event_type",
+    (ResponsesEventType.OUTPUT_ITEM_ADDED, ResponsesEventType.OUTPUT_ITEM_DONE),
+)
+def test_stream_blocks_registered_result_output_for_parsed_and_raw(
+    result_type: str,
+    event_type: str,
+) -> None:
+    event = {
+        "type": event_type,
+        "output_index": 0,
+        "item": {
+            "type": result_type,
+            "call_id": "call-stream-result",
+            "output": '{"value":"\\u0073ecret"}',
+        },
+    }
+    frame = b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+
+    async def run_parsed() -> None:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=[event]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [item async for item in stream]
+
+    async def run_raw() -> None:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[frame[:13], frame[13:]]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [chunk async for chunk in raw]
+
+    asyncio.run(run_parsed())
+    asyncio.run(run_raw())
+
+
+@pytest.mark.parametrize("result_type", sorted(RESPONSES_TOOL_RESULT_ITEM_TYPES))
+def test_stream_releases_inactive_result_output_for_parsed_and_raw(
+    result_type: str,
+) -> None:
+    event = {
+        "type": ResponsesEventType.OUTPUT_ITEM_ADDED,
+        "output_index": 0,
+        "item": {
+            "type": result_type,
+            "call_id": "call-safe-result",
+            "output": '{"value":"other-provider-secret"}',
+        },
+    }
+    frame = b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=[event]))
+        ).send_streaming(_provider("active-secret"), "openai_responses", {}, "test")
+        return [item async for item in stream]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[frame]))
+        ).send_streaming(_provider("active-secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        return b"".join([chunk async for chunk in raw])
+
+    assert asyncio.run(run_parsed()) == [event]
+    assert asyncio.run(run_raw()) == frame
+
+
+def test_stream_keeps_unregistered_result_output_opaque_for_parsed_and_raw() -> None:
+    event = {
+        "type": ResponsesEventType.OUTPUT_ITEM_ADDED,
+        "output_index": 0,
+        "item": {
+            "type": "unregistered_tool_result",
+            "call_id": "call-unknown",
+            "output": '{"value":"\\u0073ecret"}',
+        },
+    }
+    frame = b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=[event]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        return [item async for item in stream]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[frame]))
+        ).send_streaming(_provider("secret"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        return b"".join([chunk async for chunk in raw])
+
+    assert asyncio.run(run_parsed()) == [event]
+    assert asyncio.run(run_raw()) == frame
 
 
 def test_raw_sse_collision_blocks_every_cross_chunk_split_without_leaking():

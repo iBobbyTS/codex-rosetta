@@ -31,6 +31,7 @@ from ...types.ir import (
 from ...types.ir.tools import ToolCallConfig
 from ..base import BaseToolOps
 from ..base.helpers import extract_part_ids, log_orphan_warnings, sanitize_schema
+from ._constants import RESPONSES_TOOL_RESULT_ITEM_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -824,9 +825,14 @@ class OpenAIResponsesToolOps(BaseToolOps):
         Returns:
             IR ToolResultPart.
         """
+        item_type = provider_tool_result.get("type")
+        is_registered_result = (
+            isinstance(item_type, str) and item_type in RESPONSES_TOOL_RESULT_ITEM_TYPES
+        )
         output = provider_tool_result.get("output", "")
-        # Try to parse JSON output
-        if isinstance(output, str):
+        # Only registered result fields are decoded as embedded JSON. Unknown
+        # Responses items remain opaque even when their output looks like JSON.
+        if is_registered_result and isinstance(output, str):
             try:
                 parsed = json.loads(output)
                 output = parsed

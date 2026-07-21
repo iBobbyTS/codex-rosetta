@@ -32,7 +32,10 @@ from ...types.ir import (
 from ...types.ir.messages import MessageMetadata
 from ..base import BaseMessageOps
 from .content_ops import OpenAIResponsesContentOps
-from ._constants import RESPONSES_TOOL_CALL_ITEM_TYPES
+from ._constants import (
+    RESPONSES_TOOL_CALL_ITEM_TYPES,
+    RESPONSES_TOOL_RESULT_ITEM_TYPES,
+)
 from .tool_ops import OpenAIResponsesToolOps
 
 
@@ -338,9 +341,7 @@ class OpenAIResponsesMessageOps(BaseMessageOps):
 
     _TOOL_CALL_TYPES = RESPONSES_TOOL_CALL_ITEM_TYPES
 
-    _TOOL_RESULT_TYPES = frozenset(
-        {"function_call_output", "custom_tool_call_output", "mcp_call_output"}
-    )
+    _TOOL_RESULT_TYPES = RESPONSES_TOOL_RESULT_ITEM_TYPES
 
     def p_messages_to_ir(
         self,
