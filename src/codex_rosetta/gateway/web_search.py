@@ -114,7 +114,7 @@ class TavilyHTTPClient:
                 safe_error = self._redactor.redact(str(exc))
                 raise RuntimeError(f"Tavily request failed: {safe_error}") from None
 
-        if self._redactor.contains_wire_bytes(response.content):
+        if self._redactor.contains_json_semantic(response.content):
             raise RuntimeError(
                 "Tavily response contains a configured credential; response blocked"
             )

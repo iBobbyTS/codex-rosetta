@@ -11,8 +11,8 @@ second profile under this directory.
 - System map: [`SYSTEM-MAP.md`](SYSTEM-MAP.md)
 - Coverage ledger: [`COVERAGE.md`](COVERAGE.md)
 - Findings ledger: [`FINDINGS.md`](FINDINGS.md)
-- Latest run: [`runs/20260720-1859/REPORT.md`](runs/20260720-1859/REPORT.md)
-- Latest status: AUD-017 and AUD-018 are `Closed` after authorized deterministic remediation. Credential collisions now fail closed without rewriting successful SSE/JSON, raw SSE is released only at complete safe event boundaries, and Admin model discovery rejects invalid provider JSON schemas with a stable non-sensitive error. No real provider/API call occurred in this run.
+- Latest run: [`runs/20260720-2103/REPORT.md`](runs/20260720-2103/REPORT.md)
+- Latest status: AUD-019 is `Closed` after shared JSON-semantic checks blocked equivalent escape spellings across provider, SSE, Tavily, and sidecar return paths. AUD-020 remains `Must Fix / Needs Decision / Open` until the owner-selected credential domain is recorded. No real provider/API call occurred.
 
 Historical run snapshots remain under their original dated directories. They
 are preserved as historical evidence and may contain paths or conclusions that

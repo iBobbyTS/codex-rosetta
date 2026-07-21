@@ -1321,6 +1321,27 @@ def test_tavily_blocks_reflected_token_in_error(
     assert str(exc_info.value).endswith("response blocked")
 
 
+def test_tavily_blocks_semantically_escaped_reflected_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        return BoundedHttpResponse(
+            status_code=200,
+            headers={"content-type": "application/json"},
+            content=b'{"answer":"\\u0073ecret","results":[]}',
+        )
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", _fake_request)
+
+    with pytest.raises(RuntimeError, match="response blocked"):
+        asyncio.run(
+            TavilyHTTPClient("secret").search(
+                "query",
+                settings=WebSearchSettings(),
+            )
+        )
+
+
 def test_tavily_detaches_transport_error_that_reflects_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

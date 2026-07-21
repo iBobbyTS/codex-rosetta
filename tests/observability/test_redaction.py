@@ -208,3 +208,31 @@ def test_contains_exact_detects_json_escaped_and_scalar_credentials():
     escaped = json.dumps({"value": 'quoted"credential'}, separators=(",", ":"))
     assert SecretRedactor({'quoted"credential'}).contains_wire_bytes(escaped.encode())
     assert SecretRedactor({"1"}).contains_exact(1)
+
+
+@pytest.mark.parametrize(
+    ("token", "payload", "detected_on_wire"),
+    [
+        ("secret", b'{"value":"\\u0073ecret"}', False),
+        ("secret", b'{"\\u0073ecret":"value"}', False),
+        ("a/b", b'{"value":"a\\/b"}', False),
+        ("emoji-\U0001f600", b'{"value":"emoji-\\ud83d\\ude00"}', True),
+        ('quote"slash\\', b'{"value":"quote\\"slash\\\\"}', True),
+    ],
+)
+def test_contains_json_semantic_detects_equivalent_string_encodings(
+    token: str,
+    payload: bytes,
+    detected_on_wire: bool,
+) -> None:
+    redactor = SecretRedactor({token})
+
+    assert redactor.contains_wire_bytes(payload) is detected_on_wire
+    assert redactor.contains_json_semantic(payload)
+
+
+def test_contains_json_semantic_preserves_invalid_and_unrelated_content() -> None:
+    redactor = SecretRedactor({"secret"})
+
+    assert not redactor.contains_json_semantic(b'{"value":"ordinary"}')
+    assert not redactor.contains_json_semantic(b'{"value":"\\u0073ecret"')
