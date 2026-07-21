@@ -179,8 +179,10 @@ def test_responses_direct_transport_forwards_each_endpoint(upstream_path: str) -
 
 
 @pytest.mark.parametrize("status_code", [200, 400])
-def test_auxiliary_provider_return_redacts_success_and_http_error(
+@pytest.mark.parametrize("upstream_path", ENDPOINTS)
+def test_auxiliary_provider_return_blocks_credential_collision(
     status_code: int,
+    upstream_path: str,
 ) -> None:
     token = "upstream-key"
     config = _make_config()
@@ -192,11 +194,11 @@ def test_auxiliary_provider_return_redacts_success_and_http_error(
         raw_content=json.dumps(payload, separators=(",", ":")).encode(),
     )
 
-    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+    response = asyncio.run(handle_codex_auxiliary(request, config, upstream_path))
 
-    assert response.status_code == status_code
+    assert response.status_code == 502
     assert token.encode() not in response.body
-    assert b"before [REDACTED] after" in response.body
+    assert b"response blocked" in response.body
 
 
 def test_auxiliary_transport_failure_is_redacted_before_metrics() -> None:

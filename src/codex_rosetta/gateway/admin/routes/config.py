@@ -911,6 +911,54 @@ def _format_connection_error(exc: Exception, url: str) -> str:
     return f"Failed to connect to upstream: {err_str}"
 
 
+def _invalid_model_list_response() -> JSONResponse:
+    """Return a stable error for a provider model-list schema mismatch."""
+    return JSONResponse({"error": "Upstream returned an invalid model list"})
+
+
+def _credential_collision_response() -> JSONResponse:
+    """Return a stable error for an ambiguous provider credential collision."""
+    return JSONResponse(
+        {
+            "error": (
+                "Upstream model list contains a configured credential; response blocked"
+            )
+        }
+    )
+
+
+def _normalize_upstream_model_ids(
+    body: dict[str, Any],
+    *,
+    provider_type: str,
+    id_field: str | None,
+) -> list[str] | None:
+    """Validate one provider model-list schema and return sorted model IDs."""
+    collection_key = "models" if provider_type == "google" else "data"
+    models = body.get(collection_key)
+    if not isinstance(models, list):
+        return None
+
+    model_ids: list[str] = []
+    for model in models:
+        if not isinstance(model, dict):
+            return None
+        fallback_key = "name" if provider_type == "google" else "id"
+        fallback_id = model.get(fallback_key, "")
+        if not isinstance(fallback_id, str):
+            return None
+        if provider_type == "google" and fallback_id.startswith("models/"):
+            fallback_id = fallback_id[len("models/") :]
+        model_id = model.get(id_field, fallback_id) if id_field else fallback_id
+        if not isinstance(model_id, str):
+            return None
+        if model_id:
+            model_ids.append(model_id)
+
+    model_ids.sort()
+    return model_ids
+
+
 async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
     """Fetch the model list from an upstream provider's /v1/models endpoint."""
     from codex_rosetta.shims import get_shim
@@ -973,35 +1021,28 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
         )
 
     try:
-        body = redactor.redact_exact(resp.json())
+        body = resp.json()
     except Exception:
         return JSONResponse(
             {"error": "Upstream returned non-JSON response"},
         )
+    if redactor.contains_exact(body):
+        return _credential_collision_response()
+    if not isinstance(body, dict):
+        return _invalid_model_list_response()
 
     # Resolve model_id_field from shim (e.g. Argo uses "internal_id")
     shim_name = config.provider_shim_names.get(provider_name)
     shim = get_shim(shim_name) if shim_name else None
     id_field = shim.model_id_field if shim and shim.model_id_field else None
 
-    # Normalize response — different providers return different formats
-    model_ids: list[str] = []
-    if ptype == "google":
-        # Google: {"models": [{"name": "models/gemini-...", ...}]}
-        for m in body.get("models", []):
-            name = m.get("name", "")
-            if name.startswith("models/"):
-                name = name[len("models/") :]
-            model_ids.append(m.get(id_field, name) if id_field else name)
-    else:
-        # Anthropic & OpenAI-compatible: {"data": [{"id": "...", ...}]}
-        for m in body.get("data", []):
-            model_ids.append(
-                m.get(id_field, m.get("id", "")) if id_field else m.get("id", "")
-            )
-
-    model_ids = [m for m in model_ids if m]
-    model_ids.sort()
+    model_ids = _normalize_upstream_model_ids(
+        body,
+        provider_type=ptype,
+        id_field=id_field,
+    )
+    if model_ids is None:
+        return _invalid_model_list_response()
 
     return JSONResponse(
         {

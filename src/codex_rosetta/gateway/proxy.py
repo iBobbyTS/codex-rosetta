@@ -98,6 +98,7 @@ from .tool_profiles import (
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
+    UpstreamCredentialCollisionError,
     UpstreamTransport,
 )
 from .transport.credential_redaction import CredentialRedactingTransport
@@ -205,6 +206,26 @@ def error_response_for_source(
         body = {"error": {"message": message}}
 
     return JSONResponse(body, status_code=status_code)
+
+
+def _stream_credential_collision_event(source_provider: ProviderType) -> str:
+    """Return a source-compatible SSE error for a blocked credential collision."""
+    message = "Upstream response contains a configured credential; response blocked"
+    if source_provider in ("openai_responses", "open_responses"):
+        body = {
+            "type": "error",
+            "error": {"type": "server_error", "code": None, "message": message},
+        }
+    elif source_provider == "anthropic":
+        body = {
+            "type": "error",
+            "error": {"type": "api_error", "message": message},
+        }
+    elif source_provider == "google":
+        body = {"error": {"code": 502, "message": message, "status": "INTERNAL"}}
+    else:
+        body = {"error": {"message": message, "type": "server_error", "code": None}}
+    return SSE_FORMATTERS.get(source_provider, SSE_FORMATTERS["openai_chat"])(body)
 
 
 def _conversion_failure_response(
@@ -1703,8 +1724,7 @@ async def _stream_event_generator(
     """
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_outcome = "cancelled"
-    stream_error: str | None = "Stream closed before completion"
+    terminal_state = _StreamTerminalState()
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -1758,11 +1778,13 @@ async def _stream_event_generator(
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-        terminal_outcome = "completed"
-        stream_error = None
+        terminal_state.complete()
     except BaseException as exc:
-        terminal_outcome, stream_error = _stream_terminal_failure(exc)
-        raise
+        yield _stream_terminal_recovery(
+            exc,
+            source_provider,
+            terminal_state,
+        )
     finally:
         _finalize_stream_profile(
             entry_id=entry_id,
@@ -1770,8 +1792,8 @@ async def _stream_event_generator(
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_outcome,
-            stream_error=stream_error,
+            terminal_outcome=terminal_state.outcome,
+            stream_error=terminal_state.error,
             ttfb_ms=ttfb_ms,
         )
 
@@ -1798,8 +1820,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_outcome = "cancelled"
-    stream_error: str | None = "Stream closed before completion"
+    terminal_state = _StreamTerminalState()
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
     controller = WebSearchStreamController()
@@ -1929,11 +1950,13 @@ async def _web_search_stream_event_generator(  # noqa: C901
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-        terminal_outcome = "completed"
-        stream_error = None
+        terminal_state.complete()
     except BaseException as exc:
-        terminal_outcome, stream_error = _stream_terminal_failure(exc)
-        raise
+        yield _stream_terminal_recovery(
+            exc,
+            source_provider,
+            terminal_state,
+        )
     finally:
         _finalize_stream_profile(
             entry_id=entry_id,
@@ -1941,8 +1964,8 @@ async def _web_search_stream_event_generator(  # noqa: C901
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_outcome,
-            stream_error=stream_error,
+            terminal_outcome=terminal_state.outcome,
+            stream_error=terminal_state.error,
             ttfb_ms=ttfb_ms,
         )
 
@@ -2137,9 +2160,35 @@ def _stream_terminal_failure(exc: BaseException) -> tuple[str, str]:
     return "error", str(exc)
 
 
+@dataclass
+class _StreamTerminalState:
+    """Mutable terminal classification shared with stream recovery helpers."""
+
+    outcome: str = "cancelled"
+    error: str | None = "Stream closed before completion"
+
+    def complete(self) -> None:
+        """Mark a stream as normally completed."""
+        self.outcome = "completed"
+        self.error = None
+
+
+def _stream_terminal_recovery(
+    exc: BaseException,
+    source_provider: ProviderType,
+    terminal_state: _StreamTerminalState,
+) -> str:
+    """Recover only credential collisions; preserve every other failure."""
+    terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+    if not isinstance(exc, UpstreamCredentialCollisionError):
+        raise exc
+    return _stream_credential_collision_event(source_provider)
+
+
 async def _raw_stream_event_generator(
     *,
     stream: Any,
+    source_provider: ProviderType,
     model: str,
     entry_id: str | None = None,
     request_log: Any | None = None,
@@ -2148,8 +2197,7 @@ async def _raw_stream_event_generator(
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_outcome = "cancelled"
-    stream_error: str | None = "Stream closed before completion"
+    terminal_state = _StreamTerminalState()
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -2171,11 +2219,11 @@ async def _raw_stream_event_generator(
             duration_s=time.monotonic() - t0,
             chunk_count=chunk_count,
         )
-        terminal_outcome = "completed"
-        stream_error = None
+        terminal_state.complete()
     except BaseException as exc:
-        terminal_outcome, stream_error = _stream_terminal_failure(exc)
-        raise
+        yield _stream_terminal_recovery(exc, source_provider, terminal_state).encode(
+            "utf-8"
+        )
     finally:
         _finalize_stream_profile(
             entry_id=entry_id,
@@ -2183,8 +2231,8 @@ async def _raw_stream_event_generator(
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_outcome,
-            stream_error=stream_error,
+            terminal_outcome=terminal_state.outcome,
+            stream_error=terminal_state.error,
             ttfb_ms=ttfb_ms,
             passthrough=True,
         )
@@ -2374,6 +2422,7 @@ async def _handle_direct_responses_streaming(
         StreamingResponse(
             _raw_stream_event_generator(
                 stream=stream,
+                source_provider=route.source_provider,
                 model=model,
                 entry_id=entry_id,
                 request_log=request_log,

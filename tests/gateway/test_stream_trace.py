@@ -388,6 +388,7 @@ def test_raw_stream_trace_records_passthrough_chunk_once(tmp_path):
         chunks: list[bytes] = []
         async for chunk in _raw_stream_event_generator(
             stream=_RawStream(raw_chunks),
+            source_provider="openai_responses",
             model="gpt-test",
             trace=trace,
         ):
@@ -455,6 +456,7 @@ def test_raw_stream_trace_records_early_close_as_cancelled(tmp_path):
     async def scenario() -> None:
         generator = _raw_stream_event_generator(
             stream=_RawStream([b"first", b"second"]),
+            source_provider="openai_responses",
             model="model",
             trace=trace,
         )

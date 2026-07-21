@@ -106,9 +106,15 @@ class WebRunSidecarHTTPClient:
             ) from None
         assert response is not None
 
+        if self._redactor.contains_wire_bytes(response.content):
+            raise WebRunSidecarError(
+                "web-run sidecar response contains a configured credential; "
+                "response blocked"
+            )
+
         invalid_json = False
         try:
-            body = self._redactor.redact_exact(response.json())
+            body = response.json()
         except Exception:
             invalid_json = True
             body = None
@@ -168,9 +174,15 @@ class WebRunSidecarHTTPClient:
             ) from None
         assert response is not None
 
+        if self._redactor.contains_wire_bytes(response.content):
+            raise WebRunSidecarError(
+                "web-run sidecar response contains a configured credential; "
+                "response blocked"
+            )
+
         invalid_json = False
         try:
-            body = self._redactor.redact_exact(response.json())
+            body = response.json()
         except Exception:
             invalid_json = True
             body = None

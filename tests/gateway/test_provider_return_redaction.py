@@ -128,7 +128,7 @@ class _StaticStream(UpstreamStream):
 
 
 @pytest.mark.parametrize("status_code", [200, 401])
-def test_responses_passthrough_redacts_success_and_http_error(status_code: int) -> None:
+def test_responses_passthrough_blocks_credential_collision(status_code: int) -> None:
     token = "passthrough-provider-secret"
     payload = {
         "id": "resp_test",
@@ -140,7 +140,7 @@ def test_responses_passthrough_redacts_success_and_http_error(status_code: int) 
             "message": f"before {token} after",
         },
     }
-    response, profile = asyncio.run(
+    response, _profile = asyncio.run(
         handle_non_streaming(
             _passthrough_route(),
             _provider(token),
@@ -155,14 +155,13 @@ def test_responses_passthrough_redacts_success_and_http_error(status_code: int) 
         )
     )
 
-    assert response.status_code == status_code
+    assert response.status_code == 502
     assert token.encode() not in response.body
-    assert b"before [REDACTED] after" in response.body
-    assert profile["passthrough"] is True
+    assert b"response blocked" in response.body
 
 
 @pytest.mark.parametrize("status_code", [200, 429])
-def test_converted_response_redacts_success_and_http_error(status_code: int) -> None:
+def test_converted_response_blocks_credential_collision(status_code: int) -> None:
     token = "converted-provider-secret"
     upstream = {
         "id": "chatcmpl-test",
@@ -198,12 +197,14 @@ def test_converted_response_redacts_success_and_http_error(status_code: int) -> 
         )
     )
 
-    assert response.status_code == status_code
+    assert response.status_code == 502
     assert token.encode() not in response.body
-    assert b"[REDACTED]" in response.body
+    assert b"response blocked" in response.body
 
 
-def test_passthrough_raw_stream_redacts_cross_chunk_and_trace(tmp_path) -> None:
+def test_passthrough_raw_stream_blocks_cross_chunk_collision_and_trace(
+    tmp_path,
+) -> None:
     token = "raw-passthrough-secret"
     payload = (
         b'event: response.output_text.delta\ndata: {"type":"response.output_text.delta",'
@@ -236,12 +237,14 @@ def test_passthrough_raw_stream_redacts_cross_chunk_and_trace(tmp_path) -> None:
 
     emitted = asyncio.run(run())
 
-    assert emitted == payload.replace(token.encode(), b"[REDACTED]")
+    assert token.encode() not in emitted
+    assert b"[REDACTED]" not in emitted
+    assert emitted.startswith(b"event: error\n")
+    assert b"response blocked" in emitted
     assert token not in trace_path.read_text(encoding="utf-8")
-    assert "stable" not in trace_path.read_text(encoding="utf-8")
 
 
-def test_converted_stream_redacts_model_output_before_sse_and_trace(tmp_path) -> None:
+def test_converted_stream_blocks_model_output_before_sse_and_trace(tmp_path) -> None:
     token = "converted-stream-secret"
     trace_path = tmp_path / "converted-trace.jsonl"
     trace_state = StreamTraceState(
@@ -293,12 +296,14 @@ def test_converted_stream_redacts_model_output_before_sse_and_trace(tmp_path) ->
     emitted = asyncio.run(run())
 
     assert token not in emitted
-    assert "before [REDACTED] after" in emitted
+    assert "[REDACTED]" not in emitted
+    assert emitted.startswith("event: error\n")
+    assert "response blocked" in emitted
     assert token not in trace_path.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("converted", [False, True])
-def test_streaming_http_error_is_redacted_for_passthrough_and_conversion(
+def test_streaming_http_error_collision_is_blocked_for_passthrough_and_conversion(
     tmp_path,
     converted: bool,
 ) -> None:
@@ -329,7 +334,7 @@ def test_streaming_http_error_is_redacted_for_passthrough_and_conversion(
     assert isinstance(response, Response)
     assert response.status_code == 401
     assert token.encode() not in response.body
-    assert b"failed with [REDACTED]" in response.body
+    assert b"response blocked" in response.body
     if trace_path.exists():
         assert token not in trace_path.read_text(encoding="utf-8")
 

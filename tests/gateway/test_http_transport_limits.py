@@ -1264,7 +1264,7 @@ def test_tavily_real_loopback_normal_json_forces_identity(
     assert server.accept_encoding == "identity"
 
 
-def test_tavily_removes_reflected_token_from_documented_success_fields(
+def test_tavily_blocks_reflected_token_in_documented_success_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = "tvly-audit-secret"
@@ -1289,16 +1289,16 @@ def test_tavily_removes_reflected_token_from_documented_success_fields(
 
     monkeypatch.setattr(web_search_module, "request_bounded_response", _fake_request)
 
-    result = asyncio.run(
-        TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
-    )
+    with pytest.raises(RuntimeError) as exc_info:
+        asyncio.run(
+            TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
+        )
 
-    assert token not in json.dumps(result)
-    assert result["answer"] == "reflected [REDACTED]"
-    assert result["token"] == "[REDACTED]"
+    assert token not in str(exc_info.value)
+    assert str(exc_info.value).endswith("response blocked")
 
 
-def test_tavily_removes_reflected_token_from_error(
+def test_tavily_blocks_reflected_token_in_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     token = "tvly-audit-secret"
@@ -1318,7 +1318,7 @@ def test_tavily_removes_reflected_token_from_error(
         )
 
     assert token not in str(exc_info.value)
-    assert "[REDACTED]" in str(exc_info.value)
+    assert str(exc_info.value).endswith("response blocked")
 
 
 def test_tavily_detaches_transport_error_that_reflects_token(

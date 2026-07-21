@@ -130,6 +130,10 @@ class UpstreamSafetyError(UpstreamConnectionError):
     """Raised when an upstream response violates a bounded transport contract."""
 
 
+class UpstreamCredentialCollisionError(UpstreamSafetyError):
+    """Raised when an upstream return contains a configured credential."""
+
+
 class UpstreamResponseTooLargeError(UpstreamSafetyError):
     """Raised before an upstream response body can exceed its byte limit."""
 

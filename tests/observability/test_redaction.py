@@ -189,3 +189,22 @@ def test_streaming_wire_redaction_covers_every_token_split_and_prefix_overlap():
     actual = b"".join(bytewise.feed(bytes([value])) for value in payload)
     actual += bytewise.finish()
     assert actual == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "prefix credential suffix",
+        b"prefix credential suffix",
+        {"credential": "ordinary"},
+        {"nested": ["credential"]},
+    ],
+)
+def test_contains_exact_detects_credentials_in_keys_values_and_wire(value):
+    assert SecretRedactor({"credential"}).contains_exact(value)
+
+
+def test_contains_exact_detects_json_escaped_and_scalar_credentials():
+    escaped = json.dumps({"value": 'quoted"credential'}, separators=(",", ":"))
+    assert SecretRedactor({'quoted"credential'}).contains_wire_bytes(escaped.encode())
+    assert SecretRedactor({"1"}).contains_exact(1)
