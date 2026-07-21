@@ -286,6 +286,11 @@ class OpenAIChatToolOps(BaseToolOps):
         Returns:
             OpenAI Chat tool call dict.
         """
+        if ir_tool_call.get("tool_type") == "computer_use":
+            raise NotImplementedError(
+                "OpenAI Chat does not support computer_use tool calls"
+            )
+
         tool_input = ir_tool_call.get("tool_input", {})
         arguments = (
             json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)

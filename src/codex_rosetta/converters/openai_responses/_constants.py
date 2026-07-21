@@ -26,6 +26,24 @@ class ResponsesEventType:
     FUNCTION_CALL_ARGS_DONE = "response.function_call_arguments.done"
     CUSTOM_TOOL_CALL_INPUT_DELTA = "response.custom_tool_call_input.delta"
     CUSTOM_TOOL_CALL_INPUT_DONE = "response.custom_tool_call_input.done"
+    MCP_CALL_ARGS_DELTA = "response.mcp_call_arguments.delta"
+    MCP_CALL_ARGS_DONE = "response.mcp_call_arguments.done"
+
+
+# Responses output items whose string fields are decoded as embedded JSON by
+# the converter. Security checks and message routing share this inventory so a
+# newly supported consumer cannot silently bypass credential inspection.
+RESPONSES_EMBEDDED_JSON_FIELDS: dict[str, tuple[str, ...]] = {
+    "function_call": ("arguments",),
+    "mcp_call": ("arguments",),
+    "custom_tool_call": ("input",),
+    "shell_call": ("arguments",),
+    "code_interpreter_call": ("arguments",),
+}
+
+RESPONSES_TOOL_CALL_ITEM_TYPES = frozenset(
+    {*RESPONSES_EMBEDDED_JSON_FIELDS, "computer_call"}
+)
 
 
 # --- Status <-> Reason mappings ---

@@ -1,7 +1,7 @@
 # Audit Coverage Ledger
 
 Last updated: 2026-07-21
-Repository head: `04efc74e0425c42bb906581b61c0c0be6976841` + current remediation working tree; targeted re-audit `20260721-1232`
+Repository head: current remediation working tree; targeted re-audit `20260721-1428`
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Status Definitions
@@ -108,6 +108,7 @@ Profile: `docs/audit-profile.md` (Approved)
 | 2026-07-21 / 20260721-0906 remediation | PROVIDER-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03/IF-05 | Invalidated | Fresh (deterministic) | executable embedded-JSON inventory and bounded custom accumulation close the credential gap; canonical computer call round-trips in Responses and every unsupported conversion fails explicitly | AUD-019/AUD-021 closure; focused `326 passed`, full `3621 passed, 5 skipped`, lint/compatibility green |
 | 2026-07-21 / 20260721-1148 | PROVIDER-01/STREAM-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03/IF-05 | Fresh (deterministic) | Invalidated | leading-whitespace Responses arguments and out-of-order Chat tool indices bypass active-credential stream checks; `computer_call_output` is silently discarded | AUD-022/AUD-023/AUD-024; focused `242 passed` plus three deterministic repros |
 | 2026-07-21 / 20260721-1232 remediation | PROVIDER-01/STREAM-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03/IF-05 | Invalidated | Fresh (deterministic) | whitespace-normalized semantic gate, stable Chat index mapping, and explicit `computer_call_output` rejection close the three counterexamples without expanding computer-control scope | `f30d167`, `6bd24b4`, `04efc74`; focused `248 passed`, full `3624 passed, 5 skipped`, `make lint` |
+| 2026-07-21 / 20260721-1428 remediation | PROVIDER-01/STREAM-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03/IF-05 | Invalidated | Fresh (deterministic) | split text/reasoning/refusal/MCP/provider stream fields are accumulated by stable identity; completion scans all output items; non-streaming tool calls report `tool_calls` | `AUD-025/AUD-026/AUD-027`; focused `185 passed`, full `3629 passed, 5 skipped`, ruff/format/ty green |
 
 ## Due Rotation Queue
 

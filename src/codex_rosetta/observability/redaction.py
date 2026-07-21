@@ -6,11 +6,28 @@ import json
 import re
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 REDACTED = "[REDACTED]"
 
 _BEARER_RE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+
+
+@dataclass(frozen=True)
+class JsonObjectMembers:
+    """JSON object members whose order and duplicate names are preserved."""
+
+    members: tuple[tuple[str, Any], ...]
+
+
+def decode_json_preserving_members(value: str | bytes) -> Any:
+    """Decode JSON without collapsing duplicate object members."""
+
+    return json.loads(
+        value,
+        object_pairs_hook=lambda pairs: JsonObjectMembers(tuple(pairs)),
+    )
 
 
 def _normalized_key(value: Any) -> str:
@@ -112,6 +129,11 @@ class SecretRedactor:
                 self.contains_exact(key) or self.contains_exact(item)
                 for key, item in value.items()
             )
+        if isinstance(value, JsonObjectMembers):
+            return any(
+                self.contains_exact(key) or self.contains_exact(item)
+                for key, item in value.members
+            )
         if isinstance(value, list | tuple):
             return any(self.contains_exact(item) for item in value)
         if value is None or isinstance(value, bool | int | float):
@@ -129,7 +151,7 @@ class SecretRedactor:
         if self.contains_wire_bytes(raw):
             return True
         try:
-            parsed = json.loads(value)
+            parsed = decode_json_preserving_members(value)
         except json.JSONDecodeError, UnicodeDecodeError:
             return False
         return self.contains_exact(parsed)

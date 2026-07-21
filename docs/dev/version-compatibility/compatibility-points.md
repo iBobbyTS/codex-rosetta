@@ -152,6 +152,25 @@ Covered by `gateway/admin/tool_catalog.json`,
 `test_code_mode_projection.py`, `test_admin_tools_catalog.py`, and the
 credential-free live evidence in `reports/live-evidence.md`.
 
+The current CP-02 return boundary shares the Responses converter's executable
+inventory for embedded JSON in `function_call.arguments`,
+`mcp_call.arguments`, `custom_tool_call.input`, `shell_call.arguments`, and
+`code_interpreter_call.arguments`. Function-argument and custom-input SSE
+fragments use the same bounded semantic accumulator, so a credential cannot be
+reconstructed only after individually safe events are released.
+
+For CP-05/CP-17, `computer_call` is the canonical public Responses wire item.
+The non-streaming Responses IR round trip preserves its native structure.
+Chat, Anthropic, and Google targets, plus the generic streaming bridge, reject
+`computer_use` explicitly; Rosetta does not invent a function representation or
+silently discard the call item. Direct Responses transport remains byte-transparent
+under the ordinary transport safety envelope. The 20260721-1148 omission audit
+found that `computer_call_output` is not yet owned by the IR/result dispatcher and
+is currently silently discarded; this is an open Must-Fix decision point. The
+owner must either authorize an explicit unsupported-item rejection (the current
+scope recommendation) or a complete native output/screenshot round trip before
+claiming the computer-call history contract is complete.
+
 ## Compatibility point test matrix
 
 | Compatibility points | Can be automated | Must be actually tested |
@@ -467,10 +486,18 @@ both converted parsing and byte-preserving Responses passthrough. Chunked HTTP
 payloads are read in fixed bounded subchunks instead of materializing the
 peer-declared chunk size. Overflows close the upstream and become a stable
 `UpstreamStreamLimitError`; credential-free raw passthrough bytes below the
-limits are byte-identical. Configured-credential collisions across arbitrary
-chunk boundaries block the complete risk event and terminate from a valid SSE
-boundary. A Codex upgrade that introduces larger required single events must
-be measured and reviewed explicitly rather than disabling the limits.
+limits are byte-identical. Exact-wire and one-layer parsed JSON collisions
+across arbitrary HTTP chunk boundaries block the complete risk event and
+terminate from a valid SSE boundary. The consumer-semantic gate also preserves
+duplicate object members, parses only documented Responses/Chat function and
+tool argument JSON strings, and accumulates argument deltas using the same
+call/item/index identities as the converter consumers. Live state is bounded to
+1 MiB, 4096 fragments, and 4096 identities; exceeding a bound fails closed.
+Unknown ordinary strings are not recursively parsed, and credential-free safe
+duplicate/BOM frames remain byte-identical. Every new provider argument schema
+or consumer identity rule must be registered and regression-tested explicitly.
+A Codex upgrade that introduces larger required single events must be measured
+and reviewed rather than disabling the limits.
 
 The Gateway also bounds streaming connection establishment to 30 seconds,
 upstream SSE inactivity to 60 seconds, and connection cleanup to 2 seconds.

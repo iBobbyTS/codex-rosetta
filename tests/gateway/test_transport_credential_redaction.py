@@ -605,6 +605,86 @@ def test_raw_sse_blocks_cross_event_argument_reconstruction(
     assert asyncio.run(run()) == b""
 
 
+@pytest.mark.parametrize(
+    ("target_provider", "events"),
+    [
+        (
+            "openai_responses",
+            [
+                {"type": "response.output_text.delta", "delta": "secret-"},
+                {"type": "response.output_text.delta", "delta": "token"},
+            ],
+        ),
+        (
+            "openai_chat",
+            [
+                {"choices": [{"index": 0, "delta": {"content": "secret-"}}]},
+                {"choices": [{"index": 0, "delta": {"content": "token"}}]},
+            ],
+        ),
+        (
+            "anthropic",
+            [
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "secret-"},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": "token"},
+                },
+            ],
+        ),
+        (
+            "google",
+            [
+                {
+                    "candidates": [
+                        {"index": 0, "content": {"parts": [{"text": "secret-"}]}}
+                    ]
+                },
+                {
+                    "candidates": [
+                        {"index": 0, "content": {"parts": [{"text": "token"}]}}
+                    ]
+                },
+            ],
+        ),
+    ],
+)
+def test_stream_blocks_split_text_credentials_for_every_provider(
+    target_provider: ProviderType,
+    events: list[dict[str, Any]],
+) -> None:
+    """Provider consumers can concatenate text across events, so the gate must too."""
+
+    async def run_parsed() -> None:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=events))
+        ).send_streaming(_provider("secret-token"), target_provider, {}, "test")
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [event async for event in stream]
+
+    payload = b"".join(
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    )
+
+    async def run_raw() -> None:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[payload]))
+        ).send_streaming(_provider("secret-token"), target_provider, {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        with pytest.raises(UpstreamCredentialCollisionError):
+            _ = [chunk async for chunk in raw]
+
+    asyncio.run(run_parsed())
+    asyncio.run(run_raw())
+
+
 def test_raw_sse_blocks_whitespace_padded_argument_reconstruction() -> None:
     """Leading/trailing JSON whitespace must not bypass semantic inspection."""
     events = [

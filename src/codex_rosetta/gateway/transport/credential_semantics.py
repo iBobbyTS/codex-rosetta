@@ -89,6 +89,10 @@ class ProviderCredentialSemanticGate:
             self._inspect_responses_event(event)
         elif self._target_provider == "openai_chat":
             self._inspect_chat_event(event)
+        elif self._target_provider == "anthropic":
+            self._inspect_anthropic_event(event)
+        elif self._target_provider == "google":
+            self._inspect_google_event(event)
 
     def _inspect_argument(self, value: Any) -> None:
         if isinstance(value, str) and self._redactor.contains_json_semantic(value):
@@ -131,8 +135,8 @@ class ProviderCredentialSemanticGate:
         buffer.fragment_count += 1
         self._live_bytes += encoded_len
         self._live_fragments += 1
-        # Function arguments are JSON objects. Parse only once a fragment can
-        # complete that schema value; raw token bytes are checked on every append.
+        # JSON arguments are parsed only once a fragment can complete the
+        # schema value; raw token bytes are checked on every append.
         stripped = buffer.text.strip()
         if self._redactor.contains_wire_bytes(buffer.text.encode("utf-8")) or (
             stripped.startswith("{")
@@ -147,6 +151,11 @@ class ProviderCredentialSemanticGate:
         if buffer is not None:
             self._live_bytes -= buffer.byte_count
             self._live_fragments -= buffer.fragment_count
+
+    def _append_text(self, key: tuple[Any, ...], fragment: Any) -> None:
+        if not isinstance(fragment, str) or not fragment:
+            return
+        self._append(key, fragment)
 
     def _clear_all(self) -> None:
         self._buffers.clear()
@@ -203,12 +212,25 @@ class ProviderCredentialSemanticGate:
             if mapped_call_id == call_id:
                 del self._responses_item_to_call[item_id]
 
+    @staticmethod
+    def _stream_identity(
+        event: Any,
+        *field_names: str,
+    ) -> tuple[Any, ...]:
+        values: list[Any] = []
+        for field_name in field_names:
+            value = _only(event, field_name)
+            if value is not None:
+                values.append((field_name, value))
+        return tuple(values) or (("default", 0),)
+
     def _inspect_responses_event(self, event: Any) -> None:
         event_types = _values(event, "type")
         event_type = event_types[-1] if event_types else None
         if event_type in {
             ResponsesEventType.FUNCTION_CALL_ARGS_DELTA,
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DELTA,
+            ResponsesEventType.MCP_CALL_ARGS_DELTA,
         }:
             deltas = _values(event, "delta")
             call_id = self._responses_call_id(event)
@@ -218,6 +240,7 @@ class ProviderCredentialSemanticGate:
         if event_type in {
             ResponsesEventType.FUNCTION_CALL_ARGS_DONE,
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DONE,
+            ResponsesEventType.MCP_CALL_ARGS_DONE,
         }:
             field_name = (
                 "input"
@@ -227,6 +250,29 @@ class ProviderCredentialSemanticGate:
             for field_value in _values(event, field_name):
                 self._inspect_argument(field_value)
             self._clear_responses_call(self._responses_call_id(event))
+            return
+        if event_type in {
+            ResponsesEventType.OUTPUT_TEXT_DELTA,
+            ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA,
+        }:
+            deltas = _values(event, "delta")
+            if deltas and isinstance(deltas[-1], str):
+                field = (
+                    "reasoning"
+                    if event_type == ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA
+                    else "text"
+                )
+                key = (
+                    "responses",
+                    field,
+                    self._stream_identity(
+                        event,
+                        "item_id",
+                        "output_index",
+                        "content_index",
+                    ),
+                )
+                self._append_text(key, deltas[-1])
             return
         if event_type in {
             ResponsesEventType.OUTPUT_ITEM_ADDED,
@@ -282,7 +328,19 @@ class ProviderCredentialSemanticGate:
 
     def _inspect_chat_event(self, event: Any) -> None:
         for choice in _items(event, "choices"):
+            choice_index = _only(choice, "index")
             for delta in _values(choice, "delta"):
+                for field_name in ("content", "reasoning_content", "refusal"):
+                    values = _values(delta, field_name)
+                    if values and isinstance(values[-1], str):
+                        self._append_text(
+                            (
+                                "chat",
+                                field_name,
+                                ("choice_index", choice_index or 0),
+                            ),
+                            values[-1],
+                        )
                 for tool_call in _items(delta, "tool_calls"):
                     call_id = self._chat_call_id(tool_call)
                     for function in _values(tool_call, "function"):
@@ -293,3 +351,45 @@ class ProviderCredentialSemanticGate:
                             and call_id is not None
                         ):
                             self._append(("chat", "call_id", call_id), arguments[-1])
+
+    def _inspect_anthropic_event(self, event: Any) -> None:
+        if _only(event, "type") != "content_block_delta":
+            return
+        delta = _only(event, "delta")
+        delta_type = _only(delta, "type")
+        field_names = {
+            "text_delta": "text",
+            "thinking_delta": "thinking",
+            "signature_delta": "signature",
+            "input_json_delta": "partial_json",
+        }
+        field_name = field_names.get(delta_type)
+        if field_name is None:
+            return
+        values = _values(delta, field_name)
+        if values and isinstance(values[-1], str):
+            key = (
+                "anthropic",
+                field_name,
+                ("block_index", _only(event, "index") or 0),
+            )
+            self._append_text(key, values[-1])
+
+    def _inspect_google_event(self, event: Any) -> None:
+        for candidate in _items(event, "candidates"):
+            choice_index = _only(candidate, "index") or 0
+            content = _only(candidate, "content")
+            for part_index, part in enumerate(_items(content, "parts")):
+                values = _values(part, "text")
+                if not values or not isinstance(values[-1], str):
+                    continue
+                field_name = "reasoning" if _only(part, "thought") else "text"
+                self._append_text(
+                    (
+                        "google",
+                        field_name,
+                        ("choice_index", choice_index),
+                        ("part_index", part_index),
+                    ),
+                    values[-1],
+                )

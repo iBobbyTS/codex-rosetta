@@ -560,6 +560,17 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 else "",
                 "arguments": arguments,
             }
+        elif tool_type == "computer_use":
+            metadata = ir_tool_call.get("provider_metadata") or {}
+            native_item = metadata.get("responses_native_item")
+            if (
+                isinstance(native_item, dict)
+                and native_item.get("type") == "computer_call"
+            ):
+                return dict(native_item)
+            raise ValueError(
+                "computer_use requires a preserved Responses computer_call item"
+            )
         else:
             # Default to function_call
             return {
@@ -618,6 +629,61 @@ class OpenAIResponsesToolOps(BaseToolOps):
         if query:
             item["action"] = {"type": "search", "query": query}
         return item
+
+    @staticmethod
+    def _native_execution_call_to_ir(
+        provider_tool_call: dict[str, Any], item_type: str
+    ) -> ToolCallPart:
+        if item_type == "computer_call":
+            native_item = dict(provider_tool_call)
+            tool_input = {
+                key: native_item[key]
+                for key in ("action", "actions", "pending_safety_checks")
+                if key in native_item
+            }
+            return cast(
+                ToolCallPart,
+                {
+                    "type": "tool_call",
+                    "tool_call_id": provider_tool_call.get(
+                        "call_id", provider_tool_call.get("id", "")
+                    ),
+                    "tool_name": "computer",
+                    "tool_input": tool_input,
+                    "tool_type": "computer_use",
+                    "provider_metadata": {
+                        "responses_tool_type": "computer_call",
+                        "responses_native_item": native_item,
+                    },
+                },
+            )
+
+        tool_type_map = {
+            "shell_call": "code_interpreter",
+            "code_interpreter_call": "code_interpreter",
+        }
+        arguments = provider_tool_call.get("arguments", {})
+        if isinstance(arguments, dict):
+            tool_input = arguments
+        elif isinstance(arguments, str):
+            try:
+                tool_input = json.loads(arguments) if arguments else {}
+            except json.JSONDecodeError:
+                tool_input = {"input": arguments}
+        else:
+            tool_input = {}
+        return cast(
+            ToolCallPart,
+            {
+                "type": "tool_call",
+                "tool_call_id": provider_tool_call.get(
+                    "call_id", provider_tool_call.get("id", "")
+                ),
+                "tool_name": provider_tool_call.get("name", item_type),
+                "tool_input": tool_input,
+                "tool_type": tool_type_map.get(item_type, "function"),
+            },
+        )
 
     @staticmethod
     def p_tool_call_to_ir(provider_tool_call: Any, **kwargs: Any) -> ToolCallPart:
@@ -683,22 +749,8 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 tool_type="mcp",
             )
         elif item_type in ("shell_call", "computer_call", "code_interpreter_call"):
-            tool_type_map = {
-                "shell_call": "code_interpreter",
-                "computer_call": "computer_use",
-                "code_interpreter_call": "code_interpreter",
-            }
-            return cast(
-                ToolCallPart,
-                {
-                    "type": "tool_call",
-                    "tool_call_id": provider_tool_call.get(
-                        "call_id", provider_tool_call.get("id", "")
-                    ),
-                    "tool_name": provider_tool_call.get("name", item_type),
-                    "tool_input": tool_input,
-                    "tool_type": tool_type_map.get(item_type, "function"),
-                },
+            return OpenAIResponsesToolOps._native_execution_call_to_ir(
+                provider_tool_call, item_type
             )
         elif item_type == "custom_tool_call":
             # custom_tool_call uses plain text 'input' instead of JSON

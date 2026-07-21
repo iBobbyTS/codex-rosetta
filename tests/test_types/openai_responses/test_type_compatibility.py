@@ -636,14 +636,15 @@ class TestComputerToolTypes:
     def test_response_computer_tool_call(self):
         """Test creating ResponseComputerToolCall."""
         computer_call: ResponseComputerToolCall = {
-            "type": "computer_tool_call",
+            "type": "computer_call",
             "id": "comp_123",
-            "action": "click",
-            "parameters": {"x": 100, "y": 200},
+            "call_id": "call_comp_123",
+            "action": {"type": "click", "x": 100, "y": 200, "button": "left"},
+            "pending_safety_checks": [],
             "status": "completed",
         }
-        assert computer_call["type"] == "computer_tool_call"
-        assert computer_call["action"] == "click"
+        assert computer_call["type"] == "computer_call"
+        assert computer_call["action"]["type"] == "click"
 
 
 class TestShellAndPatchTypes:
