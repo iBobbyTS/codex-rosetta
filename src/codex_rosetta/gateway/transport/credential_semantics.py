@@ -20,18 +20,24 @@ _RESPONSES_TYPES = {"openai_responses", "open_responses"}
 
 # Keep this inventory explicit: these provider text consumers concatenate
 # deltas by wire identity, while unknown Responses strings remain opaque.
-_RESPONSES_TEXT_DELTA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
+_RESPONSES_TEXT_DELTA_FIELDS: dict[
+    str,
+    tuple[str, tuple[str, ...], tuple[str, ...]],
+] = {
     "response.reasoning_text.delta": (
         "reasoning_text",
-        ("item_id", "output_index", "content_index"),
+        ("content_index",),
+        ("item_id", "output_index"),
     ),
     "response.refusal.delta": (
         "refusal",
         ("item_id", "output_index", "content_index"),
+        (),
     ),
     "response.code_interpreter_call_code.delta": (
         "code_interpreter_code",
         ("item_id", "output_index"),
+        (),
     ),
 }
 
@@ -89,6 +95,8 @@ class ProviderCredentialSemanticGate:
         self._responses_item_to_call: dict[str, str] = {}
         self._responses_mcp_item_to_index: dict[str, int] = {}
         self._responses_mcp_index_to_item: dict[int, str] = {}
+        self._responses_text_identities: set[tuple[Any, ...]] = set()
+        self._responses_text_identity_modes: dict[tuple[Any, ...], tuple[str, ...]] = {}
         self._chat_index_to_call: dict[int, str] = {}
         self._chat_call_to_index: dict[str, int] = {}
         self._chat_call_ids: set[str] = set()
@@ -181,6 +189,8 @@ class ProviderCredentialSemanticGate:
         self._responses_item_to_call.clear()
         self._responses_mcp_item_to_index.clear()
         self._responses_mcp_index_to_item.clear()
+        self._responses_text_identities.clear()
+        self._responses_text_identity_modes.clear()
         self._chat_index_to_call.clear()
         self._chat_call_to_index.clear()
         self._chat_call_ids.clear()
@@ -195,6 +205,7 @@ class ProviderCredentialSemanticGate:
         return (
             len(self._responses_item_to_call)
             + len(self._responses_mcp_item_to_index)
+            + len(self._responses_text_identities)
             + len(self._chat_call_ids)
         )
 
@@ -319,10 +330,10 @@ class ProviderCredentialSemanticGate:
                 values.append((field_name, value))
         return tuple(values) or (("default", 0),)
 
-    def _responses_text_identity(
+    def _responses_text_identity_values(
         self,
         event: Any,
-        *field_names: str,
+        field_names: tuple[str, ...],
     ) -> tuple[tuple[str, Any], ...]:
         values: list[tuple[str, Any]] = []
         for field_name in field_names:
@@ -340,16 +351,80 @@ class ProviderCredentialSemanticGate:
             values.append((field_name, value))
         return tuple(values)
 
+    def _responses_text_identity(
+        self,
+        event: Any,
+        required_fields: tuple[str, ...],
+        optional_fields: tuple[str, ...],
+    ) -> tuple[
+        tuple[tuple[str, Any], ...],
+        tuple[tuple[str, Any], ...],
+        tuple[str, ...],
+    ]:
+        required_identity = self._responses_text_identity_values(
+            event,
+            required_fields,
+        )
+        present_optional_fields = tuple(
+            name for name in optional_fields if _values(event, name)
+        )
+        optional_identity = (
+            self._responses_text_identity_values(event, present_optional_fields)
+            if present_optional_fields
+            else ()
+        )
+        return (
+            optional_identity + required_identity,
+            required_identity,
+            present_optional_fields,
+        )
+
+    def _track_responses_text_identity(
+        self,
+        field_name: str,
+        identity: tuple[tuple[str, Any], ...],
+        required_identity: tuple[tuple[str, Any], ...],
+        *,
+        optional_identity_shape: tuple[str, ...],
+    ) -> None:
+        mode_key = (field_name, required_identity)
+        existing_mode = self._responses_text_identity_modes.get(mode_key)
+        if existing_mode is not None and existing_mode != optional_identity_shape:
+            self._clear_all()
+            raise SecretCollisionError
+
+        identity_key = (field_name, identity)
+        if identity_key not in self._responses_text_identities:
+            self._reserve_identity()
+            self._responses_text_identities.add(identity_key)
+        self._responses_text_identity_modes[mode_key] = optional_identity_shape
+
     def _inspect_responses_text_delta(
         self,
         event: Any,
         field_name: str,
-        identity_fields: tuple[str, ...],
+        required_identity_fields: tuple[str, ...],
+        optional_identity_fields: tuple[str, ...],
     ) -> None:
         deltas = _values(event, "delta")
         if not deltas or not isinstance(deltas[-1], str):
             return
-        identity = self._responses_text_identity(event, *identity_fields)
+        identity, required_identity, optional_identity_shape = (
+            self._responses_text_identity(
+                event,
+                required_identity_fields,
+                optional_identity_fields,
+            )
+        )
+        if not deltas[-1]:
+            return
+        if optional_identity_fields:
+            self._track_responses_text_identity(
+                field_name,
+                identity,
+                required_identity,
+                optional_identity_shape=optional_identity_shape,
+            )
         self._append_text(
             ("responses", field_name, identity),
             deltas[-1],

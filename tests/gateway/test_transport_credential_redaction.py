@@ -791,6 +791,136 @@ def test_stream_blocks_split_text_credentials_for_every_provider(
 
 
 @pytest.mark.parametrize(
+    "extra_identity",
+    [
+        {},
+        {"item_id": "codex-item"},
+        {"output_index": 0},
+        {"item_id": "codex-item", "output_index": 0},
+    ],
+)
+def test_stream_accepts_codex_source_shaped_reasoning_text_delta(
+    extra_identity: dict[str, Any],
+) -> None:
+    """Codex accepts reasoning deltas identified only by content index."""
+    event = {
+        "type": "response.reasoning_text.delta",
+        "delta": "ordinary reasoning",
+        "content_index": 0,
+        **extra_identity,
+    }
+    frame = b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=[event]))
+        ).send_streaming(_provider("secret-token"), "openai_responses", {}, "test")
+        return [item async for item in stream]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=[frame]))
+        ).send_streaming(_provider("secret-token"), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        return b"".join([chunk async for chunk in raw])
+
+    assert asyncio.run(run_parsed()) == [event]
+    assert asyncio.run(run_raw()) == frame
+
+
+def test_stream_blocks_split_codex_source_shaped_reasoning_credentials() -> None:
+    """Codex-shaped reasoning deltas retain content-index semantic state."""
+    token = "secret-token"
+    events = [
+        {
+            "type": "response.reasoning_text.delta",
+            "delta": "secret-",
+            "content_index": 0,
+        },
+        {
+            "type": "response.reasoning_text.delta",
+            "delta": "token",
+            "content_index": 0,
+        },
+    ]
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=events))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        emitted: list[dict[str, Any]] = []
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for event in stream:
+                emitted.append(event)
+        return emitted
+
+    frames = [
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    ]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=frames))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    parsed = asyncio.run(run_parsed())
+    raw = asyncio.run(run_raw())
+    assert token not in json.dumps(parsed, separators=(",", ":"))
+    assert all(event.get("delta") != "token" for event in parsed)
+    assert raw == b""
+
+
+def test_codex_reasoning_text_identity_state_is_bounded_and_cleared() -> None:
+    """Reasoning identities obey their bound and are reusable after cleanup."""
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret-token"}),
+        "openai_responses",
+        max_argument_identities=1,
+    )
+
+    def event(content_index: int, delta: str) -> dict[str, Any]:
+        return {
+            "type": "response.reasoning_text.delta",
+            "delta": delta,
+            "content_index": content_index,
+        }
+
+    gate.inspect_stream_event(event(0, "ordinary"))
+    with pytest.raises(SecretCollisionError):
+        gate.inspect_stream_event(event(1, "ordinary"))
+
+    gate.inspect_stream_event(event(2, "ordinary"))
+    gate.inspect_stream_event({"type": "response.completed", "response": {}})
+    gate.inspect_stream_event(event(3, "ordinary"))
+
+    gate.finish()
+    gate.inspect_stream_event(event(4, "ordinary"))
+    with pytest.raises(SecretCollisionError):
+        gate.inspect_stream_event(
+            {
+                **event(4, "ordinary"),
+                "item_id": "codex-item",
+            }
+        )
+
+    gate.inspect_stream_event(event(5, "ordinary"))
+    gate.finish()
+    gate.inspect_stream_event(event(4, "secret-"))
+    with pytest.raises(SecretCollisionError):
+        gate.inspect_stream_event(event(4, "token"))
+    gate.inspect_stream_event(event(6, "ordinary"))
+
+
+@pytest.mark.parametrize(
     ("event_type", "identity"),
     [
         (
