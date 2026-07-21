@@ -605,6 +605,111 @@ def test_raw_sse_blocks_cross_event_argument_reconstruction(
     assert asyncio.run(run()) == b""
 
 
+def test_mcp_argument_fragments_block_before_done_and_clean_up_identity() -> None:
+    token = "secret-token"
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "mcp_call",
+                "id": "mcp-1",
+                "name": "lookup",
+                "arguments": "",
+            },
+        },
+        {
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "mcp-1",
+            "output_index": 0,
+            "delta": '{"query":"secret-',
+        },
+        {
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "mcp-1",
+            "output_index": 0,
+            "delta": 'token"}',
+        },
+        {
+            "type": "response.mcp_call_arguments.done",
+            "item_id": "mcp-1",
+            "output_index": 0,
+            "arguments": '{"query":"secret-token"}',
+        },
+    ]
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=events))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        emitted: list[dict[str, Any]] = []
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for event in stream:
+                emitted.append(event)
+        return emitted
+
+    frames = [
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    ]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=frames))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    parsed = asyncio.run(run_parsed())
+    raw = asyncio.run(run_raw())
+    assert token not in json.dumps(parsed, separators=(",", ":"))
+    assert token.encode() not in raw
+    assert not any(
+        event.get("type")
+        in {
+            "response.mcp_call_arguments.delta",
+            "response.mcp_call_arguments.done",
+        }
+        and event.get("delta") == 'token"}'
+        for event in parsed
+    )
+
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({token}),
+        "openai_responses",
+        max_argument_identities=1,
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "mcp-safe-1",
+            "output_index": 0,
+            "delta": '{"query":"ordinary"}',
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.mcp_call_arguments.done",
+            "item_id": "mcp-safe-1",
+            "output_index": 0,
+            "arguments": '{"query":"ordinary"}',
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.mcp_call_arguments.delta",
+            "item_id": "mcp-safe-2",
+            "output_index": 1,
+            "delta": '{"query":"ordinary"}',
+        }
+    )
+
+
 @pytest.mark.parametrize(
     ("target_provider", "events"),
     [

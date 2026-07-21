@@ -70,6 +70,8 @@ class ProviderCredentialSemanticGate:
         self._max_argument_identities = max_argument_identities
         self._buffers: dict[tuple[Any, ...], _ArgumentBuffer] = {}
         self._responses_item_to_call: dict[str, str] = {}
+        self._responses_mcp_item_to_index: dict[str, int] = {}
+        self._responses_mcp_index_to_item: dict[int, str] = {}
         self._chat_index_to_call: dict[int, str] = {}
         self._chat_call_to_index: dict[str, int] = {}
         self._chat_call_ids: set[str] = set()
@@ -160,6 +162,8 @@ class ProviderCredentialSemanticGate:
     def _clear_all(self) -> None:
         self._buffers.clear()
         self._responses_item_to_call.clear()
+        self._responses_mcp_item_to_index.clear()
+        self._responses_mcp_index_to_item.clear()
         self._chat_index_to_call.clear()
         self._chat_call_to_index.clear()
         self._chat_call_ids.clear()
@@ -171,15 +175,89 @@ class ProviderCredentialSemanticGate:
         self._clear_all()
 
     def _identity_count(self) -> int:
-        return len(self._responses_item_to_call) + len(self._chat_call_ids)
+        return (
+            len(self._responses_item_to_call)
+            + len(self._responses_mcp_item_to_index)
+            + len(self._chat_call_ids)
+        )
 
     def _reserve_identity(self) -> None:
         if self._identity_count() >= self._max_argument_identities:
             self._clear_all()
             raise SecretCollisionError
 
-    def _register_responses_item(self, item: Any) -> None:
-        if _only(item, "type") not in {"function_call", "custom_tool_call"}:
+    @staticmethod
+    def _mcp_identity(item_id: Any, output_index: Any) -> tuple[str, int] | None:
+        if (
+            isinstance(item_id, str)
+            and item_id
+            and isinstance(output_index, int)
+            and not isinstance(output_index, bool)
+            and output_index >= 0
+        ):
+            return item_id, output_index
+        return None
+
+    def _track_mcp_identity(
+        self,
+        identity: tuple[str, int],
+        *,
+        reserve: bool,
+    ) -> tuple[str, int]:
+        item_id, output_index = identity
+        mapped_index = self._responses_mcp_item_to_index.get(item_id)
+        mapped_item_id = self._responses_mcp_index_to_item.get(output_index)
+        if (mapped_index is not None and mapped_index != output_index) or (
+            mapped_item_id is not None and mapped_item_id != item_id
+        ):
+            self._clear_all()
+            raise SecretCollisionError
+        if mapped_index is None and mapped_item_id is None and reserve:
+            self._reserve_identity()
+            self._responses_mcp_item_to_index[item_id] = output_index
+            self._responses_mcp_index_to_item[output_index] = item_id
+        return identity
+
+    def _responses_mcp_identity(
+        self,
+        event: Any,
+        *,
+        reserve: bool = True,
+    ) -> tuple[str, int]:
+        identity = self._mcp_identity(
+            _only(event, "item_id"),
+            _only(event, "output_index"),
+        )
+        if identity is None:
+            self._clear_all()
+            raise SecretCollisionError
+        return self._track_mcp_identity(identity, reserve=reserve)
+
+    @staticmethod
+    def _responses_mcp_key(identity: tuple[str, int]) -> tuple[Any, ...]:
+        return ("responses", "mcp", *identity)
+
+    def _clear_responses_mcp(self, identity: tuple[str, int]) -> None:
+        item_id, output_index = identity
+        self._clear(self._responses_mcp_key(identity))
+        if self._responses_mcp_item_to_index.get(item_id) == output_index:
+            del self._responses_mcp_item_to_index[item_id]
+        if self._responses_mcp_index_to_item.get(output_index) == item_id:
+            del self._responses_mcp_index_to_item[output_index]
+
+    def _register_responses_item(
+        self,
+        item: Any,
+        *,
+        output_index: Any = None,
+    ) -> None:
+        item_type = _only(item, "type")
+        if item_type == "mcp_call":
+            identity = self._mcp_identity(_only(item, "id"), output_index)
+            if identity is not None:
+                self._track_mcp_identity(identity, reserve=True)
+            return
+        if item_type not in {"function_call", "custom_tool_call"}:
             return
         item_id = _only(item, "id")
         call_id = _only(item, "call_id")
@@ -224,13 +302,53 @@ class ProviderCredentialSemanticGate:
                 values.append((field_name, value))
         return tuple(values) or (("default", 0),)
 
+    def _inspect_responses_mcp_event(self, event: Any, event_type: Any) -> None:
+        if event_type == ResponsesEventType.MCP_CALL_ARGS_DELTA:
+            identity = self._responses_mcp_identity(event)
+            deltas = _values(event, "delta")
+            if deltas and isinstance(deltas[-1], str):
+                self._append(self._responses_mcp_key(identity), deltas[-1])
+            return
+        identity = self._responses_mcp_identity(event, reserve=False)
+        for field_value in _values(event, "arguments"):
+            self._inspect_argument(field_value)
+        self._clear_responses_mcp(identity)
+
+    def _inspect_responses_output_item_event(self, event: Any, event_type: Any) -> None:
+        for item in _values(event, "item"):
+            self._inspect_tool_item(item)
+            if event_type.endswith(".added"):
+                self._register_responses_item(
+                    item,
+                    output_index=_only(event, "output_index"),
+                )
+        if not event_type.endswith(".done"):
+            return
+        item = _only(event, "item")
+        if _only(item, "type") == "mcp_call":
+            item_id = _only(item, "id")
+            output_index = self._responses_mcp_item_to_index.get(item_id)
+            if output_index is not None:
+                self._clear_responses_mcp((item_id, output_index))
+            return
+        call_id = _only(item, "call_id")
+        if not isinstance(call_id, str) or not call_id:
+            item_id = _only(item, "id")
+            call_id = self._responses_item_to_call.get(item_id)
+        self._clear_responses_call(call_id)
+
     def _inspect_responses_event(self, event: Any) -> None:
         event_types = _values(event, "type")
         event_type = event_types[-1] if event_types else None
         if event_type in {
+            ResponsesEventType.MCP_CALL_ARGS_DELTA,
+            ResponsesEventType.MCP_CALL_ARGS_DONE,
+        }:
+            self._inspect_responses_mcp_event(event, event_type)
+            return
+        if event_type in {
             ResponsesEventType.FUNCTION_CALL_ARGS_DELTA,
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DELTA,
-            ResponsesEventType.MCP_CALL_ARGS_DELTA,
         }:
             deltas = _values(event, "delta")
             call_id = self._responses_call_id(event)
@@ -240,7 +358,6 @@ class ProviderCredentialSemanticGate:
         if event_type in {
             ResponsesEventType.FUNCTION_CALL_ARGS_DONE,
             ResponsesEventType.CUSTOM_TOOL_CALL_INPUT_DONE,
-            ResponsesEventType.MCP_CALL_ARGS_DONE,
         }:
             field_name = (
                 "input"
@@ -278,17 +395,7 @@ class ProviderCredentialSemanticGate:
             ResponsesEventType.OUTPUT_ITEM_ADDED,
             ResponsesEventType.OUTPUT_ITEM_DONE,
         }:
-            for item in _values(event, "item"):
-                self._inspect_tool_item(item)
-                if event_type.endswith(".added"):
-                    self._register_responses_item(item)
-            if event_type.endswith(".done"):
-                item = _only(event, "item")
-                call_id = _only(item, "call_id")
-                if not isinstance(call_id, str) or not call_id:
-                    item_id = _only(item, "id")
-                    call_id = self._responses_item_to_call.get(item_id)
-                self._clear_responses_call(call_id)
+            self._inspect_responses_output_item_event(event, event_type)
             return
         if event_type == ResponsesEventType.RESPONSE_COMPLETED:
             self._inspect_responses_document(event)
