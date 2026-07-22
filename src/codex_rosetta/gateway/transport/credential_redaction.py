@@ -202,6 +202,8 @@ class CredentialRedactingStream(UpstreamStream):
             await self._stream.__aexit__(*args)
         except Exception as exc:
             error = _sanitized_transport_error(self._provider_info, exc)
+        finally:
+            self._semantic_gate.finish()
         if error is not None:
             raise error from None
 
@@ -230,13 +232,14 @@ class CredentialRedactingStream(UpstreamStream):
                         raise _credential_collision_error()
                     self._semantic_gate.inspect_stream_event(event)
                     yield event
-                self._semantic_gate.finish()
             except asyncio.CancelledError, GeneratorExit:
                 raise
             except SecretCollisionError:
                 error = _credential_collision_error()
             except Exception as exc:
                 error = _sanitized_transport_error(self._provider_info, exc)
+            finally:
+                self._semantic_gate.finish()
             if error is not None:
                 raise error from None
 
@@ -281,6 +284,8 @@ class CredentialRedactingStream(UpstreamStream):
             raise
         except Exception as exc:
             error = _sanitized_transport_error(self._provider_info, exc)
+        finally:
+            self._semantic_gate.finish()
         if error is not None:
             raise error from None
 

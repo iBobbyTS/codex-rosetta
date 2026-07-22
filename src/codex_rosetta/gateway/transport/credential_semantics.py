@@ -24,11 +24,6 @@ _RESPONSES_TEXT_DELTA_FIELDS: dict[
     str,
     tuple[str, tuple[str, ...], tuple[str, ...]],
 ] = {
-    "response.reasoning_text.delta": (
-        "reasoning_text",
-        ("content_index",),
-        ("item_id", "output_index"),
-    ),
     "response.refusal.delta": (
         "refusal",
         ("item_id", "output_index", "content_index"),
@@ -40,6 +35,20 @@ _RESPONSES_TEXT_DELTA_FIELDS: dict[
         (),
     ),
 }
+
+# Codex binds these deltas to its current output item after discarding all other
+# wire metadata. Only the listed event-specific indices survive parsing.
+_CODEX_RESPONSES_TEXT_DELTA_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    ResponsesEventType.OUTPUT_TEXT_DELTA: ("text", ()),
+    ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA: (
+        "reasoning_summary",
+        ("summary_index",),
+    ),
+    "response.reasoning_text.delta": ("reasoning_text", ("content_index",)),
+}
+_CODEX_RESPONSES_TEXT_FIELDS = frozenset(
+    field_name for field_name, _ in _CODEX_RESPONSES_TEXT_DELTA_FIELDS.values()
+)
 
 
 def _values(value: Any, name: str) -> tuple[Any, ...]:
@@ -97,6 +106,7 @@ class ProviderCredentialSemanticGate:
         self._responses_mcp_index_to_item: dict[int, str] = {}
         self._responses_text_identities: set[tuple[Any, ...]] = set()
         self._responses_text_identity_modes: dict[tuple[Any, ...], tuple[str, ...]] = {}
+        self._responses_active_item_generation = 0
         self._chat_index_to_call: dict[int, str] = {}
         self._chat_call_to_index: dict[str, int] = {}
         self._chat_call_ids: set[str] = set()
@@ -191,6 +201,7 @@ class ProviderCredentialSemanticGate:
         self._responses_mcp_index_to_item.clear()
         self._responses_text_identities.clear()
         self._responses_text_identity_modes.clear()
+        self._responses_active_item_generation = 0
         self._chat_index_to_call.clear()
         self._chat_call_to_index.clear()
         self._chat_call_ids.clear()
@@ -318,18 +329,6 @@ class ProviderCredentialSemanticGate:
             if mapped_call_id == call_id:
                 del self._responses_item_to_call[item_id]
 
-    @staticmethod
-    def _stream_identity(
-        event: Any,
-        *field_names: str,
-    ) -> tuple[Any, ...]:
-        values: list[Any] = []
-        for field_name in field_names:
-            value = _only(event, field_name)
-            if value is not None:
-                values.append((field_name, value))
-        return tuple(values) or (("default", 0),)
-
     def _responses_text_identity_values(
         self,
         event: Any,
@@ -430,6 +429,45 @@ class ProviderCredentialSemanticGate:
             deltas[-1],
         )
 
+    def _inspect_codex_responses_text_delta(
+        self,
+        event: Any,
+        field_name: str,
+        retained_identity_fields: tuple[str, ...],
+    ) -> None:
+        deltas = _values(event, "delta")
+        if not deltas or not isinstance(deltas[-1], str):
+            return
+        retained_identity = self._responses_text_identity_values(
+            event,
+            retained_identity_fields,
+        )
+        if not deltas[-1]:
+            return
+        identity = (
+            ("active_item", self._responses_active_item_generation),
+            *retained_identity,
+        )
+        self._track_responses_text_identity(
+            field_name,
+            identity,
+            identity,
+            optional_identity_shape=(),
+        )
+        self._append_text(("responses", field_name, identity), deltas[-1])
+
+    def _advance_responses_active_item(self) -> None:
+        for identity_key in tuple(self._responses_text_identities):
+            field_name, identity = identity_key
+            if field_name not in _CODEX_RESPONSES_TEXT_FIELDS:
+                continue
+            self._clear(("responses", field_name, identity))
+            self._responses_text_identities.remove(identity_key)
+        for mode_key in tuple(self._responses_text_identity_modes):
+            if mode_key[0] in _CODEX_RESPONSES_TEXT_FIELDS:
+                del self._responses_text_identity_modes[mode_key]
+        self._responses_active_item_generation += 1
+
     def _inspect_responses_mcp_event(self, event: Any, event_type: Any) -> None:
         if event_type == ResponsesEventType.MCP_CALL_ARGS_DELTA:
             identity = self._responses_mcp_identity(event)
@@ -443,6 +481,7 @@ class ProviderCredentialSemanticGate:
         self._clear_responses_mcp(identity)
 
     def _inspect_responses_output_item_event(self, event: Any, event_type: Any) -> None:
+        self._advance_responses_active_item()
         for item in _values(event, "item"):
             self._inspect_tool_item(item)
             if event_type.endswith(".added"):
@@ -468,6 +507,10 @@ class ProviderCredentialSemanticGate:
     def _inspect_responses_event(self, event: Any) -> None:
         event_types = _values(event, "type")
         event_type = event_types[-1] if event_types else None
+        codex_text_spec = _CODEX_RESPONSES_TEXT_DELTA_FIELDS.get(event_type)
+        if codex_text_spec is not None:
+            self._inspect_codex_responses_text_delta(event, *codex_text_spec)
+            return
         text_spec = _RESPONSES_TEXT_DELTA_FIELDS.get(event_type)
         if text_spec is not None:
             self._inspect_responses_text_delta(event, *text_spec)
@@ -499,29 +542,6 @@ class ProviderCredentialSemanticGate:
             for field_value in _values(event, field_name):
                 self._inspect_argument(field_value)
             self._clear_responses_call(self._responses_call_id(event))
-            return
-        if event_type in {
-            ResponsesEventType.OUTPUT_TEXT_DELTA,
-            ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA,
-        }:
-            deltas = _values(event, "delta")
-            if deltas and isinstance(deltas[-1], str):
-                field = (
-                    "reasoning"
-                    if event_type == ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA
-                    else "text"
-                )
-                key = (
-                    "responses",
-                    field,
-                    self._stream_identity(
-                        event,
-                        "item_id",
-                        "output_index",
-                        "content_index",
-                    ),
-                )
-                self._append_text(key, deltas[-1])
             return
         if event_type in {
             ResponsesEventType.OUTPUT_ITEM_ADDED,
