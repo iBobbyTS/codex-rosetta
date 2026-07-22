@@ -1,15 +1,16 @@
 # Persistent Audit Findings and Debt
 
 Last updated: 2026-07-21
-Repository head: current remediation working tree; targeted re-audit `20260721-1428`
+Repository head: `51f3b2d`; targeted remediation re-audit `20260721-2035`
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
 
 This section separates the current conclusions by who may authorize the next
 step. The baseline recorded `Authorized remediation: No`; the owner later
-authorized scoped remediation waves. The targeted re-audit in
-`docs/audit/runs/20260721-1232/` verifies that authorized remediation; no real
+authorized scoped remediation waves. The discovery run
+`docs/audit/runs/20260721-2008/` reopened `AUD-025`; the authorized targeted
+re-audit `docs/audit/runs/20260721-2035/` closes it at `51f3b2d`. No real
 provider/API call or deployment was authorized.
 
 ### Logic/control issues I can repair directly
@@ -28,11 +29,11 @@ provider/API call or deployment was authorized.
 | AUD-015 | Provider and web-run sidecar return paths can reflect configured credentials | Enforce configured-token redaction at every credential-bearing outbound return boundary while preserving non-secret response/error semantics. |
 | AUD-016 | Rotated provider wire keys are absent from the exact-value redaction inventory | Parse provider credentials once and register every actual trimmed wire key, plus the raw configured value where useful, for all runtime redactors. |
 | AUD-018 | Admin model discovery trusts syntactically valid upstream JSON without validating its schema | Validate the root object, collection fields, members, and model identifiers before normalization; return a stable non-sensitive Admin error for every mismatch. |
-| AUD-019 | **Open:** the executable inventory is correct for the known consumers, but leading-whitespace parsing and out-of-order Chat identity still bypass the bounded stream gate (AUD-022/AUD-023) | Reopen after the two stream-gate counterexamples are fixed and re-audited. |
-| AUD-021 | **Open:** canonical `computer_call` itself round-trips, but `computer_call_output` is silently discarded (AUD-024) | Reopen after the owner selects explicit rejection or complete native output support and the contract is verified. |
+| AUD-019 | Closed at current HEAD: the shared embedded-JSON inventory, whitespace handling, and Chat identity contract cover the registered consumers | Reopen on a new converter second-parse consumer, JSON parser boundary, or Chat identity change. |
+| AUD-021 | Closed at current HEAD: canonical `computer_call` round-trips and `computer_call_output` is explicitly rejected under the recorded scope | Reopen only if native computer-output or broader computer-control support is authorized. |
 | AUD-022 | Responses stream argument semantic gate can skip a completed JSON value with leading whitespace | Normalize JSON whitespace before semantic inspection and add raw/parsed SSE regressions; no business decision is required. |
 | AUD-023 | Chat stream tool identity uses arrival order instead of the wire `index` | Use a stable index-to-call mapping and fail closed on conflicts; no business decision is required. |
-| AUD-025 | Stream credential gate omitted split ordinary text/reasoning/refusal and provider-specific argument fields | Extend the bounded, identity-aware semantic accumulator across every currently supported provider stream field and add raw/parsed regressions. |
+| AUD-025 | **Closed:** Responses text delta buffers now follow Codex active-item and retained-index semantics | Reopen on a Codex consumer, Responses text-event, identity, or stream-lifecycle change. |
 | AUD-026 | Responses completion handling stopped scanning after the first tool-loop item | Scan and reject every completed output item before computing the finish event. |
 | AUD-027 | Non-streaming Responses tool-call output retained `finish_reason=stop` | Infer `tool_calls` from normalized IR tool-call content, matching the existing streaming contract. |
 
@@ -62,7 +63,7 @@ claims.
 | AUD-022 | Must Fix | Agent-Fixable | Closed | The bounded argument gate strips both leading and trailing JSON whitespace before semantic credential inspection | PROVIDER-01/SCN-03/SCN-04/CTRL-03; raw and parsed SSE | Gateway transport/security owner | Reopen if embedded JSON inventory, parser, or stream framing changes |
 | AUD-023 | Must Fix | Agent-Fixable | Closed | Chat tool fragments use bounded index-to-call mappings, detect remaps/conflicts, and fail closed on missing identity | PROVIDER-01/SCN-03/SCN-04/CTRL-03; Chat SSE | Gateway transport/security owner | Reopen on Chat wire-schema, identity, or state-bound changes |
 | AUD-024 | Must Fix | Decision Recorded | Closed | `computer_call_output` is rejected with a stable `NotImplementedError` before unknown-item handling can drop it | TOOL-01/SCN-03/SCN-05/IF-05; computer-use history | Project owner decision recorded: explicit rejection; Responses-only non-streaming scope retained | Reopen if native result support is authorized |
-| AUD-025 | Must Fix | Agent-Fixable | Closed | The bounded semantic gate now accumulates split text, reasoning, refusal, MCP, and provider-specific stream fields by stable event identity for Responses, Chat, Anthropic, and Google | PROVIDER-01/STREAM-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03; raw and parsed streams | Gateway transport/security owner | Reopen on a new stream field, provider schema, consumer identity, or credential-boundary change |
+| AUD-025 | Must Fix | Agent-Fixable | Closed | Responses text delta buffers use the Codex active-item generation and retained event-specific index; discarded wire metadata cannot split a consumer-visible stream | PROVIDER-01/STREAM-01/SCN-03/SCN-04/CTRL-03; raw and parsed Responses streams | Gateway transport/security owner | Reopen on a Codex consumer, Responses text-event, identity, or stream-lifecycle change |
 | AUD-026 | Must Fix | Agent-Fixable | Closed | Responses completion events scan all output items and reject unsupported `computer_call` even when a prior function/tool item selected `tool_calls` | TOOL-01/SCN-03/SCN-05/IF-05; Responses stream dispatch | Gateway converter owner | Reopen if unsupported-item policy or completion dispatch changes |
 | AUD-027 | Must Fix | Agent-Fixable | Closed | Non-streaming Responses infers `tool_calls` from normalized IR tool-call content when status alone would map to `stop` | PROVIDER-01/TOOL-01/SCN-03/SCN-05; non-stream pipeline | Gateway converter owner | Reopen if finish-reason precedence or tool-loop mapping changes |
 | AUD-020 | Must Fix | Decision Recorded | Closed | Active-provider/client credential inventory is the authoritative return-gate domain; global configured-token inventory remains diagnostic-only | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; provider and auxiliary return-domain ownership | Project owner decision recorded in profile | Reopen if deployment boundary or credential-domain ownership changes |
@@ -110,6 +111,8 @@ status table above remains authoritative when a later audit reopens an ID.
 | AUD-019 | 20260720-2255 remediation / working tree | Duplicate-preserving outer JSON parsing and bounded Responses/Chat argument semantics aligned to actual call/item/index consumers; safe duplicate/BOM/unknown-string/identity-change/resource-limit regressions; focused `322 passed`, full `3604 passed, 5 skipped`, lint green | Real provider/Codex timing remains unverified; unknown provider-specific nested schemas remain outside coverage until explicitly registered | Reopen on argument schema, identity resolution, parser, stream framing, or state-bound change |
 | AUD-019 | 20260721-0906 remediation / working tree | Shared executable inventory covers all five current Responses embedded-JSON fields; converter-inventory contract plus adversarial non-streaming/custom-SSE tests; focused `326 passed`, full `3621 passed, 5 skipped`, lint and compatibility green | Real provider/Codex timing and future unregistered consumer fields remain Unknown | Reopen on converter consumer, schema, identity, parser, stream framing, or state-bound change |
 | AUD-021 | 20260721-0906 remediation / working tree | Local SDK-backed canonical `computer_call`, IR `computer_use`, exact non-streaming Responses round trip, and explicit Chat/Anthropic/Google/stream rejection; focused/full/lint/compatibility green | Cross-format and converted-stream computer control remains deliberately unsupported; no live provider evidence | Reopen if computer-control support, wire fields, stream mapping, or target-format semantics change |
+| AUD-025 | 20260721-1428 remediation / working tree | Bounded raw/parsed accumulation covered the then-enumerated Responses, Chat, Anthropic, and Google stream fields; focused `185 passed`, full `3629 passed, 5 skipped`, ruff/format/ty green | The tests fixed optional wire identity values and did not compare them with Codex's discarded-field semantics | Reopened by `20260721-2008` when ignored wire ID changes split one Codex-consumed stream across gate buffers |
+| AUD-025 | 20260721-2035 remediation / `51f3b2d` | Codex active-item and retained-index identities block all three changing-ignored-ID counterexamples in raw and parsed paths; isolation, bounds, and completion/failure/cancellation/EOF/close cleanup pass; focused `296 passed`, phase-separated `8 passed`, full `3676 passed, 5 skipped`, lint and compatibility green | Real provider/Codex timing, external sinks, unsupported/covert encodings, public deployment, availability, and recovery remain excluded or Unknown | Reopen on Codex consumer, Responses text-event, identity, stream-lifecycle, or credential-gate changes |
 | AUD-020 | 20260720-2103 decision closure / working tree | Approved profile defines active outbound provider/client credentials as the return-gate domain; a deterministic transport contract proves an unrelated configured provider credential is returned unchanged while existing active-provider collision tests remain fail-closed | Cross-provider/client credential reflection is accepted within the local/LAN-only boundary; global diagnostics still redact the complete configured-token inventory | Reopen if public deployment, global no-configured-token return semantics, or credential ownership changes |
 
 ## AUD-019 — Consumer-semantic JSON reconstruction bypasses return credential checks
@@ -271,7 +274,7 @@ The third omission pass reopened AUD-006, AUD-009, and AUD-012, reconciled AUD-0
 
 This pass independently challenged the credential-return, redirect, and live-runner inventories at current HEAD `26b7558`. It found two previously omitted credential exposures while finding no current redirect or live-approval bypass. Details are in [`docs/audit/runs/20260720-1606/REPORT.md`](runs/20260720-1606/REPORT.md) and [`EVIDENCE.md`](runs/20260720-1606/EVIDENCE.md).
 
-### Current classification
+### Classification at discovery
 
 - Closed after authorized remediation and phase-separated verification: AUD-015 (provider, sidecar, Admin model-discovery, stream, exception, and dict-key reflected credentials) and AUD-016 (canonical rotated wire-key inventory and atomic runtime propagation).
 - Business semantics remain unchanged: the approved profile already requires configured-token redaction and does not tolerate credential leakage, so neither finding requires a new owner decision.
@@ -367,6 +370,48 @@ deterministic suite passed (`3624 passed, 5 skipped`), `make lint` passed, and n
 real provider/API/Codex call or deployment occurred. AUD-019, AUD-021, AUD-022,
 AUD-023, and AUD-024 are closed at deterministic evidence depth; runtime/provider
 timing and external-sink behavior remain outside the profile.
+
+## Targeted remediation re-audit - `20260721-1428`
+
+This run closed `AUD-025`, `AUD-026`, and `AUD-027` against the then-frozen
+counterexamples. It added bounded split-field accumulation, complete Responses
+completion scanning, and non-streaming `tool_calls` finish inference. Focused
+`185 passed`, the full deterministic suite reported `3629 passed, 5 skipped`,
+and no real provider/API/Codex call occurred.
+
+## Supplementary omission audit - `20260721-2008`
+
+The same supplementary-audit subagent independently compared the current stream
+gate with the local Codex consumer and found that three Responses text delta
+types are still partitioned by optional wire identifiers that Codex discards.
+The primary agent independently reproduced the finding through both raw and
+parsed fake transports after the subagent's reporting turn stalled. Details are
+in [`REPORT.md`](runs/20260721-2008/REPORT.md) and
+[`EVIDENCE.md`](runs/20260721-2008/EVIDENCE.md).
+
+### Classification at discovery
+
+- Reopened: `AUD-025` (`Must Fix / Agent-Fixable`).
+- No new business or risk decision is required; the approved active-provider
+  credential boundary already determines the intended outcome.
+- Affected coverage was invalidated only for `PROVIDER-01`, `STREAM-01`,
+  `SCN-03`, `SCN-04`, and `CTRL-03`.
+- The related suite remains green (`290 passed`) but lacks the changing-ignored-ID
+  failure oracle. No product remediation, real call, deployment, or commit occurred.
+
+## Targeted remediation re-audit - `20260721-2035`
+
+The repair at `51f3b2d` replaced discarded Responses wire metadata with the
+active-item and retained-index identity that Codex actually consumes. Raw and
+parsed regressions block all three frozen counterexamples before releasing the
+completing fragment; isolation, state bounds, and every terminal cleanup path
+are covered. Focused `296 passed`, a phase-separated adversarial selection
+reported `8 passed`, and the full deterministic suite reported `3676 passed,
+5 skipped`; lint and compatibility checks are green. No real call or deployment
+occurred.
+
+`AUD-025` is closed and `PROVIDER-01`, `STREAM-01`, `SCN-03`, `SCN-04`, and
+`CTRL-03` return to `Fresh (deterministic)`. No business decision was required.
 
 ## Accepted Debt and Risk
 
@@ -1478,7 +1523,7 @@ Commit: `04efc74`.
 - First detected run: `20260721-1232` omission audit
 - Owner: Gateway transport/security owner
 
-### Evidence and closure
+### Prior closure evidence (`20260721-1428`)
 
 The independent audit reconstructed an active credential across multiple text,
 reasoning, refusal, MCP, and provider-specific stream events. The semantic gate
@@ -1490,6 +1535,68 @@ Closure evidence: focused transport/converter suite `185 passed`; full
 deterministic suite `3629 passed, 5 skipped`; ruff, format, and ty checks pass.
 Residual risk remains limited to unsupported/covert encodings and real provider
 timing, which are outside the approved audit boundary.
+
+### Reopen evidence (`20260721-2008`)
+
+The previous identity-aware accumulation used provider wire identity without
+proving that the downstream consumer retained the same identity. Current Codex
+source shows:
+
+- `response.output_text.delta` retains only `delta` and binds it to the active item;
+- `response.reasoning_summary_text.delta` retains `delta + summary_index` and
+  binds it to the active item;
+- `response.reasoning_text.delta` retains `delta + content_index` and binds it
+  to the active item.
+
+The gate instead includes optional `item_id`, `output_index`, and/or
+`content_index` values that the corresponding Codex event consumer discards.
+A deterministic fake-transport probe changed those ignored values between
+`secret-` and `token`. All three event types released both parsed events and all
+raw SSE frames, reconstructing the configured dummy credential downstream.
+
+This remains the original `AUD-025` root cause: one downstream semantic stream
+can be split across multiple credential-gate buffers. It is not assigned a new
+finding ID.
+
+### Frozen acceptance criteria
+
+1. Each supported Responses text delta uses the active-item and retained-index
+   identity that Codex actually concatenates.
+2. Wire fields ignored by that consumer cannot create a fresh buffer; malformed
+   contradictions either remain identity-irrelevant or fail closed.
+3. Raw and parsed paths block the three changing-ignored-ID counterexamples
+   before the completing fragment is released.
+4. Different active items, summary indices, and content indices remain isolated;
+   state is bounded and cleared on every terminal path.
+5. Focused and full deterministic checks pass without a real API call.
+
+### Decision and recommended direction
+
+No owner decision is required. Repair the existing semantic gate so its event
+inventory owns the Codex consumer identity rather than adding another parallel
+mapping layer, then perform a targeted re-audit of the invalidated coverage cone.
+
+### Remediation and closure (`20260721-2035`)
+
+Commit `51f3b2d` implements a bounded local active-item generation and uses only
+the indices Codex retains: no index for output text, `summary_index` for
+reasoning summary, and `content_index` for reasoning text. Ignored delta IDs do
+not allocate buffers or alter identity mode. Item boundaries and stream EOF,
+completion, failure, cancellation, generator close, context-manager exit, and
+explicit close clear the semantic state; refusal and code-interpreter paths
+retain their wire-consumer identities.
+
+Raw and parsed regressions block all three changing-ignored-ID counterexamples
+before the completing fragment is released. Separate active items and retained
+indices remain isolated, and the identity count stays bounded. Focused checks
+reported `296 passed`; the post-commit adversarial selection reported `8 passed`;
+the full deterministic suite reported `3676 passed, 5 skipped`; lint and Codex
+compatibility checks passed. No real API call occurred.
+
+All frozen acceptance criteria are satisfied. Residual risk is limited to real
+provider/Codex timing, external sinks, unsupported/covert encodings, and other
+profile exclusions. Reopen on a Codex consumer, Responses text-event, identity,
+stream-lifecycle, or credential-gate change.
 
 ## AUD-026 — Responses completion scan stops after the first tool item
 
