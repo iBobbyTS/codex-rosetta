@@ -1035,6 +1035,170 @@ def test_stream_blocks_split_text_credentials_for_every_provider(
 
 
 @pytest.mark.parametrize(
+    ("event_type", "retained_identity", "first_ignored", "second_ignored"),
+    [
+        (
+            "response.output_text.delta",
+            {},
+            {"item_id": "wire-message-a", "output_index": 7, "content_index": 3},
+            {"item_id": "wire-message-b", "output_index": 8, "content_index": 4},
+        ),
+        (
+            "response.reasoning_summary_text.delta",
+            {"summary_index": 2},
+            {"item_id": "wire-summary-a", "output_index": 7, "content_index": 3},
+            {"item_id": "wire-summary-b", "output_index": 8, "content_index": 4},
+        ),
+        (
+            "response.reasoning_text.delta",
+            {"content_index": 3},
+            {"item_id": "wire-reasoning-a", "output_index": 7},
+            {"item_id": "wire-reasoning-b", "output_index": 8},
+        ),
+    ],
+)
+def test_stream_blocks_split_credentials_when_codex_ignored_ids_change(
+    event_type: str,
+    retained_identity: dict[str, Any],
+    first_ignored: dict[str, Any],
+    second_ignored: dict[str, Any],
+) -> None:
+    """Gate identity must match the active-item identity Codex consumes."""
+    token = "secret-token"
+    events = [
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "active-message", "content": []},
+        },
+        {
+            "type": event_type,
+            **retained_identity,
+            **first_ignored,
+            "delta": "secret-",
+        },
+        {
+            "type": event_type,
+            **retained_identity,
+            **second_ignored,
+            "delta": "token",
+        },
+    ]
+
+    async def run_parsed() -> list[dict[str, Any]]:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(events=events))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        emitted: list[dict[str, Any]] = []
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for event in stream:
+                emitted.append(event)
+        return emitted
+
+    frames = [
+        b"data: " + json.dumps(event, separators=(",", ":")).encode() + b"\n\n"
+        for event in events
+    ]
+
+    async def run_raw() -> bytes:
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(_Stream(chunks=frames))
+        ).send_streaming(_provider(token), "openai_responses", {}, "test")
+        raw = stream.aiter_raw_bytes()
+        assert raw is not None
+        emitted = bytearray()
+        with pytest.raises(UpstreamCredentialCollisionError):
+            async for chunk in raw:
+                emitted.extend(chunk)
+        return bytes(emitted)
+
+    parsed = asyncio.run(run_parsed())
+    raw = asyncio.run(run_raw())
+    assert all(event.get("delta") != "token" for event in parsed)
+    assert frames[-1] not in raw
+    assert token not in json.dumps(parsed, separators=(",", ":"))
+    assert token.encode() not in raw
+
+
+def test_parsed_stream_cancellation_clears_codex_text_identity_state() -> None:
+    """Cancellation must not retain a partial credential in a reusable wrapper."""
+    first = {"type": "response.output_text.delta", "delta": "secret-"}
+    second = {"type": "response.output_text.delta", "delta": "token"}
+
+    class _CancellableStream(_Stream):
+        def __init__(self) -> None:
+            super().__init__(events=[first])
+            self.block_after_events = True
+
+        def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+            async def events() -> AsyncIterator[dict[str, Any]]:
+                for event in self.events:
+                    yield event
+                if self.block_after_events:
+                    await asyncio.Event().wait()
+
+            return events()
+
+    async def run() -> list[dict[str, Any]]:
+        upstream = _CancellableStream()
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(upstream)
+        ).send_streaming(_provider("secret-token"), "openai_responses", {}, "test")
+        iterator = stream.__aiter__()
+        assert await anext(iterator) == first
+
+        async def next_event() -> dict[str, Any]:
+            return await anext(iterator)
+
+        pending = asyncio.create_task(next_event())
+        await asyncio.sleep(0)
+        pending.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+
+        upstream.events = [second]
+        upstream.block_after_events = False
+        return [event async for event in stream]
+
+    assert asyncio.run(run()) == [second]
+
+
+@pytest.mark.parametrize("termination", ("failure", "close"))
+def test_parsed_stream_terminal_paths_clear_codex_text_identity_state(
+    termination: str,
+) -> None:
+    """Failure and explicit close release partial semantic-gate state."""
+    first = {"type": "response.output_text.delta", "delta": "secret-"}
+    second = {"type": "response.output_text.delta", "delta": "token"}
+
+    async def run() -> list[dict[str, Any]]:
+        upstream = _Stream(
+            events=[first],
+            failure=(
+                UpstreamConnectionError("disconnected")
+                if termination == "failure"
+                else None
+            ),
+        )
+        stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(upstream)
+        ).send_streaming(_provider("secret-token"), "openai_responses", {}, "test")
+        iterator = stream.__aiter__()
+        assert await anext(iterator) == first
+        if termination == "failure":
+            with pytest.raises(UpstreamConnectionError):
+                await anext(iterator)
+            upstream.failure = None
+        else:
+            await stream.close()
+
+        upstream.events = [second]
+        return [event async for event in stream]
+
+    assert asyncio.run(run()) == [second]
+
+
+@pytest.mark.parametrize(
     "extra_identity",
     [
         {},
@@ -1123,54 +1287,120 @@ def test_stream_blocks_split_codex_source_shaped_reasoning_credentials() -> None
     assert raw == b""
 
 
-def test_codex_reasoning_text_identity_state_is_bounded_and_cleared() -> None:
-    """Reasoning identities obey their bound and are reusable after cleanup."""
+def test_codex_text_identity_state_is_bounded_and_cleared() -> None:
+    """Codex-consumed identities obey their bound and item terminal cleanup."""
     gate = ProviderCredentialSemanticGate(
         SecretRedactor({"secret-token"}),
         "openai_responses",
         max_argument_identities=1,
     )
 
-    def event(content_index: int, delta: str) -> dict[str, Any]:
+    def item_event(kind: str, item_id: str) -> dict[str, Any]:
+        return {
+            "type": f"response.output_item.{kind}",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": item_id, "content": []},
+        }
+
+    def delta_event(content_index: int, delta: str) -> dict[str, Any]:
         return {
             "type": "response.reasoning_text.delta",
             "delta": delta,
             "content_index": content_index,
         }
 
-    gate.inspect_stream_event(event(0, "ordinary"))
+    gate.inspect_stream_event(item_event("added", "reasoning-1"))
+    gate.inspect_stream_event(delta_event(0, "ordinary"))
     with pytest.raises(SecretCollisionError):
-        gate.inspect_stream_event(event(1, "ordinary"))
+        gate.inspect_stream_event(delta_event(1, "ordinary"))
 
-    gate.inspect_stream_event(event(2, "ordinary"))
+    gate.inspect_stream_event(item_event("added", "reasoning-2"))
+    gate.inspect_stream_event(delta_event(2, "ordinary"))
+    gate.inspect_stream_event(item_event("done", "reasoning-2"))
+    gate.inspect_stream_event(item_event("added", "reasoning-3"))
+    gate.inspect_stream_event(delta_event(3, "ordinary"))
     gate.inspect_stream_event({"type": "response.completed", "response": {}})
-    gate.inspect_stream_event(event(3, "ordinary"))
+    gate.inspect_stream_event(delta_event(4, "ordinary"))
 
     gate.finish()
-    gate.inspect_stream_event(event(4, "ordinary"))
+    gate.inspect_stream_event(delta_event(5, "ordinary"))
+    gate.inspect_stream_event(
+        {**delta_event(5, "ordinary"), "item_id": "ignored-wire-item"}
+    )
+
+    gate.finish()
+    gate.inspect_stream_event(delta_event(6, "secret-"))
     with pytest.raises(SecretCollisionError):
         gate.inspect_stream_event(
-            {
-                **event(4, "ordinary"),
-                "item_id": "codex-item",
-            }
+            {**delta_event(6, "token"), "item_id": "changed-ignored-wire-item"}
         )
+    gate.inspect_stream_event(delta_event(7, "ordinary"))
 
-    gate.inspect_stream_event(event(5, "ordinary"))
-    gate.finish()
-    gate.inspect_stream_event(event(4, "secret-"))
-    with pytest.raises(SecretCollisionError):
-        gate.inspect_stream_event(event(4, "token"))
-    gate.inspect_stream_event(event(6, "ordinary"))
+
+def test_codex_text_identities_isolate_items_and_retained_indices() -> None:
+    """Only active items and indices retained by Codex partition text streams."""
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret-token"}),
+        "openai_responses",
+    )
+
+    def item_event(kind: str, item_id: str) -> dict[str, Any]:
+        return {
+            "type": f"response.output_item.{kind}",
+            "output_index": 0,
+            "item": {"type": "reasoning", "id": item_id, "content": []},
+        }
+
+    gate.inspect_stream_event(item_event("added", "reasoning-1"))
+    gate.inspect_stream_event(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "ignored-a",
+            "delta": "secret-",
+        }
+    )
+    gate.inspect_stream_event(item_event("done", "reasoning-1"))
+    gate.inspect_stream_event(item_event("added", "reasoning-2"))
+    gate.inspect_stream_event(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "ignored-a",
+            "delta": "token",
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "summary_index": 0,
+            "delta": "secret-",
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.reasoning_summary_text.delta",
+            "summary_index": 1,
+            "delta": "token",
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.reasoning_text.delta",
+            "content_index": 0,
+            "delta": "secret-",
+        }
+    )
+    gate.inspect_stream_event(
+        {
+            "type": "response.reasoning_text.delta",
+            "content_index": 1,
+            "delta": "token",
+        }
+    )
 
 
 @pytest.mark.parametrize(
     ("event_type", "identity"),
     [
-        (
-            "response.reasoning_text.delta",
-            {"item_id": "reasoning-1", "output_index": 0, "content_index": 0},
-        ),
         (
             "response.refusal.delta",
             {"item_id": "refusal-1", "output_index": 0, "content_index": 1},
@@ -1185,7 +1415,7 @@ def test_stream_blocks_split_responses_text_delta_credentials(
     event_type: str,
     identity: dict[str, Any],
 ) -> None:
-    """Known Responses text consumers retain their own wire identity."""
+    """Non-Codex Responses text consumers retain their wire identity."""
     token = "secret-token"
     first = {"type": event_type, **identity, "delta": "secret-"}
     other_identity = {**identity, "item_id": f"{identity['item_id']}-other"}
