@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +18,8 @@ logger = logging.getLogger("codex-rosetta-gateway")
 
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TRACE_PATH = "~/.config/codex-rosetta-gateway/log.jsonl"
+MAX_PENDING_RESPONSE_BYTES = 1_048_576
+MAX_PENDING_RESPONSE_RECORDS = 4096
 
 
 @dataclass
@@ -169,6 +171,57 @@ class StreamTraceLogger:
         self.max_string_chars = max_string_chars
         self._redactor = redactor or SecretRedactor()
         self._disabled = False
+        self._defer_response = False
+        self._pending_response_lines: list[str] = []
+        self._pending_response_values: list[Any] = []
+        self._pending_response_bytes = 0
+        self._pending_response_dropped = False
+
+    def defer_response_diagnostics(self) -> None:
+        """Hold subsequent response records until the request is proven safe."""
+        if self._defer_response:
+            raise RuntimeError("Stream response diagnostics are already deferred")
+        self._defer_response = True
+        self._pending_response_lines.clear()
+        self._pending_response_values.clear()
+        self._pending_response_bytes = 0
+        self._pending_response_dropped = False
+
+    def finish_response_diagnostics(
+        self,
+        *,
+        safe: bool,
+        safety_check: Callable[[tuple[Any, ...]], bool] | None = None,
+    ) -> None:
+        """Release one safe response batch or discard all unproven records."""
+        if not self._defer_response:
+            return
+        lines = self._pending_response_lines
+        pending_values = tuple(self._pending_response_values)
+        should_release = False
+        try:
+            should_release = safe and not self._pending_response_dropped
+            if should_release:
+                should_release = not self._redactor.contains_ordered_fragments(
+                    pending_values
+                )
+            if should_release and safety_check is not None:
+                try:
+                    should_release = safety_check(pending_values)
+                except Exception:
+                    should_release = False
+                    logger.warning(
+                        "Dropping deferred stream response diagnostics after "
+                        "safety-check failure"
+                    )
+        finally:
+            self._defer_response = False
+            self._pending_response_lines = []
+            self._pending_response_values = []
+            self._pending_response_bytes = 0
+            self._pending_response_dropped = False
+        if should_release and lines:
+            self._append_lines(lines)
 
     def log(
         self,
@@ -181,6 +234,10 @@ class StreamTraceLogger:
         if self._disabled:
             return
 
+        redacted_data = _truncate(
+            self._redactor.redact(data),
+            self.max_string_chars,
+        )
         record = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "request_id": self.request_id,
@@ -191,8 +248,34 @@ class StreamTraceLogger:
             "provider_name": self.provider_name,
             "chunk_index": chunk_index,
             "stage": stage,
-            "data": _truncate(self._redactor.redact(data), self.max_string_chars),
+            "data": redacted_data,
         }
+        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+        if self._defer_response:
+            if self._pending_response_dropped:
+                return
+            line_bytes = len(line.encode("utf-8"))
+            if (
+                len(self._pending_response_lines) + 1 > MAX_PENDING_RESPONSE_RECORDS
+                or self._pending_response_bytes + line_bytes
+                > MAX_PENDING_RESPONSE_BYTES
+            ):
+                self._pending_response_lines.clear()
+                self._pending_response_values.clear()
+                self._pending_response_bytes = 0
+                self._pending_response_dropped = True
+                logger.warning(
+                    "Dropping deferred stream response diagnostics after capacity limit"
+                )
+                return
+            self._pending_response_lines.append(line)
+            self._pending_response_values.append(redacted_data)
+            self._pending_response_bytes += line_bytes
+            return
+        self._append_lines([line])
+
+    def _append_lines(self, lines: list[str]) -> None:
+        """Append a prepared record batch to the configured JSONL path."""
         try:
             parent_existed = self.path.parent.exists()
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -201,7 +284,7 @@ class StreamTraceLogger:
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                fh.write("".join(lines))
         except OSError as exc:
             self._disabled = True
             logger.warning("Disabling stream trace after write failure: %s", exc)

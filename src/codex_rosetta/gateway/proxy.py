@@ -101,7 +101,10 @@ from .transport import (
     UpstreamCredentialCollisionError,
     UpstreamTransport,
 )
-from .transport.credential_redaction import CredentialRedactingTransport
+from .transport.credential_redaction import (
+    CredentialRedactingTransport,
+    ProviderCredentialOutputGate,
+)
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
@@ -118,6 +121,8 @@ from .web_search import (
     strip_responses_web_search_tools,
     web_search_trace_summary,
 )
+
+_UNSAFE_STREAM_ERROR = "Upstream stream failed; unsafe error details blocked"
 
 logger = get_logger()
 
@@ -1426,6 +1431,32 @@ def _resolve_state_stores(
     )
 
 
+def _inspect_and_log_final_source_document(
+    provider_info: ProviderInfo,
+    source_provider: ProviderType,
+    source_response: dict[str, Any],
+    upstream_response: dict[str, Any],
+    body_log_state: BodyLogState | None,
+) -> None:
+    """Inspect final output and persist only consumer-safe diagnostics."""
+    gate = ProviderCredentialOutputGate(provider_info, source_provider)
+    try:
+        gate.inspect_document(source_response)
+        if body_log_state is not None and body_log_state.enabled:
+            diagnostic_values = (body_log_state.render(upstream_response),)
+            if not gate.diagnostics_are_safe(
+                diagnostic_values
+            ) or not body_log_state.diagnostics_are_safe(diagnostic_values):
+                return
+            log_response(
+                upstream_response,
+                label="UPSTREAM RESPONSE",
+                state=body_log_state,
+            )
+    finally:
+        gate.finish()
+
+
 async def handle_non_streaming(
     route: ResolvedRoute,
     provider_info: ProviderInfo,
@@ -1545,10 +1576,10 @@ async def handle_non_streaming(
             )
 
         if resp.body is not None:
-            log_response(
+            _log_active_provider_response_diagnostics(
+                provider_info,
                 resp.body,
-                label="UPSTREAM RESPONSE",
-                state=body_log_state,
+                body_log_state,
             )
         return (
             Response(
@@ -1674,7 +1705,6 @@ async def handle_non_streaming(
 
     # Phase 4: Target response → Source response
     assert resp.body is not None
-    log_response(resp.body, label="UPSTREAM RESPONSE", state=body_log_state)
 
     def _on_response_ir_ready(ir_response: dict[str, Any]) -> None:
         _translate_and_persist_localized_response_tools(
@@ -1697,6 +1727,18 @@ async def handle_non_streaming(
         profile.update(pipeline.profile)
         return error_response_for_source(route.source_provider, 502, str(exc)), profile
 
+    try:
+        _inspect_and_log_final_source_document(
+            provider_info,
+            route.source_provider,
+            source_response,
+            resp.body,
+            body_log_state,
+        )
+    except UpstreamCredentialCollisionError as exc:
+        profile.update(pipeline.profile)
+        return error_response_for_source(route.source_provider, 502, str(exc)), profile
+
     # Merge response-phase timings from pipeline
     profile.update(pipeline.profile)
     return JSONResponse(source_response), profile
@@ -1713,6 +1755,7 @@ async def _stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events from an already-opened upstream stream.
 
@@ -1725,14 +1768,18 @@ async def _stream_event_generator(
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
+    terminal_exception: Exception | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
     try:
         async with stream:
             async for chunk in stream:
-                if chunk_count == 0:
-                    ttfb_ms = round((time.perf_counter() - t_stream_open) * 1000, 2)
+                ttfb_ms = _capture_stream_ttfb(
+                    chunk_count=chunk_count,
+                    stream_opened_at=t_stream_open,
+                    current=ttfb_ms,
+                )
                 chunk_count += 1
                 if trace is not None:
                     trace.log("upstream_chunk", chunk, chunk_index=chunk_count)
@@ -1743,6 +1790,7 @@ async def _stream_event_generator(
                         format_sse=format_sse,
                         trace=trace,
                         chunk_count=chunk_count,
+                        credential_output_gate=credential_output_gate,
                     ):
                         yield sse_event
 
@@ -1755,6 +1803,7 @@ async def _stream_event_generator(
                     format_sse=format_sse,
                     trace=trace,
                     chunk_count=chunk_count,
+                    credential_output_gate=credential_output_gate,
                 ):
                     yield sse_event
 
@@ -1764,13 +1813,15 @@ async def _stream_event_generator(
                 format_sse=format_sse,
                 trace=trace,
                 chunk_count=chunk_count,
+                credential_output_gate=credential_output_gate,
             ):
                 yield sse_event
 
-        if source_provider == "openai_chat":
-            done_event = format_sse_done()
-            if trace is not None:
-                trace.log("downstream_sse_done", done_event, chunk_index=chunk_count)
+        for done_event in _stream_done_events(
+            source_provider,
+            trace=trace,
+            chunk_count=chunk_count,
+        ):
             yield done_event
 
         log_stream_summary(
@@ -1780,22 +1831,29 @@ async def _stream_event_generator(
         )
         terminal_state.complete()
     except BaseException as exc:
-        yield _stream_terminal_recovery(
+        recovery = _stream_terminal_recovery(
             exc,
             source_provider,
             terminal_state,
+            credential_output_gate,
         )
+        if isinstance(recovery, Exception):
+            terminal_exception = recovery
+        else:
+            yield recovery
     finally:
-        _finalize_stream_profile(
+        _finalize_response_stream(
+            trace=trace,
+            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
-            trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_state.outcome,
-            stream_error=terminal_state.error,
+            terminal_state=terminal_state,
             ttfb_ms=ttfb_ms,
         )
+    if terminal_exception is not None:
+        raise terminal_exception from None
 
 
 async def _web_search_stream_event_generator(  # noqa: C901
@@ -1816,11 +1874,13 @@ async def _web_search_stream_event_generator(  # noqa: C901
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
     max_rounds: int = 5,
+    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[str]:
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
+    terminal_exception: Exception | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
     controller = WebSearchStreamController()
@@ -1840,11 +1900,11 @@ async def _web_search_stream_event_generator(  # noqa: C901
 
             async with current_stream:
                 async for chunk in current_stream:
-                    if chunk_count == 0:
-                        ttfb_ms = round(
-                            (time.perf_counter() - t_stream_open) * 1000,
-                            2,
-                        )
+                    ttfb_ms = _capture_stream_ttfb(
+                        chunk_count=chunk_count,
+                        stream_opened_at=t_stream_open,
+                        current=ttfb_ms,
+                    )
                     chunk_count += 1
                     if trace is not None:
                         stage = (
@@ -1862,6 +1922,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
                             format_sse=format_sse,
                             trace=trace,
                             chunk_count=chunk_count,
+                            credential_output_gate=credential_output_gate,
                         ):
                             yield sse_event
 
@@ -1876,6 +1937,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
                         format_sse=format_sse,
                         trace=trace,
                         chunk_count=chunk_count,
+                        credential_output_gate=credential_output_gate,
                     ):
                         yield sse_event
 
@@ -1911,6 +1973,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
                     format_sse=format_sse,
                     trace=trace,
                     chunk_count=chunk_count,
+                    credential_output_gate=credential_output_gate,
                 ):
                     yield sse_event
 
@@ -1936,13 +1999,15 @@ async def _web_search_stream_event_generator(  # noqa: C901
                 format_sse=format_sse,
                 trace=trace,
                 chunk_count=chunk_count,
+                credential_output_gate=credential_output_gate,
             ):
                 yield sse_event
 
-        if source_provider == "openai_chat":
-            done_event = format_sse_done()
-            if trace is not None:
-                trace.log("downstream_sse_done", done_event, chunk_index=chunk_count)
+        for done_event in _stream_done_events(
+            source_provider,
+            trace=trace,
+            chunk_count=chunk_count,
+        ):
             yield done_event
 
         log_stream_summary(
@@ -1952,22 +2017,29 @@ async def _web_search_stream_event_generator(  # noqa: C901
         )
         terminal_state.complete()
     except BaseException as exc:
-        yield _stream_terminal_recovery(
+        recovery = _stream_terminal_recovery(
             exc,
             source_provider,
             terminal_state,
+            credential_output_gate,
         )
+        if isinstance(recovery, Exception):
+            terminal_exception = recovery
+        else:
+            yield recovery
     finally:
-        _finalize_stream_profile(
+        _finalize_response_stream(
+            trace=trace,
+            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
-            trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_state.outcome,
-            stream_error=terminal_state.error,
+            terminal_state=terminal_state,
             ttfb_ms=ttfb_ms,
         )
+    if terminal_exception is not None:
+        raise terminal_exception from None
 
 
 def _format_web_search_source_event_sse(
@@ -1979,9 +2051,8 @@ def _format_web_search_source_event_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
+    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
-    if trace is not None:
-        trace.log("source_event", source_event, chunk_index=chunk_count)
     events = controller.process_source_event(source_event, round_index=round_index)
     return _format_buffered_events_sse(
         [
@@ -1994,7 +2065,64 @@ def _format_web_search_source_event_sse(
         format_sse=format_sse,
         trace=trace,
         chunk_count=chunk_count,
+        credential_output_gate=credential_output_gate,
     )
+
+
+def _stream_done_events(
+    source_provider: ProviderType,
+    *,
+    trace: StreamTraceLogger | None,
+    chunk_count: int,
+) -> tuple[str, ...]:
+    if source_provider != "openai_chat":
+        return ()
+    done_event = format_sse_done()
+    if trace is not None:
+        trace.log("downstream_sse_done", done_event, chunk_index=chunk_count)
+    return (done_event,)
+
+
+def _capture_stream_ttfb(
+    *,
+    chunk_count: int,
+    stream_opened_at: float,
+    current: float | None,
+) -> float | None:
+    """Capture time to first byte while preserving an existing measurement."""
+    if chunk_count != 0:
+        return current
+    return round((time.perf_counter() - stream_opened_at) * 1000, 2)
+
+
+def _finish_credential_output_gate(
+    credential_output_gate: ProviderCredentialOutputGate | None,
+) -> None:
+    if credential_output_gate is not None:
+        credential_output_gate.finish()
+
+
+def _log_active_provider_response_diagnostics(
+    provider_info: ProviderInfo,
+    upstream_response: dict[str, Any],
+    body_log_state: BodyLogState | None,
+) -> None:
+    """Persist one direct response only when both diagnostic domains are safe."""
+    if body_log_state is None or not body_log_state.enabled:
+        return
+    gate = ProviderCredentialOutputGate(provider_info, None)
+    try:
+        values = (body_log_state.render(upstream_response),)
+        if gate.diagnostics_are_safe(values) and body_log_state.diagnostics_are_safe(
+            values
+        ):
+            log_response(
+                upstream_response,
+                label="UPSTREAM RESPONSE",
+                state=body_log_state,
+            )
+    finally:
+        gate.finish()
 
 
 def _format_source_event_sse(
@@ -2004,9 +2132,8 @@ def _format_source_event_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
+    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
-    if trace is not None:
-        trace.log("source_event", source_event, chunk_index=chunk_count)
     buffered_events = (
         event_buffer.process(source_event)
         if event_buffer is not None
@@ -2017,6 +2144,7 @@ def _format_source_event_sse(
         format_sse=format_sse,
         trace=trace,
         chunk_count=chunk_count,
+        credential_output_gate=credential_output_gate,
     )
 
 
@@ -2026,9 +2154,14 @@ def _format_buffered_events_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
+    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
     sse_events: list[str] = []
     for event in events:
+        if credential_output_gate is not None:
+            credential_output_gate.inspect_stream_event(event)
+        if trace is not None:
+            trace.log("source_event", event, chunk_index=chunk_count)
         sse_event = format_sse(event)
         if trace is not None:
             trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
@@ -2054,6 +2187,7 @@ def _converted_stream_response_generator(
     target_provider: ProviderType,
     target_body: dict[str, Any],
     extra_headers: dict[str, str] | None,
+    credential_output_gate: ProviderCredentialOutputGate,
 ) -> AsyncIterator[str]:
     if web_search_runtime is None:
         return _stream_event_generator(
@@ -2066,6 +2200,7 @@ def _converted_stream_response_generator(
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
+            credential_output_gate=credential_output_gate,
         )
     return _web_search_stream_event_generator(
         source_provider=source_provider,
@@ -2083,6 +2218,7 @@ def _converted_stream_response_generator(
         entry_id=entry_id,
         request_log=request_log,
         trace=trace,
+        credential_output_gate=credential_output_gate,
     )
 
 
@@ -2151,6 +2287,44 @@ def _finalize_stream_profile(
         )
 
 
+def _finalize_response_stream(
+    *,
+    trace: StreamTraceLogger | None,
+    credential_output_gate: ProviderCredentialOutputGate | None,
+    entry_id: str | None,
+    request_log: Any | None,
+    t0: float,
+    chunk_count: int,
+    terminal_state: _StreamTerminalState,
+    ttfb_ms: float | None,
+    passthrough: bool = False,
+) -> None:
+    """Finalize deferred diagnostics, credential state, and stream telemetry."""
+    try:
+        if trace is not None:
+            trace.finish_response_diagnostics(
+                safe=terminal_state.outcome == "completed",
+                safety_check=credential_output_gate.diagnostics_are_safe
+                if credential_output_gate is not None
+                else None,
+            )
+    finally:
+        try:
+            _finish_credential_output_gate(credential_output_gate)
+        finally:
+            _finalize_stream_profile(
+                entry_id=entry_id,
+                request_log=request_log,
+                trace=trace,
+                t0=t0,
+                chunk_count=chunk_count,
+                terminal_outcome=terminal_state.outcome,
+                stream_error=terminal_state.error,
+                ttfb_ms=ttfb_ms,
+                passthrough=passthrough,
+            )
+
+
 def _stream_terminal_failure(exc: BaseException) -> tuple[str, str]:
     """Classify early close/cancellation separately from provider failures."""
     if isinstance(exc, asyncio.CancelledError):
@@ -2177,12 +2351,19 @@ def _stream_terminal_recovery(
     exc: BaseException,
     source_provider: ProviderType,
     terminal_state: _StreamTerminalState,
-) -> str:
+    credential_output_gate: ProviderCredentialOutputGate | None,
+) -> str | Exception:
     """Recover only credential collisions; preserve every other failure."""
     terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
-    if not isinstance(exc, UpstreamCredentialCollisionError):
-        raise exc
-    return _stream_credential_collision_event(source_provider)
+    if isinstance(exc, UpstreamCredentialCollisionError):
+        return _stream_credential_collision_event(source_provider)
+    if (
+        credential_output_gate is not None
+        and not credential_output_gate.diagnostics_are_safe((terminal_state.error,))
+    ):
+        terminal_state.error = _UNSAFE_STREAM_ERROR
+        return UpstreamCredentialCollisionError(_UNSAFE_STREAM_ERROR)
+    raise exc
 
 
 async def _raw_stream_event_generator(
@@ -2193,11 +2374,13 @@ async def _raw_stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
+    terminal_exception: Exception | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -2207,8 +2390,11 @@ async def _raw_stream_event_generator(
             if raw_iter is None:
                 raise RuntimeError("Upstream stream does not support raw passthrough")
             async for chunk in raw_iter:
-                if chunk_count == 0:
-                    ttfb_ms = round((time.perf_counter() - t_stream_open) * 1000, 2)
+                ttfb_ms = _capture_stream_ttfb(
+                    chunk_count=chunk_count,
+                    stream_opened_at=t_stream_open,
+                    current=ttfb_ms,
+                )
                 chunk_count += 1
                 if trace is not None:
                     trace.log("raw_passthrough_chunk", chunk, chunk_index=chunk_count)
@@ -2221,21 +2407,30 @@ async def _raw_stream_event_generator(
         )
         terminal_state.complete()
     except BaseException as exc:
-        yield _stream_terminal_recovery(exc, source_provider, terminal_state).encode(
-            "utf-8"
+        recovery = _stream_terminal_recovery(
+            exc,
+            source_provider,
+            terminal_state,
+            credential_output_gate,
         )
+        if isinstance(recovery, Exception):
+            terminal_exception = recovery
+        else:
+            yield recovery.encode("utf-8")
     finally:
-        _finalize_stream_profile(
+        _finalize_response_stream(
+            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
             t0=t0,
             chunk_count=chunk_count,
-            terminal_outcome=terminal_state.outcome,
-            stream_error=terminal_state.error,
+            terminal_state=terminal_state,
             ttfb_ms=ttfb_ms,
             passthrough=True,
         )
+    if terminal_exception is not None:
+        raise terminal_exception from None
 
 
 async def _handle_direct_responses_streaming(
@@ -2418,6 +2613,18 @@ async def _handle_direct_responses_streaming(
             profile,
         )
 
+    credential_output_gate = ProviderCredentialOutputGate(
+        provider_info,
+        route.source_provider,
+        global_diagnostic_safety_check=(
+            upstream_error_log_state.diagnostics_are_safe
+            if upstream_error_log_state is not None
+            else None
+        ),
+    )
+    if trace is not None:
+        trace.defer_response_diagnostics()
+
     return (
         StreamingResponse(
             _raw_stream_event_generator(
@@ -2427,6 +2634,7 @@ async def _handle_direct_responses_streaming(
                 entry_id=entry_id,
                 request_log=request_log,
                 trace=trace,
+                credential_output_gate=credential_output_gate,
             ),
             content_type="text/event-stream",
         ),
@@ -2740,6 +2948,15 @@ async def handle_streaming(  # noqa: C901
         and codex_window_id
         else None
     )
+    credential_output_gate = ProviderCredentialOutputGate(
+        provider_info,
+        route.source_provider,
+        global_diagnostic_safety_check=(
+            upstream_error_log_state.diagnostics_are_safe
+            if upstream_error_log_state is not None
+            else None
+        ),
+    )
 
     if trace is not None:
         trace.log(
@@ -2757,6 +2974,7 @@ async def handle_streaming(  # noqa: C901
         )
         trace.log("source_request", body)
         trace.log("target_request", target_body)
+        trace.defer_response_diagnostics()
 
     return (
         StreamingResponse(
@@ -2777,6 +2995,7 @@ async def handle_streaming(  # noqa: C901
                 target_provider=route.target_provider,
                 target_body=target_body,
                 extra_headers=extra_headers,
+                credential_output_gate=credential_output_gate,
             ),
             content_type="text/event-stream",
         ),

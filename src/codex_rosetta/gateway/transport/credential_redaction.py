@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 from codex_rosetta.auto_detect import ProviderType
@@ -162,6 +162,70 @@ class _SSECredentialGate:
         self._semantic_gate.finish()
         self._held_frame = b""
         self._buffer = b""
+
+
+class ProviderCredentialOutputGate:
+    """Block credentials reconstructed by the final downstream consumer."""
+
+    def __init__(
+        self,
+        provider_info: ProviderInfo,
+        source_provider: ProviderType | None,
+        *,
+        global_diagnostic_safety_check: Callable[[tuple[Any, ...]], bool] | None = None,
+    ) -> None:
+        self._redactor = _provider_redactor(provider_info)
+        self._semantic_gate = ProviderCredentialSemanticGate(
+            self._redactor,
+            source_provider,
+        )
+        self._global_diagnostic_safety_check = global_diagnostic_safety_check
+        self._finished = False
+
+    def inspect_document(self, document: dict[str, Any]) -> None:
+        """Inspect one final source document before diagnostics or serialization."""
+        if self._finished:
+            raise RuntimeError("Provider credential output gate is already finished")
+        try:
+            if self._redactor.contains_exact(document):
+                raise SecretCollisionError
+            self._semantic_gate.inspect_document(document)
+        except SecretCollisionError:
+            self.finish()
+            raise _credential_collision_error() from None
+
+    def inspect_stream_event(self, event: dict[str, Any]) -> None:
+        """Inspect one final source event before tracing or serialization."""
+        if self._finished:
+            raise RuntimeError("Provider credential output gate is already finished")
+        try:
+            if self._redactor.contains_exact(event):
+                raise SecretCollisionError
+            self._semantic_gate.inspect_stream_event(event)
+        except SecretCollisionError:
+            self.finish()
+            raise _credential_collision_error() from None
+
+    def diagnostics_are_safe(self, values: tuple[Any, ...]) -> bool:
+        """Check ordered fields under active-provider and global policies."""
+        if self._finished:
+            return False
+        try:
+            if self._redactor.contains_ordered_fragments(values):
+                return False
+            return (
+                self._global_diagnostic_safety_check is None
+                or self._global_diagnostic_safety_check(values)
+            )
+        except Exception:
+            return False
+
+    def finish(self) -> None:
+        """Release all bounded downstream identity and fragment state."""
+        if self._finished:
+            return
+        self._finished = True
+        self._semantic_gate.finish()
 
 
 class CredentialRedactingStream(UpstreamStream):
@@ -414,4 +478,8 @@ class CredentialRedactingTransport:
         )
 
 
-__all__ = ["CredentialRedactingStream", "CredentialRedactingTransport"]
+__all__ = [
+    "CredentialRedactingStream",
+    "CredentialRedactingTransport",
+    "ProviderCredentialOutputGate",
+]

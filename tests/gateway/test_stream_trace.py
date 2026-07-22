@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import stat
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -13,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from codex_rosetta._vendor.httpserver import StreamingResponse
+from codex_rosetta.gateway import stream_trace
 from codex_rosetta.gateway.proxy import (
     _raw_stream_event_generator,
     _stream_event_generator,
@@ -709,3 +711,117 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert stages[-1] == "stream_complete"
     assert records[1]["data"] == body
     assert records[2]["data"]["messages"] == [{"role": "user", "content": "hello"}]
+
+
+def test_deferred_response_trace_capacity_drops_the_entire_batch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_path = tmp_path / "capacity-drop.jsonl"
+    monkeypatch.setattr(stream_trace, "MAX_PENDING_RESPONSE_BYTES", 120)
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
+    trace = state.create_logger(
+        request_id="req-capacity",
+        request_log_id="log-capacity",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    trace.log("stream_start", {"safe": True})
+    trace.defer_response_diagnostics()
+    trace.log("upstream_chunk", {"content": "first pending record"})
+    trace.log("upstream_chunk", {"content": "second pending record"})
+    trace.finish_response_diagnostics(safe=True)
+    trace.log("stream_complete", {"stream_outcome": "completed"})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "stream_start",
+        "stream_complete",
+    ]
+
+
+@pytest.mark.parametrize("safe", [False, True])
+def test_deferred_response_trace_explicitly_discards_or_releases(
+    tmp_path: Path,
+    safe: bool,
+) -> None:
+    trace_path = tmp_path / f"deferred-{safe}.jsonl"
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
+    trace = state.create_logger(
+        request_id="req-deferred",
+        request_log_id="log-deferred",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    trace.defer_response_diagnostics()
+    trace.log("upstream_chunk", {"content": "pending response"})
+    trace.finish_response_diagnostics(safe=safe)
+
+    if not safe:
+        assert not trace_path.exists()
+        return
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["upstream_chunk"]
+
+
+def test_deferred_response_trace_discards_and_resets_after_safety_check_failure(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    trace_path = tmp_path / "safety-check-failure.jsonl"
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
+    trace = state.create_logger(
+        request_id="req-safety-check",
+        request_log_id="log-safety-check",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    trace.defer_response_diagnostics()
+    trace.log("upstream_chunk", {"content": "unproven response"})
+
+    def fail_check(values: tuple[object, ...]) -> bool:
+        del values
+        raise RuntimeError("policy failure")
+
+    with caplog.at_level(logging.WARNING, logger="codex-rosetta-gateway"):
+        trace.finish_response_diagnostics(safe=True, safety_check=fail_check)
+    trace.log("stream_complete", {"stream_outcome": "completed"})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["stream_complete"]
+    assert "safety-check failure" in caplog.text
+    assert "policy failure" not in caplog.text
+
+
+def test_deferred_response_trace_uses_global_diagnostic_token_inventory(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "global-diagnostic-collision.jsonl"
+    state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path)),
+        token_values={"GLOBAL-ALPHA-BETA"},
+    )
+    trace = state.create_logger(
+        request_id="req-global-diagnostic",
+        request_log_id="log-global-diagnostic",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    trace.defer_response_diagnostics()
+    trace.log("upstream_chunk", {"content": "GLOBAL-ALPHA-"})
+    trace.log("upstream_chunk", {"content": "BETA"})
+    trace.finish_response_diagnostics(safe=True, safety_check=lambda values: True)
+
+    assert not trace_path.exists()

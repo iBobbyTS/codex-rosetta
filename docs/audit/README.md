@@ -11,9 +11,10 @@ second profile under this directory.
 - System map: [`SYSTEM-MAP.md`](SYSTEM-MAP.md)
 - Coverage ledger: [`COVERAGE.md`](COVERAGE.md)
 - Findings ledger: [`FINDINGS.md`](FINDINGS.md)
-- Latest run: [`runs/20260721-2035/REPORT.md`](runs/20260721-2035/REPORT.md)
-- Latest status: `AUD-025` is closed at `51f3b2d`. The Responses credential gate now follows Codex active-item and retained-index identities; changing ignored wire IDs is blocked in raw and parsed paths. Focused `296 passed`, phase-separated adversarial selection `8 passed`, full deterministic suite `3676 passed, 5 skipped`, and lint/compatibility checks passed. No real provider/API/Codex call or deployment occurred.
+- Latest immutable audit run (historical): [`runs/20260721-2248/REPORT.md`](runs/20260721-2248/REPORT.md)
+- Current working-tree status: `AUD-025` and review findings `REV-001`, `REV-002`, and `REV-003` are closed at deterministic evidence depth after independent delta review. Converted Chat, Anthropic, and Google documents and streams retain the target gate and add final source-consumer checking; response diagnostics remain request-local until safe completion plus active-provider/global aggregation, and unsafe terminal exception details are replaced before Trace, RequestLog, Metrics, or memory/SQLite persistence. The independent related cone reports `175 passed`; the final affected cone reports `181 passed`; the full deterministic suite reports `3723 passed, 5 skipped, 11 warnings`; lint, complexity, Codex compatibility, `git diff --check`, and CodeGraph sync pass. No real provider/API/Codex call, deployment, or commit occurred.
 
-Historical run snapshots remain under their original dated directories. They
-are preserved as historical evidence and may contain paths or conclusions that
-were true before this current baseline; they are not current status.
+Historical run snapshots remain under their original dated directories. In
+particular, `runs/20260721-2137/` and `runs/20260721-2248/` are immutable: their
+then-current paths and reopen/closure conclusions are not rewritten with the
+later terminal-sink repair. They are historical evidence, not current status.

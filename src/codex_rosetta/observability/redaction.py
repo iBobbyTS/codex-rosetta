@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import Any
 
 REDACTED = "[REDACTED]"
+MAX_ORDERED_DIAGNOSTIC_CHARS = 1_048_576
+MAX_ORDERED_DIAGNOSTIC_WORK = 8_388_608
 
 _BEARER_RE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
 
@@ -19,6 +21,10 @@ class JsonObjectMembers:
     """JSON object members whose order and duplicate names are preserved."""
 
     members: tuple[tuple[str, Any], ...]
+
+
+class _DiagnosticWorkLimit(Exception):
+    """Internal fail-closed signal for ordered diagnostic matching."""
 
 
 def decode_json_preserving_members(value: str | bytes) -> Any:
@@ -61,6 +67,125 @@ def _add_token(values: set[str], value: Any) -> None:
     """Add a resolved non-empty API token to the redaction set."""
     if isinstance(value, str) and value and "${" not in value:
         values.add(value)
+
+
+def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[str]:
+    """Yield ordered string leaves from already-redacted diagnostic values."""
+    for value in values:
+        if isinstance(value, str):
+            yield from _iter_diagnostic_text(value)
+        elif isinstance(value, bytes):
+            yield from _iter_diagnostic_text(value.decode("utf-8", errors="replace"))
+        elif isinstance(value, Mapping):
+            for key, item in value.items():
+                yield from _iter_diagnostic_strings((key, item))
+        elif isinstance(value, JsonObjectMembers):
+            for key, item in value.members:
+                yield from _iter_diagnostic_strings((key, item))
+        elif isinstance(value, list | tuple):
+            yield from _iter_diagnostic_strings(value)
+
+
+def _iter_diagnostic_text(value: str) -> Iterable[str]:
+    """Yield consumer-visible strings from plain, JSON, or SSE diagnostic text."""
+    stripped = value.strip()
+    if stripped.startswith(("{", "[")):
+        try:
+            parsed = decode_json_preserving_members(stripped)
+        except json.JSONDecodeError:
+            pass
+        else:
+            yield from _iter_diagnostic_strings((parsed,))
+            return
+
+    parsed_sse = False
+    for frame in re.split(r"\r?\n\r?\n", stripped):
+        data_lines: list[str] = []
+        for line in frame.splitlines():
+            if line.startswith("data:"):
+                data_lines.append(line[5:].removeprefix(" "))
+        if not data_lines:
+            continue
+        data = "\n".join(data_lines)
+        try:
+            parsed_data = decode_json_preserving_members(data)
+        except json.JSONDecodeError:
+            yield data
+        else:
+            if isinstance(parsed_data, JsonObjectMembers | list):
+                yield from _iter_diagnostic_strings((parsed_data,))
+            else:
+                yield data
+        parsed_sse = True
+    if not parsed_sse:
+        yield value
+
+
+def _ordered_fragments_contain(
+    token: str,
+    fragments: tuple[str, ...],
+    *,
+    work_budget: int,
+) -> tuple[bool, int]:
+    """Check ordered reconstruction and report bounded comparison work."""
+    reachable: set[int] = set()
+    work = 0
+    try:
+        for fragment in fragments:
+            work = _add_diagnostic_work(
+                work,
+                len(fragment) + len(reachable),
+                work_budget,
+            )
+            next_reachable = set(reachable)
+            if token in fragment:
+                return True, work
+            work = _add_starting_diagnostic_matches(
+                token,
+                fragment,
+                next_reachable,
+                work,
+                work_budget,
+            )
+            for matched in reachable:
+                remaining_len = len(token) - matched
+                work = _add_diagnostic_work(
+                    work,
+                    min(len(fragment), remaining_len),
+                    work_budget,
+                )
+                remaining = token[matched:]
+                if fragment.startswith(remaining):
+                    return True, work
+                if len(fragment) < len(remaining) and remaining.startswith(fragment):
+                    next_reachable.add(matched + len(fragment))
+            reachable = next_reachable
+    except _DiagnosticWorkLimit:
+        return True, work_budget + 1
+    return False, work
+
+
+def _add_diagnostic_work(work: int, amount: int, budget: int) -> int:
+    work += amount
+    if work > budget:
+        raise _DiagnosticWorkLimit
+    return work
+
+
+def _add_starting_diagnostic_matches(
+    token: str,
+    fragment: str,
+    reachable: set[int],
+    work: int,
+    budget: int,
+) -> int:
+    earliest_start = max(0, len(fragment) - len(token) + 1)
+    for start in range(earliest_start, len(fragment)):
+        work = _add_diagnostic_work(work, len(fragment) - start, budget)
+        suffix = fragment[start:]
+        if len(suffix) < len(token) and token.startswith(suffix):
+            reachable.add(len(suffix))
+    return work
 
 
 def collect_token_values(config: Mapping[str, Any]) -> set[str]:
@@ -155,6 +280,28 @@ class SecretRedactor:
         except json.JSONDecodeError, UnicodeDecodeError:
             return False
         return self.contains_exact(parsed)
+
+    def contains_ordered_fragments(self, values: Iterable[Any]) -> bool:
+        """Return whether ordered diagnostic values can reconstruct a token."""
+        fragments: list[str] = []
+        total_chars = 0
+        for fragment in _iter_diagnostic_strings(values):
+            total_chars += len(fragment)
+            if total_chars > MAX_ORDERED_DIAGNOSTIC_CHARS:
+                return True
+            fragments.append(fragment)
+        frozen_fragments = tuple(fragments)
+        remaining_work = MAX_ORDERED_DIAGNOSTIC_WORK
+        for token in self._token_values:
+            contains_token, used_work = _ordered_fragments_contain(
+                token,
+                frozen_fragments,
+                work_budget=remaining_work,
+            )
+            if contains_token:
+                return True
+            remaining_work -= used_work
+        return False
 
     def streaming_redactor(self) -> StreamingSecretRedactor:
         """Create an independent exact-value redactor for a chunked byte stream."""
