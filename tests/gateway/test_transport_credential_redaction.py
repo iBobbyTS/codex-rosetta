@@ -1337,6 +1337,35 @@ def test_codex_text_identity_state_is_bounded_and_cleared() -> None:
     gate.inspect_stream_event(delta_event(7, "ordinary"))
 
 
+def test_completed_document_snapshot_does_not_repeat_prior_text_deltas() -> None:
+    """A complete Responses snapshot is checked independently from prior deltas."""
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"ordinaryordinary"}),
+        "openai_responses",
+    )
+    output = [
+        {
+            "id": "msg-safe",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ordinary"}],
+        }
+    ]
+
+    gate.inspect_stream_event(
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg-safe",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "ordinary",
+        }
+    )
+    gate.inspect_stream_event(
+        {"type": "response.completed", "response": {"output": output}}
+    )
+
+
 def test_codex_text_identities_isolate_items_and_retained_indices() -> None:
     """Only active items and indices retained by Codex partition text streams."""
     gate = ProviderCredentialSemanticGate(

@@ -244,3 +244,66 @@ def test_contains_json_semantic_checks_duplicate_object_members() -> None:
     assert redactor.contains_json_semantic(
         b'{"value":"\\u0073ecret","value":"ordinary"}'
     )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        ({"first": "CANARY-ALPHA-"}, {"second": "BETA"}),
+        ({"CANARY-ALPHA-": "first"}, {"BETA": "second"}),
+        ([b"prefix-CANARY-ALPHA-", "BETA-suffix"],),
+    ],
+)
+def test_contains_ordered_fragments_detects_diagnostic_reconstruction(
+    values: tuple[object, ...],
+) -> None:
+    redactor = SecretRedactor({"CANARY-ALPHA-BETA"})
+
+    assert redactor.contains_ordered_fragments(values)
+
+
+def test_contains_ordered_fragments_preserves_unrelated_diagnostics() -> None:
+    redactor = SecretRedactor({"CANARY-ALPHA-BETA"})
+
+    assert not redactor.contains_ordered_fragments(
+        ({"first": "CANARY-OMEGA-"}, {"second": "BETA"})
+    )
+
+
+def test_contains_ordered_fragments_checks_only_token_length_boundary_suffixes() -> (
+    None
+):
+    redactor = SecretRedactor({"CANARY-ALPHA-BETA"})
+    long_prefix = "x" * 1_000_000
+
+    assert redactor.contains_ordered_fragments((long_prefix + "CANARY-ALPHA-", "BETA"))
+
+
+def test_contains_ordered_fragments_parses_json_and_sse_diagnostic_text() -> None:
+    redactor = SecretRedactor({"CANARY-ALPHA-BETA"})
+
+    assert redactor.contains_ordered_fragments(
+        (
+            b'data: {"diagnostic":"CANARY-ALPHA-"}\n\n',
+            'event: message\ndata: {"diagnostic":"BETA"}\n\n',
+        )
+    )
+
+
+@pytest.mark.parametrize("token", ["null", "true", "1"])
+def test_contains_ordered_fragments_preserves_json_scalar_text(token: str) -> None:
+    assert SecretRedactor({token}).contains_ordered_fragments((token,))
+
+
+def test_contains_ordered_fragments_preserves_quoted_plain_text() -> None:
+    assert SecretRedactor({'"quoted"'}).contains_ordered_fragments(('"quoted"',))
+
+
+def test_contains_ordered_fragments_fails_closed_when_work_budget_is_exceeded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_rosetta.observability import redaction
+
+    monkeypatch.setattr(redaction, "MAX_ORDERED_DIAGNOSTIC_WORK", 1)
+
+    assert SecretRedactor({"credential"}).contains_ordered_fragments(("ordinary",))

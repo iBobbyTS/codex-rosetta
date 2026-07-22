@@ -1,7 +1,7 @@
 # Persistent Audit Findings and Debt
 
-Last updated: 2026-07-21
-Repository head: `51f3b2d`; targeted remediation re-audit `20260721-2035`
+Last updated: 2026-07-22
+Repository head: working tree after `0f26285`; AUD-025 independently closed at deterministic evidence depth
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
@@ -10,8 +10,17 @@ This section separates the current conclusions by who may authorize the next
 step. The baseline recorded `Authorized remediation: No`; the owner later
 authorized scoped remediation waves. The discovery run
 `docs/audit/runs/20260721-2008/` reopened `AUD-025`; the authorized targeted
-re-audit `docs/audit/runs/20260721-2035/` closes it at `51f3b2d`. No real
-provider/API call or deployment was authorized.
+re-audit `docs/audit/runs/20260721-2035/` closed its native Responses
+counterexamples at `51f3b2d`. The supplementary omission audit
+`docs/audit/runs/20260721-2137/` reopened the same finding because Chat,
+Anthropic, and Google stream identities could still be collapsed by the
+cross-format Responses bridge after the gate. The current repair extends the
+final source-consumer boundary to non-streaming documents, defers response
+diagnostics until the stream is proven safe, and sanitizes unsafe terminal
+exceptions before internal or outer telemetry can persist them. An independent
+delta review reproduced the original counterexamples as blocked and verified
+active-provider and inactive-provider/global diagnostic cases across memory and
+SQLite sinks. No real provider/API call or deployment was authorized.
 
 ### Logic/control issues I can repair directly
 
@@ -33,7 +42,7 @@ provider/API call or deployment was authorized.
 | AUD-021 | Closed at current HEAD: canonical `computer_call` round-trips and `computer_call_output` is explicitly rejected under the recorded scope | Reopen only if native computer-output or broader computer-control support is authorized. |
 | AUD-022 | Responses stream argument semantic gate can skip a completed JSON value with leading whitespace | Normalize JSON whitespace before semantic inspection and add raw/parsed SSE regressions; no business decision is required. |
 | AUD-023 | Chat stream tool identity uses arrival order instead of the wire `index` | Use a stable index-to-call mapping and fail closed on conflicts; no business decision is required. |
-| AUD-025 | **Closed:** Responses text delta buffers now follow Codex active-item and retained-index semantics | Reopen on a Codex consumer, Responses text-event, identity, or stream-lifecycle change. |
+| AUD-025 | **Closed at current working tree:** final source-consumer checking covers converted documents and streams; response diagnostics are held until safe completion plus active-provider and global configured-token aggregation, and unsafe terminal exception details are replaced before every telemetry sink | Reopen on a provider/source consumer, converter, diagnostic sink, buffer/controller ordering, lifecycle, or credential-gate change. |
 | AUD-026 | Responses completion handling stopped scanning after the first tool-loop item | Scan and reject every completed output item before computing the finish event. |
 | AUD-027 | Non-streaming Responses tool-call output retained `finish_reason=stop` | Infer `tool_calls` from normalized IR tool-call content, matching the existing streaming contract. |
 
@@ -63,7 +72,7 @@ claims.
 | AUD-022 | Must Fix | Agent-Fixable | Closed | The bounded argument gate strips both leading and trailing JSON whitespace before semantic credential inspection | PROVIDER-01/SCN-03/SCN-04/CTRL-03; raw and parsed SSE | Gateway transport/security owner | Reopen if embedded JSON inventory, parser, or stream framing changes |
 | AUD-023 | Must Fix | Agent-Fixable | Closed | Chat tool fragments use bounded index-to-call mappings, detect remaps/conflicts, and fail closed on missing identity | PROVIDER-01/SCN-03/SCN-04/CTRL-03; Chat SSE | Gateway transport/security owner | Reopen on Chat wire-schema, identity, or state-bound changes |
 | AUD-024 | Must Fix | Decision Recorded | Closed | `computer_call_output` is rejected with a stable `NotImplementedError` before unknown-item handling can drop it | TOOL-01/SCN-03/SCN-05/IF-05; computer-use history | Project owner decision recorded: explicit rejection; Responses-only non-streaming scope retained | Reopen if native result support is authorized |
-| AUD-025 | Must Fix | Agent-Fixable | Closed | Responses text delta buffers use the Codex active-item generation and retained event-specific index; discarded wire metadata cannot split a consumer-visible stream | PROVIDER-01/STREAM-01/SCN-03/SCN-04/CTRL-03; raw and parsed Responses streams | Gateway transport/security owner | Reopen on a Codex consumer, Responses text-event, identity, or stream-lifecycle change |
+| AUD-025 | Must Fix | Agent-Fixable | Closed | Converted returns retain the target-provider gate, add a final source-consumer gate for documents and streams, defer response trace records until safe completion, and sanitize unsafe terminal exceptions before trace, RequestLog, Metrics, or SQLite persistence | PROVIDER-01/STREAM-01/SCN-03/SCN-04/CTRL-03; converted Chat/Anthropic/Google returns and diagnostics | Gateway transport/security owner with converter and observability owners; independently verified | Reopen on provider/source consumer, converter, diagnostics, buffer/controller ordering, lifecycle, outer instrumentation, or credential-gate change |
 | AUD-026 | Must Fix | Agent-Fixable | Closed | Responses completion events scan all output items and reject unsupported `computer_call` even when a prior function/tool item selected `tool_calls` | TOOL-01/SCN-03/SCN-05/IF-05; Responses stream dispatch | Gateway converter owner | Reopen if unsupported-item policy or completion dispatch changes |
 | AUD-027 | Must Fix | Agent-Fixable | Closed | Non-streaming Responses infers `tool_calls` from normalized IR tool-call content when status alone would map to `stop` | PROVIDER-01/TOOL-01/SCN-03/SCN-05; non-stream pipeline | Gateway converter owner | Reopen if finish-reason precedence or tool-loop mapping changes |
 | AUD-020 | Must Fix | Decision Recorded | Closed | Active-provider/client credential inventory is the authoritative return-gate domain; global configured-token inventory remains diagnostic-only | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; provider and auxiliary return-domain ownership | Project owner decision recorded in profile | Reopen if deployment boundary or credential-domain ownership changes |
@@ -83,6 +92,22 @@ claims.
 | AUD-016 | Must Fix | Agent-Fixable | Closed | `ProviderInfo` exposes the canonical `KeyRing` rotation sequence and `GatewayConfig` registers both the raw CSV and every selectable trimmed key with all runtime redactors | PROVIDER-01/DATA-01/CTRL-03; logs, traces, metrics, persistence, and response redaction | Gateway config, transport, and observability owners | Reopen on credential syntax, parsing, selection, startup/hot-reload propagation, or redactor-consumer changes |
 | AUD-009 | Should Plan | Decision Recorded | Closed | Only exact backend-supported `api_type` strings are present; all other values infer in memory using `responses`, `chat`, `anthropic`, `google` order; custom defaults to Responses; warning emitted | PROVIDER-01; config/Admin | Project owner decision recorded in profile | Reopen if support list, fallback order, or persistence semantics change |
 | AUD-011 | Should Plan | Decision Recorded | Risk Accepted | Direct arbitrary HTTP(S) custom egress and key delivery are accepted within local/LAN scope; provider redirect expansion requires explicit opt-in | PROVIDER-01/SCN-09; transport boundary | Project owner | Reopen if deployment boundary, direct-egress policy, or redirect policy changes |
+
+## Current Repair Review Disposition
+
+These review-local IDs describe the current `AUD-025` repair and do not replace
+the persistent finding ID. All three are closed at deterministic evidence depth:
+
+| Review ID | Status | Independent closure evidence |
+| --- | --- | --- |
+| REV-001 | Closed | Real Chat, Anthropic, and Google conversion pipelines reconstruct the frozen split canaries, and the final source-consumer document gate blocks them before BodyLog or client serialization. |
+| REV-002 | Closed | Final stream events are gated before trace/SSE; deferred diagnostics and terminal errors additionally apply active-provider plus global configured-token ordered-fragment checks. Active and inactive/global sibling cases remain absent from Trace, RequestLog, Metrics, and memory/SQLite persistence, while ordinary errors retain their detail. |
+| REV-003 | Closed | `FINDINGS.md`, `COVERAGE.md`, `SYSTEM-MAP.md`, this baseline README, and the Codex compatibility ledgers now agree that `AUD-025` is `Closed` / `Fresh (deterministic)`. |
+
+`docs/audit/runs/20260721-2137/` and
+`docs/audit/runs/20260721-2248/` are immutable historical snapshots. Their
+then-current reopen/closure statements remain unchanged; this current ledger is
+authoritative for the later terminal-sink repair and independent review.
 
 ## Historical Closure Evidence
 
@@ -113,6 +138,7 @@ status table above remains authoritative when a later audit reopens an ID.
 | AUD-021 | 20260721-0906 remediation / working tree | Local SDK-backed canonical `computer_call`, IR `computer_use`, exact non-streaming Responses round trip, and explicit Chat/Anthropic/Google/stream rejection; focused/full/lint/compatibility green | Cross-format and converted-stream computer control remains deliberately unsupported; no live provider evidence | Reopen if computer-control support, wire fields, stream mapping, or target-format semantics change |
 | AUD-025 | 20260721-1428 remediation / working tree | Bounded raw/parsed accumulation covered the then-enumerated Responses, Chat, Anthropic, and Google stream fields; focused `185 passed`, full `3629 passed, 5 skipped`, ruff/format/ty green | The tests fixed optional wire identity values and did not compare them with Codex's discarded-field semantics | Reopened by `20260721-2008` when ignored wire ID changes split one Codex-consumed stream across gate buffers |
 | AUD-025 | 20260721-2035 remediation / `51f3b2d` | Codex active-item and retained-index identities block all three changing-ignored-ID counterexamples in raw and parsed paths; isolation, bounds, and completion/failure/cancellation/EOF/close cleanup pass; focused `296 passed`, phase-separated `8 passed`, full `3676 passed, 5 skipped`, lint and compatibility green | Real provider/Codex timing, external sinks, unsupported/covert encodings, public deployment, availability, and recovery remain excluded or Unknown | Reopen on Codex consumer, Responses text-event, identity, stream-lifecycle, or credential-gate changes |
+| AUD-025 | current working-tree remediation and independent delta review / after historical `20260721-2248` snapshot | Final document/stream source-consumer gate, bounded deferred diagnostics, and cause-free terminal-error sanitization block the frozen active-provider and inactive/global-sibling reconstructions across client/SSE, Trace, RequestLog, Metrics, and memory/SQLite persistence; independent related cone `175 passed`, final affected `181 passed`, full `3723 passed, 5 skipped` | Deterministic local fakes only; no real provider/Codex timing, external sink, public deployment, availability, or recovery claim | Reopen on provider/source consumer, converter, diagnostic sink, outer stream instrumentation, lifecycle, or credential-domain change |
 | AUD-020 | 20260720-2103 decision closure / working tree | Approved profile defines active outbound provider/client credentials as the return-gate domain; a deterministic transport contract proves an unrelated configured provider credential is returned unchanged while existing active-provider collision tests remain fail-closed | Cross-provider/client credential reflection is accepted within the local/LAN-only boundary; global diagnostics still redact the complete configured-token inventory | Reopen if public deployment, global no-configured-token return semantics, or credential ownership changes |
 
 ## AUD-019 — Consumer-semantic JSON reconstruction bypasses return credential checks
@@ -413,6 +439,26 @@ occurred.
 `AUD-025` is closed and `PROVIDER-01`, `STREAM-01`, `SCN-03`, `SCN-04`, and
 `CTRL-03` return to `Fresh (deterministic)`. No business decision was required.
 
+## Supplementary omission audit - `20260721-2137`
+
+The audit at `51f3b2d` was sufficient for native Responses events, but it did
+not establish the same identity invariant across target-provider conversion.
+The current source trace shows that Chat choice, Anthropic block, and Google
+candidate/part identities are inspected by the upstream semantic gate, then
+discarded or collapsed by the Responses bridge before Codex consumes the stream
+as one active item. A neutral offline canary (`CANARY-ALPHA-BETA`) was split
+across changed upstream identities for all three providers; the gate allowed
+the fragments and the converted source-side consumer reconstructed the complete
+canary.
+
+This is the original `AUD-025` root cause: a single downstream semantic stream
+can be split across multiple gate buffers. It is not a new finding. `AUD-025` is
+reopened as `Must Fix / Agent-Fixable`, and only `PROVIDER-01`, `STREAM-01`,
+`SCN-03`, `SCN-04`, and `CTRL-03` are invalidated. The related focused checks
+remain green (`153 passed`) but hold provider identities fixed and therefore do
+not supply the missing cross-format failure oracle. No product remediation,
+real call, deployment, or commit occurred.
+
 ## Accepted Debt and Risk
 
 | ID | Owner | Why acceptable now | Safety ceiling | Mitigations/monitoring | Revisit trigger/date | Expected resolution |
@@ -425,7 +471,7 @@ occurred.
 | --- | --- | --- | --- | --- | --- | --- |
 | GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | live runners now share a fail-closed exact-marker gate; deterministic suite excludes real calls | keep the shared gate mandatory for every new runner | Approved live runs remain explicit and out of audit evidence | Project owner | Enforced |
 | GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings and compaction mappings now have scope, TTL and transactional row/byte limits | require quota contract tests for each new durable store | Limits are local/LAN policy values and may need owner tuning | Gateway persistence owner | Enforced |
-| GP-003 | Every credential-bearing outbound client must register the credentials actually sent on the wire and block untrusted return collisions without silently corrupting the supported wire/application protocol | Tavily required AUD-014; provider/sidecar siblings required AUD-015; CSV key rotation required AUD-016; AUD-017 established collision-safe fail-closed semantics; AUD-019 now shares an executable Responses consumer inventory with converter routing and contract tests | keep the schema-aware inventory and bounded accumulators executable against every current converter parser and stream consumer across success/error/stream/exception paths | arbitrary recursive parsing would create false positives and unbounded state; enforcement must remain schema-aware and bounded | Gateway transport/security owner | Enforced |
+| GP-003 | Every credential-bearing outbound client must register the credentials actually sent on the wire and block untrusted return collisions without silently corrupting the supported wire/application protocol | Tavily required AUD-014; provider/sidecar siblings required AUD-015; CSV key rotation required AUD-016; AUD-017 established collision-safe fail-closed semantics; AUD-019 shares an executable Responses consumer inventory; AUD-025 now reaches final document/stream consumer semantics, defers unproven response diagnostics, and sanitizes unsafe terminal details before outer telemetry | keep the schema-aware inventory, bounded accumulators, bounded diagnostic hold lifecycle, and terminal-sink checks executable against every current converter parser and final consumer across success/error/stream/exception paths | arbitrary recursive parsing would create false positives and unbounded state; enforcement must remain schema-aware and bounded | Gateway transport/security owner with converter and observability owners | Enforced / AUD-025 independently closed deterministically |
 
 ## Candidate Disposition
 
@@ -1521,7 +1567,8 @@ Commit: `04efc74`.
 - Decision class: Agent-Fixable
 - Status: Closed
 - First detected run: `20260721-1232` omission audit
-- Owner: Gateway transport/security owner
+- Last updated state: current working tree after historical `20260721-2248`; independent deterministic delta review passed
+- Owner: Gateway transport/security owner with converter and observability owners
 
 ### Prior closure evidence (`20260721-1428`)
 
@@ -1597,6 +1644,85 @@ All frozen acceptance criteria are satisfied. Residual risk is limited to real
 provider/Codex timing, external sinks, unsupported/covert encodings, and other
 profile exclusions. Reopen on a Codex consumer, Responses text-event, identity,
 stream-lifecycle, or credential-gate change.
+
+### Second reopen evidence (`20260721-2137`)
+
+The previous closure aligned the gate with the native Responses event consumer,
+but the actual gateway path runs the gate before target -> IR -> source
+conversion. The current source trace establishes the following mismatch:
+
+- Chat text/reasoning/refusal fragments are keyed by `choice_index`, while the
+  Responses bridge accumulates source text in one context and Codex consumes the
+  resulting delta on the active item.
+- Anthropic text/thinking/signature/input fragments are keyed by `block_index`,
+  but the source Responses text accumulator has no block partition.
+- Google text/reasoning fragments are keyed by candidate and `part_index`,
+  while the bridge emits a fixed source `content_index` and appends all text to
+  the active context accumulator.
+
+The reachable proxy path is recorded in
+`docs/audit/runs/20260721-2137/EVIDENCE.md` UNIT-001. A neutral local canary
+probe changed the upstream partition identity between `CANARY-ALPHA-` and
+`BETA`; Chat, Anthropic, and Google all released both fragments and the
+converted source-side reconstruction equaled `CANARY-ALPHA-BETA`. This is the
+same split-stream invariant as the earlier Responses finding, not an
+independent root cause.
+
+The existing `153 passed` focused suite holds those identities fixed
+(`tests/gateway/test_transport_credential_redaction.py:957-1034`) and therefore
+does not provide a cross-format failure oracle. No product code or tests were
+changed, and no real call occurred.
+
+### Historical frozen acceptance criteria (`20260721-2137`)
+
+1. Every converted text/reasoning field is gated by the final source consumer
+   identity after target -> IR -> Responses conversion, whether the gate is
+   moved or an equivalent post-conversion boundary is introduced.
+2. Changing Chat choice, Anthropic block, or Google candidate/part metadata that
+   the source consumer would collapse cannot split one credential buffer; an
+   ambiguous conflict fails closed.
+3. Fake-transport plus real-pipeline regressions cover parsed and raw SSE for
+   all three provider families and block the completing canary before formatted
+   Responses output is released.
+4. Distinct actual active items and retained reasoning indices remain isolated;
+   state is bounded and cleared on all completion, EOF, failure, cancellation,
+   iterator-close, context-manager-exit, and explicit-close paths.
+5. Direct Responses, tool-argument, collision-safe byte, active-provider-only,
+   and protocol-validity controls remain green under focused, full deterministic,
+   lint, and compatibility checks.
+
+### Current disposition
+
+`AUD-025` is **Closed / Must Fix / Agent-Fixable** at deterministic evidence
+depth. The current
+repair retains the target-provider gate and applies the shared semantic policy
+to the final converted document or event stream. Non-streaming Responses
+documents aggregate all `output_text` parts in downstream consumer order before
+BodyLog or client serialization. Converted-stream response diagnostics are held
+per request with a 1 MiB / 4096-record limit; safe completion plus active-provider
+and global configured-token diagnostic aggregation releases the ordered batch,
+while collision, conversion failure, cancellation, early close,
+or capacity overflow discards the entire unproven batch. Before release, the
+batch is also checked for ordered reconstruction from active-provider credential
+fragments in diagnostic keys or values.
+
+Real-pipeline fake-transport tests prove that Chat, Anthropic, and Google target
+documents reconstruct the configured canary under Responses `output_text`
+consumer semantics with an unrelated credential, then fail closed with the
+active credential before BodyLog exposure. Parsed trace tests prove ordered
+target/IR/source diagnostics cannot reconstruct the canary on collision, safe
+diagnostics retain their stages, and error/`aclose()` paths release no unproven
+records. Diagnostic-finish exceptions clear pending state and cannot skip the
+final gate or profile cleanup. Terminal exceptions are checked before
+finalization and outer instrumentation; unsafe details become one stable,
+cause-free error across client/SSE, Trace, RequestLog, Metrics, and memory/SQLite
+persistence, while ordinary errors retain their detail. An independent delta
+review reproduced the original JSON-split terminal counterexample as blocked and
+reported `175 passed` across the related four-file cone, with focused Ruff and
+`git diff --check` green. Final verification reports `181 passed` for the
+five-file affected cone and `3723 passed, 5 skipped, 11 warnings` for the full
+deterministic suite; lint, complexity, compatibility, diff, and CodeGraph checks
+pass. No real call occurred.
 
 ## AUD-026 — Responses completion scan stops after the first tool item
 

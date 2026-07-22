@@ -114,11 +114,15 @@ class ProviderCredentialSemanticGate:
         self._live_fragments = 0
 
     def inspect_document(self, value: Any) -> None:
-        """Inspect known non-streaming response argument fields."""
-        if self._target_provider in _RESPONSES_TYPES:
-            self._inspect_responses_document(value)
-        elif self._target_provider == "openai_chat":
-            self._inspect_chat_document(value)
+        """Inspect one complete response using the provider consumer semantics."""
+        self._clear_all()
+        try:
+            if self._target_provider in _RESPONSES_TYPES:
+                self._inspect_responses_document(value)
+            elif self._target_provider == "openai_chat":
+                self._inspect_chat_document(value)
+        finally:
+            self._clear_all()
 
     def inspect_stream_event(self, event: Any) -> None:
         """Inspect one parsed stream event before its frame is released."""
@@ -143,11 +147,22 @@ class ProviderCredentialSemanticGate:
                     self._inspect_argument(field_value)
 
     def _inspect_responses_document(self, value: Any) -> None:
-        for item in _items(value, "output"):
-            self._inspect_tool_item(item)
+        self._inspect_responses_output_items(_items(value, "output"))
         for response in _values(value, "response"):
-            for item in _items(response, "output"):
-                self._inspect_tool_item(item)
+            self._inspect_responses_output_items(_items(response, "output"))
+
+    def _inspect_responses_output_items(self, items: tuple[Any, ...]) -> None:
+        for item in items:
+            self._inspect_tool_item(item)
+            if _only(item, "type") != "message":
+                continue
+            for part in _items(item, "content"):
+                if _only(part, "type") != "output_text":
+                    continue
+                self._append_text(
+                    ("responses", "document", "output_text"),
+                    _only(part, "text"),
+                )
 
     def _inspect_chat_document(self, value: Any) -> None:
         for choice in _items(value, "choices"):
@@ -550,8 +565,7 @@ class ProviderCredentialSemanticGate:
             self._inspect_responses_output_item_event(event, event_type)
             return
         if event_type == ResponsesEventType.RESPONSE_COMPLETED:
-            self._inspect_responses_document(event)
-            self._clear_all()
+            self.inspect_document(event)
 
     def _chat_call_id(self, tool_call: Any) -> str | None:
         call_id = _only(tool_call, "id")

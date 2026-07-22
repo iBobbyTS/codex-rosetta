@@ -303,6 +303,10 @@ class UpstreamErrorLogState:
             return suffix[: self.max_chars]
         return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
 
+    def diagnostics_are_safe(self, values: Iterable[Any]) -> bool:
+        """Check ordered fields against the global diagnostic token inventory."""
+        return not self._redactor.contains_ordered_fragments(values)
+
 
 @dataclass(frozen=True)
 class PreparedBodyLogConfig:
@@ -369,6 +373,10 @@ class BodyLogState:
         if self.max_chars <= len(suffix):
             return suffix[: self.max_chars]
         return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
+
+    def diagnostics_are_safe(self, values: Iterable[Any]) -> bool:
+        """Check ordered fields against the global diagnostic token inventory."""
+        return not self._redactor.contains_ordered_fragments(values)
 
     def log(self, label: str, value: Any) -> None:
         """Emit one single-line body record only when this app opted in."""
