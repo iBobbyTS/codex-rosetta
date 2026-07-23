@@ -8,7 +8,9 @@
     className = '',
     sidecar,
     onclose,
+    header,
     children,
+    actions,
   }: {
     open: boolean;
     labelledby: string;
@@ -16,7 +18,9 @@
     className?: string;
     sidecar?: import('svelte').Snippet;
     onclose: () => void;
+    header: import('svelte').Snippet;
     children: import('svelte').Snippet;
+    actions: import('svelte').Snippet;
   } = $props();
 
   let panel = $state<HTMLDivElement>();
@@ -67,13 +71,17 @@
     {#if sidecar}
       <div bind:this={panel} class="model-group-modal-shell">
         <div class:modal-wide={wide} class={`modal ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={labelledby} tabindex="-1">
-          {@render children()}
+          <div class="modal-header">{@render header()}</div>
+          <div class="modal-body">{@render children()}</div>
+          <div class="modal-actions">{@render actions()}</div>
         </div>
         {@render sidecar()}
       </div>
     {:else}
       <div bind:this={panel} class:modal-wide={wide} class={`modal ${className}`.trim()} role="dialog" aria-modal="true" aria-labelledby={labelledby} tabindex="-1">
-        {@render children()}
+        <div class="modal-header">{@render header()}</div>
+        <div class="modal-body">{@render children()}</div>
+        <div class="modal-actions">{@render actions()}</div>
       </div>
     {/if}
   </div>
