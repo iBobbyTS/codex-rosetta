@@ -135,6 +135,11 @@ def _write_jsonc(path: str, data: dict[str, Any]) -> None:
     write_config(path, data)
 
 
+def _cli_value_or_config(value: Any, configured: Any) -> Any:
+    """Use an explicitly supplied CLI value, including zero or an empty string."""
+    return configured if value is None else value
+
+
 def _create_initial_config(config_path: str) -> None:
     """Create the standard secure gateway configuration at *config_path*."""
     template = {
@@ -623,9 +628,9 @@ def main() -> None:
             runtime_config.setdefault("server", {})["proxy"] = args.proxy
 
         config = GatewayConfig(runtime_config)
-        host = args.host or config.host
-        port = args.port or config.port
-        socket_path = args.socket or config.socket
+        host = _cli_value_or_config(args.host, config.host)
+        port = _cli_value_or_config(args.port, config.port)
+        socket_path = _cli_value_or_config(args.socket, config.socket)
 
         if config.local_mode and host.strip().lower() not in {
             "127.0.0.1",

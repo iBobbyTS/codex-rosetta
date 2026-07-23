@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "bootstrap",
+  "description": "Minimal local bootstrap window capability",
+  "windows": ["bootstrap"],
+  "local": true,
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
+}

@@ -7,26 +7,43 @@ from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
-from ..static import load_admin_html
+from ..static import load_admin_asset, load_admin_html
 from ._shared import _parse_json_object
-
-# Cached HTML — loaded once on first request.
-_admin_html: str | None = None
 
 
 async def serve_admin_html(request: Any) -> Response:
     """Serve the admin panel SPA."""
-    global _admin_html
-    if _admin_html is None:
-        _admin_html = load_admin_html()
     return Response(
-        body=_admin_html,
+        body=load_admin_html(),
         status_code=200,
         content_type="text/html; charset=utf-8",
         headers={
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Content-Security-Policy": "frame-ancestors 'none'",
+            "Content-Security-Policy": (
+                "default-src 'self'; script-src 'self'; style-src 'self'; "
+                "img-src 'self' data:; connect-src 'self'; object-src 'none'; "
+                "base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+            ),
             "X-Frame-Options": "DENY",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+        },
+    )
+
+
+async def serve_admin_asset(request: Any, asset_path: str) -> Response:
+    """Serve one immutable, manifest-allowlisted Admin build asset."""
+    try:
+        asset = load_admin_asset(f"assets/{asset_path}")
+    except FileNotFoundError, OSError, ValueError:
+        return JSONResponse({"error": "Not Found"}, status_code=404)
+    return Response(
+        body=asset.body,
+        status_code=200,
+        content_type=asset.content_type,
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

@@ -1,0 +1,11 @@
+{
+  "admin.html": {
+    "file": "assets/admin-kK8ZGKaH.js",
+    "name": "admin",
+    "src": "admin.html",
+    "isEntry": true,
+    "css": [
+      "assets/admin-CNiwE1zO.css"
+    ]
+  }
+}

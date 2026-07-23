@@ -49,6 +49,7 @@ dev = [
     "ty==0.0.54",
     "build>=1.2.2.post1",
 ]
+desktop-build = ["pyinstaller==6.21.0"]
 
 all = ["codex-rosetta[openai,anthropic,google,gateway,profiling,dev]"]
 
@@ -59,6 +60,7 @@ Issues = "https://github.com/iBobbyTS/codex-rosetta/issues"
 
 [project.scripts]
 codex-rosetta-gateway = "codex_rosetta.gateway:main"
+codex-rosetta-desktop-sidecar = "codex_rosetta.gateway.desktop_sidecar:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -66,7 +68,7 @@ where = ["src"]
 [tool.setuptools.package-data]
 "codex_rosetta" = ["py.typed", "shims/providers/*/provider.yaml", "shims/providers/*/*/provider.yaml"]
 "codex_rosetta.gateway" = ["codex_models.json", "codex_model_presets.json", "codex_compact_prompt.md", "codex_compact_summary_prefix.md", "resources/web_run/*", "resources/web_run/.dockerignore"]
-"codex_rosetta.gateway.admin" = ["admin.html", "admin_i18n.json", "tool_catalog.json"]
+"codex_rosetta.gateway.admin" = ["admin_i18n.json", "tool_catalog.json", "dist/**"]
 
 [tool.setuptools.dynamic]
 version = { attr = "codex_rosetta.__version__" }

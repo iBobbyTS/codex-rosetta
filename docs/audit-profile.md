@@ -2,12 +2,12 @@
 
 Status: Approved
 Owner: Bobby (project owner)
-Last reviewed: 2026-07-20
+Last reviewed: 2026-07-22
 Review cadence: Every supported Codex source/CLI compatibility update, and after any material change to gateway auth, state, provider routing, persistence, agent tooling, or release controls
 
 ## 1. System Context
 
-- Project/workload boundary: Codex-Rosetta core conversion library, IR/type system, provider shims, Codex-facing Gateway, Admin panel/API, local-mode catalog/tool adaptation, observability/persistence, Docker/Compose packaging, CI/build/manual-release controls, and repository-local agent/live-test harnesses.
+- Project/workload boundary: Codex-Rosetta core conversion library, IR/type system, provider shims, Codex-facing Gateway, shared Svelte Admin/API, Tauri desktop supervisor and packaged Python sidecar, local-mode catalog/tool adaptation, observability/persistence, Docker/Compose packaging, CI/build/manual-release controls, and repository-local agent/live-test harnesses.
 - Supported deployment boundary: local-machine deployment and trusted internal-network deployment only.
 - Explicitly unsupported commitment: public-internet deployment account security, public multi-user service operation, high availability, backup/restore, disaster recovery, or data-loss recovery.
 - Primary users and stakeholders: one operator/admin and Codex as the only supported downstream client; development/maintenance agents and the project owner.
@@ -19,8 +19,8 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
   4. Single-admin configuration, API-key management, provider/model changes, and hot reload.
   5. Deterministic local validation, package build, Codex compatibility checks, and manual release preparation.
 - Crown-jewel data, assets, and secrets: upstream provider API keys, Gateway API keys, Admin password/session secret, tool-call and compaction history, prompts/source code/tool payloads, request/stream/error logs, model/provider routing configuration, and compatibility contract artifacts.
-- External systems and third-party dependencies: Codex source/CLI as compatibility authority; configured upstream providers from the bundled provider/shim preset surface; optional web-run sidecar/Tavily; Python SDKs and cryptography; GitHub Actions and manual GitHub Releases.
-- Deployment environments: local Python process; local Docker/Compose; trusted LAN deployment. No current production deployment exists.
+- External systems and third-party dependencies: Codex source/CLI as compatibility authority; configured upstream providers from the bundled provider/shim preset surface; optional web-run sidecar/Tavily; Python SDKs and cryptography; Svelte/Vite/npm; Rust/Tauri/Cargo; PyInstaller and platform signing tools; GitHub Actions and manual GitHub Releases.
+- Deployment environments: local Python process; local Docker/Compose; trusted LAN deployment; local macOS/Windows desktop supervising its own loopback Gateway. No current production deployment exists.
 - Legal, privacy, regulatory, or contractual constraints: None supplied. Treat as unknown if a later deployment introduces such obligations.
 - Compatibility boundary: current Codex/provider wire compatibility remains in scope. No project-version migration layer for old Rosetta config, persistence, or internal APIs is promised; incompatible legacy config/state is rejected and must be rebuilt.
 - Provider configuration semantics: vendor/variant selections are presentation-only and are not persisted. The configured base URL is authoritative at runtime: an exact preset URL renders the matching preset; any other URL renders `custom` and is allowed. Only exact backend-supported `api_type` strings count as explicit; missing, empty, non-string, and unrecognized values select the first protocol supported by the exact preset URL in `responses`, `chat`, `anthropic`, `google` order, while unmatched custom URLs default to `responses`. The inferred value is rendered and logged as a warning but is not written back. Arbitrary HTTP(S) custom URLs may receive upstream API keys within the accepted local/LAN boundary. Configured credentials have no minimum-length requirement. Untrusted return gates compare only credentials configured for the active outbound provider or auxiliary client; credentials belonging only to another configured provider/client are outside that return gate and may be returned unchanged. Global diagnostics redaction still uses the complete configured-token inventory. Rosetta access always requires a configured Gateway API key; no unauthenticated mode is supported. Redirects are denied by default; an operator may explicitly enable them per provider, including model discovery, while non-provider auxiliary HTTP paths always deny redirects.
@@ -52,11 +52,11 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 - Always inspect: `/v1/responses`, `/v1/models`, health/admin routes; AuthState and Admin session; provider/model resolution; ConversionPipeline and OpenAI Responses converter; SSE/stream lifecycle; tool localization/deferred discovery; compaction/resume persistence; token redaction and request/error/stream logs; CI/build/manual release gates.
 - Rotate each audit: non-Codex converter edges, provider-specific shims, web-run/search/image sidecars, admin UI/operations, transport limits, dependency/supply-chain controls, and agent harness/eval integrity.
 - Recently changed or high-churn areas at this baseline: Codex alpha.23 compatibility, model/catalog overlays, compaction, deferred MCP/tool dispatch, live-agent contracts, gateway auth/headers, stream tracing, and provider/model configuration.
-- Public entry points and external interfaces: `create_app`, `/v1/responses`, `/v1/models`, `/health*`, `/admin/*`, local CLI, Python conversion API, model catalog resources, Docker/Compose, CI workflows, and manual release tag checks.
-- Auth, authorization, tenant/data isolation, and trust boundaries: one Admin identity; multiple API-key principals; internal Admin token; provider API-key egress; prompt/tool/provider responses as untrusted content; local/LAN network boundary; agent/test harness permissions.
+- Public entry points and external interfaces: `create_app`, `/v1/responses`, `/v1/models`, `/health*`, `/admin/*`, local CLI, restricted desktop-sidecar pipe protocol, Tauri bootstrap commands, Python conversion API, model catalog resources, Docker/Compose, CI workflows, and manual release tag checks.
+- Auth, authorization, tenant/data isolation, and trust boundaries: one Admin identity; multiple API-key principals; internal Admin token; provider API-key egress; prompt/tool/provider responses as untrusted content; local/LAN network boundary; privileged bootstrap webview separated from the unprivileged loopback Admin webview; versioned owned-child pipes; agent/test harness permissions.
 - Persistence, migrations, retention, deletion, backup, and restore: SQLite request logs/metrics/error dumps; encrypted tool-call mappings; compaction replacement mappings with TTL plus transactional row/byte bounds; incompatible old state is rejected rather than migrated; no backup/restore guarantee and no deployed data set.
 - Background jobs, queues, retries, concurrency, and idempotency: stream generators/cleanup, per-request and per-window stores, tool/compaction cleanup, provider key rotation, sidecar supervision, retries/timeouts, and Admin test tasks.
-- Release, deployment, rollback, configuration, and feature flags: JSONC/env substitution and atomic writes; local/Docker/Compose; manual GitHub Release; Codex contract/version gates; CI permissions and mutable build inputs.
+- Release, deployment, rollback, configuration, and feature flags: JSONC/env substitution and atomic writes; local/Docker/Compose; native Tauri/PyInstaller desktop bundles; manual GitHub Release only; Codex contract/version gates; CI permissions and mutable build inputs.
 - Observability, alerts, runbooks, and incident recovery: request/error/stream trace, metrics, health/readiness, Admin diagnostics, local logs; no production alerting or recovery exercise exists.
 - Exclusions and rationale: real Codex/provider API calls, production deployment, public-internet account-security claim, backup/restore/DR, HA/SLO/RTO/RPO, external GitHub settings not available locally, and provider/model quality. These remain explicit evidence gaps, not safety claims.
 
@@ -78,8 +78,8 @@ Review cadence: Every supported Codex source/CLI compatibility update, and after
 
 ## 7. Supply Chain And Build Baseline
 
-- Dependency and license policy: MIT project; core has no required runtime dependencies; optional provider/gateway/dev dependencies follow `pyproject.toml` and require future review for version/provenance drift.
-- Lockfile, vendoring, and generated-code policy: no general lockfile; `_vendor` is managed and must not be edited directly; generated/catalog artifacts must retain their source/target identity.
+- Dependency and license policy: MIT project; core has no required runtime dependencies; optional provider/gateway/dev dependencies follow `pyproject.toml`; desktop dependencies are exactly locked by npm and Cargo and require future review for version/provenance drift.
+- Lockfile, vendoring, and generated-code policy: npm and Cargo desktop dependency graphs use committed lockfiles; Python has no general lockfile; `_vendor` is managed and must not be edited directly; generated/catalog artifacts must retain their source/target identity.
 - Build provenance, artifact integrity, and release-signing expectations: manual GitHub Release only for local/trusted-LAN use; no public deployment or public artifact-integrity guarantee is made. Signing/SBOM/provenance remain deferred supply-chain debt and are not release claims.
 - CI/CD permission and secret boundaries: CI should remain read-only except explicitly scoped scheduled compatibility issue creation; no release secrets are expected in PR workflows.
 - SBOM or dependency inventory expectations: Not currently defined; inventory and immutable pinning are rotation priorities.

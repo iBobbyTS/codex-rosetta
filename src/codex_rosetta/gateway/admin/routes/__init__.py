@@ -28,6 +28,7 @@ from ._shared import (  # noqa: F401  (re-exported for backward compat)
 from .auth import (
     admin_check,
     admin_login,
+    serve_admin_asset,
     serve_admin_html,
 )
 from .config import (
@@ -93,6 +94,7 @@ def register_admin_routes(app: Any) -> None:
     # HTML
     app.route("/admin", methods=["GET"])(serve_admin_html)
     app.route("/admin/", methods=["GET"])(serve_admin_html)
+    app.route("/admin/assets/<path:asset_path>", methods=["GET"])(serve_admin_asset)
     for page in (
         "providers",
         "models",

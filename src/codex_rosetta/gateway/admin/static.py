@@ -1,40 +1,86 @@
-"""Load the admin panel HTML from package resources."""
+"""Load the built Admin SPA from package resources."""
 
 from __future__ import annotations
 
 import importlib.resources
 import json
-from importlib.resources.abc import Traversable
+import posixpath
+from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import PurePosixPath
+from typing import Any
 
 
-_I18N_PLACEHOLDER = "__CODEX_ROSETTA_ADMIN_I18N_JSON__"
+_MIME_TYPES = {
+    ".css": "text/css; charset=utf-8",
+    ".js": "text/javascript; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".png": "image/png",
+    ".svg": "image/svg+xml",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+}
 
 
-def _load_admin_i18n(package_files: Traversable) -> dict[str, dict[str, str]]:
-    """Load and validate the bundled Admin localization dictionary."""
-    value = json.loads(package_files.joinpath("admin_i18n.json").read_text("utf-8"))
-    if not isinstance(value, dict) or not value:
-        raise ValueError("admin_i18n.json must contain a non-empty JSON object")
-    for language, translations in value.items():
-        if not isinstance(language, str) or not isinstance(translations, dict):
-            raise ValueError("admin_i18n.json languages must map to JSON objects")
-        if not all(
-            isinstance(key, str) and isinstance(text, str)
-            for key, text in translations.items()
-        ):
-            raise ValueError("admin_i18n.json translations must be strings")
-    return value
+@dataclass(frozen=True)
+class AdminAsset:
+    """One immutable asset from the generated Vite manifest."""
+
+    body: bytes
+    content_type: str
 
 
+def _dist_files() -> Any:
+    """Return the Admin distribution package resource directory."""
+    return importlib.resources.files(__package__ or __name__).joinpath("dist")
+
+
+@lru_cache(maxsize=1)
+def _asset_allowlist() -> frozenset[str]:
+    """Return generated asset paths referenced by the Vite manifest."""
+    manifest = json.loads(_dist_files().joinpath("manifest.json").read_text("utf-8"))
+    if not isinstance(manifest, dict) or not manifest:
+        raise ValueError("Admin Vite manifest must contain a non-empty object")
+    allowed: set[str] = set()
+    for entry in manifest.values():
+        if not isinstance(entry, dict):
+            raise ValueError("Admin Vite manifest entries must be objects")
+        file_value = entry.get("file")
+        if isinstance(file_value, str):
+            allowed.add(file_value)
+        for field in ("css", "assets"):
+            values = entry.get(field, [])
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) for value in values
+            ):
+                raise ValueError(f"Admin Vite manifest {field!r} must be a list")
+            allowed.update(values)
+    return frozenset(allowed)
+
+
+@lru_cache(maxsize=1)
 def load_admin_html() -> str:
-    """Return the contents of ``admin.html`` bundled with this package."""
-    package_files = importlib.resources.files(__package__ or __name__)
-    html = package_files.joinpath("admin.html").read_text("utf-8")
-    if html.count(_I18N_PLACEHOLDER) != 1:
-        raise ValueError("admin.html must contain exactly one I18N placeholder")
-    serialized_i18n = json.dumps(
-        _load_admin_i18n(package_files),
-        ensure_ascii=True,
-        separators=(",", ":"),
-    ).replace("<", "\\u003c")
-    return html.replace(_I18N_PLACEHOLDER, serialized_i18n)
+    """Return the generated Admin SPA document bundled with this package."""
+    html = _dist_files().joinpath("admin.html").read_text("utf-8")
+    if '<script type="module"' not in html or "/admin/assets/" not in html:
+        raise ValueError("Admin distribution entry point is incomplete")
+    return html
+
+
+@lru_cache(maxsize=32)
+def load_admin_asset(asset_path: str) -> AdminAsset:
+    """Load an allowlisted generated asset without filesystem traversal."""
+    relative = asset_path.lstrip("/")
+    normalized = posixpath.normpath(relative)
+    path = PurePosixPath(normalized)
+    if normalized != relative or path.is_absolute() or ".." in path.parts:
+        raise FileNotFoundError("Invalid Admin asset path")
+    if normalized not in _asset_allowlist() or not normalized.startswith("assets/"):
+        raise FileNotFoundError("Unknown Admin asset")
+    content_type = _MIME_TYPES.get(path.suffix.lower())
+    if content_type is None:
+        raise FileNotFoundError("Unsupported Admin asset type")
+    resource = _dist_files()
+    for part in path.parts:
+        resource = resource.joinpath(part)
+    return AdminAsset(resource.read_bytes(), content_type)
