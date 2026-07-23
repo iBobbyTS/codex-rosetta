@@ -34,4 +34,8 @@ export function providerLogo(shimName?: string): string {
   return shimName ? logos[shimName] ?? '' : '';
 }
 
+export function providerLogoNeedsDarkInversion(shimName?: string): boolean {
+  return Boolean(shimName && shimName !== 'opencode_go' && logos[shimName]);
+}
+
 export const bundledProviderLogoNames = Object.freeze(Object.keys(logos));
