@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api, download } from '../lib/api';
   import { createSerialPoll } from '../lib/polling';
+  import { t } from '../../shared/i18n.svelte';
 
   type Dict = Record<string, unknown>;
   type Metrics = {
@@ -36,7 +37,9 @@
   const duration = (seconds = 0) => {
     const hours = Math.floor(seconds / 3600);
     const minutes = Math.floor((seconds % 3600) / 60);
-    return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+    return hours
+      ? t('format.durationHoursMinutes', { hours, minutes })
+      : t('format.durationMinutes', { minutes });
   };
 
   function drawChart(canvas: HTMLCanvasElement, series: Array<Record<string, number | string>>, key: string): void {
@@ -62,8 +65,8 @@
     for (let index = 0; index <= 4; index += 1) { const y = padTop + (chartHeight / 4) * index; context.beginPath(); context.moveTo(padLeft, y); context.lineTo(width - padRight, y); context.stroke(); }
     context.fillStyle = dimColor; context.font = '10px sans-serif'; context.textAlign = 'right';
     for (let index = 0; index <= 4; index += 1) { const y = padTop + (chartHeight / 4) * index; const value = maxValue * (1 - index / 4); context.fillText(value.toFixed(value >= 10 ? 0 : 1), padLeft - 6, y + 3); }
-    context.textAlign = 'center'; context.fillText('-60s', padLeft, height - 4); context.fillText('-30s', padLeft + chartWidth / 2, height - 4); context.fillText('now', padLeft + chartWidth, height - 4);
-    if (!values.length || Math.max(...values) === 0) { context.fillStyle = dimColor; context.font = '13px sans-serif'; context.fillText('No data', padLeft + chartWidth / 2, padTop + chartHeight / 2); return; }
+    context.textAlign = 'center'; context.fillText(t('chart.secondsAgo', { seconds: 60 }), padLeft, height - 4); context.fillText(t('chart.secondsAgo', { seconds: 30 }), padLeft + chartWidth / 2, height - 4); context.fillText(t('chart.now'), padLeft + chartWidth, height - 4);
+    if (!values.length || Math.max(...values) === 0) { context.fillStyle = dimColor; context.font = '13px sans-serif'; context.fillText(t('chart.noData'), padLeft + chartWidth / 2, padTop + chartHeight / 2); return; }
     context.strokeStyle = accentColor; context.lineWidth = 1.5; context.beginPath();
     values.forEach((value, index) => { const x = padLeft + (index / Math.max(values.length - 1, 1)) * chartWidth; const y = padTop + chartHeight - (value / maxValue) * chartHeight; if (index === 0) context.moveTo(x, y); else context.lineTo(x, y); });
     context.stroke(); context.lineTo(padLeft + chartWidth, padTop + chartHeight); context.lineTo(padLeft, padTop + chartHeight); context.closePath(); context.fillStyle = accentColor.startsWith('#') ? `${accentColor}14` : 'rgba(99,102,241,0.08)'; context.fill();
@@ -112,12 +115,12 @@
       () => profileStatus.enabled
         ? api.post('/admin/api/profiling/disable')
         : api.post('/admin/api/profiling/enable', { requests }),
-      profileStatus.enabled ? 'Profiling disabled.' : 'Profiling enabled.',
+      profileStatus.enabled ? t('toast.profilingDisabled') : t('toast.profilingEnabled'),
     );
   }
   function clearProfiling(): void {
-    if (!confirm('Clear all profiling results?')) return;
-    void operation(() => api.del('/admin/api/profiling/results'), 'Profiling results cleared.');
+    if (!confirm(t('confirm.clearProfiling'))) return;
+    void operation(() => api.del('/admin/api/profiling/results'), t('toast.profilingCleared'));
   }
   async function inspectProfile(index: number): Promise<void> { busy = true; error = ''; try { selectedProfile = await api.get(`/admin/api/profiling/results/${index}`); } catch (cause) { error = message(cause); } finally { busy = false; } }
   async function downloadProfiles(): Promise<void> { busy = true; error = ''; try { const blob = await download('/admin/api/profiling/results/download'); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'profiling-results.zip'; link.click(); URL.revokeObjectURL(url); } catch (cause) { error = message(cause); } finally { busy = false; } }
@@ -127,30 +130,30 @@
 
 <div>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}{#if notice}<div class="toast show" role="status">{notice}</div>{/if}
-  {#if loading}<p aria-live="polite">Loading metrics...</p>
+  {#if loading}<p aria-live="polite">{t('loading.metrics')}</p>
   {:else if metrics}
     <div class="stats-grid">
-      <div class="stat-card"><div class="label">Total requests</div><div class="value blue">{metrics.total_requests??0}</div></div>
-      <div class="stat-card"><div class="label">Error rate</div><div class="value" class:red={(metrics.error_rate??0)>0}>{((metrics.error_rate??0)*100).toFixed(1)}%</div></div>
-      <div class="stat-card"><div class="label">Active streams</div><div class="value green">{metrics.active_streams??0}</div></div>
-      <div class="stat-card"><div class="label">Uptime</div><div class="value">{duration(metrics.uptime_seconds)}</div></div>
+      <div class="stat-card"><div class="label">{t('metric.totalRequests')}</div><div class="value blue">{metrics.total_requests??0}</div></div>
+      <div class="stat-card"><div class="label">{t('metric.errorRate')}</div><div class="value" class:red={(metrics.error_rate??0)>0}>{((metrics.error_rate??0)*100).toFixed(1)}%</div></div>
+      <div class="stat-card"><div class="label">{t('metric.activeStreams')}</div><div class="value green">{metrics.active_streams??0}</div></div>
+      <div class="stat-card"><div class="label">{t('metric.uptime')}</div><div class="value">{duration(metrics.uptime_seconds)}</div></div>
     </div>
-    <div class="chart-row"><div class="chart-box"><h3>Throughput (req/s)</h3><canvas bind:this={throughputCanvas} aria-label="Throughput chart"></canvas></div><div class="chart-box"><h3>Latency (ms)</h3><canvas bind:this={latencyCanvas} aria-label="Latency chart"></canvas></div></div>
-    <div class="section"><div style="display:flex;align-items:center;gap:12px;margin-bottom:12px"><h2 style="margin:0">Per-Provider Breakdown</h2><button class="btn btn-sm" disabled={busy} onclick={()=>void operation(()=>api.post('/admin/api/metrics/rebuild'),'Metrics rebuilt.')}>Rebuild Counters</button></div>
-      <div class="table-scroll"><table><thead><tr><th>Provider</th><th>Requests</th></tr></thead><tbody>
+    <div class="chart-row"><div class="chart-box"><h3>{t('chart.throughput')}</h3><canvas bind:this={throughputCanvas} aria-label={t('aria.throughputChart')}></canvas></div><div class="chart-box"><h3>{t('chart.latency')}</h3><canvas bind:this={latencyCanvas} aria-label={t('aria.latencyChart')}></canvas></div></div>
+    <div class="section"><div style="display:flex;align-items:center;gap:12px;margin-bottom:12px"><h2 style="margin:0">{t('section.breakdown')}</h2><button class="btn btn-sm" disabled={busy} onclick={()=>void operation(()=>api.post('/admin/api/metrics/rebuild'),t('toast.metricsRebuildComplete'))}>{t('metrics.rebuild')}</button></div>
+      <div class="table-scroll"><table><thead><tr><th>{t('col.provider')}</th><th>{t('col.requests')}</th></tr></thead><tbody>
         {#each Object.entries(metrics.by_target_provider ?? {}).sort((a,b) => b[1]-a[1]) as [provider, requests]}
           <tr><td>{provider}</td><td>{requests}</td></tr>
-        {:else}<tr><td colspan="2" class="empty">No request data.</td></tr>{/each}
+        {:else}<tr><td colspan="2" class="empty">{t('empty.requestData')}</td></tr>{/each}
       </tbody></table></div>
     </div>
   {/if}
-  <div class="section"><h2 style="margin-bottom:12px">Profiling</h2><div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap"><span class="badge" class:badge-success={profileStatus.enabled} style="padding:4px 10px;border-radius:4px;font-size:12px;font-weight:600">{profileStatus.enabled?`${profileStatus.remaining??0} remaining`:'OFF'}</span><label for="profilingCount" style="font-size:13px">Requests:</label><input id="profilingCount" aria-label="Requests" type="number" min="1" max="100" bind:value={count} style="width:60px;padding:4px 6px" /><button class="btn btn-sm" disabled={busy} onclick={toggleProfiling}>{profileStatus.enabled?'Disable':'Enable'}</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={clearProfiling}>Clear</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={()=>void downloadProfiles()}>Download all</button></div>
-    <p style="font-size:12px;color:var(--text-dim);margin:0 0 8px">Results are in-memory only and will be lost on restart. Download important results.</p>
-    <div class="table-scroll"><table><thead><tr><th>Time</th><th>Model</th><th>Source → Target</th><th>Mode</th><th>Duration</th><th>Flamegraph</th></tr></thead><tbody>
+  <div class="section"><h2 style="margin-bottom:12px">{t('section.profiling')}</h2><div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap"><span class="badge" class:badge-success={profileStatus.enabled} style="padding:4px 10px;border-radius:4px;font-size:12px;font-weight:600">{profileStatus.enabled?t('profiling.remaining',{n:profileStatus.remaining??0}):t('profiling.off')}</span><label for="profilingCount" style="font-size:13px">{t('profiling.requests')}</label><input id="profilingCount" aria-label={t('aria.profilingRequests')} type="number" min="1" max="100" bind:value={count} style="width:60px;padding:4px 6px" /><button class="btn btn-sm" disabled={busy} onclick={toggleProfiling}>{profileStatus.enabled?t('profiling.disable'):t('profiling.enable')}</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={clearProfiling}>{t('profiling.clear')}</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={()=>void downloadProfiles()}>{t('profiling.downloadAll')}</button></div>
+    <p style="font-size:12px;color:var(--text-dim);margin:0 0 8px">{t('profiling.hint')}</p>
+    <div class="table-scroll"><table><thead><tr><th>{t('col.time')}</th><th>{t('col.model')}</th><th>{t('col.sourceTarget')}</th><th>{t('col.mode')}</th><th>{t('col.duration')}</th><th>{t('profiling.flamegraph')}</th></tr></thead><tbody>
       {#each results as result, index}
-        <tr><td>{result.timestamp?new Date(result.timestamp).toLocaleString():'-'}</td><td>{result.model??'-'}</td><td>{result.source??'-'} → {result.target??'-'}</td><td>{result.is_stream?'stream':'sync'}</td><td>{typeof result.duration_ms==='number'?`${result.duration_ms.toFixed(0)} ms`:'-'}</td><td><button class="btn btn-sm" onclick={()=>void inspectProfile(index)}>View</button></td></tr>
-      {:else}<tr><td colspan="6" class="empty">No profiling results. Enable profiling and send requests.</td></tr>{/each}
+        <tr><td>{result.timestamp?new Date(result.timestamp).toLocaleString():'-'}</td><td>{result.model??'-'}</td><td>{result.source??'-'} → {result.target??'-'}</td><td>{result.is_stream?t('profiling.stream'):t('profiling.sync')}</td><td>{typeof result.duration_ms==='number'?`${result.duration_ms.toFixed(0)} ms`:'-'}</td><td><button class="btn btn-sm" onclick={()=>void inspectProfile(index)}>{t('btn.view')}</button></td></tr>
+      {:else}<tr><td colspan="6" class="empty">{t('profiling.empty')}</td></tr>{/each}
     </tbody></table></div>
-    {#if selectedProfile}<pre aria-label="Profiling artifact">{JSON.stringify(selectedProfile, null, 2)}</pre>{/if}
+    {#if selectedProfile}<pre aria-label={t('aria.profilingArtifact')}>{JSON.stringify(selectedProfile, null, 2)}</pre>{/if}
   </div>
 </div>

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
-  import { t } from '../lib/i18n.svelte';
+  import { t } from '../../shared/i18n.svelte';
 
   type Dict = Record<string, unknown>;
   type Config = {
@@ -83,11 +83,11 @@
     const wasConfirmed = server.local_mode_confirmed === true;
     const needsConfirmation = localMode && !wasConfirmed;
     if (needsConfirmation) {
-      const home = config.codex_home || 'the configured Codex home';
+      const home = config.codex_home || t('label.configuredCodexHome');
       const catalogWarning = config.model_catalog_configured
-        ? ` The existing model catalog configured under ${home} will be replaced.`
-        : ` A managed model catalog will be created under ${home}.`;
-      if (!confirm(`Enable Codex local mode and synchronize Codex configuration?${catalogWarning}`)) {
+        ? t('confirm.catalogReplace', { home })
+        : t('confirm.catalogCreate', { home });
+      if (!confirm(t('confirm.localModeSync', { catalog_warning: catalogWarning }))) {
         localMode = wasEnabled;
         localModeConfirmed = wasConfirmed;
         return;
@@ -99,7 +99,7 @@
       local_mode: localMode,
     };
     if (needsConfirmation) body.local_mode_confirmed = true;
-    void operation(() => api.put('/admin/api/config/server', body), 'Server settings saved.');
+    void operation(() => api.put('/admin/api/config/server', body), t('toast.serverSaved'));
   }
 
   function saveCodex(): void {
@@ -111,15 +111,20 @@
           extract_model: extractModel || null,
         },
       }),
-      'Codex settings saved.',
+      t('toast.codexSettingsSaved'),
     );
   }
 
   function taskStatus(selected: string, fallback: string): string {
     const effective = selected || fallback;
-    if (!taskModelsEnabled) return `Effective default: ${fallback} (local mode is not confirmed)`;
-    if (!configuredModels.includes(effective)) return `Missing model: ${effective}`;
-    return selected ? `Configured model: ${effective}` : `Effective default: ${effective}`;
+    if (!taskModelsEnabled) return t('settings.taskEffectiveUnconfirmed', { model: fallback });
+    if (!configuredModels.includes(effective)) return t('settings.taskMissing', { model: effective });
+    return selected
+      ? t('settings.taskConfigured', { model: effective })
+      : t('settings.taskEffective', { model: effective });
+  }
+  function taskMissing(selected: string, fallback: string): boolean {
+    return taskModelsEnabled && !configuredModels.includes(selected || fallback);
   }
 
   async function diagnose(): Promise<void> {
@@ -140,7 +145,7 @@
     error = '';
     try {
       const result = await api.get<{ ok?: boolean; ip?: string; error?: string }>('/admin/api/diagnostics/host-ip');
-      if (!result.ok || !result.ip) throw new Error(result.error || 'Host IP is unavailable.');
+      if (!result.ok || !result.ip) throw new Error(result.error || t('error.hostIpUnavailable'));
       hostIp = result.ip;
     } catch (cause) {
       error = message(cause);
@@ -154,7 +159,7 @@
     error = '';
     try {
       const result = await api.get<{ token?: string }>('/admin/api/internal-token');
-      if (!result.token) throw new Error('Internal token is unavailable.');
+      if (!result.token) throw new Error(t('error.internalTokenUnavailable'));
       internalToken = result.token;
     } catch (cause) {
       error = message(cause);
@@ -173,10 +178,10 @@
 <section class="settings" aria-labelledby="settings-title">
   <header>
     <div>
-      <h2 id="settings-title">{t('modal.settings', 'Server and Codex settings')}</h2>
-      <p>Configuration writes and Codex synchronization remain transactional in Python.</p>
+      <h2 id="settings-title">{t('modal.settings')}</h2>
+      <p>{t('settings.description')}</p>
     </div>
-    <button disabled={busy} onclick={() => void operation(() => api.post('/admin/api/config/reload'), 'Configuration reloaded.')}>Reload config</button>
+    <button disabled={busy} onclick={() => void operation(() => api.post('/admin/api/config/reload'), t('toast.configReloaded'))}>{t('btn.reloadConfig')}</button>
   </header>
 
   {#if error}<div class="alert" role="alert">{error}</div>{/if}
@@ -184,66 +189,66 @@
 
   <div class="columns">
     <div class="panel">
-      <h3>Server</h3>
-      <label>{t('label.globalProxy', 'Global proxy')} <input bind:value={proxy} placeholder="http://proxy.example:8080" /></label>
-      <label>{t('label.requestBodyLimit', 'Request body limit')}
+      <h3>{t('section.settingsServer')}</h3>
+      <label>{t('label.globalProxy')} <input bind:value={proxy} placeholder={t('placeholder.genericProxy')} /></label>
+      <label>{t('label.requestBodyLimit')}
         <select bind:value={bodyLimit}>
-          {#each [64, 128, 256, 512, 1024] as value}<option value={value}>{value} MB</option>{/each}
-          <option value="unlimited">Unlimited</option>
+          {#each [64, 128, 256, 512, 1024] as value}<option value={value}>{t('format.megabytes',{value})}</option>{/each}
+          <option value="unlimited">{t('label.unlimited')}</option>
         </select>
       </label>
-      <label class="check"><input type="checkbox" bind:checked={localMode} /> {t('label.localMode', 'Codex local mode')}</label>
+      <label class="check"><input type="checkbox" bind:checked={localMode} /> {t('label.localMode')}</label>
       <p class:warning={localMode && !localModeConfirmed} class="hint">
-        {localModeConfirmed ? 'Local mode is explicitly confirmed.' : 'Local mode is not confirmed.'}
-        {#if config.model_catalog_configured} Existing model catalog detected.{/if}
+        {localModeConfirmed ? t('settings.localModeConfirmed') : t('settings.localModeUnconfirmed')}
+        {#if config.model_catalog_configured} {t('settings.catalogDetected')}{/if}
       </p>
       {#if config.codex_home}<p class="hint"><code>{config.codex_home}</code></p>{/if}
-      <button class="primary" disabled={busy} onclick={saveServer}>{t('btn.save', 'Save')}</button>
+      <button class="primary" disabled={busy} onclick={saveServer}>{t('btn.save')}</button>
     </div>
 
     <div class="panel">
-      <h3>Codex task models</h3>
-      <label>Auto review model
+      <h3>{t('section.taskModels')}</h3>
+      <label>{t('label.autoReviewModelShort')}
         <select bind:value={reviewModel} disabled={!taskModelsEnabled}>
-          <option value="">Use default ({taskDefaults.review})</option>
+          <option value="">{t('format.defaultModel',{model:taskDefaults.review})}</option>
           {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if reviewModel && !configuredModels.includes(reviewModel)}<option value={reviewModel}>{reviewModel} (missing)</option>{/if}
+          {#if reviewModel && !configuredModels.includes(reviewModel)}<option value={reviewModel}>{t('format.missingModel',{model:reviewModel})}</option>{/if}
         </select>
       </label>
-      <p class="hint" class:missing={taskStatus(reviewModel, taskDefaults.review).startsWith('Missing')}>{taskStatus(reviewModel, taskDefaults.review)}</p>
-      <label>Memory consolidation model
+      <p class="hint" class:missing={taskMissing(reviewModel, taskDefaults.review)}>{taskStatus(reviewModel, taskDefaults.review)}</p>
+      <label>{t('label.memoryConsolidationModelShort')}
         <select bind:value={consolidationModel} disabled={!taskModelsEnabled}>
-          <option value="">Use default ({taskDefaults.consolidation})</option>
+          <option value="">{t('format.defaultModel',{model:taskDefaults.consolidation})}</option>
           {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if consolidationModel && !configuredModels.includes(consolidationModel)}<option value={consolidationModel}>{consolidationModel} (missing)</option>{/if}
+          {#if consolidationModel && !configuredModels.includes(consolidationModel)}<option value={consolidationModel}>{t('format.missingModel',{model:consolidationModel})}</option>{/if}
         </select>
       </label>
-      <p class="hint" class:missing={taskStatus(consolidationModel, taskDefaults.consolidation).startsWith('Missing')}>{taskStatus(consolidationModel, taskDefaults.consolidation)}</p>
-      <label>Memory extraction model
+      <p class="hint" class:missing={taskMissing(consolidationModel, taskDefaults.consolidation)}>{taskStatus(consolidationModel, taskDefaults.consolidation)}</p>
+      <label>{t('label.memoryExtractionModelShort')}
         <select bind:value={extractModel} disabled={!taskModelsEnabled}>
-          <option value="">Use default ({taskDefaults.extract})</option>
+          <option value="">{t('format.defaultModel',{model:taskDefaults.extract})}</option>
           {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if extractModel && !configuredModels.includes(extractModel)}<option value={extractModel}>{extractModel} (missing)</option>{/if}
+          {#if extractModel && !configuredModels.includes(extractModel)}<option value={extractModel}>{t('format.missingModel',{model:extractModel})}</option>{/if}
         </select>
       </label>
-      <p class="hint" class:missing={taskStatus(extractModel, taskDefaults.extract).startsWith('Missing')}>{taskStatus(extractModel, taskDefaults.extract)}</p>
-      <button class="primary" disabled={busy || !taskModelsEnabled} onclick={saveCodex}>Save Codex settings</button>
+      <p class="hint" class:missing={taskMissing(extractModel, taskDefaults.extract)}>{taskStatus(extractModel, taskDefaults.extract)}</p>
+      <button class="primary" disabled={busy || !taskModelsEnabled} onclick={saveCodex}>{t('btn.saveCodexSettings')}</button>
     </div>
   </div>
 
   <div class="panel sensitive">
-    <h3>On-demand diagnostics</h3>
-    <p class="hint">Sensitive values are fetched only after an explicit action.</p>
+    <h3>{t('section.onDemandDiagnostics')}</h3>
+    <p class="hint">{t('settings.sensitiveHint')}</p>
     <div class="actions">
-      <button disabled={busy} onclick={() => void revealHostIp()}>Show host IP</button>
-      <button disabled={busy} onclick={() => void revealInternalToken()}>Reveal internal token</button>
+      <button disabled={busy} onclick={() => void revealHostIp()}>{t('btn.showHostIp')}</button>
+      <button disabled={busy} onclick={() => void revealInternalToken()}>{t('btn.revealInternalToken')}</button>
     </div>
-    {#if hostIp}<p>Host IP: <code>{hostIp}</code></p>{/if}
-    {#if internalToken}<p>Internal token: <code>{internalToken}</code></p>{/if}
+    {#if hostIp}<p>{t('label.hostIp')} <code>{hostIp}</code></p>{/if}
+    {#if internalToken}<p>{t('label.internalToken')} <code>{internalToken}</code></p>{/if}
   </div>
 
   <div class="diagnostics">
-    <button disabled={busy} onclick={() => void diagnose()}>{t('diag.runDiag', 'Run network diagnostics')}</button>
+    <button disabled={busy} onclick={() => void diagnose()}>{t('diag.runDiag')}</button>
     {#if diagnostics}<pre>{JSON.stringify(diagnostics, null, 2)}</pre>{/if}
   </div>
 </section>

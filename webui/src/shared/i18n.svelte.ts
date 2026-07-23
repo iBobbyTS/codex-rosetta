@@ -1,6 +1,7 @@
-import translations from '../../../../src/codex_rosetta/gateway/admin/admin_i18n.json';
+import translations from '../../../src/codex_rosetta/gateway/admin/admin_i18n.json';
 
 export type Language = 'en' | 'zh';
+export type TranslationParams = Record<string, string | number>;
 
 function initialLanguage(): Language {
   const saved = localStorage.getItem('codex-rosetta-lang');
@@ -16,7 +17,11 @@ export function setLanguage(value: Language): void {
   document.documentElement.lang = value === 'zh' ? 'zh-CN' : 'en';
 }
 
-export function t(key: string, fallback: string): string {
+export function t(key: string, params: TranslationParams = {}): string {
   const table = translations[language.value] as Record<string, string>;
-  return table[key] ?? fallback;
+  const fallback = translations.en as Record<string, string>;
+  const template = table[key] ?? fallback[key] ?? key;
+  return template.replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) =>
+    Object.prototype.hasOwnProperty.call(params, name) ? String(params[name]) : match
+  );
 }
