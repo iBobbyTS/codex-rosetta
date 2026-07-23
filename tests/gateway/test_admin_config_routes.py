@@ -1125,6 +1125,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
 def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     """Admin config exposes grouped management data and expanded runtime models."""
     config = _config_data()
+    config["providers"]["openai"]["provider"] = "openai"
     config["models"] = {"standalone": "openai"}
     config["model_groups"] = {
         "OpenAI": {
@@ -1152,6 +1153,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["type"] == "llm"
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert body["providers"]["openai"]["default_tool_profile"] == "builtin"
+    assert body["providers"]["openai"]["provider"] == "openai"
     assert "validation_error" not in body["providers"]["openai"]
     assert body["known_api_types"] == ["responses", "chat", "anthropic", "google"]
     assert "known_provider_types" not in body

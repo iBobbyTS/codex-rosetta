@@ -379,8 +379,8 @@ async def get_config(request: Any) -> Response:
     except Exception as exc:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
-    # Mask API keys. Provider vendor/variant is derived at runtime from the
-    # authoritative base URL; it is not persisted as UI metadata.
+    # Mask credentials and legacy runtime-only metadata. The persisted
+    # ``provider`` supplier remains part of the Admin configuration contract.
     providers = raw.get("providers", {})
     masked_providers: dict[str, Any] = {}
     provider_errors: dict[str, str] = {}
@@ -388,7 +388,6 @@ async def get_config(request: Any) -> Response:
         masked = dict(cfg)
         if "api_key" in masked:
             masked["api_key"] = _mask_api_key(masked["api_key"])
-        masked.pop("provider", None)
         masked.pop("shim", None)
         masked.pop("type", None)
         masked.pop("validation_error", None)

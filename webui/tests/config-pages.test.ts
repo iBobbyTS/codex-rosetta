@@ -37,6 +37,8 @@ describe('ProvidersPage', () => {
     expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     await fireEvent.click(within(screen.getByRole('dialog', { name: /Edit Provider/ })).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
+    expect(screen.getByRole('status')).toHaveTextContent("Provider 'official' saved");
+    expect(screen.getByRole('status')).not.toHaveTextContent('{name}');
     const body = apiMock.put.mock.calls[0][1];
     expect(body).toEqual({
       provider: 'openai',
