@@ -23,6 +23,7 @@ from codex_rosetta.gateway.tool_profiles import (
     normalize_tool_profile_documents,
     resolve_tool_profile,
     tool_profile_contract,
+    validate_tool_profile_name,
 )
 from codex_rosetta.gateway.web_run_capabilities import (
     WEB_RUN_BASIC_SEARCH_CAPABILITY,
@@ -104,7 +105,6 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     )
     assert set(contract["readonly"]) == {
         "builtin",
-        "openai-responses-tool-mapping-only",
         "web-run-injection",
         "responses-tool-mapping",
     }
@@ -117,17 +117,6 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         "injected",
     )
     assert contract["builtin"]["injection.claude_code.read"] == "injected"
-
-
-def test_openai_responses_tool_mapping_only_profile_never_replaces_tools():
-    contract = tool_profile_contract()
-    profile = contract["readonly"]["openai-responses-tool-mapping-only"]["tools"]
-    catalog_items = load_tool_catalog()["items"]
-
-    assert set(profile) == set(contract["supported"])
-    for item in catalog_items:
-        expected = "disabled" if item["type"] == "custom_injection" else "passthrough"
-        assert profile[item["id"]] == expected
 
 
 def test_disabled_namespace_forces_all_child_states_to_disabled():
@@ -755,7 +744,6 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
 
     assert set(contract["readonly"]) == {
         "builtin",
-        "openai-responses-tool-mapping-only",
         "web-run-injection",
         "responses-tool-mapping",
     }
@@ -778,6 +766,11 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
     assert (
         contract["readonly"]["responses-tool-mapping"]["tools"] == contract["builtin"]
     )
+
+
+def test_passthrough_option_is_not_a_creatable_tool_profile() -> None:
+    with pytest.raises(ValueError, match="'passthrough' is reserved"):
+        validate_tool_profile_name("passthrough")
 
 
 def test_profile_filters_top_level_lite_and_namespace_children():

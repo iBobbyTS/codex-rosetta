@@ -60,18 +60,6 @@
   },
   "preset_profiles": [
     {
-      "id": "openai-responses-tool-mapping-only",
-      "name": "透传（适用于OpenAI官方API）",
-      "api_types": ["responses"],
-      "defaults": {
-        "function": "passthrough",
-        "custom": "passthrough",
-        "hosted": "passthrough",
-        "namespace": "passthrough",
-        "custom_injection": "disabled"
-      }
-    },
-    {
       "id": "web-run-injection",
       "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
       "api_types": ["responses"],
