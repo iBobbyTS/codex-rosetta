@@ -1,15 +1,15 @@
 # Codex 模型目录字段参考
 
 本文说明 Codex 消费的模型目录，以及 Codex-Rosetta 在暴露第三方模型时应如何使用这些字段。当前源码优先检查目标是 Codex
-`0.145.0-alpha.23`、源码提交
-`655224ffae098a85efeddf8289171ff3bd2624d1`，主要参考：
+`0.145.0`、源码提交
+`25af12f7e61572b0bc18ddb1008be543b91519b0`，主要参考：
 
 - `codex-rs/models-manager/models.json`；
 - `codex-rs/protocol/src/openai_models.rs`；
 - `codex-rs/models-manager/src/model_info.rs`；
 - `codex-rs/core`、`codex-rs/tools` 和 `codex-rs/ext` 下的字段消费者。
 
-这些是 Codex 内部契约，不是 OpenAI 公共 API 定义的字段。alpha.23 的源码优先检查已发现尚未完成的适配项，因此本页不构成兼容性批准。每次升级 Codex 时，应使用集中维护的
+这些是 Codex 内部契约，不是 OpenAI 公共 API 定义的字段。正式版源码优先检查仍有待运行的 live-agent 门禁，因此本页不构成兼容性批准。每次升级 Codex 时，应使用集中维护的
 [`版本兼容性 checklist`](../dev/version-compatibility/upgrade-checklist.md)，
 不要把本字段参考当成另一套升级流程。
 
@@ -22,7 +22,7 @@
 只有网关未配置任何模型时，本地模式才会以全部八个打包条目为基础。只要配置了至少一个
 模型，生成的目录就只包含已配置的模型名称。已配置名称与八个打包 slug 之一相同时，
 会在解析后的 JSON 值层面复用该条目，然后再应用 Rosetta 的运行时 overlay。打包资产仍
-与 alpha.23 完全一致；生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
+与正式版 `0.145.0` 源码完全一致；生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
 `supports_reasoning_summaries` 布尔字段，因此有意不会与打包资产逐字节一致。
 
 ### 压缩哈希 overlay
@@ -77,7 +77,7 @@ Terra 的指令结构并替换模型身份，同时声明各自的上下文、�
 默认摘要和按字节截断策略。所有第三方预设继续禁用并行工具调用，直到各自的跨协议
 调用、结果关联和 replay 行为得到独立验证。
 
-当前预设资源包含 25 个经过审查的 `shared_overrides`。alpha.23 将推理能力字段改名为
+当前预设资源包含 25 个经过审查的 `shared_overrides`。正式版使用
 `supports_reasoning_summary_parameter`，运行时和预设现在都使用这个精确字段。第三方快照
 有意与官方 Terra 保持差异：service/speed tier 为空、original 图片 detail 关闭、并行工具
 调用关闭，并默认关闭 reasoning summary 参数。这些值是 Rosetta 的安全能力声明，不是把
@@ -88,20 +88,21 @@ Terra 的指令结构并替换模型身份，同时声明各自的上下文、�
 允许在单个 `models[]` 条目中覆盖，`template_slug` 只补充 Rosetta 尚未识别的字段；
 已知删除或忽略的字段不能通过模板兜底重新出现。
 
-目标 alpha.23 打包 JSON 共使用 40 个不同键，其中四个会被 `ModelInfo` 忽略，因此实际
+目标正式版打包 JSON 共使用 41 个不同键，其中五个会被 `ModelInfo` 忽略，因此实际
 消费 36 个打包字段。`ModelInfo` 另外接受打包 JSON 未提供、带默认值的
 `effective_context_window_percent=95` 和 `supports_reasoning_summary_parameter=true`；
 `used_fallback_model_metadata` 仅供运行时使用，不能由 catalog JSON 提供。下列表格因此共记录
-42 个 catalog 相关名称：38 个可输入字段和四个会被忽略的打包键；运行时专用字段另行说明。
+43 个 catalog 相关名称：38 个可输入字段和五个会被忽略的打包键；运行时专用字段另行说明。
 
-打包 JSON 中有四个键不属于当前 Rust `ModelInfo`。加载打包文件时，Serde 会忽略它们：
+打包 JSON 中有五个键不属于当前 Rust `ModelInfo`。加载打包文件时，Serde 会忽略它们：
 
 - `available_in_plans`；
 - `minimal_client_version`；
 - `prefer_websockets`；
 - `reasoning_summary_format`。
+- `supports_reasoning_summaries`。
 
-下文把它们标记为 **已审查 0.144.x 基线及 alpha.23 均未消费**。Rosetta 会从生成的第三方预设中省略它们，
+下文把它们标记为 **已审查 0.144.x 基线及正式 0.145.0 均未消费**。Rosetta 会从生成的第三方预设中省略它们，
 并明确阻止 `template_slug` 把它们恢复回来。除非后续 Codex 版本开始消费这些字段，
 否则 Rosetta 不应根据它们实现运行时协议逻辑。`used_fallback_model_metadata` 则相反：
 它是 `ModelInfo` 的客户端内部运行时标志，而且禁止反序列化，因此不是合法的
@@ -119,8 +120,8 @@ catalog 输入字段。
 | `supported_in_api` | 布尔值，`true` | 传递为模型预设的 API 支持标志。 | 只有 Rosetta 确实能路由该别名时才设为 true；此字段不会验证真实上游 API。 |
 | `availability_nux` | 对象或 null，`{"message":"New model available."}` | 模型刚可用时展示的可选 NUX 提示。 | 私有别名通常设为 null；不要把它当能力开关。 |
 | `upgrade` | 对象或 null，`{"model":"replacement","migration_markdown":"Use replacement."}` | 为旧模型提供推荐替代模型和迁移说明。 | 只用于明确的别名迁移。真正的上游路由变化仍放在 Rosetta 配置中。 |
-| `available_in_plans` | 字符串数组，`["plus","team"]` | **已审查 0.144.x 基线及 alpha.23 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要据此做 Rosetta 鉴权或路由；访问控制应在网关/provider 层实现。 |
-| `minimal_client_version` | 打包 JSON 中的字符串，`"0.144.0"` | **已审查 0.144.x 基线及 alpha.23 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要依靠它拒绝旧客户端；需要时使用明确的网关兼容策略。 |
+| `available_in_plans` | 字符串数组，`["plus","team"]` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要据此做 Rosetta 鉴权或路由；访问控制应在网关/provider 层实现。 |
+| `minimal_client_version` | 打包 JSON 中的字符串，`"0.144.0"` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要依靠它拒绝旧客户端；需要时使用明确的网关兼容策略。 |
 
 ## 推理、输出和服务档位
 
@@ -128,9 +129,9 @@ catalog 输入字段。
 | --- | --- | --- | --- |
 | `default_reasoning_level` | reasoning effort 或 null，`"medium"` | 用户未选择时使用的默认推理强度。 | 选择上游接受或 Rosetta 已映射的值，并保证它也出现在 `supported_reasoning_levels` 中。 |
 | `supported_reasoning_levels` | 对象数组，`[{"effort":"low","description":"Fast"},{"effort":"high","description":"Deep"}]` | 提供可选的推理强度及 UI 说明。当前枚举包括 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 和 `ultra`，后续版本可能变化。 | 只声明上游接受或 Rosetta 明确映射的档位。不要为了获得委派行为而照抄 `ultra`。 |
-| `supports_reasoning_summary_parameter` | 布尔值，默认 `true` | alpha.23 控制 Codex 是否可以发送 Responses 的 `reasoning.summary` 参数。该字段 serde 默认值为 true，目标目录不再包含旧的 `supports_reasoning_summaries`。Rosetta 只会为 0.144.x 客户端在运行时额外生成这个旧布尔字段；alpha.23 会忽略它。 | 只有确定目标客户端需要省略摘要参数，且生成目录由匹配的 Codex 源码消费时才设为 false；旧字段只是兼容 shim，不能当作 alpha.23 的能力来源。 |
+| `supports_reasoning_summary_parameter` | 布尔值，默认 `true` | Codex 0.145.0 消费这个 Rust 字段，默认值为 true。它的打包 JSON 同时包含旧版 `supports_reasoning_summaries: true`；该键不是 `ModelInfo` 字段，会被 serde 忽略。 | 只有确定目标客户端需要省略摘要参数，且生成目录由匹配的 Codex 源码消费时才设为 false。Rosetta 为 0.144.x 客户端保留旧键，但正式版能力事实来源仍是 Rust 字段。 |
 | `default_reasoning_summary` | `"auto"`、`"concise"`、`"detailed"` 或 `"none"` | 用户没有配置时的默认摘要模式。 | 第三方模型在端到端验证前优先使用 `none`。 |
-| `reasoning_summary_format` | 字符串，`"experimental"` | **已审查 0.144.x 基线及 alpha.23 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要按此字段分支 Rosetta 转换；应检查实际请求和流事件。 |
+| `reasoning_summary_format` | 字符串，`"experimental"` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要按此字段分支 Rosetta 转换；应检查实际请求和流事件。 |
 | `support_verbosity` | 布尔值，`true` | 为 true 时，Codex 发送用户配置或默认的 Responses `text.verbosity`；为 false 时省略。 | 只有上游接受，或 Rosetta 会剥离/映射时才启用。 |
 | `default_verbosity` | `"low"`、`"medium"`、`"high"` 或 null | 支持 verbosity 且用户未覆盖时的默认值。 | 使用上游真实支持的值；`support_verbosity` 为 false 时，null 最安全。 |
 | `service_tiers` | 对象数组，`[{"id":"priority","name":"Fast","description":"Higher speed"}]` | 为 UI 和 subagent/模型选择列出允许的服务档位，并校验请求档位。 | 除非 Rosetta provider 会把档位映射到真实上游服务等级，否则保持空数组。 |
@@ -164,7 +165,7 @@ catalog 输入字段。
 | `use_responses_lite` | 布尔值，`true` | 启用 Codex 的 Responses Lite 方言：工具/指令移入 input item，使用内部 header，禁用 hosted tool，并期望独立 namespace 工具。 | 固定为 true。Rosetta 负责 Chat 上游所需的 `input[].type="additional_tools"`、developer instructions、custom `exec`、独立 `/v1/alpha/search`、compact/header 和 stream 转换。 |
 | `multi_agent_version` | `"disabled"`、`"v1"`、`"v2"` 或 null | 选择旧 multi-agent、collaboration v2、禁用，或 feature/config fallback；会影响工具定义和 subagent 生命周期。 | 面向最新模型的 Terra 兼容配置固定为 `v2`，catalog 不增加弱模型降级预设。 |
 | `auto_review_model_override` | 字符串或 null，`"review-model"` | 把命令执行批准审查从当前模型改交给另一个模型。 | 指向 Rosetta 已暴露、确实可路由且适合批准审查的别名；普通模型保持 null。 |
-| `prefer_websockets` | 布尔值，`true` | **已审查 0.144.x 基线及 alpha.23 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设；WebSocket 选择由其他位置控制。 | 不要根据这个字段宣称 WebSocket 支持或切换 Rosetta transport；应验证真实客户端请求路径。 |
+| `prefer_websockets` | 布尔值，`true` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设；WebSocket 选择由其他位置控制。 | 不要根据这个字段宣称 WebSocket 支持或切换 Rosetta transport；应验证真实客户端请求路径。 |
 
 ## 指令和 Skills
 
@@ -287,7 +288,7 @@ fallback 预设；不能使用这套表面的模型不属于本 catalog 的支�
 }
 ```
 
-示例特意省略当前未消费的四个打包键。alpha.23 的推理字段改名和权限消息新增项，
+示例特意省略当前未消费的四个打包键。正式版的音频输入模态、旧版摘要键和权限消息新增项，
 必须针对精确目标源码复核后，才能把该示例用于兼容性声明。
 
 ## 升级审查要求

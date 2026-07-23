@@ -50,10 +50,10 @@ High-confidence unchanged rows may record the live API result as "not triggered 
 ## Current documentation baseline
 
 - [`upgrade-review.md`](upgrade-review.md): full
-  source-first inventory and implementation review for `0.145.0-alpha.23`,
-  including direct comparison with `0.142.0` and `0.144.6`, deterministic
-  checks, and the complete available live-agent matrix. The adaptation is
-  recorded, but failed/unavailable live gates keep adoption pending.
+  source-first inventory and implementation review for `0.145.0`, including
+  direct comparison with `0.142.0`, `0.144.6`, and alpha.23, deterministic
+  checks, and the formal-version live-agent gate status. The adaptation is
+  recorded, but live reruns keep adoption pending.
 - [`live-evidence.md`](live-evidence.md): per-attempt route,
   thread, evaluation, and cache-continuation evidence for that review.
 - [`range-coverage-review.md`](range-coverage-review.md): historical

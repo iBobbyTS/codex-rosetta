@@ -56,27 +56,31 @@ and test matrix below must each contain every registered name exactly once.
 ## Current upgrade status
 
 The code-derived ledger has been rechecked against Codex `0.142.0`,
-`0.144.6`, and the exact `0.145.0-alpha.23` source. The alpha.23 adaptation,
-packaged model/tool assets, deterministic tests, and all currently executable
-CLI live-agent cells have been updated or run, but runtime compatibility remains
-**not approved** because required live gates still contain failures or unavailable
-external runners. The package version therefore remains `0.144.0.r0`. See
+`0.144.6`, `0.145.0-alpha.23`, and the exact `0.145.0` source. The formal
+adaptation, packaged model/tool assets, and deterministic tests have been
+updated or run, but formal-version live-agent cells are still pending. Runtime
+compatibility remains **not approved** and the package version therefore remains
+`0.144.0.r0`. See
 [`reports/upgrade-review.md`](reports/upgrade-review.md) for
 the exact pass/failure matrix and adoption decision, and see
 [`reports/range-coverage-review.md`](reports/range-coverage-review.md) for
 the historical range review for 0.142.0–0.144.6.
 
-## Alpha.23 source-first corrections
+## Formal 0.145.0 source-first corrections
 
 The overview table below contains historical implementation detail that remains
-useful for the 0.144.x boundary. For the current alpha.23 inspection, these
+useful for the 0.144.x boundary. For the current formal 0.145.0 inspection, these
 source facts supersede older wording:
 
-- Codex ModelInfo uses supports_reasoning_summary_parameter with a serde
-  default of true; supports_reasoning_summaries is no longer the alpha.23
-  target catalog field. Rosetta local-mode catalogs also emit that legacy
-  boolean as a compatibility alias for installed 0.144.x clients, deriving it
-  from the current summary capability when available.
+- Codex ModelInfo uses `supports_reasoning_summary_parameter` with a serde
+  default of true. The formal bundled JSON also carries the legacy
+  `supports_reasoning_summaries: true` key, which is ignored because it is not a
+  `ModelInfo` field. Rosetta local-mode catalogs continue to emit that alias for
+  installed 0.144.x clients, deriving it from the current summary capability.
+- Codex 0.145.0 adds `ContentItem::InputAudio`, `InputModality::Audio`, and
+  Code Mode/MCP audio forwarding. Responses and Chat converters now preserve
+  data-URL and provider-native audio forms through the IR; malformed or
+  unsupported audio remains fail-open passthrough.
 - ModelMessages now has optional permissions (danger_full_access,
   workspace_write, read_only), and AutoReviewMessages has policy_template.
 - Response item IDs are typed ResponseItemId values with prefix validation; the
@@ -88,7 +92,8 @@ source facts supersede older wording:
 - Alpha.23 adds cache_write_tokens to completed usage and changes remote
   compaction fallback/response-id handling. Rosetta maps cache writes to the
   existing IR cache_creation_tokens owner on cross-provider paths.
-- Code Mode deferred-only MCP type rendering, apply_patch/exec descriptions,
+- Code Mode deferred-only MCP type rendering, audio forwarding,
+  apply_patch/exec descriptions,
   Realtime routing, host-skill world state, and platform-specific shell
   descriptions are changed source contracts and must not be classified as
   high-confidence unchanged.
@@ -98,6 +103,13 @@ source facts supersede older wording:
   rollout ordinals have no Rosetta wire-converter owner. They remain explicit
   client-owned/live-gate obligations under the relevant CP rows, not evidence
   that the Responses bridge is unchanged.
+
+The detailed CP-07 and CP-23 overview rows retain alpha.23 implementation
+history. Their current formal binding is the packaged `0.145.0` catalog and
+tool catalog metadata at source commit `25af12f7e61572b0bc18ddb1008be543b91519b0`.
+The formal source adds audio to the client input/Code Mode surface; the current
+owner is the Responses/Chat audio bridge and `code_mode_projection.py`, not a
+new static tool-catalog item. The static conceptual inventory remains 53 items.
 
 ## Current compatibility overview
 
@@ -298,10 +310,11 @@ the corresponding field/tool should remain disabled or use the proven older
 surface.
 
 Rosetta local mode is the sole owner of `<codex-home>/model_catalog.json`. With
-no configured models it starts from the eight bound Codex 0.145.0-alpha.23
+no configured models it starts from the eight bound Codex 0.145.0
 entries; otherwise it writes only configured aliases in stable name order. In
 both paths it applies the runtime `comp_hash` overlay and emits the legacy
-`supports_reasoning_summaries` alias for 0.144.x clients; alpha.23 ignores that
+`supports_reasoning_summaries` alias for 0.144.x clients; the formal Rust
+loader ignores that
 extra key, so the packaged asset remains byte-identical while the generated
 local catalog is intentionally not. Exact aliases found in
 `codex_model_presets.json` receive their declared Terra-derived preset,
@@ -309,7 +322,7 @@ including prompt identity substitution; other aliases use the generic Terra
 copy with only `slug`, `display_name`, and `description` replaced. The runtime
 shared preset fields start from the target Terra catalog, currently the 24
 client-consumed identity-independent fields reviewed from official
-`0.145.0-alpha.23`. The catalog targets current flagship third-party models and
+`0.145.0`. The catalog targets current flagship third-party models and
 keeps Responses Lite, Code Mode only, collaboration v2, and the Terra search
 metadata as fixed shared behavior; only Rosetta's verified protocol semantics
 or model-specific facts justify a different value.
@@ -480,7 +493,7 @@ The OpenAI Chat tool converter also adds model-visible usage hints for `request_
 
 ### Static tool catalog version binding
 
-`src/codex_rosetta/gateway/admin/tool_catalog.json` is a read-only conceptual snapshot of fixed Codex tools. Its metadata is bound to Codex CLI `0.145.0-alpha.23` and source commit `655224ffae098a85efeddf8289171ff3bd2624d1`; the source inventory retains 53 fixed conceptual items while live request captures validate conditional shapes. It intentionally excludes `tool_search`, `tool_read`, and `invoke_deferred_tool` as static items because these synthetic Functions are projected request-locally from live deferred guidance; it also excludes the obsolete hosted `image_generation` tool and runtime-dynamic MCP, plugin, app, and connector tools, including GitHub. Under Code Mode, Codex flattens namespaced tools nested in `exec` to `namespace__function` properties, so the catalog directly lists `clock__*`, `web__run`, `image_gen__imagegen`, `memories__*`, and `skills__*` without synthetic parent Namespace items. Only directly model-visible Responses Namespaces such as `collaboration` and legacy `multi_agent_v1` retain Namespace parents. The catalog does not describe the exact tools available to any individual request because features, environment availability, model metadata, Provider capabilities, and runtime extensions still control exposure.
+`src/codex_rosetta/gateway/admin/tool_catalog.json` is a read-only conceptual snapshot of fixed Codex tools. Its metadata is bound to Codex CLI `0.145.0` and source commit `25af12f7e61572b0bc18ddb1008be543b91519b0`; the source inventory retains 53 fixed conceptual items while live request captures validate conditional shapes. It intentionally excludes `tool_search`, `tool_read`, and `invoke_deferred_tool` as static items because these synthetic Functions are projected request-locally from live deferred guidance; it also excludes the obsolete hosted `image_generation` tool and runtime-dynamic MCP, plugin, app, and connector tools, including GitHub. Under Code Mode, Codex flattens namespaced tools nested in `exec` to `namespace__function` properties, so the catalog directly lists `clock__*`, `web__run`, `image_gen__imagegen`, `memories__*`, and `skills__*` without synthetic parent Namespace items. Only directly model-visible Responses Namespaces such as `collaboration` and legacy `multi_agent_v1` retain Namespace parents. The catalog does not describe the exact tools available to any individual request because features, environment availability, model metadata, Provider capabilities, and runtime extensions still control exposure.
 
 Every Codex upgrade must review the built-in tool specifications and bundled extension registrations, refresh the catalog contents and version metadata when needed, and run the catalog contract tests. Even when the tool set is unchanged, the source binding may be advanced only after that review is recorded in the upgrade report.
 

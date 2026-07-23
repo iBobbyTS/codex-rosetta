@@ -10,6 +10,7 @@ from codex_rosetta.converters.openai_responses.content_ops import (
 from typing import cast
 
 from codex_rosetta.types.ir import (
+    AudioPart,
     CitationPart,
     FilePart,
     ImagePart,
@@ -238,17 +239,47 @@ class TestOpenAIResponsesContentOps:
         assert result["type"] == "file"
         assert result["provider_ref"]["file_id"] == "file-xyz"
 
-    # ==================== Audio (not supported) ====================
+    # ==================== Audio ====================
 
-    def test_ir_audio_to_p_raises(self):
-        """Test ir_audio_to_p raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="does not support audio"):
-            OpenAIResponsesContentOps.ir_audio_to_p({"type": "audio"})
+    def test_ir_audio_to_p_with_data_url(self):
+        """Test IR audio data → Codex Responses input_audio."""
+        result = OpenAIResponsesContentOps.ir_audio_to_p(
+            AudioPart(
+                type="audio",
+                audio_data={"data": "abc123", "media_type": "audio/wav"},
+            )
+        )
+        assert result == {
+            "type": "input_audio",
+            "audio_url": "data:audio/wav;base64,abc123",
+        }
 
-    def test_p_audio_to_ir_raises(self):
-        """Test p_audio_to_ir raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="does not support audio"):
-            OpenAIResponsesContentOps.p_audio_to_ir({})
+    def test_p_audio_to_ir_with_data_url(self):
+        """Test Codex Responses input_audio → IR audio data."""
+        result = OpenAIResponsesContentOps.p_audio_to_ir(
+            {
+                "type": "input_audio",
+                "audio_url": "data:audio/mpeg;base64,xyz789",
+            }
+        )
+        assert result == AudioPart(
+            type="audio",
+            audio_data={"data": "xyz789", "media_type": "audio/mpeg"},
+        )
+
+    def test_audio_url_round_trip(self):
+        """Test an external audio URL round-trip."""
+        original = AudioPart(type="audio", url="https://example.com/audio.wav")
+        provider = OpenAIResponsesContentOps.ir_audio_to_p(original)
+        restored = OpenAIResponsesContentOps.p_audio_to_ir(provider)
+        assert restored == original
+
+    def test_ir_audio_to_p_rejects_incomplete_audio_data(self):
+        """Test incomplete IR audio data raises a stable conversion error."""
+        with pytest.raises(ValueError, match="data and media_type"):
+            OpenAIResponsesContentOps.ir_audio_to_p(
+                cast(AudioPart, {"type": "audio", "audio_data": {"data": "abc"}})
+            )
 
     # ==================== Reasoning ====================
 

@@ -62,6 +62,22 @@ class TestConvertContentBlocksToIR:
         assert result[0]["image_data"]["data"] == "BBBB"
         assert result[0]["image_data"]["media_type"] == "image/png"
 
+    def test_input_audio_block_openai(self):
+        """Test Codex input_audio → IR AudioPart."""
+        blocks = [
+            {
+                "type": "input_audio",
+                "audio_url": "data:audio/wav;base64,AAAA",
+            }
+        ]
+        result = convert_content_blocks_to_ir(blocks, OpenAIResponsesContentOps)
+        assert result == [
+            {
+                "type": "audio",
+                "audio_data": {"data": "AAAA", "media_type": "audio/wav"},
+            }
+        ]
+
     def test_string_block(self):
         """Test plain string block → IR TextPart."""
         blocks = ["just a string"]
@@ -146,6 +162,22 @@ class TestConvertIRContentBlocksToP:
         assert len(result) == 1
         assert result[0]["type"] == "input_image"
         assert "base64,EEEE" in result[0]["image_url"]
+
+    def test_audio_to_openai_responses(self):
+        """Test IR AudioPart → Codex input_audio."""
+        blocks = [
+            {
+                "type": "audio",
+                "audio_data": {"data": "EEEE", "media_type": "audio/wav"},
+            }
+        ]
+        result = convert_ir_content_blocks_to_p(blocks, OpenAIResponsesContentOps)
+        assert result == [
+            {
+                "type": "input_audio",
+                "audio_url": "data:audio/wav;base64,EEEE",
+            }
+        ]
 
     def test_string_block(self):
         """Test plain string → provider text block."""

@@ -217,29 +217,40 @@ class OpenAIResponsesContentOps(BaseContentOps):
 
         return FilePart(type="file", file_name=file_name)
 
-    # ==================== Audio (not supported) ====================
+    # ==================== Audio ====================
 
     @staticmethod
     def ir_audio_to_p(ir_audio: AudioPart, **kwargs: Any) -> Any:
-        """IR AudioPart → OpenAI Responses audio content.
-
-        Raises:
-            NotImplementedError: OpenAI Responses API does not support audio parts.
-        """
-        raise NotImplementedError(
-            "OpenAI Responses API does not support audio content parts."
-        )
+        """IR AudioPart → Codex Responses ``input_audio`` content."""
+        audio_data = ir_audio.get("audio_data")
+        if audio_data:
+            data = audio_data.get("data")
+            media_type = audio_data.get("media_type")
+            if not isinstance(data, str) or not isinstance(media_type, str):
+                raise ValueError("Audio data must have data and media_type")
+            audio_url = f"data:{media_type};base64,{data}"
+        else:
+            audio_url = ir_audio.get("url")
+        if not isinstance(audio_url, str) or not audio_url:
+            raise ValueError("Audio part must have audio_data or url")
+        return {"type": "input_audio", "audio_url": audio_url}
 
     @staticmethod
     def p_audio_to_ir(provider_audio: Any, **kwargs: Any) -> AudioPart:
-        """OpenAI Responses audio content → IR AudioPart.
-
-        Raises:
-            NotImplementedError: OpenAI Responses API does not support audio parts.
-        """
-        raise NotImplementedError(
-            "OpenAI Responses API does not support audio content parts."
-        )
+        """Codex Responses ``input_audio`` content → IR AudioPart."""
+        if not isinstance(provider_audio, dict):
+            raise ValueError("Audio content must be an object")
+        audio_url = provider_audio.get("audio_url") or provider_audio.get("audio")
+        if not isinstance(audio_url, str) or not audio_url:
+            raise ValueError("Audio content must have audio_url")
+        match = re.match(r"data:([^;]+);base64,(.*)", audio_url)
+        if match:
+            media_type, data = match.groups()
+            return AudioPart(
+                type="audio",
+                audio_data={"data": data, "media_type": media_type},
+            )
+        return AudioPart(type="audio", url=audio_url)
 
     # ==================== Reasoning ====================
 

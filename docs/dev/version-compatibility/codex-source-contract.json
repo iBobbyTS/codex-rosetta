@@ -1,5 +1,5 @@
 {
-  "codex_source_commit": "655224ffae098a85efeddf8289171ff3bd2624d1",
+  "codex_source_commit": "25af12f7e61572b0bc18ddb1008be543b91519b0",
   "contract": {
     "apply_patch": {
       "format_type": "grammar",
@@ -8,11 +8,19 @@
       "syntax": "lark"
     },
     "approval_messages_fields": {
+      "never": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
       "on_request": {
         "attributes": [],
         "type": "Option<String>"
       },
       "on_request_auto_review": {
+        "attributes": [],
+        "type": "Option<String>"
+      },
+      "unless_trusted": {
         "attributes": [],
         "type": "Option<String>"
       }
@@ -28,7 +36,7 @@
       }
     },
     "code_mode_exec_shape": {
-      "description_builder_sha256": "02f3f432c386eda25cf35f94d398c35aa2b9c486b6f697975ac4519a332907c2",
+      "description_builder_sha256": "af585759d5c4dcd97e824c885b42f5a23974e1ee130bb305ccb09b1c32a62f73",
       "nested_declaration_renderer_sha256": "80d9ffb8ca7469a0bcc74d5c9ce52cdb631edcdc271efdf9c0bf587febf563cd",
       "nested_sample_renderer_sha256": "c1b48d36df4e857b2dd640b1374e3aa38fc25c49803f9154adb0d18368663193",
       "nested_section_heading_renderer_sha256": "2bd54e63ee0a3deefcc64bcc1b39d0abed019778eadadb3e299babc4becf208d",
@@ -67,6 +75,7 @@
       "tools"
     ],
     "content_item_variants": [
+      "InputAudio",
       "InputImage",
       "InputText",
       "OutputText"
@@ -93,6 +102,7 @@
         "UnifiedExec"
       ],
       "InputModality": [
+        "Audio",
         "Image",
         "Text"
       ],

@@ -1,6 +1,65 @@
-# Codex 0.145.0-alpha.23 Upgrade Review
-Date: 2026-07-18
-Codex version: 0.145.0-alpha.23
+# Codex 0.145.0 Upgrade Review
+Date: 2026-07-23
+Codex version: 0.145.0
+
+## Formal-release status
+
+- Review mode: **full inventory, source-first**. The formal source is detached
+  at `rust-v0.145.0`, commit
+  `25af12f7e61572b0bc18ddb1008be543b91519b0`.
+- Installed CLI remains `codex-cli 0.144.6`; the source checkout and installed
+  CLI are separate compatibility identifiers. Rosetta remains `0.144.0.r0`.
+- The formal source adds `InputAudio`/`Audio` protocol variants, audio in the
+  Code Mode MCP forwarding helper, `never`/`unless_trusted` approval fields,
+  and a changed Code Mode description builder. The bundled catalog also changes
+  context limits, prompt/skills values, and carries the legacy
+  `supports_reasoning_summaries` key while Rust `ModelInfo` continues to read
+  `supports_reasoning_summary_parameter` with default `true`.
+- Rosetta now bridges audio data URLs and Chat `input_audio` through the IR,
+  preserves valid audio on Responses and Chat paths, and fail-open passes
+  malformed or unsupported audio blocks. The packaged model and tool catalogs
+  are bound to the formal source commit.
+- Targeted adaptation tests pass (`371 passed`); `make check-codex-compat` passes
+  against the refreshed formal baseline. The first formal live smoke
+  (`command_execution/01`, `codex-cli 0.145.0`, `gpt-5.6-terra`) passed through
+  the observed `晚照 (Plus)` Responses route. The remaining formal live-agent
+  matrix is pending, so 0.145.0 remains **not approved** and the package version
+  must not advance.
+
+## Formal CP Classification
+
+| ID and compatibility point | Classification | Source/automation evidence | Formal live result |
+| --- | --- | --- | --- |
+| `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint/header extraction and full suite pass | One-shot local-mode smoke only |
+| `CP-02 — Responses transparent handling` | High-confidence unchanged | Transport contract unchanged; full suite pass | Direct Responses smoke completed |
+| `CP-03 — Codex Search and Images endpoints` | Possibly unchanged | No extracted formal change | Pending search/Images cells |
+| `CP-04 — Request and window identity` | Possibly unchanged | Metadata keys unchanged | Pending multi-turn wire capture |
+| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge and tests added | Audio cell pending |
+| `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
+| `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
+| `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Code Mode cell pending |
+| `CP-09 — Code tool localization` | Changed | MCP audio projection updated | Code Mode cell pending |
+| `CP-10 — Tool history consistency` | Possibly unchanged | Item names unchanged; full suite pass | Pending replay cell |
+| `CP-11 — Deferred tool discovery` | Possibly unchanged | Tool mapping unchanged | Pending deferred suite |
+| `CP-12 — Codex tool usage tips` | Changed | Static guidance now includes `audio()` | Pending |
+| `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Pending local/orchestrator gates |
+| `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Formal dual-auth smoke passed |
+| `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
+| `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
+| `CP-17 — Stream lifecycle` | Possibly unchanged | Event-name extractor and suite pass | Smoke stream completed |
+| `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Pending tool/terminal cell |
+| `CP-19 — Reasoning` | Possibly unchanged | Reasoning fields unchanged | Pending summary/audio capture |
+| `CP-20 — Context compaction resilience` | Possibly unchanged | Remote V2 contract unchanged | Pending protocol/once cells |
+| `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal relevant diff | Pending relay matrix |
+| `CP-22 — Model-group tool profiles` | Changed | Audio now model-visible in Code Mode | Pending Chat/Responses live paths |
+| `CP-23 — Static tool catalog` | Changed | Formal tag/commit and audio guidance refreshed | Pending broader tool matrix |
+
+The remainder of this file is the retained alpha.23 live inventory and is
+historical evidence for the predecessor review. Its identities and results do
+not constitute formal 0.145.0 live evidence; formal reruns must be appended to
+`reports/live-evidence.md` under a separate 0.145.0 heading.
+
+# Codex 0.145.0-alpha.23 Upgrade Review (historical)
 
 ## Decision
 

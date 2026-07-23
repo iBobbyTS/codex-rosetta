@@ -15,8 +15,6 @@ from typing import Any, cast
 from ...types.ir import (
     ContentPart,
     ExtensionItem,
-    FileData,
-    FilePart,
     Message,
     RefusalPart,
     TextPart,
@@ -835,16 +833,6 @@ class OpenAIChatMessageOps(BaseMessageOps):
         elif part_type == "image_url":
             return [self.content_ops.p_image_to_ir(provider_part)]
         elif part_type == "input_audio":
-            # Audio input → FilePart as fallback
-            audio_data = provider_part.get("input_audio", {})
-            return [
-                FilePart(
-                    type="file",
-                    file_data=FileData(
-                        data=audio_data.get("data", ""),
-                        media_type=f"audio/{audio_data.get('format', 'wav')}",
-                    ),
-                )
-            ]
+            return [self.content_ops.p_audio_to_ir(provider_part)]
 
         return []

@@ -2,8 +2,8 @@
 
 This document describes the model catalog consumed by Codex and how
 Codex-Rosetta should use it when exposing third-party models. The current
-source-first review target is Codex `0.145.0-alpha.23`, source commit
-`655224ffae098a85efeddf8289171ff3bd2624d1`, especially:
+source-first review target is Codex `0.145.0`, source commit
+`25af12f7e61572b0bc18ddb1008be543b91519b0`, especially:
 
 - `codex-rs/models-manager/models.json`;
 - `codex-rs/protocol/src/openai_models.rs`;
@@ -11,8 +11,8 @@ source-first review target is Codex `0.145.0-alpha.23`, source commit
 - the consumers under `codex-rs/core`, `codex-rs/tools`, and `codex-rs/ext`.
 
 These are internal Codex contracts, not fields defined by the public OpenAI
-API. The alpha.23 source-first review found open adaptation gaps, so this page
-is not a compatibility approval. Whenever Codex is upgraded, use the centralized
+API. The formal-release source-first review still has open live-agent gates, so
+this page is not a compatibility approval. Whenever Codex is upgraded, use the centralized
 [`version-compatibility checklist`](../dev/version-compatibility/upgrade-checklist.md)
 rather than treating this field reference as an upgrade procedure.
 
@@ -32,7 +32,7 @@ configured models. If at least one model is configured, the generated catalog
 contains only the configured model names. A configured name matching one of the
 eight bundled slugs reuses that entry at the parsed JSON value level before
 Rosetta applies its runtime overlays. The packaged asset remains byte-identical
-to alpha.23; generated local-mode catalogs additionally carry the legacy
+to the formal `0.145.0` source; generated local-mode catalogs additionally carry the legacy
 `supports_reasoning_summaries` boolean for Codex 0.144.x clients and therefore
 are intentionally not byte-identical to the packaged asset.
 
@@ -122,7 +122,8 @@ supported shared key is also accepted on an individual `models[]` entry, and
 `template_slug` fills only fields Rosetta does not yet recognize. Known removed
 or ignored fields cannot be resurrected through the template fallback.
 
-The target alpha.23 bundled JSON uses 40 distinct keys. Four are ignored by
+The formal 0.145.0 bundled JSON uses 41 distinct keys, including the ignored
+legacy summary alias. Five are ignored by
 `ModelInfo`, leaving 36 consumed bundled fields. `ModelInfo` additionally
 accepts the omitted defaulted inputs `effective_context_window_percent=95` and
 `supports_reasoning_summary_parameter=true`; `used_fallback_model_metadata` is
@@ -158,8 +159,8 @@ disabled, so it is not a valid catalog input field.
 | `supported_in_api` | boolean, `true` | Propagates into the model preset's API-support marker. | Set only when the exposed alias can actually be routed by Rosetta. This flag does not validate the upstream API. |
 | `availability_nux` | object or null, `{"message":"New model available."}` | Optional new-user-experience message shown when a model becomes available. | Usually `null` for private aliases. Never use it as a capability switch. |
 | `upgrade` | object or null, `{"model":"replacement","migration_markdown":"Use replacement."}` | Supplies a recommended replacement and migration message for an older model. | Use only for a deliberate alias migration. Keep upstream routing changes in Rosetta configuration, not in this UI hint. |
-| `available_in_plans` | string array, `["plus","team"]` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
-| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
+| `available_in_plans` | string array, `["plus","team"]` | **Ignored in the reviewed 0.144.x baseline and formal 0.145.0:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not use it for Rosetta authorization or routing. Enforce access at the gateway/provider layer. |
+| `minimal_client_version` | string in bundled JSON, `"0.144.0"` | **Ignored in the reviewed 0.144.x baseline and formal 0.145.0:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not rely on it to reject old clients. Use an explicit gateway compatibility policy if required. |
 
 ## Reasoning, output, and service tiers
 
@@ -167,9 +168,9 @@ disabled, so it is not a valid catalog input field.
 | --- | --- | --- | --- |
 | `default_reasoning_level` | reasoning effort or null, `"medium"` | Default effort when the user has not selected one. | Choose an effort accepted by the upstream or mapped by Rosetta. It must also appear in `supported_reasoning_levels`. |
 | `supported_reasoning_levels` | object array, `[{"effort":"low","description":"Fast"},{"effort":"high","description":"Deep"}]` | Populates selectable reasoning efforts and their UI descriptions. Current enums include `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`, and `ultra`, subject to version changes. | Advertise only efforts that the upstream accepts or that Rosetta intentionally maps. Do not copy `ultra` merely to obtain delegation behavior. |
-| `supports_reasoning_summary_parameter` | boolean, default `true` | Alpha.23 controls whether Codex may send the Responses `reasoning.summary` parameter. The field is serde-defaulted to true and the old `supports_reasoning_summaries` key is no longer in the target catalog. Rosetta may emit that old boolean only as a runtime compatibility alias for 0.144.x clients; alpha.23 ignores the extra key. | Set false only when the target client must omit the summary parameter and the generated catalog is known to be consumed by the matching Codex source. Treat the legacy key as a compatibility shim, never as the alpha.23 capability source of truth. |
+| `supports_reasoning_summary_parameter` | boolean, default `true` | Codex 0.145.0 consumes this Rust field, which defaults to true. Its bundled JSON also contains the legacy `supports_reasoning_summaries: true` key; that key is not a `ModelInfo` field and is ignored by serde. | Set false only when the target client must omit the summary parameter and the generated catalog is known to be consumed by the matching Codex source. Rosetta retains the legacy key for 0.144.x clients, but the Rust field remains the formal capability source of truth. |
 | `default_reasoning_summary` | `"auto"`, `"concise"`, `"detailed"`, or `"none"` | Default summary mode when the user has not configured one. | Prefer `none` for third-party models until summary delivery is verified end to end. |
-| `reasoning_summary_format` | string, `"experimental"` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
+| `reasoning_summary_format` | string, `"experimental"` | **Ignored in the reviewed 0.144.x baseline and formal 0.145.0:** not present in `ModelInfo`; omitted from Rosetta third-party presets. | Do not branch Rosetta conversion on this key. Inspect actual request and stream fields instead. |
 | `support_verbosity` | boolean, `true` | When true, Codex sends the configured or default Responses `text.verbosity`; when false it omits it. | Enable only when the upstream accepts it or Rosetta strips/maps it. |
 | `default_verbosity` | `"low"`, `"medium"`, `"high"`, or null | Default Responses verbosity when supported and not overridden by the user. | Use a value actually supported by the upstream. `null` is safest when `support_verbosity` is false. |
 | `service_tiers` | object array, `[{"id":"priority","name":"Fast","description":"Higher speed"}]` | Lists allowed service tiers for UI and subagent/model selection; requested tiers are validated against this list. | Keep empty unless the Rosetta provider maps the tier to a real upstream service class. |
@@ -203,7 +204,7 @@ disabled, so it is not a valid catalog input field.
 | `use_responses_lite` | boolean, `true` | Enables Codex's Responses Lite dialect: tools/instructions move into input items, internal headers are used, hosted tools are disabled, and standalone namespace tools are expected. | Keep true. Rosetta owns `input[].type="additional_tools"`, developer instructions, custom `exec`, standalone `/v1/alpha/search`, compact/header behavior, and stream conversion for Chat upstreams. |
 | `multi_agent_version` | `"disabled"`, `"v1"`, `"v2"`, or null | Selects legacy multi-agent, collaboration v2, disabled, or feature/config fallback behavior. It affects tool definitions and subagent lifecycle. | Keep `v2` for the Terra-compatible latest-model profile. Do not add weak-model downgrade presets to this catalog. |
 | `auto_review_model_override` | string or null, `"review-model"` | Redirects command-execution approval review from the selected model to another model. | Set to a Rosetta-exposed alias that is actually routable and suited to approval review. Keep null for ordinary models. |
-| `prefer_websockets` | boolean, `true` | **Ignored in the reviewed 0.144.x baseline and alpha.23:** not present in `ModelInfo`; omitted from Rosetta third-party presets, and WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
+| `prefer_websockets` | boolean, `true` | **Ignored in the reviewed 0.144.x baseline and formal 0.145.0:** not present in `ModelInfo`; omitted from Rosetta third-party presets, and WebSocket selection is controlled elsewhere. | Do not claim WebSocket support or change Rosetta transport from this field. Verify the actual client request path. |
 
 ## Instructions and skills
 
@@ -350,8 +351,8 @@ identity, limits, modalities, reasoning levels, and hash remain model-specific:
 }
 ```
 
-The four currently ignored bundled keys are omitted deliberately. The
-alpha.23 reasoning field rename and permission-message additions must be
+The four currently ignored bundled keys are omitted deliberately. The formal
+0.145.0 audio input modality, legacy summary key, and permission-message additions must be
 reviewed against the exact target source before this example is used for
 compatibility claims.
 

@@ -598,7 +598,7 @@ class TestOpenAIChatMessageOps:
         assert "legacy_function_old_func" in result[0]["content"][0]["tool_call_id"]
 
     def test_p_audio_input_to_ir(self):
-        """Test OpenAI input_audio → IR FilePart."""
+        """Test OpenAI input_audio → IR AudioPart."""
         result = cast(
             list[Any],
             self.message_ops.p_messages_to_ir(
@@ -615,8 +615,8 @@ class TestOpenAIChatMessageOps:
                 ]
             ),
         )
-        assert result[0]["content"][0]["type"] == "file"
-        assert result[0]["content"][0]["file_data"]["media_type"] == "audio/mp3"
+        assert result[0]["content"][0]["type"] == "audio"
+        assert result[0]["content"][0]["audio_data"]["media_type"] == "audio/mpeg"
 
     # ==================== Round-trip ====================
 

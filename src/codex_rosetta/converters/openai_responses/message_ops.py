@@ -571,6 +571,8 @@ class OpenAIResponsesMessageOps(BaseMessageOps):
             return [self.content_ops.p_text_to_ir(provider_part)]
         elif part_type == "input_image":
             return [self.content_ops.p_image_to_ir(provider_part)]
+        elif part_type in ("input_audio", "audio"):
+            return [self.content_ops.p_audio_to_ir(provider_part)]
         elif part_type == "input_file":
             return [self.content_ops.p_file_to_ir(provider_part)]
 

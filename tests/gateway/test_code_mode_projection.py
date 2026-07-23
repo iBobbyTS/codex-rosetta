@@ -1638,6 +1638,7 @@ def test_node_repl_projection_generates_mcp_content_forwarder():
     )
     assert 'if (item?.type === "text") text(item.text);' in script
     assert 'else if (item?.type === "image") image(item);' in script
+    assert 'else if (item?.type === "audio") audio(item);' in script
     assert "if (result?.isError) text({ isError: true });" in script
     assert "return result" not in script
 
@@ -1655,6 +1656,7 @@ def test_unknown_mcp_projection_is_recovered_from_paired_search_and_read():
         'const result = await tools["mcp__archive__lookup"]({"record_id":"ARCHIVE-7"});'
     )
     assert 'else if (item?.type === "image") image(item);' in script
+    assert 'else if (item?.type === "audio") audio(item);' in script
 
 
 def test_dispatcher_call_translates_to_allowlisted_custom_exec():
