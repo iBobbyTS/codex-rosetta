@@ -1,7 +1,5 @@
 import { api } from './api';
 
-export type ModelTestKind = 'text' | 'stream' | 'tools' | 'vision' | 'reasoning';
-
 export type TestTaskResult = {
   status: 'pending' | 'done' | 'error' | 'cancelled';
   status_code?: number;
@@ -9,29 +7,12 @@ export type TestTaskResult = {
   error?: string;
 };
 
-export function buildModelTestPayload(model: string, kind: ModelTestKind): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
+export function buildModelTestPayload(model: string): Record<string, unknown> {
+  return {
     model,
     max_output_tokens: 256,
     input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with a short gateway test response.' }] }],
   };
-  if (kind === 'stream') payload.stream = true;
-  if (kind === 'reasoning') payload.reasoning = { effort: 'low' };
-  if (kind === 'tools') {
-    payload.tools = [{
-      type: 'function', name: 'get_weather', description: 'Get weather for a city',
-      parameters: { type: 'object', properties: { location: { type: 'string' } }, required: ['location'] },
-    }];
-  }
-  if (kind === 'vision') {
-    payload.input = [{
-      type: 'message', role: 'user', content: [
-        { type: 'input_text', text: 'Describe this test image briefly.' },
-        { type: 'input_image', image_url: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==' },
-      ],
-    }];
-  }
-  return payload;
 }
 
 export function safeUsageRows(value: unknown): Array<[string, number]> {

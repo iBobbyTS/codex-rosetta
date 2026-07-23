@@ -39,3 +39,19 @@ test('renders the shared Admin shell without viewport overflow', async ({ page }
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test('keeps model mapping actions inside the model-group dialog', async ({ page }) => {
+  await page.setViewportSize({ width: 658, height: 850 });
+  await page.goto('/admin/admin.html');
+  await page.getByRole('link', { name: 'Models' }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Edit Model Group' });
+  const row = dialog.locator('.model-group-row');
+  const remove = dialog.getByRole('button', { name: 'Remove' });
+  await expect(remove).toBeVisible();
+  const [rowBox, removeBox] = await Promise.all([row.boundingBox(), remove.boundingBox()]);
+  expect(rowBox).not.toBeNull();
+  expect(removeBox).not.toBeNull();
+  expect(removeBox!.x + removeBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
+});
