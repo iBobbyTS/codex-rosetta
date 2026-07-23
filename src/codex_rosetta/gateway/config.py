@@ -69,9 +69,9 @@ SELF_HOSTED_WEB_SEARCH_PROVIDERS = frozenset(
 WEB_SEARCH_PROVIDERS = frozenset({"tavily", *SELF_HOSTED_WEB_SEARCH_PROVIDERS})
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
 
-# Provider vendor/variant is intentionally not persisted. These exact URL
-# matches are the runtime source of truth for selecting a bundled shim. Any
-# other URL remains an allowed custom endpoint for the selected protocol.
+# The Admin supplier is persisted as ``provider`` while its variant remains a
+# UI-derived value. Runtime shim selection independently uses these exact
+# protocol URL matches. Any other URL remains an allowed custom endpoint.
 _PRESET_SHIMS_BY_URL: dict[tuple[str, str], str] = {
     ("chat", "https://api.deepseek.com"): "deepseek",
     ("chat", "https://open.bigmodel.cn/api/paas/v4"): "zhipu",

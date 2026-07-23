@@ -549,6 +549,10 @@ def _build_provider_entry(
 
     entry: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
 
+    provider = body.get("provider")
+    if provider:
+        entry["provider"] = provider
+
     api_type = body.get("api_type")
     if api_type:
         entry["api_type"] = api_type

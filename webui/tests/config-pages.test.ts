@@ -18,9 +18,9 @@ beforeEach(() => {
 });
 
 describe('ProvidersPage', () => {
-  it('derives a preset from the authoritative URL and never persists the preset label', async () => {
+  it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
-      providers: { official: { base_url: 'https://api.openai.com/v1', api_type: 'responses', proxy: 'http://proxy.example:8080' } },
+      providers: { official: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_type: 'responses', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
       credential_visible: true,
@@ -39,6 +39,7 @@ describe('ProvidersPage', () => {
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
     const body = apiMock.put.mock.calls[0][1];
     expect(body).toEqual({
+      provider: 'openai',
       base_url: 'https://api.openai.com/v1',
       proxy: 'http://proxy.example:8080',
       allow_redirects: false,
@@ -46,11 +47,31 @@ describe('ProvidersPage', () => {
       api_key: 'provider-secret',
     });
     expect(body).not.toHaveProperty('preset');
-    expect(body).not.toHaveProperty('provider');
     expect(body).not.toHaveProperty('base');
     expect(body).not.toHaveProperty('variant');
     const bodyLimit = screen.getByLabelText('Maximum Request Body') as HTMLSelectElement;
     expect(Array.from(bodyLimit.options, (option) => option.value)).toEqual(['64', '128', '256', '512', '1024', 'unlimited']);
+  });
+
+  it('derives a child option from persisted provider and URL without using api_type', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        kimi: { provider: 'moonshot', base_url: 'https://api.moonshot.ai/v1', api_type: 'responses' },
+        mismatch: { provider: 'deepseek', base_url: 'https://api.openai.com/v1', api_type: 'chat' },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    const edits = await screen.findAllByRole('button', { name: 'Edit' });
+    await fireEvent.click(edits[0]);
+    expect(screen.getByLabelText('Provider')).toHaveValue('moonshot');
+    expect(screen.getByLabelText('Provider variant')).toHaveValue('international');
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(edits[1]);
+    expect(screen.getByLabelText('Provider')).toHaveValue('deepseek');
+    expect(screen.getByLabelText('Provider variant')).toHaveValue('custom');
   });
 
   it('renders only backend-supported API types with user-facing protocol names', async () => {

@@ -19,7 +19,7 @@ describe('legacy Admin visual structure', () => {
   it('keeps provider editing in the legacy modal and requires an exact delete name', async () => {
     apiMock.get.mockResolvedValue({
       server: {}, known_api_types: ['responses'], credential_visible: false,
-      providers: { Primary: { base_url: 'https://api.openai.com/v1', api_type: 'responses' } },
+      providers: { Primary: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_type: 'responses' } },
       models: { demo: { provider: 'Primary' } }, registered_shims: [],
     });
     render(ProvidersPage);

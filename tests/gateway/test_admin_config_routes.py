@@ -990,8 +990,8 @@ def test_get_config_never_returns_admin_password(
     assert runtime_password not in response.body.decode("utf-8")
 
 
-def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_path):
-    """Admin provider options are derived from URL instead of persisted."""
+def test_put_provider_persists_provider_url_and_api_type(tmp_path):
+    """Admin persists the supplier while leaving its variant derived."""
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
 
@@ -1018,6 +1018,7 @@ def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_p
     assert saved["providers"]["DeepSeek"] == {
         "api_key": "sk-new",
         "base_url": "https://api.deepseek.com",
+        "provider": "deepseek",
         "api_type": "chat",
         "allow_redirects": True,
     }
@@ -1025,6 +1026,31 @@ def test_put_provider_persists_url_and_api_type_without_ui_provider_option(tmp_p
     assert app.gateway_config.provider_types["DeepSeek"] == "openai_chat"
     assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
     assert app.gateway_config.providers["DeepSeek"].allow_redirects is True
+
+
+def test_put_provider_rejects_missing_persisted_provider(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(_config_data())
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(_config_data())
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial_config
+        ),
+        path_params={"name": "MissingSupplier"},
+        json=lambda: {
+            "api_type": "chat",
+            "base_url": "https://api.example.test",
+            "api_key": "sk-new",
+        },
+    )
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert b"'api_key', 'base_url', and 'provider' are required" in response.body
+    assert config_path.read_text(encoding="utf-8") == original
+    assert request.app.gateway_config is initial_config
 
 
 def test_put_provider_persists_direct_responses_protocol(tmp_path):
@@ -1091,8 +1117,8 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["DeepSeek"]["api_key"] == "sk-1234567890"
+    assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
     assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
-    assert "provider" not in saved["providers"]["DeepSeek"]
     assert "type" not in saved["providers"]["DeepSeek"]
 
 

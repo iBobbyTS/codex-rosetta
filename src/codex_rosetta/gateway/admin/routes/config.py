@@ -477,6 +477,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     api_key = body.get("api_key", "")
     base_url = body.get("base_url", "")
+    provider = body.get("provider")
 
     try:
         data = load_config_raw(config_path)
@@ -490,10 +491,17 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     if not api_key and resolve_name in existing_providers:
         api_key = existing_providers[resolve_name].get("api_key", "")
 
-    if not api_key or not base_url:
+    if (
+        not api_key
+        or not base_url
+        or not isinstance(provider, str)
+        or not provider.strip()
+    ):
         return JSONResponse(
-            {"error": "Both 'api_key' and 'base_url' are required"}, status_code=400
+            {"error": "'api_key', 'base_url', and 'provider' are required"},
+            status_code=400,
         )
+    body["provider"] = provider.strip()
 
     provider_entry = _build_provider_entry(
         body, api_key, base_url, existing_providers, resolve_name

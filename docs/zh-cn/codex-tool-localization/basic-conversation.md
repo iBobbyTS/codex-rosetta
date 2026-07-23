@@ -9,7 +9,7 @@ Codex 通过 OpenAI Responses API 接口与模型通信。许多第三方供应�
 
 ## 单一 Responses 协议与供应商感知默认值
 
-Provider 配置保存 `api_type: "responses"`。供应商选择只决定模型组默认 Profile，协议处理始终保持直接传输：
+Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应商子选项不入库；管理界面只根据已保存的供应商和 Base URL 推导子选项。供应商选择只决定模型组默认 Profile，协议处理始终保持直接传输：
 
 - OpenAI 官方选择 **透传（适用于OpenAI官方API）**，请求、工具声明、响应 JSON 和 SSE 字节都走直接路径。
 - OpenAI 自定义以及“自定义 + 自定义”选择 **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**。原始工具形态全部保留，只有 `web.run` 设为 Modified 并由 Rosetta 处理。
