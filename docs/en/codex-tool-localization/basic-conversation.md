@@ -14,7 +14,7 @@ Provider configuration stores the selected `provider` together with `api_type: "
 - OpenAI Official selects **透传（适用于OpenAI官方API）** and keeps the request, tool declarations, response JSON, and SSE bytes on the direct path.
 - OpenAI Custom and Custom + Custom select **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**. This keeps every original tool shape except `web.run`, which is Modified and handled by Rosetta.
 - A listed third-party provider with Responses selects **工具映射（适用于第三方模型提供的Responses接口）** while keeping direct Responses transport.
-- Any Chat protocol selects **Chat Default（适用于第三方仅提供chat api的模型）**. Other protocols currently use the same fallback through a separate branch reserved for future protocol defaults.
+- Any Chat protocol selects **Chat Default（适用于第三方仅提供chat api的模型）**. Anthropic and Google protocols have no bundled default, but may use an explicitly compatible user Profile.
 
 The only supported Responses protocol value is `responses`; the former `responses_passthrough` and `responses_rosetta` values are no longer accepted and must be replaced before loading the configuration.
 

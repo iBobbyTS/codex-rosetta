@@ -90,7 +90,11 @@ def _make_config(
                 "token": image_token,
             }
         tool_profile = "test-profile"
-        tool_profiles[tool_profile] = {"tools": tools, "inputs": inputs}
+        tool_profiles[tool_profile] = {
+            "api_types": [api_type],
+            "tools": tools,
+            "inputs": inputs,
+        }
     return GatewayConfig(
         {
             "providers": {
@@ -236,7 +240,10 @@ def test_non_passthrough_modes_return_not_implemented(
     assert response.status_code == 501
     payload = json.loads(response.body)
     assert payload["error"]["type"] == "invalid_request_error"
-    if upstream_path in {"images/generations", "images/edits"}:
+    if upstream_path in {
+        "images/generations",
+        "images/edits",
+    }:
         assert "image_gen.imagegen is disabled" in payload["error"]["message"]
     else:
         assert (

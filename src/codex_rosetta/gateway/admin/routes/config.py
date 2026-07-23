@@ -31,7 +31,6 @@ from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
-    normalize_tool_profiles,
     tool_profile_contract,
     validate_tool_profile_reference,
 )
@@ -265,13 +264,24 @@ def _normalize_model_groups_for_admin(
         provider_error = provider_errors.get(provider)
         if provider_error:
             normalized_group["validation_error"] = provider_error
+        provider_config = raw_providers.get(provider)
+        try:
+            api_type = (
+                resolve_provider_api_type(provider, provider_config)
+                if isinstance(provider, str) and isinstance(provider_config, dict)
+                else None
+            )
+        except ValueError:
+            api_type = None
         if group_type == "llm" and provider_supports_tool_profiles(
-            raw_providers.get(provider)
+            provider_config, api_type=api_type
         ):
-            normalized_group["tool_profile"] = group_value.get(
+            tool_profile = group_value.get(
                 "tool_profile",
                 default_tool_profile_for_provider(raw_providers.get(provider)),
             )
+            if tool_profile is not None:
+                normalized_group["tool_profile"] = tool_profile
         groups[group_name] = normalized_group
     return groups
 
@@ -368,6 +378,41 @@ def _model_group_duplicate_response(
     return None
 
 
+def _resolve_model_group_tool_profile(
+    data: dict[str, Any],
+    provider: str,
+    provider_config: Any,
+    requested_profile: Any,
+    *,
+    group_name: str,
+) -> tuple[str | None, Response | None]:
+    """Validate and resolve the optional protocol-scoped Tool Profile."""
+    if not isinstance(provider_config, dict):
+        return None, JSONResponse(
+            {"error": f"Provider '{provider}' config must be an object"},
+            status_code=400,
+        )
+    try:
+        provider_api_type = resolve_provider_api_type(provider, provider_config)
+    except ValueError as exc:
+        return None, JSONResponse({"error": str(exc)}, status_code=400)
+    if not provider_supports_tool_profiles(provider_config, api_type=provider_api_type):
+        return None, None
+    if requested_profile is None:
+        return None, None
+    try:
+        tool_profiles = normalize_tool_profile_documents(data.get("tool_profiles"))
+        tool_profile = validate_tool_profile_reference(
+            requested_profile,
+            tool_profiles,
+            field=f"model group '{group_name}' tool_profile",
+            api_type=provider_api_type,
+        )
+    except ValueError as exc:
+        return None, JSONResponse({"error": str(exc)}, status_code=400)
+    return tool_profile, None
+
+
 async def get_config(request: Any) -> Response:
     """Return the current (raw) gateway configuration."""
     config_path = _get_config_path(request)
@@ -439,7 +484,11 @@ async def get_config(request: Any) -> Response:
             "tool_profiles": tool_profiles,
             "tool_profile_input_overrides": tool_profile_input_overrides,
             "tool_profile_presets": [
-                {"id": profile["id"], "name": profile["name"]}
+                {
+                    "id": profile["id"],
+                    "name": profile["name"],
+                    "api_types": list(profile["api_types"]),
+                }
                 for profile in tool_profile_contract()["profiles"]
             ],
             "model_presets": model_presets_for_admin(),
@@ -696,19 +745,15 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return duplicate_error
 
     provider_config = (data.get("providers", {}) or {}).get(provider)
-    tool_profile: str | None = None
-    if provider_supports_tool_profiles(provider_config):
-        tool_profiles = normalize_tool_profiles(data.get("tool_profiles"))
-        try:
-            tool_profile = validate_tool_profile_reference(
-                body.get(
-                    "tool_profile", default_tool_profile_for_provider(provider_config)
-                ),
-                tool_profiles,
-                field=f"model group '{name}' tool_profile",
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+    tool_profile, profile_error = _resolve_model_group_tool_profile(
+        data,
+        provider,
+        provider_config,
+        body.get("tool_profile", default_tool_profile_for_provider(provider_config)),
+        group_name=name,
+    )
+    if profile_error is not None:
+        return profile_error
 
     model_groups[name] = {
         "provider": provider,

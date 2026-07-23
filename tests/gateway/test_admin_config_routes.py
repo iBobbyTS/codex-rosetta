@@ -1232,18 +1232,22 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         {
             "id": "builtin",
             "name": "Chat Default（适用于第三方仅提供chat api的模型）",
+            "api_types": ["chat"],
         },
         {
             "id": "openai-responses-tool-mapping-only",
             "name": "透传（适用于OpenAI官方API）",
+            "api_types": ["responses"],
         },
         {
             "id": "web-run-injection",
             "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
+            "api_types": ["responses"],
         },
         {
             "id": "responses-tool-mapping",
             "name": "工具映射（适用于第三方模型提供的Responses接口）",
+            "api_types": ["responses"],
         },
     ]
     assert any(
@@ -1382,6 +1386,65 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.upstream_model == "gpt-upstream"
     assert route.input_modalities is None
     assert route.tool_profile_name == "builtin"
+
+
+def test_put_model_group_rejects_tool_profile_for_other_protocol(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["api_type"] = "responses"
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(config)
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "llm",
+        "tool_profile": "builtin",
+        "models": {"gpt-grouped": {}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert "not provider api_type 'responses'" in json.loads(response.body)["error"]
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("api_type", ["anthropic", "google"])
+def test_put_model_group_persists_no_implicit_profile_for_anthropic_or_google(
+    tmp_path, api_type
+):
+    config = _config_data()
+    config["providers"]["openai"]["api_type"] = api_type
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "llm",
+        "models": {"gpt-grouped": {}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "tool_profile" not in saved["model_groups"]["OpenAI"]
+    route, _provider = app.gateway_config.resolve("openai_responses", "gpt-grouped")
+    assert route.tool_profile_name is None
 
 
 def test_put_model_group_persists_model_info_without_runtime_modality_override(

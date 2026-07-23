@@ -22,6 +22,7 @@ from .providers import build_provider_info
 from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
+    TOOL_PROFILE_API_TYPES,
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
@@ -402,17 +403,22 @@ def api_type_to_provider_type(api_type: Any) -> str | None:
     return API_TYPE_TO_PROVIDER_TYPE.get(api_type)
 
 
-def provider_supports_tool_profiles(cfg: Any) -> bool:
+def provider_supports_tool_profiles(cfg: Any, *, api_type: str | None = None) -> bool:
     """Return whether a provider is allowed to use model-group Tool Profiles."""
-    return isinstance(cfg, dict)
+    if not isinstance(cfg, dict):
+        return False
+    effective_api_type = api_type if api_type is not None else cfg.get("api_type")
+    return effective_api_type in TOOL_PROFILE_API_TYPES
 
 
-def default_tool_profile_for_provider(cfg: Any) -> str:
+def default_tool_profile_for_provider(cfg: Any) -> str | None:
     """Return the bundled default Profile for one provider selection."""
     if not isinstance(cfg, dict):
-        return CHAT_DEFAULT_TOOL_PROFILE
+        return None
 
     api_type = cfg.get("api_type")
+    if api_type not in API_TYPE_TO_PROVIDER_TYPE:
+        api_type = _infer_provider_api_type(cfg.get("base_url"))
     if api_type == "responses":
         shim_name = _provider_shim_for_url(api_type, cfg.get("base_url"))
         if shim_name == "openai_responses":
@@ -423,15 +429,13 @@ def default_tool_profile_for_provider(cfg: Any) -> str:
     if api_type == "chat":
         return CHAT_DEFAULT_TOOL_PROFILE
 
-    # Keep this fallback separate from the Chat branch so future protocols can
-    # receive their own default without changing established Chat behavior.
-    return CHAT_DEFAULT_TOOL_PROFILE
+    return None
 
 
 def resolve_model_tool_profile_names(
     raw_model_groups: Any,
     raw_providers: dict[str, dict[str, str]],
-    tool_profiles: dict[str, dict[str, str]],
+    tool_profiles: dict[str, dict[str, Any]],
 ) -> dict[str, str]:
     """Resolve Profile names for every LLM model group."""
     result: dict[str, str] = {}
@@ -440,19 +444,24 @@ def resolve_model_tool_profile_names(
     for group_name, group in raw_model_groups.items():
         if not isinstance(group, dict) or group.get("type") != "llm":
             continue
-        if not provider_supports_tool_profiles(
-            raw_providers.get(group.get("provider"))
-        ):
+        provider_name = group.get("provider")
+        provider_config = raw_providers.get(provider_name)
+        if not isinstance(provider_name, str) or not isinstance(provider_config, dict):
+            continue
+        api_type = resolve_provider_api_type(provider_name, provider_config)
+        if not provider_supports_tool_profiles(provider_config, api_type=api_type):
+            continue
+        profile_value = group.get(
+            "tool_profile",
+            default_tool_profile_for_provider(provider_config),
+        )
+        if profile_value is None:
             continue
         profile_name = validate_tool_profile_reference(
-            group.get(
-                "tool_profile",
-                default_tool_profile_for_provider(
-                    raw_providers.get(group.get("provider"))
-                ),
-            ),
+            profile_value,
             tool_profiles,
             field=f"config: model_groups.{group_name}.tool_profile",
+            api_type=api_type,
         )
         group_models = group.get("models", {})
         if isinstance(group_models, dict):
@@ -747,7 +756,9 @@ class GatewayConfig:
             for name, profile in self.tool_profile_documents.items()
         }
         self.model_tool_profile_names = resolve_model_tool_profile_names(
-            raw.get("model_groups", {}), self._raw_providers, self.tool_profiles
+            raw.get("model_groups", {}),
+            self._raw_providers,
+            self.tool_profile_documents,
         )
 
         _server = raw.get("server", {})

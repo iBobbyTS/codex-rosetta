@@ -14,7 +14,7 @@ Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应�
 - OpenAI 官方选择 **透传（适用于OpenAI官方API）**，请求、工具声明、响应 JSON 和 SSE 字节都走直接路径。
 - OpenAI 自定义以及“自定义 + 自定义”选择 **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**。原始工具形态全部保留，只有 `web.run` 设为 Modified 并由 Rosetta 处理。
 - 列表内第三方供应商选择 Responses 时，自动使用 **工具映射（适用于第三方模型提供的Responses接口）**，同时保持 Responses 直接传输。
-- 任何 Chat 协议选择 **Chat Default（适用于第三方仅提供chat api的模型）**。其他协议当前也回退到该 Profile，但代码保留独立分支，方便以后扩展。
+- 任何 Chat 协议选择 **Chat Default（适用于第三方仅提供chat api的模型）**。Anthropic 和 Google 协议没有内置默认 Profile，但可以使用显式兼容的用户 Profile。
 
 现在只支持 `responses` 这一种 Responses 协议值；旧的 `responses_passthrough` 与 `responses_rosetta` 不再接受，加载配置前必须替换为 `responses`。
 

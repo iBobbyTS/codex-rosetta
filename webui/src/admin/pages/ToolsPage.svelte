@@ -39,9 +39,11 @@
       namespaces?: NamespacePlacement[];
     };
   };
+  type ProfileApiType = 'chat' | 'responses' | 'anthropic' | 'google';
   type Profile = {
     id: string;
     name: string;
+    api_types: ProfileApiType[];
     tools: Record<string, string>;
     inputs: Record<string, Record<string, string>>;
     readonly: boolean;
@@ -61,10 +63,17 @@
     { id: 'namespace', labelKey: 'tools.filter.namespace', fallback: 'Namespace' },
     { id: 'rosetta_injection', labelKey: 'tools.filter.rosetta_injection', fallback: 'Rosetta Injection' },
   ];
+  const profileApiTypeOptions: Array<{ value: ProfileApiType; label: string }> = [
+    { value: 'chat', label: 'OpenAI Chat Completions' },
+    { value: 'responses', label: 'OpenAI Responses' },
+    { value: 'anthropic', label: 'Anthropic Messages' },
+    { value: 'google', label: 'Google GenAI (Gemini)' },
+  ];
 
   let catalog = $state<Catalog>({});
   let profilesData = $state<ProfilesResponse>({});
   let selectedId = $state('');
+  let profileApiTypes = $state<ProfileApiType[]>(['chat']);
   let toolDraft = $state<Record<string, string>>({});
   let inputDraft = $state<Record<string, Record<string, string>>>({});
   let cloneName = $state('');
@@ -121,6 +130,7 @@
     const profile = (profilesData.profiles ?? []).find((item) => item.id === id);
     if (!profile) return;
     selectedId = id;
+    profileApiTypes = [...profile.api_types];
     toolDraft = { ...profile.tools };
     inputDraft = JSON.parse(JSON.stringify(profile.inputs ?? {})) as Record<string, Record<string, string>>;
     resetExpandedNamespaces();
@@ -135,6 +145,14 @@
       ? catalog.placements?.groups?.[0]?.item_ids[0]
       : group?.item_ids[0];
     detailId = firstId ?? '';
+  }
+
+  function toggleProfileApiType(value: ProfileApiType, checked: boolean): void {
+    const next = new Set(profileApiTypes);
+    checked ? next.add(value) : next.delete(value);
+    if (!next.size) return;
+    profileApiTypes = profileApiTypeOptions.map((option) => option.value).filter((item) => next.has(item));
+    dirty = true;
   }
 
   async function load(signal?: AbortSignal): Promise<void> {
@@ -168,6 +186,7 @@
     notice = '';
     try {
       await api.put(`/admin/api/tools/profiles/${encodeURIComponent(id.trim())}`, {
+        api_types: profileApiTypes,
         tools: toolDraft,
         inputs: inputDraft,
       });
@@ -373,6 +392,23 @@
       <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>Reset</button>
       <button class="btn btn-sm btn-danger" disabled={busy || selected.readonly} onclick={() => void remove()}>Delete Profile</button>
       {#if dirty}<span class="tool-profile-dirty">Unsaved changes</span>{/if}
+    </div>
+    <div class="tool-profile-protocol-row">
+      <span class="tool-profile-protocol-label">{t('tools.apiType', 'Applicable Protocol')}</span>
+      <div class="tool-profile-checkbox-group" role="group" aria-label={t('tools.apiType', 'Applicable Protocol')}>
+        {#each profileApiTypeOptions as option}
+          {@const checked = profileApiTypes.includes(option.value)}
+          <label class="tool-profile-checkbox">
+            <input
+              type="checkbox"
+              checked={checked}
+              disabled={selected.readonly || (checked && profileApiTypes.length === 1)}
+              onchange={(event) => toggleProfileApiType(option.value, event.currentTarget.checked)}
+            />
+            {option.label}
+          </label>
+        {/each}
+      </div>
     </div>
 
     <div class="tools-toolbar" role="toolbar" aria-label="Filter tool types">

@@ -9,6 +9,7 @@ from typing import Any, cast
 from .admin.tool_catalog import load_tool_catalog
 
 BUILTIN_TOOL_PROFILE = "builtin"
+TOOL_PROFILE_API_TYPES = ("chat", "responses", "anthropic", "google")
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
 VIEW_IMAGE_PROFILE_ITEM_ID = "function.view_image"
@@ -730,6 +731,9 @@ def _build_preset_profile(
     builtin_inputs: dict[str, dict[str, str]],
 ) -> dict[str, Any]:
     """Build and validate one immutable preset Profile."""
+    api_types = normalize_tool_profile_api_types(
+        preset.get("api_types"), field=f"preset_profiles.{preset.get('id')}"
+    )
     defaults = preset.get("defaults", {})
     overrides = preset.get("tools", {})
     base = preset.get("base")
@@ -765,6 +769,7 @@ def _build_preset_profile(
     return {
         "id": preset["id"],
         "name": preset["name"],
+        "api_types": api_types,
         "tools": _disable_namespace_children(tools, namespace_children),
         "inputs": inputs,
     }
@@ -780,6 +785,9 @@ def tool_profile_contract() -> dict[str, Any]:
     namespace_children = _namespace_children_contract(catalog, supported)
 
     builtin_profile = dict(catalog["builtin_profile"])
+    builtin_profile["api_types"] = normalize_tool_profile_api_types(
+        builtin_profile.get("api_types"), field="builtin_profile"
+    )
     builtin_overrides = builtin_profile.pop("tools", {})
     builtin = _apply_bundled_tool_overrides(
         "builtin_profile.tools",
@@ -852,6 +860,21 @@ def validate_tool_profile_name(value: Any, *, allow_readonly: bool = False) -> s
     return name
 
 
+def normalize_tool_profile_api_types(value: Any, *, field: str) -> list[str]:
+    """Validate the non-empty provider protocol set for one Tool Profile."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field}.api_types must be a non-empty array")
+    invalid = [item for item in value if item not in TOOL_PROFILE_API_TYPES]
+    if invalid:
+        raise ValueError(
+            f"{field}.api_types contains unsupported values: {invalid}; "
+            f"expected only {list(TOOL_PROFILE_API_TYPES)}"
+        )
+    if len(set(value)) != len(value):
+        raise ValueError(f"{field}.api_types must not contain duplicate values")
+    return [api_type for api_type in TOOL_PROFILE_API_TYPES if api_type in value]
+
+
 def normalize_tool_profile_tools(value: Any, *, field: str) -> dict[str, str]:
     """Validate a complete tool-state mapping against the bundled catalog."""
     if not isinstance(value, dict):
@@ -902,7 +925,7 @@ def normalize_tool_profile_documents(
         name = validate_tool_profile_name(raw_name)
         if not isinstance(raw_profile, dict):
             raise ValueError(f"config: tool_profiles.{name} must be an object")
-        unsupported_fields = set(raw_profile) - {"tools", "inputs"}
+        unsupported_fields = set(raw_profile) - {"api_types", "tools", "inputs"}
         if unsupported_fields:
             raise ValueError(
                 f"config: tool_profiles.{name} has unsupported fields: "
@@ -910,6 +933,9 @@ def normalize_tool_profile_documents(
             )
         field = f"config: tool_profiles.{name}"
         profiles[name] = {
+            "api_types": normalize_tool_profile_api_types(
+                raw_profile.get("api_types"), field=field
+            ),
             "tools": normalize_tool_profile_tools(
                 raw_profile.get("tools"), field=field
             ),
@@ -1002,14 +1028,21 @@ def resolve_tool_profile_inputs(
 
 def validate_tool_profile_reference(
     value: Any,
-    profiles: dict[str, dict[str, str]],
+    profiles: dict[str, dict[str, Any]],
     *,
     field: str,
+    api_type: str | None = None,
 ) -> str:
-    """Validate a model-group profile reference."""
+    """Validate a model-group profile reference and optional protocol match."""
     name = validate_tool_profile_name(value, allow_readonly=True)
-    if name not in tool_profile_contract()["readonly"] and name not in profiles:
+    profile = tool_profile_contract()["readonly"].get(name, profiles.get(name))
+    if profile is None:
         raise ValueError(f"{field} references unknown tool profile '{name}'")
+    if api_type is not None and api_type not in profile["api_types"]:
+        raise ValueError(
+            f"{field} references tool profile '{name}' for api_types "
+            f"{profile['api_types']}, not provider api_type '{api_type}'"
+        )
     return name
 
 
@@ -1023,6 +1056,7 @@ def tool_profiles_for_admin(
         {
             "id": profile["id"],
             "name": profile["name"],
+            "api_types": list(profile["api_types"]),
             "tools": dict(profile["tools"]),
             "inputs": resolve_tool_profile_inputs(
                 profile["id"], profiles, input_overrides
@@ -1035,6 +1069,7 @@ def tool_profiles_for_admin(
         {
             "id": name,
             "name": name,
+            "api_types": list(profile["api_types"]),
             "tools": dict(profile["tools"]),
             "inputs": {
                 item_id: dict(values) for item_id, values in profile["inputs"].items()

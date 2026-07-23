@@ -10,8 +10,10 @@ from ...config import (
     default_tool_profile_for_provider,
     load_config_raw,
     provider_supports_tool_profiles,
+    resolve_provider_api_type,
 )
 from ...tool_profiles import (
+    normalize_tool_profile_api_types,
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     normalize_tool_profile_inputs,
@@ -53,12 +55,19 @@ def _tool_profile_references(data: dict[str, Any]) -> dict[str, list[str]]:
     for group_name, group in model_groups.items():
         if not isinstance(group, dict) or group.get("type") != "llm":
             continue
-        if not provider_supports_tool_profiles(providers.get(group.get("provider"))):
+        provider_name = group.get("provider")
+        provider_config = providers.get(provider_name)
+        if not isinstance(provider_name, str) or not isinstance(provider_config, dict):
+            continue
+        api_type = resolve_provider_api_type(provider_name, provider_config)
+        if not provider_supports_tool_profiles(provider_config, api_type=api_type):
             continue
         profile_name = group.get(
             "tool_profile",
             default_tool_profile_for_provider(providers.get(group.get("provider"))),
         )
+        if profile_name is None:
+            continue
         references.setdefault(profile_name, []).append(group_name)
     return references
 
@@ -102,6 +111,9 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
     if isinstance(body, Response):
         return body
     try:
+        api_types = normalize_tool_profile_api_types(
+            body.get("api_types"), field=f"tool profile '{name}'"
+        )
         tools = normalize_tool_profile_tools(
             body.get("tools"), field=f"tool profile '{name}'"
         )
@@ -117,6 +129,11 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
     config_path, data = loaded
     readonly = tool_profile_contract()["readonly"]
     if name in readonly:
+        if api_types != readonly[name]["api_types"]:
+            return JSONResponse(
+                {"error": (f"bundled tool profile '{name}' api_types are read-only")},
+                status_code=400,
+            )
         if tools != readonly[name]["tools"]:
             return JSONResponse(
                 {"error": (f"bundled tool profile '{name}' tool states are read-only")},
@@ -140,7 +157,7 @@ async def put_tool_profile(request: Any, **kwargs: Any) -> Response:
         return JSONResponse(
             {"error": "'tool_profiles' must be an object"}, status_code=400
         )
-    profiles[name] = {"tools": tools, "inputs": inputs}
+    profiles[name] = {"api_types": api_types, "tools": tools, "inputs": inputs}
     _config, error = _commit_gateway_config(request, config_path, data)
     if error is not None:
         return error

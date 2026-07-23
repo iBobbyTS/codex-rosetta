@@ -448,6 +448,8 @@ th.sortable.desc::after { content:'\25BC';opacity:.8; }
 .tool-profile-toolbar { display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:14px 0 4px; }
 .tool-profile-toolbar label { font-size:12px;font-weight:600; }
 .tool-profile-toolbar select { min-width:190px;padding:6px 9px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text); }
+.tool-profile-protocol-row { display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0 4px;min-height:30px; }
+.tool-profile-protocol-label { font-size:12px;font-weight:600; }
 .tool-profile-dirty { color:var(--orange);font-size:11px; }
 .tool-filter-btn { border:1px solid var(--border);background:var(--bg-card);color:var(--text-dim);padding:6px 10px;border-radius:999px;font-size:12px;cursor:pointer; }
 .tool-filter-btn:hover { border-color:var(--accent);color:var(--text); }

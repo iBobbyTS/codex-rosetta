@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -125,6 +126,10 @@ def test_main_initializes_missing_config_and_continues_startup(
 
     config_path = config_dir / "config.jsonc"
     assert config_path.is_file()
+    generated = json.loads(config_path.read_text(encoding="utf-8"))
+    assert generated["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
+    assert "tool_profile" not in generated["model_groups"]["Anthropic"]
+    assert "tool_profile" not in generated["model_groups"]["Google"]
     assert started == [("127.0.0.1", 8765)]
 
 

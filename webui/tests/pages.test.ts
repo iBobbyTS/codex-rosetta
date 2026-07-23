@@ -104,12 +104,39 @@ describe('ToolsPage', () => {
             namespaces: [],
           },
         })
-      : Promise.resolve({ profiles: [{ id: 'builtin', name: 'Builtin', tools: { 'function.exec_command': 'modified' }, inputs: {}, readonly: true }], supported_states: { 'function.exec_command': ['disabled', 'modified'] }, references: {} }));
+      : Promise.resolve({ profiles: [{ id: 'builtin', name: 'Builtin', api_types: ['chat'], tools: { 'function.exec_command': 'modified' }, inputs: {}, readonly: true }], supported_states: { 'function.exec_command': ['disabled', 'modified'] }, references: {} }));
     render(ToolsPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Create Copy' }));
     const name = screen.getByLabelText('New profile name');
     await fireEvent.input(name, { target: { value: 'custom-profile' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Create copy' }));
-    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/tools/profiles/custom-profile', { tools: { 'function.exec_command': 'modified' }, inputs: {} }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/tools/profiles/custom-profile', { api_types: ['chat'], tools: { 'function.exec_command': 'modified' }, inputs: {} }));
+  });
+
+  it('saves multiple selected protocols for a writable profile', async () => {
+    apiMock.get.mockImplementation((path: string) => path.endsWith('/catalog')
+      ? Promise.resolve({
+          items: [{ id: 'function.exec_command', name: 'exec_command', type: 'function' }],
+          placements: {
+            groups: [{ id: 'exec_expansion', item_ids: ['function.exec_command'] }],
+            namespaces: [],
+          },
+        })
+      : Promise.resolve({ profiles: [{ id: 'custom', name: 'custom', api_types: ['chat'], tools: { 'function.exec_command': 'modified' }, inputs: {}, readonly: false }], supported_states: { 'function.exec_command': ['disabled', 'modified'] }, references: {} }));
+    render(ToolsPage);
+    const responses = await screen.findByRole('checkbox', { name: 'OpenAI Responses' });
+    const anthropic = screen.getByRole('checkbox', { name: 'Anthropic Messages' });
+    const google = screen.getByRole('checkbox', { name: 'Google GenAI (Gemini)' });
+    expect(responses.closest('.tool-profile-protocol-row')).not.toBeNull();
+    expect(document.querySelector('.tool-profile-toolbar input[type="checkbox"]')).toBeNull();
+
+    await fireEvent.click(responses);
+    await fireEvent.click(anthropic);
+    await fireEvent.click(google);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/tools/profiles/custom', {
+      api_types: ['chat', 'responses', 'anthropic', 'google'], tools: { 'function.exec_command': 'modified' }, inputs: {},
+    }));
   });
 });
