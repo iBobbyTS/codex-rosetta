@@ -16,6 +16,7 @@ CODEX_CONTRACT_SCRIPT := scripts/check_codex_compatibility.py
 RELEASE_VERSION_SCRIPT := scripts/check_release_version.py
 CODEX_JSONL_ANALYZER := scripts/analyze_codex_jsonl_errors.py
 PY_CHECK_PATHS := src/ tests/ $(CODEX_CONTRACT_SCRIPT) $(RELEASE_VERSION_SCRIPT) $(CODEX_JSONL_ANALYZER)
+WEBUI_DIR := webui
 
 # Default target
 all: lint test build
@@ -52,6 +53,23 @@ test:
 	@echo "Running tests..."
 	pytest tests/ --ignore=tests/integration -v --tb=short
 	@echo "Tests completed."
+
+web-build:
+	cd $(WEBUI_DIR) && npm ci && npm run build
+
+web-check:
+	cd $(WEBUI_DIR) && npm run check
+
+web-test:
+	cd $(WEBUI_DIR) && npm run test
+
+desktop-sidecar: web-build
+	./scripts/build_desktop_sidecar.sh
+
+desktop-test:
+	cargo fmt --manifest-path src-tauri/Cargo.toml --check
+	cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+	cargo test --manifest-path src-tauri/Cargo.toml
 
 # Run integration tests (requires API keys; uses proxychains if available)
 test-integration:

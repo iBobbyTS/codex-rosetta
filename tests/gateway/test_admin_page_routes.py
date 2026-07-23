@@ -3,20 +3,15 @@
 from __future__ import annotations
 
 import asyncio
-import html as html_module
 import importlib.resources
 import json
-import re
 
 import pytest
 
 from codex_rosetta._vendor.httpserver import Request
 from codex_rosetta.gateway.app import create_app
-from codex_rosetta.gateway.admin.static import load_admin_html
+from codex_rosetta.gateway.admin.static import load_admin_asset, load_admin_html
 from codex_rosetta.gateway.config import GatewayConfig
-
-
-I18N_PLACEHOLDER = "__CODEX_ROSETTA_ADMIN_I18N_JSON__"
 
 
 def _make_app():
@@ -89,72 +84,61 @@ def test_admin_page_routes_serve_admin_html(path: str):
 
     assert response.status_code == 200
     assert response.headers["Content-Type"] == "text/html; charset=utf-8"
-    assert response.headers["Content-Security-Policy"] == "frame-ancestors 'none'"
+    csp = response.headers["Content-Security-Policy"]
+    assert "script-src 'self'" in csp
+    assert "object-src 'none'" in csp
+    assert "frame-ancestors 'none'" in csp
     assert response.headers["X-Frame-Options"] == "DENY"
-    assert b'class="admin-nav"' in response.body
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+    assert b'<div id="app"></div>' in response.body
+    assert b"/admin/assets/" in response.body
 
 
-def test_admin_i18n_dictionary_is_loaded_from_bundled_json() -> None:
+def test_admin_i18n_dictionary_has_matching_language_keys() -> None:
     package_files = importlib.resources.files("codex_rosetta.gateway.admin")
-    raw_html = package_files.joinpath("admin.html").read_text("utf-8")
     translations = json.loads(
         package_files.joinpath("admin_i18n.json").read_text("utf-8")
     )
-    rendered_html = load_admin_html()
 
-    assert raw_html.count(I18N_PLACEHOLDER) == 1
-    assert "'nav.providers':'Providers'" not in raw_html
     assert set(translations) == {"en", "zh"}
     assert translations["en"].keys() == translations["zh"].keys()
-    assert I18N_PLACEHOLDER not in rendered_html
-    serialized = rendered_html.split("const I18N = ", 1)[1].split(
-        ";\n\nlet currentLang", 1
-    )[0]
-    assert json.loads(serialized) == translations
 
 
-def test_admin_login_token_has_no_browser_inactivity_expiry() -> None:
+def test_admin_entry_has_no_inline_script_or_style() -> None:
     admin_html = load_admin_html()
 
-    assert "localStorage.setItem('admin_token', data.token);" in admin_html
-    assert "localStorage.removeItem('admin_token');" in admin_html
-    assert "INACTIVITY_TIMEOUT_MS" not in admin_html
-    assert "_startInactivityTracking" not in admin_html
+    assert '<script type="module"' in admin_html
+    assert "<script>" not in admin_html
+    assert "<style" not in admin_html
 
 
-def test_admin_dynamic_handlers_and_attributes_use_context_specific_encoding():
-    """Malicious persisted names cannot break handler or attribute boundaries."""
-    admin_html = load_admin_html()
-    payload = "x');globalThis.__pwned=1;//\"<&"
-
-    # handlerArg's contract is JSON string serialization followed by HTML
-    # attribute encoding.  Browser entity decoding must reconstruct one JSON
-    # string literal whose value is exactly the attacker-controlled name.
-    encoded_arg = html_module.escape(json.dumps(payload), quote=True)
-    assert json.loads(html_module.unescape(encoded_arg)) == payload
-    assert "return escAttr(JSON.stringify(String(value)));" in admin_html
-
-    unsafe_handlers = re.findall(
-        r'on(?:click|change)="[^"\n]*\$\{esc\(',
-        admin_html,
+def test_manifest_allows_only_generated_assets() -> None:
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    manifest = json.loads(
+        package_files.joinpath("dist", "manifest.json").read_text("utf-8")
     )
-    assert unsafe_handlers == []
+    entry = next(iter(manifest.values()))
 
-    unsafe_attributes = re.findall(
-        r'(?:aria-controls|data-[\w-]+|id|src|title|value)="[^"\n]*\$\{esc\(',
-        admin_html,
+    script = load_admin_asset(entry["file"])
+
+    assert script.content_type == "text/javascript; charset=utf-8"
+    assert script.body
+    with pytest.raises(FileNotFoundError):
+        load_admin_asset("../admin_i18n.json")
+    with pytest.raises(FileNotFoundError):
+        load_admin_asset("assets/not-in-manifest.js")
+
+
+def test_admin_asset_route_uses_immutable_cache_policy() -> None:
+    app = _make_app()
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    manifest = json.loads(
+        package_files.joinpath("dist", "manifest.json").read_text("utf-8")
     )
-    assert unsafe_attributes == []
+    path = "/admin/" + next(iter(manifest.values()))["file"]
 
+    response = asyncio.run(app._dispatch(_request(app, path)))
 
-def test_admin_model_test_metadata_uses_dom_api_not_html_strings():
-    """Provider result metadata stays on the safe-by-construction DOM path."""
-    admin_html = load_admin_html()
-    run_test_source = admin_html.split("async function runTest", 1)[1].split(
-        "// ===================== Init", 1
-    )[0]
-
-    assert "Number.isSafeInteger(value)" in admin_html
-    assert "meta.innerHTML" not in run_test_source
-    assert "_appendTestUsageMeta(meta, type, body?.usage);" in run_test_source
-    assert "meta.replaceChildren(_createTestMetaItem('Model', model));" in admin_html
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"

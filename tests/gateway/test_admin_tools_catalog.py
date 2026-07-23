@@ -7,7 +7,6 @@ import importlib.resources
 import json
 
 from codex_rosetta._vendor.httpserver import Request
-from codex_rosetta.gateway.admin.static import load_admin_html
 from codex_rosetta.gateway.admin.tool_catalog import load_tool_catalog
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
@@ -735,107 +734,6 @@ def test_catalog_api_is_read_only_and_returns_bundled_resource():
     for method in ("POST", "PUT", "PATCH", "DELETE"):
         response = asyncio.run(app._dispatch(_request(app, method)))
         assert response.status_code == 405
-
-
-def test_admin_tools_view_has_profile_editor_and_all_filters():
-    html = load_admin_html()
-    page = html.split('id="page-tools"', 1)[1].split("<!-- Network Search Page -->", 1)[
-        0
-    ]
-
-    assert 'href="/admin/tools"' in html
-    assert "api.get('/admin/api/tools/catalog')" in html
-    for filter_name in (
-        "all",
-        "exec_expansion",
-        "function",
-        "namespace",
-        "rosetta_injection",
-    ):
-        assert f'data-tool-filter="{filter_name}"' in page
-
-    assert 'id="toolProfileSelect"' in page
-    assert 'id="saveToolProfileBtn"' in page
-    assert 'onclick="openToolProfileCloneModal()"' in page
-    assert "updateToolProfileState" in html
-    assert "checkbox_group" in html
-    assert "tools.disabledHint" in page
-    assert "item.description_i18n" in html
-    assert "item.note_i18n" in html
-    assert "item.note_visible_when" in html
-    assert (
-        "summary + description + stateDescription + placement + projection + inputs + note"
-        in html
-    )
-    assert "function renderToolCodexPlacement(item)" in html
-    assert "item.codex_placement" in html
-    assert "item.exec_projection" in html
-    assert "!item.ui_hidden" in html
-    assert "item.profile_inputs" in html
-    assert "renderToolProfileInputs(item)" in html
-    assert 'id="toolCatalogLayout"' in page
-    assert 'id="toolDetailPanel"' in page
-    assert "selectToolDetail(itemId)" in html
-    assert "toolDetailKeyHandler(event, itemId)" in html
-    assert "['function', 'custom', 'hosted', 'namespace'].includes(item.type)" in html
-    assert "updateToolProfileInput" in html
-    assert "saveToolProfileBtn').disabled = !toolProfileDirty" in html
-    assert "if (currentToolProfile()?.readonly) return;" in html
-    assert "if (!profile || profile.readonly)" not in html
-    assert "namespaceDisabled" in html
-    assert "toolProfileDraft[item.namespace_id] === 'disabled'" in html
-    assert (
-        "for (const childId of childIds) toolProfileDraft[childId] = 'disabled';"
-        in html
-    )
-    assert "currentToolProfile()?.readonly || namespaceDisabled" in html
-    assert "function toolEffectiveState(item)" in html
-    assert "function toolStateClass(item)" in html
-    assert "toolStateClass(namespaceItem)" in html
-    assert "toolProfileDraft[item.namespace_id] === 'disabled'" in html
-    assert "tool-state-expanded" in html
-    assert "tool-state-injected" in html
-    assert "function collapseDisabledToolNamespaces()" in html
-    assert "collapseDisabledToolNamespaces();" in html
-    assert "toolProfileDraft[item.id] !== 'disabled'" in html
-    assert (
-        "const isDisabled = toolProfileDraft[namespaceItem.id] === 'disabled';" in html
-    )
-    assert (
-        "const isExpanded = !isDisabled && expandedToolNamespaces.has(namespaceItem.id);"
-        in html
-    )
-    assert "${isDisabled ? ' disabled' : ''}" in html
-    assert "if (toolProfileDraft[namespaceId] === 'disabled')" in html
-    assert "input.type === 'password'" in html
-    assert "input.type === 'select'" in html
-    assert "input.type === 'checkbox_group'" in html
-    assert "updateToolProfileCheckboxGroup" in html
-    assert "input.type === 'textarea'" in html
-    assert '<textarea class="tool-profile-input tool-profile-textarea"' in html
-    assert "input.readonly ? ' readonly' : ''" in html
-    assert "option.value === value" in html
-    assert "input.visible_when" in html
-    assert "!input.ui_hidden" in html
-    assert "item.description_visible_when" in html
-    assert "renderToolNamespace(item, placement.child_ids, index)" in html
-    assert "toolPolicyLabel(item, state)" in html
-    assert "renderToolProfileInputs(namespaceItem)" not in html
-    assert "isToolCardContentVisible" in html
-    assert "renderToolCatalog();" in html
-    assert "${esc(option.label)}" in html
-    assert '<select class="tool-profile-input"' in html
-    assert "inputs: toolProfileInputDraft" in html
-    assert "toolCatalogFilter === 'all' || toolCatalogFilter === 'namespace'" in html
-    assert (
-        "if (item.type === 'namespace' && toolProfileDraft[item.id] !== 'disabled')"
-        in html
-    )
-    assert "item.default_expanded" not in html
-    assert "api.get('/admin/api/tools/profiles')" in html
-    assert 'href="/admin/web-search"' not in html
-    assert 'id="page-web-search"' not in html
-    assert "saveWebSearchSettings" not in html
 
 
 def test_admin_tool_profile_crud_and_reference_guard(tmp_path):

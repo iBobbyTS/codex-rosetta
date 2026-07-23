@@ -17,6 +17,7 @@ Anthropic and Google conversion remain internal options and are not currently gu
 ## Gateway operations
 
 - [Security and authentication](gateway-security.md)
+- [Web Admin and desktop app](desktop.md)
 
 The terminal supports four logging levels:
 

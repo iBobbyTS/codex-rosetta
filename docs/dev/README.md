@@ -16,6 +16,7 @@ lives in [`docs/en`](../en/README.md) and [`docs/zh-cn`](../zh-cn/README.md).
 
 ## Architecture and research
 
+- [Admin UI migration inventory](admin-ui-migration-inventory.md)
 - [Design history](design/architecture.md)
 - [Provider and model parameter survey](provider_model_params/survey.md)
 - [SDK and IR research](sdk_ir/)
@@ -25,6 +26,7 @@ lives in [`docs/en`](../en/README.md) and [`docs/zh-cn`](../zh-cn/README.md).
 ## Release
 
 - [Manual GitHub Release procedure](releasing.md)
+- [Svelte and Tauri desktop build](desktop-build.md)
 
 Releases are created only through the GitHub web UI. PyPI and Docker publishing
 targets are disabled. `make build-docker` remains available for local

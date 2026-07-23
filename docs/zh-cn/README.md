@@ -17,6 +17,7 @@ Anthropic 和 Google 转换仍是内部选项，目前不作保证。管理界�
 ## 网关运维
 
 - [安全与认证](gateway-security.md)
+- [Web 管理界面与桌面应用](desktop.md)
 
 终端支持四个日志级别：
 
