@@ -13,6 +13,49 @@ beforeEach(() => {
 });
 
 describe('advanced tool profiles', () => {
+  it('labels exec and namespace groups from the selected profile protocols', async () => {
+    apiMock.get.mockImplementation((path: string) => path.endsWith('/catalog') ? Promise.resolve({
+      items: [
+        { id: 'function.exec_command', name: 'exec_command', type: 'function' },
+        { id: 'namespace.multi', name: 'multi', type: 'namespace' },
+      ],
+      placements: {
+        groups: [
+          { id: 'exec_expansion', item_ids: ['function.exec_command'] },
+          { id: 'namespace', item_ids: ['namespace.multi'] },
+        ],
+        namespaces: [{ namespace_id: 'namespace.multi', child_ids: [] }],
+      },
+    }) : Promise.resolve({
+      profiles: [{
+        id: 'custom', name: 'Custom', api_types: ['chat'], readonly: false,
+        tools: {
+          'function.exec_command': 'modified',
+          'namespace.multi': 'modified',
+        },
+        inputs: {},
+      }],
+      supported_states: {},
+      references: {},
+    }));
+
+    const view = render(ToolsPage);
+    const execGroup = await waitFor(() => {
+      const group = view.container.querySelector<HTMLElement>('[data-tool-group="exec_expansion"]');
+      expect(group).not.toBeNull();
+      return group as HTMLElement;
+    });
+    const namespaceGroup = view.container.querySelector<HTMLElement>('[data-tool-group="namespace"]');
+    expect(namespaceGroup).not.toBeNull();
+    expect(execGroup.querySelector('.tool-group-title > span:first-child')).toHaveTextContent('Exec Expansion');
+    expect(namespaceGroup?.querySelector('.tool-group-title > span:first-child')).toHaveTextContent('Namespace Expansion');
+
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'OpenAI Responses' }));
+
+    expect(execGroup.querySelector('.tool-group-title > span:first-child')).toHaveTextContent(/^exec$/);
+    expect(namespaceGroup?.querySelector('.tool-group-title > span:first-child')).toHaveTextContent(/^Namespace$/);
+  });
+
   it('renders namespace children only inside their expandable namespace group', async () => {
     apiMock.get.mockImplementation((path: string) => path.endsWith('/catalog') ? Promise.resolve({
       items: [
