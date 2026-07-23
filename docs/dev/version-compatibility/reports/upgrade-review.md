@@ -19,10 +19,15 @@ Codex version: 0.145.0
   preserves valid audio on Responses and Chat paths, and fail-open passes
   malformed or unsupported audio blocks. The packaged model and tool catalogs
   are bound to the formal source commit.
-- Targeted adaptation tests pass (`371 passed`); `make check-codex-compat` passes
+- The full non-integration suite passes (`3749 passed, 4 skipped`), and
+  `make check-codex-compat` passes
   against the refreshed formal baseline. The first formal live smoke
   (`command_execution/01`, `codex-cli 0.145.0`, `gpt-5.6-terra`) passed through
-  the observed `晚照 (Plus)` Responses route. The remaining formal live-agent
+  the observed `晚照 (Plus)` Responses route. A second formal smoke with
+  `deepseek-v4-flash` passed through the `Deepseek (Official)`
+  Responses→Chat route after Rosetta added the Codex-required `summary_index`
+  to reconstructed reasoning-summary deltas and separated response-contract
+  failures from actual credential collisions. The remaining formal live-agent
   matrix is pending, so 0.145.0 remains **not approved** and the package version
   must not advance.
 
@@ -34,7 +39,7 @@ Codex version: 0.145.0
 | `CP-02 — Responses transparent handling` | High-confidence unchanged | Transport contract unchanged; full suite pass | Direct Responses smoke completed |
 | `CP-03 — Codex Search and Images endpoints` | Possibly unchanged | No extracted formal change | Pending search/Images cells |
 | `CP-04 — Request and window identity` | Possibly unchanged | Metadata keys unchanged | Pending multi-turn wire capture |
-| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge and tests added | Audio cell pending |
+| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot Chat bridge passed; audio cell pending |
 | `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
 | `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
 | `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Code Mode cell pending |
@@ -46,9 +51,9 @@ Codex version: 0.145.0
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Formal dual-auth smoke passed |
 | `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
-| `CP-17 — Stream lifecycle` | Possibly unchanged | Event-name extractor and suite pass | Smoke stream completed |
+| `CP-17 — Stream lifecycle` | Changed | Consumer-visible identity failures now use a response-contract error distinct from credential collision | Direct and converted smoke streams completed |
 | `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Pending tool/terminal cell |
-| `CP-19 — Reasoning` | Possibly unchanged | Reasoning fields unchanged | Pending summary/audio capture |
+| `CP-19 — Reasoning` | Changed | Reconstructed summary deltas now include Codex-required `summary_index`; saved-response replay and cross-module gate tests pass | DeepSeek reasoning/tool round completed; broader summary/audio capture pending |
 | `CP-20 — Context compaction resilience` | Possibly unchanged | Remote V2 contract unchanged | Pending protocol/once cells |
 | `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal relevant diff | Pending relay matrix |
 | `CP-22 — Model-group tool profiles` | Changed | Audio now model-visible in Code Mode | Pending Chat/Responses live paths |

@@ -402,6 +402,7 @@ class TestStreamResponseToProvider:
         result = cast(dict[str, Any], self.converter.stream_response_to_provider(event))
         assert result["type"] == "response.reasoning_summary_text.delta"
         assert result["delta"] == "thinking..."
+        assert result["summary_index"] == 0
 
     def test_reasoning_delta_preserved_in_completed_output(self):
         """Reasoning deltas become durable reasoning output items."""
@@ -420,6 +421,7 @@ class TestStreamResponseToProvider:
         assert result[0]["item"]["status"] == "in_progress"
         assert result[1]["type"] == "response.reasoning_summary_text.delta"
         assert result[1]["delta"] == ""
+        assert result[1]["summary_index"] == 0
 
         self.converter.stream_response_to_provider(
             cast(

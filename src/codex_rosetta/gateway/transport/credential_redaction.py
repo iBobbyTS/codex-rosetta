@@ -19,10 +19,14 @@ from ._base import (
     UpstreamConnectionError,
     UpstreamCredentialCollisionError,
     UpstreamResponse,
+    UpstreamResponseContractError,
     UpstreamStream,
     UpstreamTransport,
 )
-from .credential_semantics import ProviderCredentialSemanticGate
+from .credential_semantics import (
+    ProviderCredentialSemanticGate,
+    ProviderResponseContractError,
+)
 from .provider_info import ProviderInfo
 
 
@@ -55,6 +59,16 @@ def _credential_collision_error() -> UpstreamCredentialCollisionError:
     """Return a stable error for an ambiguous provider-return collision."""
     return UpstreamCredentialCollisionError(
         "Upstream response contains a configured credential; response blocked"
+    )
+
+
+def _response_contract_error(
+    exc: ProviderResponseContractError,
+) -> UpstreamResponseContractError:
+    """Return a stable error for invalid consumer-visible response semantics."""
+    return UpstreamResponseContractError(
+        "Upstream response violates the required consumer contract: "
+        f"{exc}; response blocked"
     )
 
 
@@ -193,6 +207,9 @@ class ProviderCredentialOutputGate:
         except SecretCollisionError:
             self.finish()
             raise _credential_collision_error() from None
+        except ProviderResponseContractError as exc:
+            self.finish()
+            raise _response_contract_error(exc) from None
 
     def inspect_stream_event(self, event: dict[str, Any]) -> None:
         """Inspect one final source event before tracing or serialization."""
@@ -205,6 +222,9 @@ class ProviderCredentialOutputGate:
         except SecretCollisionError:
             self.finish()
             raise _credential_collision_error() from None
+        except ProviderResponseContractError as exc:
+            self.finish()
+            raise _response_contract_error(exc) from None
 
     def diagnostics_are_safe(self, values: tuple[Any, ...]) -> bool:
         """Check ordered fields under active-provider and global policies."""
@@ -300,6 +320,8 @@ class CredentialRedactingStream(UpstreamStream):
                 raise
             except SecretCollisionError:
                 error = _credential_collision_error()
+            except ProviderResponseContractError as exc:
+                error = _response_contract_error(exc)
             except Exception as exc:
                 error = _sanitized_transport_error(self._provider_info, exc)
             finally:
@@ -329,6 +351,8 @@ class CredentialRedactingStream(UpstreamStream):
                 raise
             except SecretCollisionError:
                 error = _credential_collision_error()
+            except ProviderResponseContractError as exc:
+                error = _response_contract_error(exc)
             except Exception as exc:
                 error = _sanitized_transport_error(self._provider_info, exc)
             if error is not None:
@@ -461,6 +485,8 @@ class CredentialRedactingTransport:
             semantic_gate.inspect_document(response.body)
         except SecretCollisionError:
             raise _credential_collision_error() from None
+        except ProviderResponseContractError as exc:
+            raise _response_contract_error(exc) from None
         if redactor.contains_json_semantic(response.raw_content):
             raise _credential_collision_error()
         try:
@@ -471,6 +497,8 @@ class CredentialRedactingTransport:
             semantic_gate.inspect_document(parsed_raw)
         except SecretCollisionError:
             raise _credential_collision_error() from None
+        except ProviderResponseContractError as exc:
+            raise _response_contract_error(exc) from None
         return UpstreamResponse(
             status_code=response.status_code,
             body=response.body,

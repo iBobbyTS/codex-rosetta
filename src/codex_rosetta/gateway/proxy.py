@@ -99,6 +99,7 @@ from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
     UpstreamCredentialCollisionError,
+    UpstreamResponseContractError,
     UpstreamTransport,
 )
 from .transport.credential_redaction import (
@@ -213,9 +214,11 @@ def error_response_for_source(
     return JSONResponse(body, status_code=status_code)
 
 
-def _stream_credential_collision_event(source_provider: ProviderType) -> str:
-    """Return a source-compatible SSE error for a blocked credential collision."""
-    message = "Upstream response contains a configured credential; response blocked"
+def _stream_safety_error_event(
+    source_provider: ProviderType,
+    message: str,
+) -> str:
+    """Return a source-compatible SSE event for a blocked safety error."""
     if source_provider in ("openai_responses", "open_responses"):
         body = {
             "type": "error",
@@ -1735,7 +1738,7 @@ async def handle_non_streaming(
             resp.body,
             body_log_state,
         )
-    except UpstreamCredentialCollisionError as exc:
+    except (UpstreamCredentialCollisionError, UpstreamResponseContractError) as exc:
         profile.update(pipeline.profile)
         return error_response_for_source(route.source_provider, 502, str(exc)), profile
 
@@ -2353,10 +2356,13 @@ def _stream_terminal_recovery(
     terminal_state: _StreamTerminalState,
     credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> str | Exception:
-    """Recover only credential collisions; preserve every other failure."""
+    """Recover blocked safety errors; preserve every other failure."""
     terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
-    if isinstance(exc, UpstreamCredentialCollisionError):
-        return _stream_credential_collision_event(source_provider)
+    if isinstance(
+        exc,
+        (UpstreamCredentialCollisionError, UpstreamResponseContractError),
+    ):
+        return _stream_safety_error_event(source_provider, str(exc))
     if (
         credential_output_gate is not None
         and not credential_output_gate.diagnostics_are_safe((terminal_state.error,))

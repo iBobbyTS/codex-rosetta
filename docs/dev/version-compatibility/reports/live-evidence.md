@@ -15,10 +15,14 @@ and outcome here.
 | Run | Suite/task | Codex binary and model | Observed provider / route | Thread | Exit / marker / evaluation | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |
+| `202607231548` | `command_execution/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f90f6-fe4a-7913-9f26-3fc0b79affd7` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One upstream-localized `exec_command` was restored to one native Codex `exec` and one completed command start, with no continuation. Both converted streams reached `response.completed`. |
 
-This smoke proves the formal binary and provider-neutral GPT routing contract for
-the one-shot command path only. It does not prove formal audio behavior, remote
-compaction, Images, Browser, Skills, or the remaining live-agent matrix.
+These smokes prove the formal binary's direct Responses and third-party Chat
+bridge one-shot command paths only. The DeepSeek run specifically verifies that
+reconstructed reasoning-summary deltas include the Codex-consumed
+`summary_index` identity and survive the final-source semantic gate. They do not
+prove formal audio behavior, remote compaction, Images, Browser, Skills, or the
+remaining live-agent matrix.
 
 Per-request usage for the smoke, in request order, was
 `80eb8786:20098/125/3840/base` and `06eadb04:20253/10/3840/-16383`, using the
@@ -26,6 +30,23 @@ required delta `3840 - (20098 + 125)`. The second request contains the newly
 inserted native command result and a changed conversation/tool prefix, so this
 large negative delta is expected cache-prefix breakage rather than a cache-rate
 measurement. Both requests carried `cache_write_tokens: 0`.
+
+The DeepSeek request usage was
+`243b4f8d:18169/144/0/base` and
+`65c1cfa2:18412/40/18304/-9`, using the required delta
+`18304 - (18169 + 144)`. Both requests used the same model, route,
+prompt-cache key, stable instructions, and tool set; the second request added
+the native command result while retaining an effective adjacent prefix. No
+large discontinuity analysis was required.
+
+Before the converter repair, the saved failing DeepSeek response was replayed
+through the updated safety classification. Its first reconstructed reasoning
+delta failed as `UpstreamResponseContractError` with `missing or invalid
+summary_index stream identity`; the message did not contain `credential`, while
+the existing configured-token collision controls remained blocked as credential
+collisions. After adding `summary_index: 0`, the same saved response replayed all
+60 upstream events into 65 source events, including 36 reasoning deltas and a
+terminal `response.completed`.
 
 ## Alpha.23 historical evidence
 

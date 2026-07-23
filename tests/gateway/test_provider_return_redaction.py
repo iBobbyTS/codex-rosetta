@@ -16,10 +16,12 @@ import pytest
 import codex_rosetta.gateway.app as app_module
 from codex_rosetta._vendor.httpserver import Response, StreamingResponse
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
 from codex_rosetta.gateway.proxy import (
     _StreamTerminalState,
     _finalize_response_stream,
     _stream_event_generator,
+    _stream_terminal_recovery,
     handle_non_streaming,
     handle_streaming,
 )
@@ -29,6 +31,7 @@ from codex_rosetta.gateway.transport._base import (
     UpstreamConnectionError,
     UpstreamCredentialCollisionError,
     UpstreamResponse,
+    UpstreamResponseContractError,
     UpstreamStream,
 )
 from codex_rosetta.gateway.transport.credential_redaction import (
@@ -42,6 +45,7 @@ from codex_rosetta.observability import (
 )
 from codex_rosetta.observability.redaction import SecretRedactor
 from codex_rosetta.routing import ResolvedRoute
+from codex_rosetta.types.ir.stream import ReasoningDeltaEvent
 
 
 def _provider(token: str) -> ProviderInfo:
@@ -70,6 +74,68 @@ def _converted_route(target_provider: ProviderType = "openai_chat") -> ResolvedR
         provider_name="test-provider",
         upstream_model="test-model",
     )
+
+
+def test_output_gate_reports_missing_reasoning_identity_as_contract_error() -> None:
+    gate = ProviderCredentialOutputGate(
+        _provider("configured-provider-secret"),
+        "openai_responses",
+    )
+
+    with pytest.raises(UpstreamResponseContractError) as caught:
+        gate.inspect_stream_event(
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "delta": "",
+                "sequence_number": 2,
+            }
+        )
+
+    message = str(caught.value)
+    assert "missing or invalid summary_index stream identity" in message
+    assert "credential" not in message
+
+
+def test_converter_reasoning_delta_satisfies_output_gate_contract() -> None:
+    converter = OpenAIResponsesConverter()
+    event = cast(
+        dict[str, Any],
+        converter.stream_response_to_provider(
+            cast(
+                ReasoningDeltaEvent,
+                {"type": "reasoning_delta", "reasoning": "thinking..."},
+            )
+        ),
+    )
+    gate = ProviderCredentialOutputGate(
+        _provider("configured-provider-secret"),
+        "openai_responses",
+    )
+
+    gate.inspect_stream_event(event)
+
+    assert event["summary_index"] == 0
+
+
+def test_stream_contract_error_is_reported_without_credential_claim() -> None:
+    message = (
+        "Upstream response violates the required consumer contract: "
+        "missing or invalid summary_index stream identity; response blocked"
+    )
+    terminal_state = _StreamTerminalState()
+
+    event = _stream_terminal_recovery(
+        UpstreamResponseContractError(message),
+        "openai_responses",
+        terminal_state,
+        None,
+    )
+
+    assert isinstance(event, str)
+    assert message in event
+    assert "contains a configured credential" not in event
+    assert terminal_state.outcome == "error"
+    assert terminal_state.error == message
 
 
 class _StaticTransport:
