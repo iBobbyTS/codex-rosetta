@@ -97,7 +97,13 @@ describe('NetworkSearchPage', () => {
 describe('ToolsPage', () => {
   it('creates a writable copy from the selected profile', async () => {
     apiMock.get.mockImplementation((path: string) => path.endsWith('/catalog')
-      ? Promise.resolve({ items: [{ id: 'function.exec_command', name: 'exec_command', type: 'function' }] })
+      ? Promise.resolve({
+          items: [{ id: 'function.exec_command', name: 'exec_command', type: 'function' }],
+          placements: {
+            groups: [{ id: 'exec_expansion', item_ids: ['function.exec_command'] }],
+            namespaces: [],
+          },
+        })
       : Promise.resolve({ profiles: [{ id: 'builtin', name: 'Builtin', tools: { 'function.exec_command': 'modified' }, inputs: {}, readonly: true }], supported_states: { 'function.exec_command': ['disabled', 'modified'] }, references: {} }));
     render(ToolsPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Create Copy' }));
