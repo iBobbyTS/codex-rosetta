@@ -1,20 +1,494 @@
 <script lang="ts">
-  import{onMount}from'svelte';import Modal from'../components/Modal.svelte';import{api}from'../lib/api';import{t}from'../lib/i18n.svelte';
-  type InputOption={value:string;label?:string};type ProfileInput={id:string;label_i18n?:string;type?:string;default?:string;visible_when?:string[];options?:InputOption[];readonly?:boolean;ui_hidden?:boolean};type Placement={normal_mode_i18n?:string;code_mode_i18n?:string};type ToolItem={id:string;name?:string;type?:string;namespace_id?:string;policy_id?:string;summary_i18n?:string;description_i18n?:string;note_i18n?:string;note_visible_when?:string[];profile_inputs?:ProfileInput[];codex_placement?:Placement;ui_hidden?:boolean};type Catalog={items?:ToolItem[]};type Profile={id:string;name:string;tools:Record<string,string>;inputs:Record<string,Record<string,string>>;readonly:boolean};type ProfilesResponse={profiles?:Profile[];supported_states?:Record<string,string[]>;references?:Record<string,string[]>};
-  let catalog=$state<Catalog>({});let profilesData=$state<ProfilesResponse>({});let selectedId=$state('');let toolDraft=$state<Record<string,string>>({});let inputDraft=$state<Record<string,Record<string,string>>>({});let cloneName=$state('');let cloneOpen=$state(false);let filter=$state('all');let detailId=$state('');let loading=$state(true);let busy=$state(false);let dirty=$state(false);let error=$state('');let notice=$state('');
-  let selected=$derived((profilesData.profiles??[]).find((profile)=>profile.id===selectedId));let detail=$derived((catalog.items??[]).find((item)=>item.id===detailId));let visibleItems=$derived((catalog.items??[]).filter((item)=>!item.ui_hidden&&matchesFilter(item)));const message=(value:unknown)=>value instanceof Error?value.message:String(value);
-  function matchesFilter(item:ToolItem):boolean{if(filter==='all')return true;if(filter==='functions')return['function','custom','hosted'].includes(item.type??'');if(filter==='namespaces')return item.type==='namespace'||!!item.namespace_id;return item.type==='custom_injection';}
-  function selectProfile(id:string):void{const profile=(profilesData.profiles??[]).find((item)=>item.id===id);if(!profile)return;selectedId=id;toolDraft={...profile.tools};inputDraft=JSON.parse(JSON.stringify(profile.inputs??{}))as Record<string,Record<string,string>>;dirty=false;error='';}
-  async function load(signal?:AbortSignal):Promise<void>{try{const[nextCatalog,nextProfiles]=await Promise.all([api.get<Catalog>('/admin/api/tools/catalog',signal),api.get<ProfilesResponse>('/admin/api/tools/profiles',signal)]);catalog=nextCatalog;profilesData=nextProfiles;const keep=nextProfiles.profiles?.some((item)=>item.id===selectedId)?selectedId:nextProfiles.profiles?.[0]?.id??'';selectProfile(keep);detailId||=nextCatalog.items?.[0]?.id??'';error='';}catch(cause){if(!(cause instanceof DOMException&&cause.name==='AbortError'))error=message(cause);}finally{loading=false;}}
-  async function saveAs(id:string):Promise<void>{if(!id.trim()){error='Profile name is required.';return;}busy=true;error='';notice='';try{await api.put(`/admin/api/tools/profiles/${encodeURIComponent(id.trim())}`,{tools:toolDraft,inputs:inputDraft});notice=`Profile ${id.trim()} saved.`;selectedId=id.trim();await load();}catch(cause){error=message(cause);}finally{busy=false;}}
-  async function createCopy():Promise<void>{await saveAs(cloneName);if(!error)cloneOpen=false;}
-  async function remove():Promise<void>{if(!selected||selected.readonly||!confirm(`Delete tool profile “${selected.name}”?`))return;busy=true;error='';try{await api.del(`/admin/api/tools/profiles/${encodeURIComponent(selected.id)}`);selectedId='';await load();notice=`Profile ${selected.name} deleted.`;}catch(cause){error=message(cause);}finally{busy=false;}}
-  function updateTool(item:ToolItem,state:string):void{if(selected?.readonly)return;toolDraft={...toolDraft,[item.id]:state};if(item.type==='namespace'&&state==='disabled'){const next={...toolDraft};for(const child of catalog.items??[])if(child.namespace_id===item.id)next[child.id]='disabled';toolDraft=next;}dirty=true;}
-  function stateFor(item:ToolItem):string{return toolDraft[item.id]??'disabled';}function effectiveDisabled(item:ToolItem):boolean{return!!item.namespace_id&&toolDraft[item.namespace_id]==='disabled';}function inputValue(item:ToolItem,input:ProfileInput):string{return inputDraft[item.id]?.[input.id]??input.default??'';}function setInput(item:ToolItem,input:ProfileInput,value:string):void{inputDraft={...inputDraft,[item.id]:{...(inputDraft[item.id]??{}),[input.id]:value}};dirty=true;}function inputVisible(item:ToolItem,input:ProfileInput):boolean{return!input.ui_hidden&&(!input.visible_when?.length||input.visible_when.includes(stateFor(item)));}
-  onMount(()=>{const controller=new AbortController();void load(controller.signal);return()=>controller.abort();});
+  import { onMount } from 'svelte';
+  import Modal from '../components/Modal.svelte';
+  import { api } from '../lib/api';
+  import { t } from '../lib/i18n.svelte';
+
+  type InputOption = { value: string; label?: string };
+  type ProfileInput = {
+    id: string;
+    label_i18n?: string;
+    type?: string;
+    default?: string;
+    visible_when?: string[];
+    options?: InputOption[];
+    readonly?: boolean;
+    ui_hidden?: boolean;
+  };
+  type Placement = { normal_mode_i18n?: string; code_mode_i18n?: string };
+  type ToolItem = {
+    id: string;
+    name?: string;
+    type?: string;
+    namespace_id?: string;
+    policy_id?: string;
+    summary_i18n?: string;
+    description_i18n?: string;
+    note_i18n?: string;
+    note_visible_when?: string[];
+    profile_inputs?: ProfileInput[];
+    codex_placement?: Placement;
+    ui_hidden?: boolean;
+  };
+  type CatalogGroup = { id: string; item_ids: string[] };
+  type NamespacePlacement = { namespace_id: string; child_ids: string[] };
+  type Catalog = {
+    items?: ToolItem[];
+    placements?: {
+      groups?: CatalogGroup[];
+      namespaces?: NamespacePlacement[];
+    };
+  };
+  type Profile = {
+    id: string;
+    name: string;
+    tools: Record<string, string>;
+    inputs: Record<string, Record<string, string>>;
+    readonly: boolean;
+  };
+  type ProfilesResponse = {
+    profiles?: Profile[];
+    supported_states?: Record<string, string[]>;
+    references?: Record<string, string[]>;
+  };
+  type FilterId = 'all' | 'exec_expansion' | 'function' | 'namespace' | 'rosetta_injection';
+  type ResolvedGroup = { id: string; items: ToolItem[] };
+
+  const filterOptions: Array<{ id: FilterId; labelKey: string; fallback: string }> = [
+    { id: 'all', labelKey: 'tools.filter.all', fallback: 'All' },
+    { id: 'exec_expansion', labelKey: 'tools.filter.exec_expansion', fallback: 'Exec Expansion' },
+    { id: 'function', labelKey: 'tools.filter.function', fallback: 'Function' },
+    { id: 'namespace', labelKey: 'tools.filter.namespace', fallback: 'Namespace' },
+    { id: 'rosetta_injection', labelKey: 'tools.filter.rosetta_injection', fallback: 'Rosetta Injection' },
+  ];
+
+  let catalog = $state<Catalog>({});
+  let profilesData = $state<ProfilesResponse>({});
+  let selectedId = $state('');
+  let toolDraft = $state<Record<string, string>>({});
+  let inputDraft = $state<Record<string, Record<string, string>>>({});
+  let cloneName = $state('');
+  let cloneOpen = $state(false);
+  let filter = $state<FilterId>('all');
+  let detailId = $state('');
+  let expandedNamespaces = $state<string[]>([]);
+  let loading = $state(true);
+  let busy = $state(false);
+  let dirty = $state(false);
+  let error = $state('');
+  let notice = $state('');
+
+  let selected = $derived((profilesData.profiles ?? []).find((profile) => profile.id === selectedId));
+  let detail = $derived((catalog.items ?? []).find((item) => item.id === detailId));
+  let itemIndex = $derived(new Map((catalog.items ?? []).map((item) => [item.id, item])));
+  let namespaceIndex = $derived(new Map(
+    (catalog.placements?.namespaces ?? []).map((placement) => [placement.namespace_id, placement]),
+  ));
+  let visibleGroups = $derived.by((): ResolvedGroup[] =>
+    (catalog.placements?.groups ?? [])
+      .filter((group) => filter === 'all' || group.id === filter)
+      .map((group) => ({
+        id: group.id,
+        items: group.item_ids
+          .map((id) => itemIndex.get(id))
+          .filter((item): item is ToolItem => Boolean(item && !item.ui_hidden)),
+      }))
+      .filter((group) => group.items.length > 0),
+  );
+  let visibleToolCount = $derived(visibleGroups.reduce(
+    (count, group) => count + group.items.reduce(
+      (groupCount, item) => groupCount + 1 + (item.type === 'namespace' ? namespaceChildren(item.id).length : 0),
+      0,
+    ),
+    0,
+  ));
+
+  const message = (value: unknown) => value instanceof Error ? value.message : String(value);
+
+  function namespaceChildren(namespaceId: string): ToolItem[] {
+    return (namespaceIndex.get(namespaceId)?.child_ids ?? [])
+      .map((id) => itemIndex.get(id))
+      .filter((item): item is ToolItem => Boolean(item && !item.ui_hidden));
+  }
+
+  function resetExpandedNamespaces(): void {
+    expandedNamespaces = (catalog.placements?.namespaces ?? [])
+      .map((placement) => placement.namespace_id)
+      .filter((namespaceId) => toolDraft[namespaceId] !== 'disabled');
+  }
+
+  function selectProfile(id: string): void {
+    const profile = (profilesData.profiles ?? []).find((item) => item.id === id);
+    if (!profile) return;
+    selectedId = id;
+    toolDraft = { ...profile.tools };
+    inputDraft = JSON.parse(JSON.stringify(profile.inputs ?? {})) as Record<string, Record<string, string>>;
+    resetExpandedNamespaces();
+    dirty = false;
+    error = '';
+  }
+
+  function setFilter(nextFilter: FilterId): void {
+    filter = nextFilter;
+    const group = (catalog.placements?.groups ?? []).find((item) => item.id === nextFilter);
+    const firstId = nextFilter === 'all'
+      ? catalog.placements?.groups?.[0]?.item_ids[0]
+      : group?.item_ids[0];
+    detailId = firstId ?? '';
+  }
+
+  async function load(signal?: AbortSignal): Promise<void> {
+    try {
+      const [nextCatalog, nextProfiles] = await Promise.all([
+        api.get<Catalog>('/admin/api/tools/catalog', signal),
+        api.get<ProfilesResponse>('/admin/api/tools/profiles', signal),
+      ]);
+      catalog = nextCatalog;
+      profilesData = nextProfiles;
+      const keep = nextProfiles.profiles?.some((item) => item.id === selectedId)
+        ? selectedId
+        : nextProfiles.profiles?.[0]?.id ?? '';
+      selectProfile(keep);
+      detailId ||= nextCatalog.placements?.groups?.[0]?.item_ids[0] ?? '';
+      error = '';
+    } catch (cause) {
+      if (!(cause instanceof DOMException && cause.name === 'AbortError')) error = message(cause);
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function saveAs(id: string): Promise<void> {
+    if (!id.trim()) {
+      error = 'Profile name is required.';
+      return;
+    }
+    busy = true;
+    error = '';
+    notice = '';
+    try {
+      await api.put(`/admin/api/tools/profiles/${encodeURIComponent(id.trim())}`, {
+        tools: toolDraft,
+        inputs: inputDraft,
+      });
+      notice = `Profile ${id.trim()} saved.`;
+      selectedId = id.trim();
+      await load();
+    } catch (cause) {
+      error = message(cause);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function createCopy(): Promise<void> {
+    await saveAs(cloneName);
+    if (!error) cloneOpen = false;
+  }
+
+  async function remove(): Promise<void> {
+    if (!selected || selected.readonly || !confirm(`Delete tool profile “${selected.name}”?`)) return;
+    busy = true;
+    error = '';
+    try {
+      await api.del(`/admin/api/tools/profiles/${encodeURIComponent(selected.id)}`);
+      selectedId = '';
+      await load();
+      notice = `Profile ${selected.name} deleted.`;
+    } catch (cause) {
+      error = message(cause);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function updateTool(item: ToolItem, state: string): void {
+    if (selected?.readonly) return;
+    toolDraft = { ...toolDraft, [item.id]: state };
+    if (item.type === 'namespace' && state === 'disabled') {
+      const next = { ...toolDraft };
+      for (const child of namespaceChildren(item.id)) next[child.id] = 'disabled';
+      toolDraft = next;
+      expandedNamespaces = expandedNamespaces.filter((id) => id !== item.id);
+    }
+    dirty = true;
+  }
+
+  function stateFor(item: ToolItem): string {
+    if (item.namespace_id && toolDraft[item.namespace_id] === 'disabled') return 'disabled';
+    return toolDraft[item.id] ?? 'disabled';
+  }
+
+  function effectiveDisabled(item: ToolItem): boolean {
+    return Boolean(item.namespace_id && toolDraft[item.namespace_id] === 'disabled');
+  }
+
+  function toggleNamespace(item: ToolItem): void {
+    if (stateFor(item) === 'disabled') return;
+    expandedNamespaces = expandedNamespaces.includes(item.id)
+      ? expandedNamespaces.filter((id) => id !== item.id)
+      : [...expandedNamespaces, item.id];
+  }
+
+  function namespaceExpanded(item: ToolItem): boolean {
+    return stateFor(item) !== 'disabled' && expandedNamespaces.includes(item.id);
+  }
+
+  function inputValue(item: ToolItem, input: ProfileInput): string {
+    return inputDraft[item.id]?.[input.id] ?? input.default ?? '';
+  }
+
+  function setInput(item: ToolItem, input: ProfileInput, value: string): void {
+    inputDraft = {
+      ...inputDraft,
+      [item.id]: { ...(inputDraft[item.id] ?? {}), [input.id]: value },
+    };
+    dirty = true;
+  }
+
+  function inputVisible(item: ToolItem, input: ProfileInput): boolean {
+    return !input.ui_hidden && (!input.visible_when?.length || input.visible_when.includes(stateFor(item)));
+  }
+
+  function selectOnKeyboard(event: KeyboardEvent, item: ToolItem): void {
+    if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    detailId = item.id;
+  }
+
+  onMount(() => {
+    const controller = new AbortController();
+    void load(controller.signal);
+    return () => controller.abort();
+  });
 </script>
-<div class="section"><div class="section-header"><h2>{t('section.tools','Tool Catalog')}</h2></div><div class="tools-notice"><div>{t('tools.notice','This static catalog includes conditionally enabled tools and does not describe the tools available to the current request.')}</div><div style="margin-top:4px">{t('tools.disabledHint','Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.')}</div></div>{#if error}<div class="toast error show" role="alert">{error}</div>{/if}{#if notice}<div class="toast show" role="status">{notice}</div>{/if}
-{#if loading}<div class="tool-catalog-status">Loading tool catalog...</div>{:else if !selected}<div class="tool-catalog-status">No tool profiles are available.</div>{:else}<div class="tools-meta">{visibleItems.length} tools{#if (profilesData.references?.[selected.id]??[]).length} · Used by: {(profilesData.references?.[selected.id]??[]).join(', ')}{/if}</div><div class="tool-profile-toolbar"><label for="toolProfileSelect">Profile</label><select id="toolProfileSelect" value={selectedId} onchange={(event)=>selectProfile(event.currentTarget.value)}>{#each profilesData.profiles??[] as profile}<option value={profile.id}>{profile.name}</option>{/each}</select><button class="btn btn-sm" onclick={()=>{cloneName='';cloneOpen=true;}}>Create Copy</button><button class="btn btn-sm btn-primary" disabled={busy||!dirty} onclick={()=>void saveAs(selected.id)}>Save Profile</button><button class="btn btn-sm" disabled={busy||!dirty} onclick={()=>selectProfile(selected.id)}>Reset</button><button class="btn btn-sm btn-danger" disabled={busy||selected.readonly} onclick={()=>void remove()}>Delete Profile</button>{#if dirty}<span class="tool-profile-dirty">Unsaved changes</span>{/if}</div>
-<div class="tools-toolbar" role="toolbar" aria-label="Filter tool types">{#each [['all','All'],['functions','Function'],['namespaces','Namespace'],['injections','Rosetta Injection']] as option}<button class="tool-filter-btn" class:active={filter===option[0]} onclick={()=>{filter=option[0];}}>{option[1]}</button>{/each}</div><div class="tool-catalog-layout"><div class="tool-catalog-groups"><div class="tool-group"><div class="tool-group-title"><span>Tools</span><span class="tool-group-count">{visibleItems.length}</span></div><div class="tool-list tool-card-grid">{#each visibleItems as item}<div class={`tool-item tool-state-${stateFor(item)}`} class:selected={detailId===item.id} role="button" tabindex="0" onclick={()=>{detailId=item.id;}} onkeydown={(event)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();detailId=item.id;}}}><div class="tool-name">{item.name??item.id}</div><select class="tool-state-select" aria-label={`${item.name??item.id} state`} disabled={selected.readonly||effectiveDisabled(item)} value={stateFor(item)} onclick={(event)=>event.stopPropagation()} onchange={(event)=>updateTool(item,event.currentTarget.value)}>{#each profilesData.supported_states?.[item.id]??['disabled','passthrough','modified'] as state}<option value={state}>{state}</option>{/each}</select>{#if item.summary_i18n}<div class="tool-description">{t(item.summary_i18n,'')}</div>{/if}</div>{/each}</div></div></div>
-{#if detail}<aside class="tool-detail-panel" aria-label="Tool details"><div class="tool-detail-header"><div class="tool-detail-heading"><span class="tool-detail-kicker">{detail.type??'tool'}</span><span class="tool-detail-name">{detail.name??detail.id}</span></div><div class="tool-badges"><span class="tool-badge kind">{detail.id}</span></div></div><div class="tool-detail-body">{#if detail.description_i18n}<div class="tool-description">{t(detail.description_i18n,'')}</div>{/if}{#if detail.note_i18n&&(!detail.note_visible_when?.length||detail.note_visible_when.includes(stateFor(detail)))}<div class="tool-description">{t(detail.note_i18n,'')}</div>{/if}<div class="tool-policy"><span>Policy</span><code>{detail.policy_id??'-'}</code></div>{#if detail.codex_placement}<div class="tool-codex-placement"><div class="tool-codex-placement-row"><span class="tool-codex-placement-label">Normal mode</span><span>{detail.codex_placement.normal_mode_i18n?t(detail.codex_placement.normal_mode_i18n,'-'):'-'}</span></div><div class="tool-codex-placement-row"><span class="tool-codex-placement-label">Code mode</span><span>{detail.codex_placement.code_mode_i18n?t(detail.codex_placement.code_mode_i18n,'-'):'-'}</span></div></div>{/if}<div class="tool-profile-inputs">{#each detail.profile_inputs??[] as input}{#if inputVisible(detail,input)}<div class="tool-profile-input-group"><label class="tool-profile-input-label" for={`tool-${detail.id}-${input.id}`}>{input.label_i18n?t(input.label_i18n,input.id):input.id}</label>{#if input.type==='select'}<select id={`tool-${detail.id}-${input.id}`} class="tool-profile-input" disabled={input.readonly} value={inputValue(detail,input)} onchange={(event)=>setInput(detail,input,event.currentTarget.value)}>{#each input.options??[] as option}<option value={option.value}>{option.label??option.value}</option>{/each}</select>{:else if input.type==='textarea'}<textarea id={`tool-${detail.id}-${input.id}`} class="tool-profile-input tool-profile-textarea" readonly={input.readonly} value={inputValue(detail,input)} oninput={(event)=>setInput(detail,input,event.currentTarget.value)}></textarea>{:else}<input id={`tool-${detail.id}-${input.id}`} class="tool-profile-input" type={input.type==='password'?'password':'text'} readonly={input.readonly} value={inputValue(detail,input)} oninput={(event)=>setInput(detail,input,event.currentTarget.value)} />{/if}</div>{/if}{/each}</div></div></aside>{/if}</div>{/if}</div>
-<Modal open={cloneOpen} labelledby="tool-clone-title" onclose={()=>cloneOpen=false}><h3 id="tool-clone-title">Create Copy</h3><div class="form-group"><label for="toolProfileCloneName">New profile name</label><input id="toolProfileCloneName" maxlength="128" bind:value={cloneName} placeholder="e.g. DeepSeek Tools" /></div><div class="modal-actions"><button class="btn" onclick={()=>cloneOpen=false}>Cancel</button><button class="btn btn-primary" disabled={busy||!cloneName.trim()} onclick={()=>void createCopy()}>Create copy</button></div></Modal>
+
+{#snippet toolCard(item: ToolItem, nested: boolean)}
+  <div
+    class={`tool-item${nested ? ' nested' : ''} tool-state-${stateFor(item)}`}
+    class:selected={detailId === item.id}
+    data-tool-id={item.id}
+    role="button"
+    tabindex="0"
+    aria-pressed={detailId === item.id}
+    onclick={() => { detailId = item.id; }}
+    onkeydown={(event) => selectOnKeyboard(event, item)}
+  >
+    <div class="tool-name">{item.name ?? item.id}</div>
+    <select
+      class="tool-state-select"
+      aria-label={`${item.name ?? item.id} state`}
+      disabled={selected?.readonly || effectiveDisabled(item)}
+      value={stateFor(item)}
+      onclick={(event) => event.stopPropagation()}
+      onchange={(event) => updateTool(item, event.currentTarget.value)}
+    >
+      {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
+        <option value={state}>{state}</option>
+      {/each}
+    </select>
+  </div>
+{/snippet}
+
+{#snippet namespaceRow(item: ToolItem)}
+  {@const expanded = namespaceExpanded(item)}
+  <div class="tool-namespace" data-namespace-id={item.id}>
+    <div
+      class={`tool-namespace-head tool-state-${stateFor(item)}`}
+      class:selected={detailId === item.id}
+      data-tool-id={item.id}
+      role="button"
+      tabindex="0"
+      aria-pressed={detailId === item.id}
+      onclick={() => { detailId = item.id; }}
+      onkeydown={(event) => selectOnKeyboard(event, item)}
+    >
+      <button
+        type="button"
+        class="tool-namespace-toggle"
+        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${item.name ?? item.id}`}
+        aria-expanded={expanded}
+        aria-controls={`tool-children-${item.id}`}
+        disabled={stateFor(item) === 'disabled'}
+        onclick={(event) => { event.stopPropagation(); toggleNamespace(item); }}
+      >{expanded ? '▾' : '▸'}</button>
+      <div class="tool-name">{item.name ?? item.id}</div>
+      <div class="tool-badges"><span class="tool-badge kind">{t(`tools.type.${item.type}`, item.type ?? 'tool')}</span></div>
+      <div class="tool-policy">
+        <select
+          class="tool-state-select"
+          aria-label={`${item.name ?? item.id} state`}
+          disabled={selected?.readonly}
+          value={stateFor(item)}
+          onclick={(event) => event.stopPropagation()}
+          onchange={(event) => updateTool(item, event.currentTarget.value)}
+        >
+          {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
+            <option value={state}>{state}</option>
+          {/each}
+        </select>
+      </div>
+    </div>
+    <div
+      class="tool-namespace-children"
+      id={`tool-children-${item.id}`}
+      hidden={!expanded}
+    >
+      {#each namespaceChildren(item.id) as child (child.id)}
+        {@render toolCard(child, true)}
+      {/each}
+    </div>
+  </div>
+{/snippet}
+
+<div class="section">
+  <div class="section-header"><h2>{t('section.tools', 'Tool Catalog')}</h2></div>
+  <div class="tools-notice">
+    <div>{t('tools.notice', 'This static catalog includes conditionally enabled tools and does not describe the tools available to the current request.')}</div>
+    <div style="margin-top:4px">{t('tools.disabledHint', 'Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.')}</div>
+  </div>
+  {#if error}<div class="toast error show" role="alert">{error}</div>{/if}
+  {#if notice}<div class="toast show" role="status">{notice}</div>{/if}
+
+  {#if loading}
+    <div class="tool-catalog-status">Loading tool catalog...</div>
+  {:else if !selected}
+    <div class="tool-catalog-status">No tool profiles are available.</div>
+  {:else}
+    <div class="tools-meta">
+      {visibleToolCount} tools
+      {#if (profilesData.references?.[selected.id] ?? []).length}
+        · Used by: {(profilesData.references?.[selected.id] ?? []).join(', ')}
+      {/if}
+    </div>
+    <div class="tool-profile-toolbar">
+      <label for="toolProfileSelect">Profile</label>
+      <select id="toolProfileSelect" value={selectedId} onchange={(event) => selectProfile(event.currentTarget.value)}>
+        {#each profilesData.profiles ?? [] as profile}
+          <option value={profile.id}>{profile.name}</option>
+        {/each}
+      </select>
+      <button class="btn btn-sm" onclick={() => { cloneName = ''; cloneOpen = true; }}>Create Copy</button>
+      <button class="btn btn-sm btn-primary" disabled={busy || !dirty} onclick={() => void saveAs(selected.id)}>Save Profile</button>
+      <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>Reset</button>
+      <button class="btn btn-sm btn-danger" disabled={busy || selected.readonly} onclick={() => void remove()}>Delete Profile</button>
+      {#if dirty}<span class="tool-profile-dirty">Unsaved changes</span>{/if}
+    </div>
+
+    <div class="tools-toolbar" role="toolbar" aria-label="Filter tool types">
+      {#each filterOptions as option}
+        <button
+          class="tool-filter-btn"
+          class:active={filter === option.id}
+          onclick={() => setFilter(option.id)}
+        >{t(option.labelKey, option.fallback)}</button>
+      {/each}
+    </div>
+
+    <div class="tool-catalog-layout">
+      <div class="tool-catalog-groups">
+        {#each visibleGroups as group (group.id)}
+          <section class="tool-group" data-tool-group={group.id}>
+            <div class="tool-group-title">
+              <span>{t(`tools.group.${group.id}`, group.id)}</span>
+              <span class="tool-group-count">{group.items.length}</span>
+            </div>
+            {#if group.id === 'namespace'}
+              <div class="tool-list">
+                {#each group.items as item (item.id)}
+                  {@render namespaceRow(item)}
+                {/each}
+              </div>
+            {:else}
+              <div class="tool-list tool-card-grid">
+                {#each group.items as item (item.id)}
+                  {@render toolCard(item, false)}
+                {/each}
+              </div>
+            {/if}
+          </section>
+        {/each}
+      </div>
+
+      {#if detail}
+        <aside class="tool-detail-panel" aria-label="Tool details">
+          <div class="tool-detail-header">
+            <div class="tool-detail-heading">
+              <span class="tool-detail-kicker">{detail.type ?? 'tool'}</span>
+              <span class="tool-detail-name">{detail.name ?? detail.id}</span>
+            </div>
+            <div class="tool-badges"><span class="tool-badge kind">{detail.id}</span></div>
+          </div>
+          <div class="tool-detail-body">
+            {#if detail.description_i18n}<div class="tool-description">{t(detail.description_i18n, '')}</div>{/if}
+            {#if detail.note_i18n && (!detail.note_visible_when?.length || detail.note_visible_when.includes(stateFor(detail)))}
+              <div class="tool-description">{t(detail.note_i18n, '')}</div>
+            {/if}
+            <div class="tool-policy"><span>Policy</span><code>{detail.policy_id ?? '-'}</code></div>
+            {#if detail.codex_placement}
+              <div class="tool-codex-placement">
+                <div class="tool-codex-placement-row">
+                  <span class="tool-codex-placement-label">Normal mode</span>
+                  <span>{detail.codex_placement.normal_mode_i18n ? t(detail.codex_placement.normal_mode_i18n, '-') : '-'}</span>
+                </div>
+                <div class="tool-codex-placement-row">
+                  <span class="tool-codex-placement-label">Code mode</span>
+                  <span>{detail.codex_placement.code_mode_i18n ? t(detail.codex_placement.code_mode_i18n, '-') : '-'}</span>
+                </div>
+              </div>
+            {/if}
+            <div class="tool-profile-inputs">
+              {#each detail.profile_inputs ?? [] as input}
+                {#if inputVisible(detail, input)}
+                  <div class="tool-profile-input-group">
+                    <label class="tool-profile-input-label" for={`tool-${detail.id}-${input.id}`}>{input.label_i18n ? t(input.label_i18n, input.id) : input.id}</label>
+                    {#if input.type === 'select'}
+                      <select
+                        id={`tool-${detail.id}-${input.id}`}
+                        class="tool-profile-input"
+                        disabled={input.readonly}
+                        value={inputValue(detail, input)}
+                        onchange={(event) => setInput(detail, input, event.currentTarget.value)}
+                      >
+                        {#each input.options ?? [] as option}<option value={option.value}>{option.label ?? option.value}</option>{/each}
+                      </select>
+                    {:else if input.type === 'textarea'}
+                      <textarea
+                        id={`tool-${detail.id}-${input.id}`}
+                        class="tool-profile-input tool-profile-textarea"
+                        readonly={input.readonly}
+                        value={inputValue(detail, input)}
+                        oninput={(event) => setInput(detail, input, event.currentTarget.value)}
+                      ></textarea>
+                    {:else}
+                      <input
+                        id={`tool-${detail.id}-${input.id}`}
+                        class="tool-profile-input"
+                        type={input.type === 'password' ? 'password' : 'text'}
+                        readonly={input.readonly}
+                        value={inputValue(detail, input)}
+                        oninput={(event) => setInput(detail, input, event.currentTarget.value)}
+                      />
+                    {/if}
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          </div>
+        </aside>
+      {/if}
+    </div>
+  {/if}
+</div>
+
+<Modal open={cloneOpen} labelledby="tool-clone-title" onclose={() => cloneOpen = false}>
+  <h3 id="tool-clone-title">Create Copy</h3>
+  <div class="form-group">
+    <label for="toolProfileCloneName">New profile name</label>
+    <input id="toolProfileCloneName" maxlength="128" bind:value={cloneName} placeholder="e.g. DeepSeek Tools" />
+  </div>
+  <div class="modal-actions">
+    <button class="btn" onclick={() => cloneOpen = false}>Cancel</button>
+    <button class="btn btn-primary" disabled={busy || !cloneName.trim()} onclick={() => void createCopy()}>Create copy</button>
+  </div>
+</Modal>
