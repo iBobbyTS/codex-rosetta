@@ -15,6 +15,14 @@ beforeEach(() => {
   apiMock.del.mockResolvedValue({ ok: true });
 });
 
+function expectFixedModalRegions(dialog: HTMLElement): void {
+  expect(Array.from(dialog.children, (child) => child.className)).toEqual([
+    'modal-header',
+    'modal-body',
+    'modal-actions',
+  ]);
+}
+
 describe('legacy Admin visual structure', () => {
   it('keeps provider editing in the legacy modal and requires an exact delete name', async () => {
     apiMock.get.mockResolvedValue({
@@ -29,12 +37,14 @@ describe('legacy Admin visual structure', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
     const addDialog = screen.getByRole('dialog', { name: 'Add Provider' });
+    expectFixedModalRegions(addDialog);
     expect(within(addDialog).getByLabelText('Provider Name')).toHaveFocus();
     await fireEvent.keyDown(addDialog, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Provider' })).not.toBeInTheDocument());
 
     await fireEvent.click(screen.getByRole('button', { name: 'Delete' }));
     const deleteDialog = screen.getByRole('dialog', { name: 'Delete Provider' });
+    expectFixedModalRegions(deleteDialog);
     const confirmButton = within(deleteDialog).getByRole('button', { name: 'Delete' });
     expect(confirmButton).toBeDisabled();
     expect(within(deleteDialog).getByText(/1 affected models/)).toBeInTheDocument();
@@ -53,13 +63,17 @@ describe('legacy Admin visual structure', () => {
     expect(await screen.findByText('API Keys')).toBeInTheDocument();
     expect(screen.queryByLabelText('Label (optional)')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: '+ Generate Key' }));
-    expect(screen.getByRole('dialog', { name: 'Generate API Key' })).toBeInTheDocument();
+    const keyDialog = screen.getByRole('dialog', { name: 'Generate API Key' });
+    expectFixedModalRegions(keyDialog);
     keys.unmount();
 
     render(ModelsPage);
     expect(await screen.findByText('Codex Task Models')).toBeInTheDocument();
     expect(screen.queryByLabelText('Model Group Name')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: '+ Add Model Group' }));
-    expect(screen.getByRole('dialog', { name: 'Add Model Group' })).toBeInTheDocument();
+    const modelDialog = screen.getByRole('dialog', { name: 'Add Model Group' });
+    expectFixedModalRegions(modelDialog);
+    await fireEvent.click(within(modelDialog).getByRole('button', { name: 'Enter Model Information Manually' }));
+    expectFixedModalRegions(screen.getByRole('dialog', { name: 'Model Information' }));
   });
 });

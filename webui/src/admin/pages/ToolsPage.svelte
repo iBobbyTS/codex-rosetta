@@ -518,13 +518,13 @@
 </div>
 
 <Modal open={cloneOpen} labelledby="tool-clone-title" onclose={() => cloneOpen = false}>
-  <h3 id="tool-clone-title">Create Copy</h3>
+  {#snippet header()}<h3 id="tool-clone-title">Create Copy</h3>{/snippet}
   <div class="form-group">
     <label for="toolProfileCloneName">New profile name</label>
     <input id="toolProfileCloneName" maxlength="128" bind:value={cloneName} placeholder="e.g. DeepSeek Tools" />
   </div>
-  <div class="modal-actions">
+  {#snippet actions()}
     <button class="btn" onclick={() => cloneOpen = false}>Cancel</button>
     <button class="btn btn-primary" disabled={busy || !cloneName.trim()} onclick={() => void createCopy()}>Create copy</button>
-  </div>
+  {/snippet}
 </Modal>
