@@ -29,6 +29,7 @@ from ...model_presets import (
 )
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
+    TOOL_PROFILE_PASSTHROUGH_OPTION,
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     tool_profile_contract,
@@ -491,6 +492,10 @@ async def get_config(request: Any) -> Response:
                 }
                 for profile in tool_profile_contract()["profiles"]
             ],
+            "tool_profile_passthrough_option": {
+                "id": TOOL_PROFILE_PASSTHROUGH_OPTION,
+                "api_types": ["responses"],
+            },
             "model_presets": model_presets_for_admin(),
             "codex": config.codex,
             "server": server,

@@ -2,16 +2,16 @@
 
 Codex talks to models through the OpenAI Responses API surface. Many third-party providers only expose an OpenAI Chat Completions-compatible endpoint. Codex-Rosetta bridges that gap in different ways depending on the route:
 
-- The Admin UI exposes one **OpenAI Responses** protocol. Every Provider uses the direct Responses path; Provider selection changes only the default Tool Profile.
+- The Admin UI exposes one **OpenAI Responses** protocol. Every Provider uses the direct Responses path; Provider selection changes only the default tool handling.
 - Responses to Chat routes are converted through Codex-Rosetta's IR, then converted back to Responses events for Codex.
 
 The goal is to preserve Codex runtime semantics, not just make the upstream request syntactically valid.
 
 ## One Responses Protocol, Provider-Aware Defaults
 
-Provider configuration stores the selected `provider` together with `api_type: "responses"`. The Provider sub-option is not stored; the Admin UI derives it only from the persisted Provider and Base URL. The Provider choice selects the model-group default Profile, while protocol handling remains direct:
+Provider configuration stores the selected `provider` together with `api_type: "responses"`. The Provider sub-option is not stored; the Admin UI derives it only from the persisted Provider and Base URL. The Provider choice selects the model-group default tool handling, while protocol handling remains direct:
 
-- OpenAI Official selects **透传（适用于OpenAI官方API）** and keeps the request, tool declarations, response JSON, and SSE bytes on the direct path.
+- OpenAI Official selects **Pass through**, a special model-group option rather than a Tool Profile. Rosetta performs no tool mapping and keeps the request, tool declarations, response JSON, and SSE bytes on the direct path.
 - OpenAI Custom and Custom + Custom select **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**. This keeps every original tool shape except `web.run`, which is Modified and handled by Rosetta.
 - A listed third-party provider with Responses selects **工具映射（适用于第三方模型提供的Responses接口）** while keeping direct Responses transport.
 - Any Chat protocol selects **Chat Default（适用于第三方仅提供chat api的模型）**. Anthropic and Google protocols have no bundled default, but may use an explicitly compatible user Profile.
@@ -20,7 +20,7 @@ The only supported Responses protocol value is `responses`; the former `response
 
 ## Direct Responses Transport
 
-For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, forwards the resulting request, and streams raw upstream SSE bytes back to Codex. Model-switch compaction is the deliberate semantic exception: Rosetta asks the previous model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
+For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, or skips tool mapping when **Pass through** is selected, then forwards the resulting request and streams raw upstream SSE bytes back to Codex. Model-switch compaction is the deliberate semantic exception: Rosetta asks the previous model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
 
 This is important because Codex relies on fields that are not part of a minimal cross-provider IR, including:
 
@@ -29,7 +29,7 @@ This is important because Codex relies on fields that are not part of a minimal 
 - Native Responses tool item structure.
 - Provider-specific request fields such as `include`.
 
-The bundled **透传** Profile leaves every native function, custom, hosted, and Namespace tool Passthrough. Its only Disabled entries are synthetic Rosetta injections, so it cannot add a tool Codex did not send. The bundled **web.run 注入** Profile differs in exactly one state: `web.run` is Modified. Rosetta then rewrites only the live `web__run` section nested in the custom `exec` description; other Responses fields and upstream response bytes remain on the direct path. **工具映射** inherits the established Chat Default mapping policy for listed third-party Responses implementations.
+The **Pass through** option bypasses Tool Profile resolution entirely, so Rosetta neither maps native tools nor injects synthetic ones. The bundled **web.run 注入** Profile preserves the original Responses tool shapes except that `web.run` is Modified. Rosetta then rewrites only the live `web__run` section nested in the custom `exec` description; other Responses fields and upstream response bytes remain on the direct path. **工具映射** inherits the established Chat Default mapping policy for listed third-party Responses implementations.
 
 Codex's standalone Search and Images clients use three additional JSON endpoints:
 

@@ -25,16 +25,11 @@ from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 
 def _responses_route() -> ResolvedRoute:
-    profile = tool_profile_contract()["readonly"]["openai-responses-tool-mapping-only"][
-        "tools"
-    ]
     return ResolvedRoute(
         source_provider="openai_responses",
         target_provider="openai_responses",
         provider_name="test-provider",
         upstream_model="gpt-test",
-        tool_profile_name="test-pass-through",
-        tool_profile=profile,
     )
 
 
@@ -205,12 +200,7 @@ def test_tool_mapping_only_sends_capability_pruned_nested_web_run_upstream():
             raw_content=json.dumps(response).encode(),
         )
 
-    profile = dict(
-        tool_profile_contract()["readonly"]["openai-responses-tool-mapping-only"][
-            "tools"
-        ]
-    )
-    profile["namespace.web.run"] = "modified"
+    profile = dict(tool_profile_contract()["readonly"]["web-run-injection"]["tools"])
     route = ResolvedRoute(
         source_provider="openai_responses",
         target_provider="openai_responses",

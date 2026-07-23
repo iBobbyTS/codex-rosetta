@@ -64,7 +64,7 @@ def test_discover_config_resolves_explicit_directory() -> None:
             "openai",
             "responses",
             "https://api.openai.com/v1",
-            "openai-responses-tool-mapping-only",
+            "passthrough",
         ),
         (
             "openai",
@@ -104,7 +104,7 @@ def test_provider_option_does_not_override_url_derived_profile() -> None:
                 "base_url": "https://api.openai.com/v1",
             }
         )
-        == "openai-responses-tool-mapping-only"
+        == "passthrough"
     )
 
 
@@ -114,7 +114,7 @@ def test_provider_option_does_not_override_url_derived_profile() -> None:
         (
             "openai",
             "https://api.openai.com/v1",
-            "openai-responses-tool-mapping-only",
+            "passthrough",
         ),
         (
             "openai",
@@ -159,7 +159,23 @@ def test_unified_responses_protocol_resolves_direct_profile(
     route, _provider_info = GatewayConfig(raw).resolve("openai_responses", "test-model")
 
     assert is_responses_passthrough(route)
-    assert route.tool_profile_name == expected_profile
+    assert route.tool_profile_name == (
+        None if expected_profile == "passthrough" else expected_profile
+    )
+    if expected_profile == "passthrough":
+        assert route.tool_profile == {}
+        assert route.tool_profile_inputs == {}
+
+
+def test_passthrough_tool_option_is_rejected_for_non_responses_provider() -> None:
+    raw = _minimal_raw()
+    raw["model_groups"]["test-llm"]["tool_profile"] = "passthrough"
+
+    with pytest.raises(
+        ValueError,
+        match="'passthrough'.*only available for provider api_type 'responses'",
+    ):
+        GatewayConfig(raw)
 
 
 def test_resolve_codex_home_uses_cli_environment_and_default_precedence(

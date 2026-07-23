@@ -390,18 +390,6 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
     assert catalog["preset_profiles"] == [
         {
-            "id": "openai-responses-tool-mapping-only",
-            "name": "透传（适用于OpenAI官方API）",
-            "api_types": ["responses"],
-            "defaults": {
-                "function": "passthrough",
-                "custom": "passthrough",
-                "hosted": "passthrough",
-                "namespace": "passthrough",
-                "custom_injection": "disabled",
-            },
-        },
-        {
             "id": "web-run-injection",
             "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
             "api_types": ["responses"],
@@ -711,14 +699,13 @@ def test_catalog_defaults_and_namespace_image_policy():
 
 def test_bundled_responses_profiles_preserve_or_map_only_intended_tools() -> None:
     profiles = tool_profile_contract()["readonly"]
-    passthrough = profiles["openai-responses-tool-mapping-only"]["tools"]
     web_run = profiles["web-run-injection"]["tools"]
     mapping = profiles["responses-tool-mapping"]["tools"]
 
-    assert all(
-        state == ("disabled" if item_id.startswith("injection.") else "passthrough")
-        for item_id, state in passthrough.items()
-    )
+    passthrough = {
+        item_id: "disabled" if item_id.startswith("injection.") else "passthrough"
+        for item_id in web_run
+    }
     assert {
         item_id: state
         for item_id, state in web_run.items()
@@ -777,7 +764,6 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     profiles = json.loads(getattr(response, "body"))["profiles"]
     assert [(profile["id"], profile["readonly"]) for profile in profiles] == [
         ("builtin", True),
-        ("openai-responses-tool-mapping-only", True),
         ("web-run-injection", True),
         ("responses-tool-mapping", True),
     ]

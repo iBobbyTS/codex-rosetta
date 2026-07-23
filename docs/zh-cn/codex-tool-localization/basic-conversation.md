@@ -2,16 +2,16 @@
 
 Codex 通过 OpenAI Responses API 接口与模型通信。许多第三方供应商只暴露 OpenAI Chat Completions 兼容的端点。Codex-Rosetta 根据路由不同，以不同方式填补这一差距：
 
-- 管理界面只暴露一个 **OpenAI Responses** 协议。所有 Provider 都走直接 Responses 路径；Provider 选择只改变默认 Tool Profile。
+- 管理界面只暴露一个 **OpenAI Responses** 协议。所有 Provider 都走直接 Responses 路径；Provider 选择只改变默认工具处理方式。
 - Responses 到 Chat 的路由通过 Codex-Rosetta 的 IR 进行转换，然后再转换回 Responses 事件供 Codex 使用。
 
 目标是保留 Codex 运行时的语义，而不仅仅是让上游请求在语法上有效。
 
 ## 单一 Responses 协议与供应商感知默认值
 
-Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应商子选项不入库；管理界面只根据已保存的供应商和 Base URL 推导子选项。供应商选择只决定模型组默认 Profile，协议处理始终保持直接传输：
+Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应商子选项不入库；管理界面只根据已保存的供应商和 Base URL 推导子选项。供应商选择只决定模型组默认工具处理方式，协议处理始终保持直接传输：
 
-- OpenAI 官方选择 **透传（适用于OpenAI官方API）**，请求、工具声明、响应 JSON 和 SSE 字节都走直接路径。
+- OpenAI 官方选择 **透传**。这是模型组的特殊选项，不是 Tool Profile；Rosetta 不执行任何工具映射，请求、工具声明、响应 JSON 和 SSE 字节都走直接路径。
 - OpenAI 自定义以及“自定义 + 自定义”选择 **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**。原始工具形态全部保留，只有 `web.run` 设为 Modified 并由 Rosetta 处理。
 - 列表内第三方供应商选择 Responses 时，自动使用 **工具映射（适用于第三方模型提供的Responses接口）**，同时保持 Responses 直接传输。
 - 任何 Chat 协议选择 **Chat Default（适用于第三方仅提供chat api的模型）**。Anthropic 和 Google 协议没有内置默认 Profile，但可以使用显式兼容的用户 Profile。
@@ -20,7 +20,7 @@ Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应�
 
 ## Responses 直接传输
 
-对于所有同协议 Responses 路由，网关不会通过 IR 解码和重新编码完整请求体。它只应用所选 Tool Profile，再转发处理后的请求，并将上游原始 SSE 字节流式传输回 Codex。模型切换压缩是唯一的语义例外：Rosetta 会让旧模型生成明文摘要，保存对应替换内容七天，并在下一个 Provider 请求前还原。传输层还有一个编码例外：经过认证且带有 `Content-Encoding: zstd` 的请求会先在配置的解压前、解压后大小限制内解码，并移除编码 header。
+对于所有同协议 Responses 路由，网关不会通过 IR 解码和重新编码完整请求体。它会应用所选 Tool Profile；选择 **透传** 时则跳过工具映射。随后网关转发请求，并将上游原始 SSE 字节流式传输回 Codex。模型切换压缩是唯一的语义例外：Rosetta 会让旧模型生成明文摘要，保存对应替换内容七天，并在下一个 Provider 请求前还原。传输层还有一个编码例外：经过认证且带有 `Content-Encoding: zstd` 的请求会先在配置的解压前、解压后大小限制内解码，并移除编码 header。
 
 这一点很重要，因为 Codex 依赖的某些字段不属于最小跨供应商 IR 的一部分，包括：
 
@@ -29,7 +29,7 @@ Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应�
 - 原生的 Responses 工具项结构。
 - 供应商特定的请求字段，如 `include`。
 
-打包的 **透传** Profile 会让所有原生 function、custom、hosted 和 Namespace 工具保持 Passthrough；只有合成式 Rosetta 注入条目为 Disabled，因此不会添加 Codex 未发送的工具。打包的 **web.run 注入** Profile 与它只有一处差异：`web.run` 为 Modified。Rosetta 只改写 custom `exec` 描述中实时提供的 `web__run` Section；其他 Responses 字段和上游响应字节仍走直接路径。**工具映射** 则继承已验证的 Chat Default 映射策略，供列表内第三方 Responses 实现使用。
+**透传**选项会完全绕过 Tool Profile 解析，因此 Rosetta 既不映射原生工具，也不注入合成工具。打包的 **web.run 注入** Profile 会保留原始 Responses 工具形态，只有 `web.run` 为 Modified。Rosetta 只改写 custom `exec` 描述中实时提供的 `web__run` Section；其他 Responses 字段和上游响应字节仍走直接路径。**工具映射** 则继承已验证的 Chat Default 映射策略，供列表内第三方 Responses 实现使用。
 
 Codex 的独立 Search 和 Images 客户端还会使用三个 JSON 端点：
 

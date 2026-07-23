@@ -1235,11 +1235,6 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
             "api_types": ["chat"],
         },
         {
-            "id": "openai-responses-tool-mapping-only",
-            "name": "透传（适用于OpenAI官方API）",
-            "api_types": ["responses"],
-        },
-        {
             "id": "web-run-injection",
             "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
             "api_types": ["responses"],
@@ -1250,6 +1245,10 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
             "api_types": ["responses"],
         },
     ]
+    assert body["tool_profile_passthrough_option"] == {
+        "id": "passthrough",
+        "api_types": ["responses"],
+    }
     assert any(
         preset["slug"] == "gpt-5.6-terra" and preset["display_name"] == "GPT-5.6-Terra"
         for preset in body["model_presets"]
@@ -1316,7 +1315,7 @@ def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
     [
         (
             "https://api.openai.com/v1/",
-            "openai-responses-tool-mapping-only",
+            "passthrough",
         ),
         ("https://relay.example/v1", "web-run-injection"),
     ],
@@ -1414,6 +1413,44 @@ def test_put_model_group_rejects_tool_profile_for_other_protocol(tmp_path):
     assert response.status_code == 400
     assert "not provider api_type 'responses'" in json.loads(response.body)["error"]
     assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_put_model_group_persists_responses_passthrough_without_runtime_profile(
+    tmp_path,
+):
+    config = _config_data()
+    config["providers"]["openai"].update(
+        {
+            "api_type": "responses",
+            "base_url": "https://api.openai.com/v1",
+        }
+    )
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "llm",
+        "tool_profile": "passthrough",
+        "models": {"gpt-grouped": {}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["tool_profile"] == "passthrough"
+    route, _provider = app.gateway_config.resolve("openai_responses", "gpt-grouped")
+    assert route.tool_profile_name is None
+    assert route.tool_profile == {}
+    assert route.tool_profile_inputs == {}
 
 
 @pytest.mark.parametrize("api_type", ["anthropic", "google"])

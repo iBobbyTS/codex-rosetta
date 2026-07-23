@@ -129,7 +129,7 @@ The important behavior is that tool calls must survive the round trip:
 
 ## Tool Profile Scope
 
-Each Tool Profile declares a non-empty set of applicable Provider protocols in its required `api_types` array. The current choices are `chat`, `responses`, `anthropic`, and `google`, and a user Profile may select any combination. **Chat Default（适用于第三方仅提供chat api的模型）** applies to Chat; **透传（适用于OpenAI官方API）**, **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**, and **工具映射（适用于第三方模型提供的Responses接口）** apply to Responses. The model-group editor lists only bundled and user Profiles whose set contains the selected Provider protocol, and the backend rejects mismatched references. Anthropic and Google Providers have no bundled default Profile, but user Profiles may explicitly support either protocol.
+Each Tool Profile declares a non-empty set of applicable Provider protocols in its required `api_types` array. The current choices are `chat`, `responses`, `anthropic`, and `google`, and a user Profile may select any combination. **Chat Default（适用于第三方仅提供chat api的模型）** applies to Chat; **web.run 注入（适用于尚未支持/alpha/search端点的中转站）** and **工具映射（适用于第三方模型提供的Responses接口）** apply to Responses. Responses model groups also offer a special **Pass through** option that is not a Profile and performs no tool mapping. The model-group editor lists this option only for Responses, followed by bundled and user Profiles whose set contains the selected Provider protocol; the backend rejects mismatched references. Anthropic and Google Providers have no bundled default Profile, but user Profiles may explicitly support either protocol.
 
 The bundled Profile manages current Codex image generation through `image_gen.imagegen`. It does not contain the obsolete hosted `image_generation` tool.
 

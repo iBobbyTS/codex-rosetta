@@ -212,6 +212,7 @@ describe('ModelsPage', () => {
         { id: 'responses-default', name: 'Responses Default', api_types: ['responses'] },
         { id: 'shared', name: 'Shared Profile', api_types: ['chat', 'responses', 'anthropic', 'google'] },
       ],
+      tool_profile_passthrough_option: { id: 'passthrough', api_types: ['responses'] },
       tool_profiles: {
         'custom-chat': { api_types: ['chat'] },
         'custom-responses': { api_types: ['responses'] },
@@ -232,6 +233,7 @@ describe('ModelsPage', () => {
     await fireEvent.change(providerSelect, { target: { value: 'responses' } });
 
     expect(within(profileSelect).getByRole('option', { name: 'Responses Default' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'Pass through' })).toBeInTheDocument();
     expect(within(profileSelect).getByRole('option', { name: 'custom-responses' })).toBeInTheDocument();
     expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
@@ -241,12 +243,39 @@ describe('ModelsPage', () => {
     expect(within(profileSelect).getByRole('option', { name: 'custom-anthropic' })).toBeInTheDocument();
     expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(within(profileSelect).queryByRole('option', { name: 'Responses Default' })).toBeNull();
+    expect(within(profileSelect).queryByRole('option', { name: 'Pass through' })).toBeNull();
 
     await fireEvent.change(providerSelect, { target: { value: 'gemini' } });
 
     expect(within(profileSelect).getByRole('option', { name: 'custom-gemini' })).toBeInTheDocument();
     expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
+  });
+
+  it('persists the Responses pass-through option outside actual profiles', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { upstream: { api_type: 'responses' } },
+      model_groups: {},
+      tool_profile_presets: [],
+      tool_profiles: {},
+      tool_profile_passthrough_option: { id: 'passthrough', api_types: ['responses'] },
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
+    await fireEvent.change(screen.getByLabelText('Profile'), { target: { value: 'passthrough' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      {
+        provider: 'upstream',
+        type: 'llm',
+        tool_profile: 'passthrough',
+        models: { 'demo-model': {} },
+      },
+    ));
   });
 
   it('detects, modifies, restores and saves all model preset metadata', async () => {

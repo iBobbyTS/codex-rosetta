@@ -124,7 +124,7 @@ Rosetta 会为这些名称登记只做形态转换的 exec 投影，但 schema �
 
 ## Tool Profile 作用范围
 
-每个 Tool Profile 都通过必填的 `api_types` 数组声明非空的适用 Provider 协议集合，目前支持 `chat`、`responses`、`anthropic` 和 `google`，用户 Profile 可以选择任意组合。**Chat Default（适用于第三方仅提供chat api的模型）** 适用于 Chat；**透传（适用于OpenAI官方API）**、**web.run 注入（适用于尚未支持/alpha/search端点的中转站）** 和 **工具映射（适用于第三方模型提供的Responses接口）** 适用于 Responses。模型组编辑器只列出适用集合包含当前 Provider 协议的内置和用户 Profile，后端也会拒绝不匹配的引用。Anthropic 和 Google Provider 没有内置默认 Profile，但用户 Profile 可以显式支持这两种协议。
+每个 Tool Profile 都通过必填的 `api_types` 数组声明非空的适用 Provider 协议集合，目前支持 `chat`、`responses`、`anthropic` 和 `google`，用户 Profile 可以选择任意组合。**Chat Default（适用于第三方仅提供chat api的模型）** 适用于 Chat；**web.run 注入（适用于尚未支持/alpha/search端点的中转站）** 和 **工具映射（适用于第三方模型提供的Responses接口）** 适用于 Responses。Responses 模型组还提供一个特殊的 **透传**选项；它不是 Profile，并且不会执行任何工具映射。模型组编辑器只在 Responses 下显示该选项，之后列出适用集合包含当前 Provider 协议的内置和用户 Profile；后端也会拒绝不匹配的引用。Anthropic 和 Google Provider 没有内置默认 Profile，但用户 Profile 可以显式支持这两种协议。
 
 打包的 Profile 通过 `image_gen.imagegen` 管理当前 Codex 图片生成工具，不包含已废弃的 Hosted `image_generation` 工具。
 

@@ -9,6 +9,7 @@ from typing import Any, cast
 from .admin.tool_catalog import load_tool_catalog
 
 BUILTIN_TOOL_PROFILE = "builtin"
+TOOL_PROFILE_PASSTHROUGH_OPTION = "passthrough"
 TOOL_PROFILE_API_TYPES = ("chat", "responses", "anthropic", "google")
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
@@ -855,6 +856,10 @@ def validate_tool_profile_name(value: Any, *, allow_readonly: bool = False) -> s
         raise ValueError(
             f"tool profile name must be at most {MAX_TOOL_PROFILE_NAME_LENGTH} characters"
         )
+    if name == TOOL_PROFILE_PASSTHROUGH_OPTION:
+        raise ValueError(
+            f"tool profile name '{TOOL_PROFILE_PASSTHROUGH_OPTION}' is reserved"
+        )
     if name in tool_profile_contract()["readonly"] and not allow_readonly:
         raise ValueError(f"the bundled tool profile '{name}' is read-only")
     return name
@@ -1033,7 +1038,14 @@ def validate_tool_profile_reference(
     field: str,
     api_type: str | None = None,
 ) -> str:
-    """Validate a model-group profile reference and optional protocol match."""
+    """Validate a model-group Profile reference or Responses passthrough option."""
+    if value == TOOL_PROFILE_PASSTHROUGH_OPTION:
+        if api_type != "responses":
+            raise ValueError(
+                f"{field} uses '{TOOL_PROFILE_PASSTHROUGH_OPTION}', which is only "
+                "available for provider api_type 'responses'"
+            )
+        return TOOL_PROFILE_PASSTHROUGH_OPTION
     name = validate_tool_profile_name(value, allow_readonly=True)
     profile = tool_profile_contract()["readonly"].get(name, profiles.get(name))
     if profile is None:

@@ -23,6 +23,7 @@ from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
     TOOL_PROFILE_API_TYPES,
+    TOOL_PROFILE_PASSTHROUGH_OPTION,
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
     resolve_tool_profile,
@@ -54,7 +55,6 @@ API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
 API_TYPE_ORDER = tuple(API_TYPE_TO_PROVIDER_TYPE)
 
 CHAT_DEFAULT_TOOL_PROFILE = BUILTIN_TOOL_PROFILE
-RESPONSES_PASSTHROUGH_TOOL_PROFILE = "openai-responses-tool-mapping-only"
 WEB_RUN_INJECTION_TOOL_PROFILE = "web-run-injection"
 RESPONSES_TOOL_MAPPING_PROFILE = "responses-tool-mapping"
 
@@ -412,7 +412,7 @@ def provider_supports_tool_profiles(cfg: Any, *, api_type: str | None = None) ->
 
 
 def default_tool_profile_for_provider(cfg: Any) -> str | None:
-    """Return the bundled default Profile for one provider selection."""
+    """Return the default Profile or special passthrough selection for a Provider."""
     if not isinstance(cfg, dict):
         return None
 
@@ -422,7 +422,7 @@ def default_tool_profile_for_provider(cfg: Any) -> str | None:
     if api_type == "responses":
         shim_name = _provider_shim_for_url(api_type, cfg.get("base_url"))
         if shim_name == "openai_responses":
-            return RESPONSES_PASSTHROUGH_TOOL_PROFILE
+            return TOOL_PROFILE_PASSTHROUGH_OPTION
         if shim_name is None:
             return WEB_RUN_INJECTION_TOOL_PROFILE
         return RESPONSES_TOOL_MAPPING_PROFILE
@@ -463,6 +463,8 @@ def resolve_model_tool_profile_names(
             field=f"config: model_groups.{group_name}.tool_profile",
             api_type=api_type,
         )
+        if profile_name == TOOL_PROFILE_PASSTHROUGH_OPTION:
+            continue
         group_models = group.get("models", {})
         if isinstance(group_models, dict):
             for model_name in group_models:
