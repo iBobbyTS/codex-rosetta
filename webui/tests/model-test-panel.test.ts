@@ -1,4 +1,6 @@
 // @vitest-environment-options { "customExportConditions": ["browser"] }
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ModelTestPanel from '../src/admin/components/ModelTestPanel.svelte';
@@ -16,6 +18,12 @@ vi.mock('../src/admin/lib/model-test', () => ({
 beforeEach(() => { vi.clearAllMocks(); apiMock.post.mockResolvedValue({ task_id: 'task-one' }); apiMock.del.mockResolvedValue({ ok: true }); });
 
 describe('ModelTestPanel', () => {
+  it('keeps the result dialog left-aligned inside the right-aligned model action cell', () => {
+    const adminStyles = readFileSync(resolve('src/admin/styles.css'), 'utf8');
+    expect(adminStyles).toMatch(/\.modal\s*\{[^}]*text-align:\s*left;/s);
+    expect(adminStyles).toMatch(/\.modal-actions\s*\{[^}]*justify-content:\s*flex-end;/s);
+  });
+
   it('does not call the test API until the user explicitly starts a test', async () => {
     pollMock.mockResolvedValue({ status: 'done', status_code: 200, body: { output_text: 'safe result' } });
     render(ModelTestPanel, { props: { model: 'demo' } });
