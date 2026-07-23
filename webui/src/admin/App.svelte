@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { AUTH_EXPIRED_EVENT, RESTART_REQUIRED_EVENT, ApiError, api, getAdminToken, request, setAdminToken } from './lib/api';
   import { routeFromPath, routes, type RouteId } from './lib/routes';
-  import { language, setLanguage, t } from './lib/i18n.svelte';
+  import { language, setLanguage, t } from '../shared/i18n.svelte';
   import DashboardPage from './pages/DashboardPage.svelte';
   import GatewayLogsPage from './pages/GatewayLogsPage.svelte';
   import KeysPage from './pages/KeysPage.svelte';
@@ -99,29 +99,29 @@
 {:else if !authenticated}
   <div class="login-overlay">
     <div class="login-box">
-      <h2>codex-rosetta <span style="font-weight:400;color:var(--text-dim)">gateway</span></h2>
-      <div class="login-subtitle">{t('login.subtitle', 'Admin panel is password-protected')}</div>
+      <h2>{t('product.name')} <span style="font-weight:400;color:var(--text-dim)">{t('product.gateway')}</span></h2>
+      <div class="login-subtitle">{t('login.subtitle')}</div>
       <form autocomplete="on" onsubmit={(event) => { event.preventDefault(); void authenticate(); }}>
         <input type="text" name="username" autocomplete="username" value="admin" style="display:none" aria-hidden="true" />
-        <input id="password" type="password" name="password" bind:value={password} autocomplete="current-password" placeholder="Password" />
+        <input id="password" type="password" name="password" bind:value={password} autocomplete="current-password" placeholder={t('label.password')} />
         <div class="login-error" role="alert">{error}</div>
-        <button type="submit" disabled={busy || !password}>{t('login.btn', 'Login')}</button>
+        <button type="submit" disabled={busy || !password}>{t('login.btn')}</button>
       </form>
     </div>
   </div>
 {:else}
   <div class="header">
-    <div><h1>codex-rosetta <span>gateway admin</span></h1></div>
+    <div><h1>{t('product.name')} <span>{t('product.gatewayAdmin')}</span></h1></div>
     <div class="header-right">
-      <span style="font-size:12px;color:var(--text-dim);margin-right:8px"><span style="margin-right:4px">{t('label.systemTime', 'System Time')}</span><span style="font-family:var(--mono)">{systemClock}</span></span>
-      <button class="btn btn-sm" onclick={() => settingsOpen = !settingsOpen} title={t('modal.settings', 'Settings')} aria-label={t('modal.settings', 'Settings')}>
+      <span style="font-size:12px;color:var(--text-dim);margin-right:8px"><span style="margin-right:4px">{t('label.systemTime')}</span><span style="font-family:var(--mono)">{systemClock}</span></span>
+      <button class="btn btn-sm" onclick={() => settingsOpen = !settingsOpen} title={t('modal.settings')} aria-label={t('modal.settings')}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
-      <button class="btn btn-sm" onclick={logout}>{t('btn.logout', 'Logout')}</button>
+      <button class="btn btn-sm" onclick={logout}>{t('btn.logout')}</button>
     </div>
   </div>
-  <nav class="admin-nav" aria-label="Admin pages">
-    {#each routes as item}<a href={item.path} class="nav-link" class:active={route === item.id} onclick={(event) => { event.preventDefault(); navigate(item.id); }}>{t(item.labelKey, item.label)}</a>{/each}
+  <nav class="admin-nav" aria-label={t('aria.adminPages')}>
+    {#each routes as item}<a href={item.path} class="nav-link" class:active={route === item.id} onclick={(event) => { event.preventDefault(); navigate(item.id); }}>{t(item.labelKey)}</a>{/each}
     <div style="flex:1"></div><div class="config-path">{configPath}</div>
   </nav>
   <main class="content">
@@ -136,16 +136,16 @@
   </main>
   <div class="settings-popup" class:open={settingsOpen} role="presentation" onclick={(event) => { if (event.target === event.currentTarget) settingsOpen = false; }}>
     <div class="settings-popup-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
-      <h3 id="settings-title">{t('modal.settings', 'Settings')}</h3>
-      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme', 'Theme')}</label><select id="settingsThemeSelect" value={theme} onchange={(event) => setTheme(event.currentTarget.value)}><option value="light">{t('theme.light', 'Light')}</option><option value="dark">{t('theme.dark', 'Dark')}</option></select></div>
-      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language', 'Language')}</label><select id="settingsLangSelect" value={language.value} onchange={(event) => setLanguage(event.currentTarget.value === 'zh' ? 'zh' : 'en')}><option value="en">English</option><option value="zh">中文</option></select></div>
+      <h3 id="settings-title">{t('modal.settings')}</h3>
+      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme')}</label><select id="settingsThemeSelect" value={theme} onchange={(event) => setTheme(event.currentTarget.value)}><option value="light">{t('theme.light')}</option><option value="dark">{t('theme.dark')}</option></select></div>
+      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language')}</label><select id="settingsLangSelect" value={language.value} onchange={(event) => setLanguage(event.currentTarget.value === 'zh' ? 'zh' : 'en')}><option value="en">{t('language.english')}</option><option value="zh">{t('language.chinese')}</option></select></div>
       <div class="settings-divider"></div>
       <div style="text-align:center;padding:4px 0 2px">
-        <div style="font-size:15px;font-weight:600;margin-bottom:2px">codex-rosetta</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:2px">{t('product.name')}</div>
         <div style="font-size:11px;color:var(--text-dim);margin-bottom:8px">{version ? `v${version}` : ''}</div>
-        <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap"><a href="https://github.com/iBobbyTS/codex-rosetta" target="_blank" rel="noopener" class="about-link">GitHub</a><a href="https://github.com/iBobbyTS/codex-rosetta/tree/master/docs" target="_blank" rel="noopener" class="about-link">Docs</a></div>
+        <div style="display:flex;justify-content:center;gap:8px;flex-wrap:wrap"><a href="https://github.com/iBobbyTS/codex-rosetta" target="_blank" rel="noopener" class="about-link">{t('about.github')}</a><a href="https://github.com/iBobbyTS/codex-rosetta/tree/master/docs" target="_blank" rel="noopener" class="about-link">{t('about.docs')}</a></div>
       </div>
     </div>
   </div>
-  {#if restartRequired}<div class="restart-notice" role="alertdialog" aria-live="assertive"><div>{t('notice.codexRestart', 'Codex configuration changed. Restart Codex for the changes to take effect.')}</div><button class="btn btn-primary btn-sm" onclick={() => restartRequired = false}>{t('btn.confirm', 'Confirm')}</button></div>{/if}
+  {#if restartRequired}<div class="restart-notice" role="alertdialog" aria-live="assertive"><div>{t('notice.codexRestart')}</div><button class="btn btn-primary btn-sm" onclick={() => restartRequired = false}>{t('btn.confirm')}</button></div>{/if}
 {/if}

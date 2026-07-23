@@ -7,11 +7,11 @@ export type TestTaskResult = {
   error?: string;
 };
 
-export function buildModelTestPayload(model: string): Record<string, unknown> {
+export function buildModelTestPayload(model: string, prompt: string): Record<string, unknown> {
   return {
     model,
     max_output_tokens: 256,
-    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with a short gateway test response.' }] }],
+    input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] }],
   };
 }
 

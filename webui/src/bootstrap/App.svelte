@@ -6,6 +6,7 @@
     probeConfiguration,
     setLocalMode,
   } from './commands';
+  import { t } from '../shared/i18n.svelte';
 
   type BootstrapStep = 'probing' | 'password' | 'local-mode' | 'starting' | 'error';
 
@@ -13,16 +14,16 @@
   let password = $state('');
   let localModeChoice = $state<boolean | null>(null);
   let errorCode = $state('desktop_start_failed');
-  let errorMessage = $state('The local gateway could not be started.');
+  let errorMessage = $state(t('bootstrap.error.default'));
   let retryAction = $state<() => Promise<void>>(probeGateway);
 
-  const errorDescriptions: Record<string, string> = {
-    bootstrap_capability_required: 'This window is not allowed to manage the local gateway.',
-    config_exists: 'Gateway configuration already exists. Check its state and try again.',
-    empty_admin_password: 'Enter a non-empty administrator password.',
-    invalid_port: 'The configured desktop port is invalid.',
-    local_mode_unconfirmed: 'Codex local mode requires an explicit decision before startup.',
-    sidecar_path: 'The bundled gateway could not be found.',
+  const errorDescriptionKeys: Record<string, string> = {
+    bootstrap_capability_required: 'bootstrap.error.bootstrap_capability_required',
+    config_exists: 'bootstrap.error.config_exists',
+    empty_admin_password: 'bootstrap.error.empty_admin_password',
+    invalid_port: 'bootstrap.error.invalid_port',
+    local_mode_unconfirmed: 'bootstrap.error.local_mode_unconfirmed',
+    sidecar_path: 'bootstrap.error.sidecar_path',
   };
 
   function describeError(error: unknown): { code: string; message: string } {
@@ -34,7 +35,7 @@
           : 'desktop_start_failed';
     return {
       code,
-      message: errorDescriptions[code] ?? 'The local gateway could not be started.',
+      message: t(errorDescriptionKeys[code] ?? 'bootstrap.error.default'),
     };
   }
 
@@ -133,23 +134,23 @@
 </script>
 
 <svelte:head>
-  <title>Codex-Rosetta Setup</title>
+  <title>{t('product.setupTitle')}</title>
 </svelte:head>
 
 <main>
   <section class="setup-panel" aria-labelledby="setup-title">
     <header>
-      <div class="mark" aria-hidden="true">R</div>
+      <div class="mark" aria-hidden="true">{t('product.mark')}</div>
       <div>
-        <p class="product">Codex-Rosetta</p>
+        <p class="product">{t('product.name')}</p>
         <h1 id="setup-title">
           {step === 'password'
-            ? 'Create administrator access'
+            ? t('bootstrap.title.createAdmin')
             : step === 'local-mode'
-              ? 'Connect Codex'
+              ? t('bootstrap.title.connectCodex')
               : step === 'error'
-                ? 'Startup failed'
-                : 'Starting local gateway'}
+                ? t('bootstrap.title.failed')
+                : t('bootstrap.title.starting')}
         </h1>
       </div>
     </header>
@@ -158,17 +159,14 @@
       <div class="status" role="status">
         <span class="spinner" aria-hidden="true"></span>
         <div>
-          <strong>Checking local configuration</strong>
-          <p>Verifying the bundled gateway before it starts.</p>
+          <strong>{t('bootstrap.checking')}</strong>
+          <p>{t('bootstrap.checkingDetail')}</p>
         </div>
       </div>
     {:else if step === 'password'}
       <form onsubmit={initializeGateway}>
-        <p class="description">
-          Set the password used to access the gateway administration interface. It cannot be
-          recovered from this desktop app.
-        </p>
-        <label for="admin-password">Administrator password</label>
+        <p class="description">{t('bootstrap.passwordDescription')}</p>
+        <label for="admin-password">{t('bootstrap.adminPassword')}</label>
         <input
           id="admin-password"
           type="password"
@@ -176,21 +174,18 @@
           autocomplete="new-password"
           required
         />
-        <p class="field-note">Any non-empty password is accepted.</p>
-        <button class="primary" type="submit">Continue</button>
+        <p class="field-note">{t('bootstrap.passwordHint')}</p>
+        <button class="primary" type="submit">{t('btn.continue')}</button>
       </form>
     {:else if step === 'local-mode'}
       <div class="decision">
-        <p class="description">
-          Local mode updates the Codex model catalog and endpoint configuration on this computer
-          so Codex uses this gateway. This can replace existing Codex catalog entries.
-        </p>
+        <p class="description">{t('bootstrap.localModeDescription')}</p>
         <div class="actions">
           <button class="primary" type="button" onclick={() => void confirmLocalMode(true)}>
-            Enable local mode
+            {t('bootstrap.enableLocalMode')}
           </button>
           <button class="secondary" type="button" onclick={() => void confirmLocalMode(false)}>
-            Not now
+            {t('bootstrap.notNow')}
           </button>
         </div>
       </div>
@@ -198,8 +193,8 @@
       <div class="status" role="status">
         <span class="spinner" aria-hidden="true"></span>
         <div>
-          <strong>Starting gateway</strong>
-          <p>The administration window will open when the local service is ready.</p>
+          <strong>{t('bootstrap.starting')}</strong>
+          <p>{t('bootstrap.startingDetail')}</p>
         </div>
       </div>
     {:else}
@@ -207,10 +202,10 @@
         <div class="error-symbol" aria-hidden="true">!</div>
         <div>
           <strong>{errorMessage}</strong>
-          <p class="error-code">Error code: {errorCode}</p>
+          <p class="error-code">{t('bootstrap.errorCode', { code: errorCode })}</p>
         </div>
       </div>
-      <button class="primary" type="button" onclick={() => void retryAction()}>Try again</button>
+      <button class="primary" type="button" onclick={() => void retryAction()}>{t('btn.tryAgain')}</button>
     {/if}
   </section>
 </main>

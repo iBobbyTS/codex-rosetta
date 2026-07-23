@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import Modal from '../components/Modal.svelte';
   import { api } from '../lib/api';
-  import { t } from '../lib/i18n.svelte';
+  import { t } from '../../shared/i18n.svelte';
 
   type InputOption = { value: string; label?: string };
   type ProfileInput = {
@@ -56,18 +56,18 @@
   type FilterId = 'all' | 'exec_expansion' | 'function' | 'namespace' | 'rosetta_injection';
   type ResolvedGroup = { id: string; items: ToolItem[] };
 
-  const filterOptions: Array<{ id: FilterId; labelKey: string; fallback: string }> = [
-    { id: 'all', labelKey: 'tools.filter.all', fallback: 'All' },
-    { id: 'exec_expansion', labelKey: 'tools.filter.exec_expansion', fallback: 'Exec Expansion' },
-    { id: 'function', labelKey: 'tools.filter.function', fallback: 'Function' },
-    { id: 'namespace', labelKey: 'tools.filter.namespace', fallback: 'Namespace' },
-    { id: 'rosetta_injection', labelKey: 'tools.filter.rosetta_injection', fallback: 'Rosetta Injection' },
+  const filterOptions: Array<{ id: FilterId; labelKey: string }> = [
+    { id: 'all', labelKey: 'tools.filter.all' },
+    { id: 'exec_expansion', labelKey: 'tools.filter.exec_expansion' },
+    { id: 'function', labelKey: 'tools.filter.function' },
+    { id: 'namespace', labelKey: 'tools.filter.namespace' },
+    { id: 'rosetta_injection', labelKey: 'tools.filter.rosetta_injection' },
   ];
-  const profileApiTypeOptions: Array<{ value: ProfileApiType; label: string }> = [
-    { value: 'chat', label: 'OpenAI Chat Completions' },
-    { value: 'responses', label: 'OpenAI Responses' },
-    { value: 'anthropic', label: 'Anthropic Messages' },
-    { value: 'google', label: 'Google GenAI (Gemini)' },
+  const profileApiTypeOptions: Array<{ value: ProfileApiType; labelKey: string }> = [
+    { value: 'chat', labelKey: 'protocol.chat' },
+    { value: 'responses', labelKey: 'protocol.responses' },
+    { value: 'anthropic', labelKey: 'protocol.anthropic' },
+    { value: 'google', labelKey: 'tools.protocol.google' },
   ];
 
   let catalog = $state<Catalog>({});
@@ -178,7 +178,7 @@
 
   async function saveAs(id: string): Promise<void> {
     if (!id.trim()) {
-      error = 'Profile name is required.';
+      error = t('tools.profileNameRequired');
       return;
     }
     busy = true;
@@ -190,7 +190,7 @@
         tools: toolDraft,
         inputs: inputDraft,
       });
-      notice = `Profile ${id.trim()} saved.`;
+      notice = t('tools.profileSaved', { name: id.trim() });
       selectedId = id.trim();
       await load();
     } catch (cause) {
@@ -206,14 +206,14 @@
   }
 
   async function remove(): Promise<void> {
-    if (!selected || selected.readonly || !confirm(`Delete tool profile “${selected.name}”?`)) return;
+    if (!selected || selected.readonly || !confirm(t('confirm.deleteToolProfile', { name: selected.name }))) return;
     busy = true;
     error = '';
     try {
       await api.del(`/admin/api/tools/profiles/${encodeURIComponent(selected.id)}`);
       selectedId = '';
       await load();
-      notice = `Profile ${selected.name} deleted.`;
+      notice = t('tools.profileDeleted', { name: selected.name });
     } catch (cause) {
       error = message(cause);
     } finally {
@@ -296,14 +296,14 @@
     <div class="tool-name">{item.name ?? item.id}</div>
     <select
       class="tool-state-select"
-      aria-label={`${item.name ?? item.id} state`}
+      aria-label={t('aria.toolState', { name: item.name ?? item.id })}
       disabled={selected?.readonly || effectiveDisabled(item)}
       value={stateFor(item)}
       onclick={(event) => event.stopPropagation()}
       onchange={(event) => updateTool(item, event.currentTarget.value)}
     >
       {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-        <option value={state}>{state}</option>
+        <option value={state}>{t(`tools.policy.${state}`)}</option>
       {/each}
     </select>
   </div>
@@ -325,25 +325,25 @@
       <button
         type="button"
         class="tool-namespace-toggle"
-        aria-label={`${expanded ? 'Collapse' : 'Expand'} ${item.name ?? item.id}`}
+        aria-label={t(expanded ? 'aria.collapseNamespace' : 'aria.expandNamespace', { name: item.name ?? item.id })}
         aria-expanded={expanded}
         aria-controls={`tool-children-${item.id}`}
         disabled={stateFor(item) === 'disabled'}
         onclick={(event) => { event.stopPropagation(); toggleNamespace(item); }}
       >{expanded ? '▾' : '▸'}</button>
       <div class="tool-name">{item.name ?? item.id}</div>
-      <div class="tool-badges"><span class="tool-badge kind">{t(`tools.type.${item.type}`, item.type ?? 'tool')}</span></div>
+      <div class="tool-badges"><span class="tool-badge kind">{t(`tools.type.${item.type}`)}</span></div>
       <div class="tool-policy">
         <select
           class="tool-state-select"
-          aria-label={`${item.name ?? item.id} state`}
+          aria-label={t('aria.toolState', { name: item.name ?? item.id })}
           disabled={selected?.readonly}
           value={stateFor(item)}
           onclick={(event) => event.stopPropagation()}
           onchange={(event) => updateTool(item, event.currentTarget.value)}
         >
           {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-            <option value={state}>{state}</option>
+            <option value={state}>{t(`tools.policy.${state}`)}</option>
           {/each}
         </select>
       </div>
@@ -361,41 +361,41 @@
 {/snippet}
 
 <div class="section">
-  <div class="section-header"><h2>{t('section.tools', 'Tool Catalog')}</h2></div>
+  <div class="section-header"><h2>{t('section.tools')}</h2></div>
   <div class="tools-notice">
-    <div>{t('tools.notice', 'This static catalog includes conditionally enabled tools and does not describe the tools available to the current request.')}</div>
-    <div style="margin-top:4px">{t('tools.disabledHint', 'Disabled means the tool is not exposed directly to the upstream model; internal translation may still target it.')}</div>
+    <div>{t('tools.notice')}</div>
+    <div style="margin-top:4px">{t('tools.disabledHint')}</div>
   </div>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}
   {#if notice}<div class="toast show" role="status">{notice}</div>{/if}
 
   {#if loading}
-    <div class="tool-catalog-status">Loading tool catalog...</div>
+    <div class="tool-catalog-status">{t('tools.loading')}</div>
   {:else if !selected}
-    <div class="tool-catalog-status">No tool profiles are available.</div>
+    <div class="tool-catalog-status">{t('tools.noProfiles')}</div>
   {:else}
     <div class="tools-meta">
-      {visibleToolCount} tools
+      {t('tools.count',{count:visibleToolCount})}
       {#if (profilesData.references?.[selected.id] ?? []).length}
-        · Used by: {(profilesData.references?.[selected.id] ?? []).join(', ')}
+        · {t('tools.usedBy')} {(profilesData.references?.[selected.id] ?? []).join(', ')}
       {/if}
     </div>
     <div class="tool-profile-toolbar">
-      <label for="toolProfileSelect">Profile</label>
+      <label for="toolProfileSelect">{t('tools.profile')}</label>
       <select id="toolProfileSelect" value={selectedId} onchange={(event) => selectProfile(event.currentTarget.value)}>
         {#each profilesData.profiles ?? [] as profile}
           <option value={profile.id}>{profile.name}</option>
         {/each}
       </select>
-      <button class="btn btn-sm" onclick={() => { cloneName = ''; cloneOpen = true; }}>Create Copy</button>
-      <button class="btn btn-sm btn-primary" disabled={busy || !dirty} onclick={() => void saveAs(selected.id)}>Save Profile</button>
-      <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>Reset</button>
-      <button class="btn btn-sm btn-danger" disabled={busy || selected.readonly} onclick={() => void remove()}>Delete Profile</button>
-      {#if dirty}<span class="tool-profile-dirty">Unsaved changes</span>{/if}
+      <button class="btn btn-sm" onclick={() => { cloneName = ''; cloneOpen = true; }}>{t('tools.cloneProfile')}</button>
+      <button class="btn btn-sm btn-primary" disabled={busy || !dirty} onclick={() => void saveAs(selected.id)}>{t('tools.saveProfile')}</button>
+      <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>{t('tools.resetProfile')}</button>
+      <button class="btn btn-sm btn-danger" disabled={busy || selected.readonly} onclick={() => void remove()}>{t('tools.deleteProfile')}</button>
+      {#if dirty}<span class="tool-profile-dirty">{t('tools.unsaved')}</span>{/if}
     </div>
     <div class="tool-profile-protocol-row">
-      <span class="tool-profile-protocol-label">{t('tools.apiType', 'Applicable Protocol')}</span>
-      <div class="tool-profile-checkbox-group" role="group" aria-label={t('tools.apiType', 'Applicable Protocol')}>
+      <span class="tool-profile-protocol-label">{t('tools.apiType')}</span>
+      <div class="tool-profile-checkbox-group" role="group" aria-label={t('tools.apiType')}>
         {#each profileApiTypeOptions as option}
           {@const checked = profileApiTypes.includes(option.value)}
           <label class="tool-profile-checkbox">
@@ -405,19 +405,19 @@
               disabled={selected.readonly || (checked && profileApiTypes.length === 1)}
               onchange={(event) => toggleProfileApiType(option.value, event.currentTarget.checked)}
             />
-            {option.label}
+            {t(option.labelKey)}
           </label>
         {/each}
       </div>
     </div>
 
-    <div class="tools-toolbar" role="toolbar" aria-label="Filter tool types">
+    <div class="tools-toolbar" role="toolbar" aria-label={t('aria.filterToolTypes')}>
       {#each filterOptions as option}
         <button
           class="tool-filter-btn"
           class:active={filter === option.id}
           onclick={() => setFilter(option.id)}
-        >{t(option.labelKey, option.fallback)}</button>
+        >{t(option.labelKey)}</button>
       {/each}
     </div>
 
@@ -426,7 +426,7 @@
         {#each visibleGroups as group (group.id)}
           <section class="tool-group" data-tool-group={group.id}>
             <div class="tool-group-title">
-              <span>{t(`tools.group.${group.id}`, group.id)}</span>
+              <span>{t(`tools.group.${group.id}`)}</span>
               <span class="tool-group-count">{group.items.length}</span>
             </div>
             {#if group.id === 'namespace'}
@@ -447,7 +447,7 @@
       </div>
 
       {#if detail}
-        <aside class="tool-detail-panel" aria-label="Tool details">
+        <aside class="tool-detail-panel" aria-label={t('aria.toolDetails')}>
           <div class="tool-detail-header">
             <div class="tool-detail-heading">
               <span class="tool-detail-kicker">{detail.type ?? 'tool'}</span>
@@ -456,20 +456,20 @@
             <div class="tool-badges"><span class="tool-badge kind">{detail.id}</span></div>
           </div>
           <div class="tool-detail-body">
-            {#if detail.description_i18n}<div class="tool-description">{t(detail.description_i18n, '')}</div>{/if}
+            {#if detail.description_i18n}<div class="tool-description">{t(detail.description_i18n)}</div>{/if}
             {#if detail.note_i18n && (!detail.note_visible_when?.length || detail.note_visible_when.includes(stateFor(detail)))}
-              <div class="tool-description">{t(detail.note_i18n, '')}</div>
+              <div class="tool-description">{t(detail.note_i18n)}</div>
             {/if}
-            <div class="tool-policy"><span>Policy</span><code>{detail.policy_id ?? '-'}</code></div>
+            <div class="tool-policy"><span>{t('tools.detail.policy')}</span><code>{detail.policy_id ?? '-'}</code></div>
             {#if detail.codex_placement}
               <div class="tool-codex-placement">
                 <div class="tool-codex-placement-row">
-                  <span class="tool-codex-placement-label">Normal mode</span>
-                  <span>{detail.codex_placement.normal_mode_i18n ? t(detail.codex_placement.normal_mode_i18n, '-') : '-'}</span>
+                  <span class="tool-codex-placement-label">{t('tools.detail.normalMode')}</span>
+                  <span>{detail.codex_placement.normal_mode_i18n ? t(detail.codex_placement.normal_mode_i18n) : '-'}</span>
                 </div>
                 <div class="tool-codex-placement-row">
-                  <span class="tool-codex-placement-label">Code mode</span>
-                  <span>{detail.codex_placement.code_mode_i18n ? t(detail.codex_placement.code_mode_i18n, '-') : '-'}</span>
+                  <span class="tool-codex-placement-label">{t('tools.detail.codeMode')}</span>
+                  <span>{detail.codex_placement.code_mode_i18n ? t(detail.codex_placement.code_mode_i18n) : '-'}</span>
                 </div>
               </div>
             {/if}
@@ -477,7 +477,7 @@
               {#each detail.profile_inputs ?? [] as input}
                 {#if inputVisible(detail, input)}
                   <div class="tool-profile-input-group">
-                    <label class="tool-profile-input-label" for={`tool-${detail.id}-${input.id}`}>{input.label_i18n ? t(input.label_i18n, input.id) : input.id}</label>
+                    <label class="tool-profile-input-label" for={`tool-${detail.id}-${input.id}`}>{input.label_i18n ? t(input.label_i18n) : input.id}</label>
                     {#if input.type === 'select'}
                       <select
                         id={`tool-${detail.id}-${input.id}`}
@@ -518,13 +518,13 @@
 </div>
 
 <Modal open={cloneOpen} labelledby="tool-clone-title" onclose={() => cloneOpen = false}>
-  {#snippet header()}<h3 id="tool-clone-title">Create Copy</h3>{/snippet}
+  {#snippet header()}<h3 id="tool-clone-title">{t('tools.cloneTitle')}</h3>{/snippet}
   <div class="form-group">
-    <label for="toolProfileCloneName">New profile name</label>
-    <input id="toolProfileCloneName" maxlength="128" bind:value={cloneName} placeholder="e.g. DeepSeek Tools" />
+    <label for="toolProfileCloneName">{t('tools.newProfileName')}</label>
+    <input id="toolProfileCloneName" maxlength="128" bind:value={cloneName} placeholder={t('placeholder.toolProfileName')} />
   </div>
   {#snippet actions()}
-    <button class="btn" onclick={() => cloneOpen = false}>Cancel</button>
-    <button class="btn btn-primary" disabled={busy || !cloneName.trim()} onclick={() => void createCopy()}>Create copy</button>
+    <button class="btn" onclick={() => cloneOpen = false}>{t('btn.cancel')}</button>
+    <button class="btn btn-primary" disabled={busy || !cloneName.trim()} onclick={() => void createCopy()}>{t('tools.createCopyAction')}</button>
   {/snippet}
 </Modal>

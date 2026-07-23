@@ -7,7 +7,7 @@ const apiMock = vi.hoisted(() => ({ post: vi.fn(), del: vi.fn() }));
 const pollMock = vi.hoisted(() => vi.fn());
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 vi.mock('../src/admin/lib/model-test', () => ({
-  buildModelTestPayload: (model: string) => ({ model }),
+  buildModelTestPayload: (model: string, _prompt: string) => ({ model }),
   pollModelTest: pollMock,
   responseText: (body: { output_text?: string }) => body.output_text ?? '',
   safeUsageRows: () => [],

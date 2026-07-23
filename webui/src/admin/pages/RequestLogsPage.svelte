@@ -3,6 +3,7 @@
   import ErrorDumpsPanel from '../components/ErrorDumpsPanel.svelte';
   import { api } from '../lib/api';
   import { createSerialPoll } from '../lib/polling';
+  import { t } from '../../shared/i18n.svelte';
 
   type Entry = {
     timestamp?: string; model?: string; source_provider?: string; target_provider?: string;
@@ -55,7 +56,7 @@
     expanded = next;
   }
   async function clearLogs(): Promise<void> {
-    if (!confirm('Clear all request logs?')) return;
+    if (!confirm(t('confirm.clearRequestLogs'))) return;
     clearing = true; error = '';
     try { await api.del('/admin/api/requests'); offset = 0; expanded = new Set(); await poll.runNow(); }
     catch (cause) { error = message(cause); }
@@ -74,26 +75,26 @@
 
 <div>
   <div class="filters">
-    <input aria-label="Model" bind:value={model} placeholder="All Models" onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
-    <input aria-label="Provider" bind:value={provider} placeholder="All Providers" onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
-    <select aria-label="Status" bind:value={status} onchange={()=>void reload(true)}><option value="">All Status</option><option value="ok">OK (2xx/3xx)</option><option value="error">Error (4xx/5xx)</option></select>
-    <select aria-label="API key" bind:value={apiKeyLabel} onchange={()=>void reload(true)}><option value="">All Keys</option>{#each keyLabels as label}<option value={label}>{label}</option>{/each}</select>
-    <button class="btn btn-sm" onclick={reset}>Reset Filters</button><button class="btn btn-sm btn-danger" disabled={clearing} onclick={()=>void clearLogs()}>{clearing?'Clearing...':'Clear logs'}</button>
+    <input aria-label={t('col.model')} bind:value={model} placeholder={t('filter.allModels')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
+    <input aria-label={t('col.provider')} bind:value={provider} placeholder={t('filter.allProviders')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
+    <select aria-label={t('col.status')} bind:value={status} onchange={()=>void reload(true)}><option value="">{t('filter.allStatus')}</option><option value="ok">{t('filter.ok')}</option><option value="error">{t('filter.error')}</option></select>
+    <select aria-label={t('col.apiKey')} bind:value={apiKeyLabel} onchange={()=>void reload(true)}><option value="">{t('filter.allKeys')}</option>{#each keyLabels as label}<option value={label}>{label}</option>{/each}</select>
+    <button class="btn btn-sm" onclick={reset}>{t('btn.resetFilters')}</button><button class="btn btn-sm btn-danger" disabled={clearing} onclick={()=>void clearLogs()}>{clearing?t('status.clearingLogs'):t('btn.clearRequestLogs')}</button>
   </div>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}
-  {#if loading}<p aria-live="polite" style="color:var(--text-dim)">Loading request logs...</p>
-  {:else}<div class="table-scroll"><table><thead><tr><th>Time</th><th>Model</th><th>Source → Target</th><th>Mode</th><th>API Key</th><th>Client IP</th><th>Status</th><th>Duration</th></tr></thead><tbody>
+  {#if loading}<p aria-live="polite" style="color:var(--text-dim)">{t('loading.requestLogs')}</p>
+  {:else}<div class="table-scroll"><table><thead><tr><th>{t('col.time')}</th><th>{t('col.model')}</th><th>{t('col.sourceTarget')}</th><th>{t('col.mode')}</th><th>{t('col.apiKey')}</th><th>{t('col.clientIp')}</th><th>{t('col.status')}</th><th>{t('col.duration')}</th></tr></thead><tbody>
     {#each entries as entry, index}
       {@const id = rowId(entry, index)}
       <tr style="cursor:pointer" onclick={() => toggle(id)}>
         <td>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}</td><td><code>{entry.model ?? '-'}</code></td>
-        <td>{entry.source_provider ?? '-'} → {entry.target_provider_name ?? entry.target_provider ?? '-'}</td><td>{entry.is_stream ? 'stream' : 'sync'}</td>
+        <td>{entry.source_provider ?? '-'} → {entry.target_provider_name ?? entry.target_provider ?? '-'}</td><td>{entry.is_stream ? t('profiling.stream') : t('profiling.sync')}</td>
         <td>{entry.api_key_label ?? '-'}</td><td>{entry.client_ip ?? '-'}</td><td><span class="badge" class:badge-error={(entry.status_code??0)>=400} class:badge-success={(entry.status_code??0)>0&&(entry.status_code??0)<400}>{entry.status_code ?? '-'}</span></td>
         <td>{typeof entry.duration_ms === 'number' ? `${entry.duration_ms.toFixed(0)} ms` : '-'}</td>
       </tr>
       {#if expanded.has(id)}<tr><td colspan="8"><pre style="white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto;margin:0;padding:10px;background:var(--bg)">{JSON.stringify(entry,null,2)}</pre></td></tr>{/if}
-    {:else}<tr><td colspan="8" class="empty">No request logs match these filters.</td></tr>{/each}
+    {:else}<tr><td colspan="8" class="empty">{t('empty.filteredLogs')}</td></tr>{/each}
   </tbody></table></div>{/if}
-  <div class="pagination"><button class="btn btn-sm" disabled={offset===0} onclick={()=>{offset=Math.max(0,offset-limit);void reload();}}>Prev</button><span class="info">Page {Math.floor(offset/limit)+1} of {Math.max(1,Math.ceil(total/limit))} · {total} entries</span><button class="btn btn-sm" disabled={offset+limit>=total} onclick={()=>{offset+=limit;void reload();}}>Next</button></div>
+  <div class="pagination"><button class="btn btn-sm" disabled={offset===0} onclick={()=>{offset=Math.max(0,offset-limit);void reload();}}>{t('btn.prev')}</button><span class="info">{t('format.page',{page:Math.floor(offset/limit)+1,pages:Math.max(1,Math.ceil(total/limit)),entries:total})}</span><button class="btn btn-sm" disabled={offset+limit>=total} onclick={()=>{offset+=limit;void reload();}}>{t('btn.next')}</button></div>
   <ErrorDumpsPanel />
 </div>
