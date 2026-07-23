@@ -21,7 +21,7 @@ describe('ProvidersPage', () => {
   it('derives a preset from the authoritative URL and never persists the preset label', async () => {
     const config = {
       providers: { official: { base_url: 'https://api.openai.com/v1', api_type: 'responses', proxy: 'http://proxy.example:8080' } },
-      known_provider_types: ['responses'],
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
       credential_visible: true,
     };
@@ -51,6 +51,27 @@ describe('ProvidersPage', () => {
     expect(body).not.toHaveProperty('variant');
     const bodyLimit = screen.getByLabelText('Maximum Request Body') as HTMLSelectElement;
     expect(Array.from(bodyLimit.options, (option) => option.value)).toEqual(['64', '128', '256', '512', '1024', 'unlimited']);
+  });
+
+  it('renders only backend-supported API types with user-facing protocol names', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {},
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const protocol = within(screen.getByRole('dialog', { name: 'Add Provider' })).getByLabelText('Protocol') as HTMLSelectElement;
+    expect(Array.from(protocol.options, (option) => [option.value, option.textContent])).toEqual([
+      ['responses', 'OpenAI Responses'],
+      ['chat', 'OpenAI Chat Completions'],
+      ['anthropic', 'Anthropic Messages'],
+      ['google', 'Google GenAI'],
+    ]);
+    expect(protocol).not.toHaveTextContent('open_responses');
+    expect(protocol).not.toHaveTextContent('openai_chat');
+    expect(protocol).not.toHaveTextContent('openai_responses');
   });
 });
 

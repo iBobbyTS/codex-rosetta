@@ -11,6 +11,7 @@ from codex_rosetta.observability.redaction import SecretRedactor
 from codex_rosetta.shims import list_shims
 
 from ...config import (
+    API_TYPE_ORDER,
     GatewayConfig,
     default_tool_profile_for_provider,
     load_config_raw,
@@ -26,7 +27,6 @@ from ...model_presets import (
     model_presets_for_admin,
     normalize_model_info,
 )
-from ...providers import known_provider_types
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     normalize_tool_profile_input_overrides,
@@ -448,7 +448,7 @@ async def get_config(request: Any) -> Response:
             "server": server,
             "credential_visible": config.credential_visible,
             "version": _get_version(),
-            "known_provider_types": known_provider_types(),
+            "known_api_types": list(API_TYPE_ORDER),
             "registered_shims": [
                 {
                     "name": s.name,

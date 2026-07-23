@@ -9,7 +9,7 @@
   type Shim = { name?: string; logo?: string };
   type ModelRoute = string | { provider?: string };
   type ModelGroup = { provider?: string; models?: Record<string, unknown> };
-  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_provider_types?: string[]; registered_shims?: Shim[]; credential_visible?: boolean };
+  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; registered_shims?: Shim[]; credential_visible?: boolean };
   type Protocols = Record<string, string>;
   type ProviderPreset = { id: string; label: string; labelKey: string; logoShim?: string; protocols: Protocols };
   type Variant = { id: string; label: string; providerId: string };
@@ -63,7 +63,7 @@
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
   const normalizeUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  function allowedTypes(): string[] { return config.known_provider_types ?? []; }
+  function allowedTypes(): string[] { return config.known_api_types ?? []; }
   function presetById(id: string): ProviderPreset { return providerPresets.find((item) => item.id === id) ?? providerPresets[providerPresets.length - 1]; }
   function variant(): Variant { return selectedVendor.variants.find((item) => item.id === variantId) ?? selectedVendor.variants[0]; }
   function resolvedPresetId(): string { return variant().providerId; }

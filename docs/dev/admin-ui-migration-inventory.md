@@ -7,7 +7,7 @@ effect. Frontend tests use mocked Admin responses and never contact a provider.
 | Capability | Authoritative Admin API or config fields | Svelte owner | Required regression evidence |
 | --- | --- | --- | --- |
 | Authentication and expiry | `login`, `auth-check`; every protected route may return 401/403 | `App.svelte`, `lib/api.ts` | 401 and 403 clear the token and replace the entire authenticated shell with login |
-| Provider configuration | `config`, provider PUT/DELETE/toggle, `/key`, `/models`; `registered_shims`, `known_provider_types` | `ProvidersPage.svelte` | URL-derived presets, backend-only API types, redirects, proxy, credential reveal and model discovery |
+| Provider configuration | `config`, provider PUT/DELETE/toggle, `/key`, `/models`; `registered_shims`, `known_api_types` | `ProvidersPage.svelte` | URL-derived presets, backend-only API types, redirects, proxy, credential reveal and model discovery |
 | Model groups and metadata | model-group PUT/DELETE; `model_presets`; `model_info` eight-field contract | `ModelsPage.svelte` | structured edit, preset detected/modified/restore, modalities/reasoning, exact round trip |
 | Model discovery | provider `/models` | `ModelsPage.svelte` | filter, select all, prefix, duplicate-safe bulk insertion |
 | Model tests | test POST, poll GET/POST, DELETE | `ModelTestPanel.svelte`, `lib/model-test.ts` | pending/done/error/cancel/timeout, safe usage rendering, no request until user action |
