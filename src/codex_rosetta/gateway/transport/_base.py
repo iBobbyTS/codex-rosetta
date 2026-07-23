@@ -134,6 +134,10 @@ class UpstreamCredentialCollisionError(UpstreamSafetyError):
     """Raised when an upstream return contains a configured credential."""
 
 
+class UpstreamResponseContractError(UpstreamSafetyError):
+    """Raised when an upstream return violates consumer-visible semantics."""
+
+
 class UpstreamResponseTooLargeError(UpstreamSafetyError):
     """Raised before an upstream response body can exceed its byte limit."""
 

@@ -79,6 +79,10 @@ class _ArgumentBuffer:
     fragment_count: int = 0
 
 
+class ProviderResponseContractError(ValueError):
+    """Raised when consumer-visible provider response semantics are invalid."""
+
+
 class ProviderCredentialSemanticGate:
     """Inspect only provider fields whose consumers decode embedded JSON.
 
@@ -181,7 +185,9 @@ class ProviderCredentialSemanticGate:
             or self._live_fragments + 1 > self._max_argument_fragments
         ):
             self._clear_all()
-            raise SecretCollisionError
+            raise ProviderResponseContractError(
+                "semantic fragment inspection capacity exceeded"
+            )
         buffer.text += fragment
         buffer.byte_count += encoded_len
         buffer.fragment_count += 1
@@ -238,7 +244,9 @@ class ProviderCredentialSemanticGate:
     def _reserve_identity(self) -> None:
         if self._identity_count() >= self._max_argument_identities:
             self._clear_all()
-            raise SecretCollisionError
+            raise ProviderResponseContractError(
+                "semantic identity inspection capacity exceeded"
+            )
 
     @staticmethod
     def _mcp_identity(item_id: Any, output_index: Any) -> tuple[str, int] | None:
@@ -265,7 +273,7 @@ class ProviderCredentialSemanticGate:
             mapped_item_id is not None and mapped_item_id != item_id
         ):
             self._clear_all()
-            raise SecretCollisionError
+            raise ProviderResponseContractError("conflicting MCP stream identity")
         if mapped_index is None and mapped_item_id is None and reserve:
             self._reserve_identity()
             self._responses_mcp_item_to_index[item_id] = output_index
@@ -284,7 +292,9 @@ class ProviderCredentialSemanticGate:
         )
         if identity is None:
             self._clear_all()
-            raise SecretCollisionError
+            raise ProviderResponseContractError(
+                "missing or invalid MCP stream identity"
+            )
         return self._track_mcp_identity(identity, reserve=reserve)
 
     @staticmethod
@@ -361,7 +371,9 @@ class ProviderCredentialSemanticGate:
             )
             if not valid:
                 self._clear_all()
-                raise SecretCollisionError
+                raise ProviderResponseContractError(
+                    f"missing or invalid {field_name} stream identity"
+                )
             values.append((field_name, value))
         return tuple(values)
 
@@ -405,7 +417,7 @@ class ProviderCredentialSemanticGate:
         existing_mode = self._responses_text_identity_modes.get(mode_key)
         if existing_mode is not None and existing_mode != optional_identity_shape:
             self._clear_all()
-            raise SecretCollisionError
+            raise ProviderResponseContractError("inconsistent optional stream identity")
 
         identity_key = (field_name, identity)
         if identity_key not in self._responses_text_identities:
@@ -584,11 +596,15 @@ class ProviderCredentialSemanticGate:
                 mapped_call_id = self._chat_index_to_call.get(tool_index)
                 if mapped_call_id is not None and mapped_call_id != call_id:
                     self._clear_all()
-                    raise SecretCollisionError
+                    raise ProviderResponseContractError(
+                        "conflicting Chat tool-call identity"
+                    )
                 mapped_index = self._chat_call_to_index.get(call_id)
                 if mapped_index is not None and mapped_index != tool_index:
                     self._clear_all()
-                    raise SecretCollisionError
+                    raise ProviderResponseContractError(
+                        "conflicting Chat tool-call identity"
+                    )
                 self._chat_index_to_call[tool_index] = call_id
                 self._chat_call_to_index[call_id] = tool_index
             return call_id
@@ -597,7 +613,7 @@ class ProviderCredentialSemanticGate:
             if mapped_call_id is not None:
                 return mapped_call_id
         self._clear_all()
-        raise SecretCollisionError
+        raise ProviderResponseContractError("missing Chat tool-call identity")
 
     def _inspect_chat_event(self, event: Any) -> None:
         for choice in _items(event, "choices"):

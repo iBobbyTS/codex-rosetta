@@ -25,6 +25,7 @@ from codex_rosetta.gateway.transport.credential_redaction import (
 )
 from codex_rosetta.gateway.transport.credential_semantics import (
     ProviderCredentialSemanticGate,
+    ProviderResponseContractError,
 )
 from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
 from codex_rosetta.observability.redaction import SecretCollisionError, SecretRedactor
@@ -798,6 +799,7 @@ def test_raw_sse_safe_duplicate_members_are_byte_identical() -> None:
                             "delta": {
                                 "tool_calls": [
                                     {
+                                        "index": 0,
                                         "id": "call-1",
                                         "function": {"arguments": '{"value":"\\u00'},
                                     }
@@ -1311,7 +1313,7 @@ def test_codex_text_identity_state_is_bounded_and_cleared() -> None:
 
     gate.inspect_stream_event(item_event("added", "reasoning-1"))
     gate.inspect_stream_event(delta_event(0, "ordinary"))
-    with pytest.raises(SecretCollisionError):
+    with pytest.raises(ProviderResponseContractError):
         gate.inspect_stream_event(delta_event(1, "ordinary"))
 
     gate.inspect_stream_event(item_event("added", "reasoning-2"))
@@ -1669,7 +1671,7 @@ def test_argument_accumulator_limits_fail_closed(
         max_argument_fragments=max_fragments,
     )
 
-    with pytest.raises(SecretCollisionError):
+    with pytest.raises(ProviderResponseContractError):
         for fragment in fragments:
             gate.inspect_stream_event(
                 {
@@ -1702,7 +1704,7 @@ def test_responses_identity_mapping_limit_and_done_cleanup() -> None:
     gate.inspect_stream_event(item_event("1", "response.output_item.done"))
     gate.inspect_stream_event(item_event("2", "response.output_item.added"))
 
-    with pytest.raises(SecretCollisionError):
+    with pytest.raises(ProviderResponseContractError):
         gate.inspect_stream_event(item_event("3", "response.output_item.added"))
 
 

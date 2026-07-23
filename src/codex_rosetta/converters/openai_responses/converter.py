@@ -1643,6 +1643,7 @@ class OpenAIResponsesConverter(BaseConverter):
         result: dict[str, Any] = {
             "type": ResponsesEventType.REASONING_SUMMARY_TEXT_DELTA,
             "delta": event["reasoning"],
+            "summary_index": 0,
         }
         if isinstance(context, OpenAIResponsesStreamContext):
             context.reasoning_seen = True
