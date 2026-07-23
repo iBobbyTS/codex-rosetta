@@ -120,6 +120,17 @@
       .filter((item): item is ToolItem => Boolean(item && !item.ui_hidden));
   }
 
+  function groupLabelKey(groupId: string): string {
+    const supportsResponses = profileApiTypes.includes('responses');
+    if (groupId === 'exec_expansion') {
+      return supportsResponses ? 'tools.group.exec' : 'tools.group.exec_expansion';
+    }
+    if (groupId === 'namespace') {
+      return supportsResponses ? 'tools.group.namespace' : 'tools.group.namespace_expansion';
+    }
+    return `tools.group.${groupId}`;
+  }
+
   function resetExpandedNamespaces(): void {
     expandedNamespaces = (catalog.placements?.namespaces ?? [])
       .map((placement) => placement.namespace_id)
@@ -426,7 +437,7 @@
         {#each visibleGroups as group (group.id)}
           <section class="tool-group" data-tool-group={group.id}>
             <div class="tool-group-title">
-              <span>{t(`tools.group.${group.id}`)}</span>
+              <span>{t(groupLabelKey(group.id))}</span>
               <span class="tool-group-count">{group.items.length}</span>
             </div>
             {#if group.id === 'namespace'}
