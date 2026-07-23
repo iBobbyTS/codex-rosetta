@@ -31,7 +31,7 @@ describe('advanced tool profiles', () => {
       },
     }) : Promise.resolve({
       profiles: [{
-        id: 'builtin', name: 'Builtin', readonly: true,
+        id: 'builtin', name: 'Builtin', api_types: ['chat'], readonly: true,
         tools: {
           'function.exec_command': 'modified',
           'namespace.multi': 'modified',
@@ -86,7 +86,7 @@ describe('advanced tool profiles', () => {
         ],
         namespaces: [{ namespace_id: 'namespace.multi', child_ids: ['namespace.multi.send'] }],
       },
-    }) : Promise.resolve({ profiles: [{ id: 'builtin', name: 'Builtin', readonly: true, tools: { 'namespace.multi': 'modified', 'namespace.multi.send': 'modified', 'hosted.web_search': 'modified', 'custom.apply_patch': 'passthrough', 'custom_injection.image': 'modified' }, inputs: {} }], supported_states: { 'hosted.web_search': ['disabled','modified'] }, references: {} }));
+    }) : Promise.resolve({ profiles: [{ id: 'builtin', name: 'Builtin', api_types: ['chat'], readonly: true, tools: { 'namespace.multi': 'modified', 'namespace.multi.send': 'modified', 'hosted.web_search': 'modified', 'custom.apply_patch': 'passthrough', 'custom_injection.image': 'modified' }, inputs: {} }], supported_states: { 'hosted.web_search': ['disabled','modified'] }, references: {} }));
     const view = render(ToolsPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Function' }));
     const functionGroup = view.container.querySelector<HTMLElement>('[data-tool-group="function"]');
@@ -100,7 +100,7 @@ describe('advanced tool profiles', () => {
     expect(token).not.toBeDisabled();
     await fireEvent.input(token, { target: { value: 'override-token' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save Profile' }));
-    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/tools/profiles/builtin', expect.objectContaining({ inputs: { 'hosted.web_search': { token: 'override-token' } } })));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/tools/profiles/builtin', expect.objectContaining({ api_types: ['chat'], inputs: { 'hosted.web_search': { token: 'override-token' } } })));
   });
 });
 

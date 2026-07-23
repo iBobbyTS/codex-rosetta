@@ -189,7 +189,7 @@ describe('KeysPage', () => {
 
 describe('ModelsPage', () => {
   it('writes only the model-group contract fields', async () => {
-    apiMock.get.mockResolvedValue({ providers: { upstream: {} }, model_groups: {}, tool_profile_presets: [] });
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
@@ -198,9 +198,60 @@ describe('ModelsPage', () => {
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { provider: 'upstream', type: 'llm', models: { 'demo-model': {} } }));
   });
 
+  it('offers only tool profiles matching the selected provider protocol', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        chat: { api_type: 'chat' },
+        responses: { api_type: 'responses' },
+        anthropic: { api_type: 'anthropic' },
+        gemini: { api_type: 'google' },
+      },
+      model_groups: {},
+      tool_profile_presets: [
+        { id: 'builtin', name: 'Chat Default', api_types: ['chat'] },
+        { id: 'responses-default', name: 'Responses Default', api_types: ['responses'] },
+        { id: 'shared', name: 'Shared Profile', api_types: ['chat', 'responses', 'anthropic', 'google'] },
+      ],
+      tool_profiles: {
+        'custom-chat': { api_types: ['chat'] },
+        'custom-responses': { api_types: ['responses'] },
+        'custom-anthropic': { api_types: ['anthropic'] },
+        'custom-gemini': { api_types: ['google'] },
+      },
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    const providerSelect = screen.getByLabelText('Provider');
+    const profileSelect = screen.getByLabelText('Profile');
+
+    expect(within(profileSelect).getByRole('option', { name: 'Chat Default' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'custom-chat' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(within(profileSelect).queryByRole('option', { name: 'Responses Default' })).toBeNull();
+
+    await fireEvent.change(providerSelect, { target: { value: 'responses' } });
+
+    expect(within(profileSelect).getByRole('option', { name: 'Responses Default' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'custom-responses' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
+
+    await fireEvent.change(providerSelect, { target: { value: 'anthropic' } });
+
+    expect(within(profileSelect).getByRole('option', { name: 'custom-anthropic' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(within(profileSelect).queryByRole('option', { name: 'Responses Default' })).toBeNull();
+
+    await fireEvent.change(providerSelect, { target: { value: 'gemini' } });
+
+    expect(within(profileSelect).getByRole('option', { name: 'custom-gemini' })).toBeInTheDocument();
+    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
+  });
+
   it('detects, modifies, restores and saves all model preset metadata', async () => {
     const preset = { slug: 'gpt-demo', display_name: 'GPT Demo', description: 'Preset description', identity: 'demo', priority: 2, context_window: 64000, input_modalities: ['text', 'image'], supported_reasoning_levels: ['low', 'high'] };
-    apiMock.get.mockResolvedValue({ providers: { upstream: {} }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });

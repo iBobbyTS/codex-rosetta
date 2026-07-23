@@ -138,7 +138,9 @@ def test_disabled_namespace_forces_all_child_states_to_disabled():
     ]:
         tools[child_id] = "passthrough"
 
-    documents = normalize_tool_profile_documents({"custom": {"tools": tools}})
+    documents = normalize_tool_profile_documents(
+        {"custom": {"api_types": ["chat"], "tools": tools}}
+    )
 
     assert documents["custom"]["tools"]["namespace.multi_agent_v2"] == "disabled"
     assert all(
@@ -147,6 +149,23 @@ def test_disabled_namespace_forces_all_child_states_to_disabled():
             "namespace.multi_agent_v2"
         ]
     )
+
+
+def test_custom_profile_requires_non_empty_supported_api_types():
+    tools = dict(tool_profile_contract()["builtin"])
+
+    with pytest.raises(ValueError, match="api_types must be a non-empty array"):
+        normalize_tool_profile_documents({"custom": {"tools": tools}})
+    with pytest.raises(ValueError, match="api_types must be a non-empty array"):
+        normalize_tool_profile_documents({"custom": {"api_types": [], "tools": tools}})
+    with pytest.raises(ValueError, match="contains unsupported values"):
+        normalize_tool_profile_documents(
+            {"custom": {"api_types": ["unsupported"], "tools": tools}}
+        )
+    with pytest.raises(ValueError, match="must not contain duplicate values"):
+        normalize_tool_profile_documents(
+            {"custom": {"api_types": ["chat", "chat"], "tools": tools}}
+        )
 
 
 def test_function_profile_inputs_support_text_password_and_select_values(monkeypatch):
@@ -211,6 +230,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
         documents = normalize_tool_profile_documents(
             {
                 "custom": {
+                    "api_types": ["chat"],
                     "tools": tools,
                     "inputs": {
                         "function.update_plan": {
@@ -232,6 +252,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
             normalize_tool_profile_documents(
                 {
                     "invalid": {
+                        "api_types": ["chat"],
                         "tools": tools,
                         "inputs": {"function.update_plan": {"quality": "ultra"}},
                     }
@@ -449,7 +470,7 @@ def test_internal_container_when_disabled_must_be_boolean(monkeypatch):
         tool_profiles_module.tool_profile_contract.cache_clear()
 
 
-@pytest.mark.parametrize("api_type", ["responses", "chat", "anthropic", "google"])
+@pytest.mark.parametrize("api_type", ["responses", "chat"])
 def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
     tools = _profile(**{"function.update_plan": "disabled"})
     raw = {
@@ -462,6 +483,7 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
         },
         "tool_profiles": {
             "custom": {
+                "api_types": ["chat", "responses", "anthropic", "google"],
                 "tools": tools,
                 "inputs": {
                     "namespace.image_gen.imagegen": {
@@ -526,21 +548,13 @@ def test_gateway_config_rejects_unknown_group_profile():
         GatewayConfig(raw)
 
 
-def test_gateway_config_resolves_bundled_profile_input_overrides():
+def test_gateway_config_rejects_profile_for_different_provider_api_type():
     raw = {
         "providers": {
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
                 "api_type": "responses",
-            }
-        },
-        "tool_profile_input_overrides": {
-            "builtin": {
-                "hosted.web_search": {
-                    "provider": "tavily",
-                    "token": "builtin-search-token",
-                }
             }
         },
         "model_groups": {
@@ -557,9 +571,144 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
         },
     }
 
+    with pytest.raises(
+        ValueError,
+        match=r"tool profile 'builtin' for api_types \['chat'\], not provider api_type 'responses'",
+    ):
+        GatewayConfig(raw)
+
+
+@pytest.mark.parametrize("api_type", ["anthropic", "google"])
+def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": api_type,
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "builtin",
+                "models": {"gpt-test": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
+    with pytest.raises(ValueError, match="not provider api_type"):
+        GatewayConfig(raw)
+
+
+@pytest.mark.parametrize("api_type", ["anthropic", "google"])
+def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type):
+    tools = _profile(**{"function.update_plan": "disabled"})
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": api_type,
+            }
+        },
+        "tool_profiles": {
+            "custom": {
+                "api_types": ["anthropic", "google"],
+                "tools": tools,
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "custom",
+                "models": {"gpt-test": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
     route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
 
-    assert route.tool_profile == tool_profile_contract()["builtin"]
+    assert route.tool_profile_name == "custom"
+    assert route.tool_profile["function.update_plan"] == "disabled"
+
+
+@pytest.mark.parametrize("api_type", ["anthropic", "google"])
+def test_gateway_config_uses_no_default_profile_for_anthropic_and_google(api_type):
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": api_type,
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "models": {"gpt-test": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+
+    assert route.tool_profile_name is None
+    assert route.tool_profile == {}
+
+
+def test_gateway_config_resolves_bundled_profile_input_overrides():
+    raw = {
+        "providers": {
+            "test": {
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": "responses",
+            }
+        },
+        "tool_profile_input_overrides": {
+            "web-run-injection": {
+                "hosted.web_search": {
+                    "provider": "tavily",
+                    "token": "builtin-search-token",
+                }
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "web-run-injection",
+                "models": {"gpt-test": {}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+        },
+    }
+
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+
+    assert (
+        route.tool_profile
+        == tool_profile_contract()["readonly"]["web-run-injection"]["tools"]
+    )
     assert route.tool_profile_inputs["hosted.web_search"] == {
         "provider": "tavily",
         "token": "builtin-search-token",
@@ -577,7 +726,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
                 "api_type": "responses",
             }
         },
-        "tool_profiles": {"custom": {"tools": tools}},
+        "tool_profiles": {"custom": {"api_types": ["responses"], "tools": tools}},
         "model_groups": {
             "Test": {
                 "provider": "test",
@@ -610,6 +759,12 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
         "web-run-injection",
         "responses-tool-mapping",
     }
+    assert contract["readonly"]["builtin"]["api_types"] == ["chat"]
+    assert {
+        tuple(profile["api_types"])
+        for profile_id, profile in contract["readonly"].items()
+        if profile_id != "builtin"
+    } == {("responses",)}
     assert resolve_tool_profile("builtin", {}) == contract["builtin"]
     assert "hosted.image_generation" not in contract["builtin"]
     assert contract["builtin"]["hosted.web_search"] == "disabled"

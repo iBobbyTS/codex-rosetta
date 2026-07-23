@@ -12,7 +12,7 @@ The currently developed and supported gateway paths are:
 - OpenAI Responses to OpenAI Chat Completions conversion;
 - Direct OpenAI Responses transport for every Provider, with model-group Tool Profile changes plus Rosetta-managed plaintext handoff for model-switch compaction.
 
-Anthropic and Google conversion remain internal options and are not currently guaranteed. The Admin UI keeps one OpenAI Responses protocol; Provider selection chooses the default Tool Profile but never changes same-format Responses protocol handling.
+Anthropic and Google conversion remain internal options and are not currently guaranteed. Tool Profiles may declare Chat, Responses, Anthropic Messages, and Google GenAI applicability; the Admin UI filters model-group choices by that protocol. Chat and Responses Providers retain their bundled defaults, while Anthropic and Google Providers use no Profile unless one is selected explicitly. Provider selection never changes same-format Responses protocol handling.
 
 ## Gateway operations
 

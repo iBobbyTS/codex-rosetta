@@ -27,6 +27,7 @@ from .config import (
     load_config_raw,
     provider_supports_tool_profiles,
     resolve_codex_home,
+    resolve_provider_api_type,
     write_config,
 )
 from .logging import get_logger, setup_logging
@@ -170,13 +171,11 @@ def _create_initial_config(config_path: str) -> None:
             "Anthropic": {
                 "provider": "anthropic",
                 "type": "llm",
-                "tool_profile": "builtin",
                 "models": {"claude-sonnet-4-20250514": {}},
             },
             "Google": {
                 "provider": "google",
                 "type": "llm",
-                "tool_profile": "builtin",
                 "models": {"gemini-2.0-flash": {}},
             },
         },
@@ -277,16 +276,19 @@ def _cmd_add_model_group(args: argparse.Namespace) -> None:
     if args.name in groups:
         print(f"Error: model group '{args.name}' already exists.", file=sys.stderr)
         sys.exit(1)
+    provider_config = providers[args.provider]
+    provider_api_type = resolve_provider_api_type(args.provider, provider_config)
+    default_tool_profile = default_tool_profile_for_provider(provider_config)
     groups[args.name] = {
         "provider": args.provider,
         "type": "llm",
         **(
-            {
-                "tool_profile": default_tool_profile_for_provider(
-                    providers[args.provider]
-                )
-            }
-            if provider_supports_tool_profiles(providers[args.provider])
+            {"tool_profile": default_tool_profile}
+            if provider_supports_tool_profiles(
+                provider_config,
+                api_type=provider_api_type,
+            )
+            and default_tool_profile is not None
             else {}
         ),
         "models": {},

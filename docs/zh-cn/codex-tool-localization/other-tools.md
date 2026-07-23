@@ -124,7 +124,7 @@ Rosetta 会为这些名称登记只做形态转换的 exec 投影，但 schema �
 
 ## Tool Profile 作用范围
 
-所有 LLM 模型组都支持选择 Tool Profile。打包的 Profile 包括 **Chat Default（适用于第三方仅提供chat api的模型）**、**透传（适用于OpenAI官方API）**、**web.run 注入（适用于尚未支持/alpha/search端点的中转站）** 和 **工具映射（适用于第三方模型提供的Responses接口）**。新建模型组时会根据 Provider 与协议自动选择对应默认值，用户仍可显式改选其他 Profile。
+每个 Tool Profile 都通过必填的 `api_types` 数组声明非空的适用 Provider 协议集合，目前支持 `chat`、`responses`、`anthropic` 和 `google`，用户 Profile 可以选择任意组合。**Chat Default（适用于第三方仅提供chat api的模型）** 适用于 Chat；**透传（适用于OpenAI官方API）**、**web.run 注入（适用于尚未支持/alpha/search端点的中转站）** 和 **工具映射（适用于第三方模型提供的Responses接口）** 适用于 Responses。模型组编辑器只列出适用集合包含当前 Provider 协议的内置和用户 Profile，后端也会拒绝不匹配的引用。Anthropic 和 Google Provider 没有内置默认 Profile，但用户 Profile 可以显式支持这两种协议。
 
 打包的 Profile 通过 `image_gen.imagegen` 管理当前 Codex 图片生成工具，不包含已废弃的 Hosted `image_generation` 工具。
 
@@ -151,4 +151,4 @@ Function、Hosted 或 Namespace 目录项可以声明多组 `profile_inputs`。�
 
 内置的 **Chat Default** Profile 会禁用旧版 `multi_agent_v1` Namespace，同时保持 `collaboration` 启用。Collaboration 子工具会为 Chat 展开，并恢复为原生 Responses Namespace 调用；它们不会通过 Code Mode `exec` 转译。任何 Namespace 设为 Disabled 时，其所有子 Function 都会被强制设为 Disabled，并锁定状态选择器，直到重新启用该 Namespace。
 
-用户填写的值随用户 Profile 保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前值；切换或重置 Profile 时会恢复已保存的值。打包的内置 Profile 允许编辑并显式保存可见 field；保存值写入 `tool_profile_input_overrides.<profile-id>`，不会改写打包 JSON。它的工具传递状态仍保持只读。输入项只有被对应运行时功能读取后才会生效；当前 Modified Function 使用目录中隐藏的 guidance，Hosted `web_search` 使用 Profile 凭据，`image_gen.imagegen` 使用 Base URL 和 Token。Modified `web.run` 则读取 `server.web_search`。
+用户 Profile 在 `api_types` 中保存适用协议集合，并将用户填写的值保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前协议集合和输入值；切换或重置 Profile 时会恢复已保存的值。打包的内置 Profile 协议集合和工具传递状态保持只读；可见 field 仍可显式保存到 `tool_profile_input_overrides.<profile-id>`，不会改写打包 JSON。输入项只有被对应运行时功能读取后才会生效；当前 Modified Function 使用目录中隐藏的 guidance，Hosted `web_search` 使用 Profile 凭据，`image_gen.imagegen` 使用 Base URL 和 Token。Modified `web.run` 则读取 `server.web_search`。

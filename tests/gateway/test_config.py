@@ -80,11 +80,12 @@ def test_discover_config_resolves_explicit_directory() -> None:
             "web-run-injection",
         ),
         ("custom", "chat", "https://chat.example/v1", "builtin"),
-        ("custom", "anthropic", "https://messages.example", "builtin"),
+        ("custom", "anthropic", "https://messages.example", None),
+        ("custom", "google", "https://generativelanguage.googleapis.com", None),
     ],
 )
 def test_provider_selection_chooses_expected_builtin_tool_profile(
-    provider: str, api_type: str, base_url: str, expected: str
+    provider: str, api_type: str, base_url: str, expected: str | None
 ) -> None:
     assert (
         default_tool_profile_for_provider(

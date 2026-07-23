@@ -366,7 +366,7 @@ def test_conditional_codex_placements_match_0_144_4_tool_assembly():
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 4
+    assert catalog["metadata"]["schema_version"] == 5
     assert catalog["metadata"]["catalog_version"] == "codex-0.145.0-alpha.23"
     assert catalog["metadata"]["codex_cli_version"] == "0.145.0-alpha.23"
     assert catalog["metadata"]["codex_source_commit"] == CODEX_ALPHA_23_SOURCE_COMMIT
@@ -375,6 +375,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["builtin_profile"]["name"] == (
         "Chat Default（适用于第三方仅提供chat api的模型）"
     )
+    assert catalog["builtin_profile"]["api_types"] == ["chat"]
     assert catalog["builtin_profile"]["tools"] == {
         "namespace.multi_agent_v1": "disabled",
         "namespace.image_gen.imagegen": "modified",
@@ -391,6 +392,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         {
             "id": "openai-responses-tool-mapping-only",
             "name": "透传（适用于OpenAI官方API）",
+            "api_types": ["responses"],
             "defaults": {
                 "function": "passthrough",
                 "custom": "passthrough",
@@ -402,6 +404,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         {
             "id": "web-run-injection",
             "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
+            "api_types": ["responses"],
             "defaults": {
                 "function": "passthrough",
                 "custom": "passthrough",
@@ -414,6 +417,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         {
             "id": "responses-tool-mapping",
             "name": "工具映射（适用于第三方模型提供的Responses接口）",
+            "api_types": ["responses"],
             "base": "builtin",
         },
     ]
@@ -743,7 +747,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
                 "provider": "custom",
-                "api_type": "responses",
+                "api_type": "chat",
             }
         },
         "tool_profiles": {},
@@ -798,6 +802,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 "PUT",
                 "/admin/api/tools/profiles/builtin",
                 {
+                    "api_types": ["chat"],
                     "tools": builtin_tools,
                     "inputs": {
                         "hosted.web_search": {
@@ -830,7 +835,11 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 app,
                 "PUT",
                 "/admin/api/tools/profiles/restricted",
-                {"tools": tools, "inputs": {}},
+                {
+                    "api_types": ["chat", "responses", "anthropic", "google"],
+                    "tools": tools,
+                    "inputs": {},
+                },
             )
         )
     )
@@ -852,8 +861,15 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
         for item_id, definitions in tool_profile_contract()["input_definitions"].items()
     }
     assert restricted["inputs"] == expected_inputs
+    assert restricted["api_types"] == ["chat", "responses", "anthropic", "google"]
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["tool_profiles"]["restricted"]["inputs"] == expected_inputs
+    assert saved["tool_profiles"]["restricted"]["api_types"] == [
+        "chat",
+        "responses",
+        "anthropic",
+        "google",
+    ]
 
     response = asyncio.run(
         app._dispatch(
