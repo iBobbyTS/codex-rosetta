@@ -1127,6 +1127,8 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert body["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert body["providers"]["openai"]["default_tool_profile"] == "builtin"
     assert "validation_error" not in body["providers"]["openai"]
+    assert body["known_api_types"] == ["responses", "chat", "anthropic", "google"]
+    assert "known_provider_types" not in body
     assert body["tool_profile_presets"] == [
         {
             "id": "builtin",
