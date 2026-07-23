@@ -1028,6 +1028,77 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
     assert app.gateway_config.providers["DeepSeek"].allow_redirects is True
 
 
+def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
+    config = _config_data()
+    config["providers"]["zulu"] = {
+        "api_key": "sk-zulu",
+        "base_url": "https://zulu.example.test",
+        "provider": "openai",
+        "api_type": "chat",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            stream_trace_state=StreamTraceState(initial_config.stream_trace),
+            auth_state=None,
+        ),
+        path_params={"name": "Alpha"},
+        json=lambda: {
+            "provider": "openai",
+            "api_type": "chat",
+            "base_url": "https://alpha.example.test",
+            "api_key": "sk-alpha",
+        },
+    )
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert list(saved["providers"]) == ["Alpha", "openai", "zulu"]
+    assert json.loads(response.body)["providers"] == ["Alpha", "openai", "zulu"]
+
+
+def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
+    config = _config_data()
+    config["providers"]["Zulu"] = {
+        "api_key": "sk-zulu",
+        "base_url": "https://zulu.example.test",
+        "provider": "openai",
+        "api_type": "chat",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            stream_trace_state=StreamTraceState(initial_config.stream_trace),
+            auth_state=None,
+        ),
+        path_params={"name": "beta"},
+        json=lambda: {
+            "rename_from": "openai",
+            "provider": "openai",
+            "api_type": "chat",
+            "base_url": "https://beta.example.test",
+        },
+    )
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert list(saved["providers"]) == ["beta", "Zulu"]
+    assert saved["model_groups"]["OpenAI"]["provider"] == "beta"
+    assert json.loads(response.body)["providers"] == ["beta", "Zulu"]
+
+
 def test_put_provider_rejects_missing_persisted_provider(tmp_path):
     config_path = tmp_path / "config.jsonc"
     original = json.dumps(_config_data())

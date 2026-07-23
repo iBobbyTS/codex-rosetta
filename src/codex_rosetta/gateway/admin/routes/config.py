@@ -485,6 +485,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     existing_providers = data.get("providers", {})
     resolve_name = body.get("rename_from", name) or name
+    is_new_provider = name not in existing_providers
 
     # When api_key is omitted/empty and we're editing, keep the existing key
     if not api_key and resolve_name in existing_providers:
@@ -508,12 +509,20 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     # Handle rename: remove old entry and update model references
     rename_from = body.get("rename_from")
-    if rename_from and rename_from != name:
+    is_rename = bool(rename_from and rename_from != name)
+    if is_rename:
         rename_err = _handle_provider_rename(data, rename_from, name)
         if rename_err is not None:
             return rename_err
 
     data.setdefault("providers", {})[name] = provider_entry
+    if is_new_provider or is_rename:
+        data["providers"] = dict(
+            sorted(
+                data["providers"].items(),
+                key=lambda item: (item[0].casefold(), item[0]),
+            )
+        )
 
     new_config, commit_error = _commit_gateway_config(request, config_path, data)
     if commit_error is not None:
