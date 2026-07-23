@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { bundledProviderLogoNames, providerLogo } from '../src/admin/lib/provider-logos';
+import { bundledProviderLogoNames, providerLogo, providerLogoNeedsDarkInversion } from '../src/admin/lib/provider-logos';
 
 describe('provider logos', () => {
   it('maps every supported shim identity to a bundled asset', () => {
@@ -35,5 +35,9 @@ describe('provider logos', () => {
     expect(providerLogo('openrouter--anthropic')).toBe(providerLogo('openrouter--openai_chat'));
     expect(providerLogo('volcengine--openai_chat')).toBe(providerLogo('volcengine--openai_responses'));
     expect(providerLogo('custom')).toBe('');
+    for (const name of bundledProviderLogoNames) {
+      expect(providerLogoNeedsDarkInversion(name)).toBe(name !== 'opencode_go');
+    }
+    expect(providerLogoNeedsDarkInversion('custom')).toBe(false);
   });
 });

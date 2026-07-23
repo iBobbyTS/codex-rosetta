@@ -37,6 +37,7 @@ describe('Admin application session', () => {
     await fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'dark' } });
     expect(localStorage.getItem('codex-rosetta-theme')).toBe('dark');
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#0f1117');
+    expect(document.documentElement.style.getPropertyValue('--provider-logo-filter')).toBe('invert(1)');
     window.dispatchEvent(new Event('admin-restart-required'));
     const restartText = 'Codex configuration changed. Restart Codex for the changes to take effect.';
     expect(await screen.findByText(restartText)).toBeInTheDocument();

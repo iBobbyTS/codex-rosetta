@@ -68,10 +68,17 @@ test('loads provider logos only from bundled assets', async ({ page }) => {
     if (request.url().includes('cdn.jsdelivr.net')) externalLogos.push(request.url());
   });
   await page.goto('/admin/admin.html');
-  await expect(page.locator('.provider-card .provider-logo')).toHaveAttribute('src', /provider-logos\/moonshot\.svg$/);
+  const providerLogo = page.locator('.provider-card .provider-logo');
+  await expect(providerLogo).toHaveAttribute('src', /provider-logos\/moonshot\.svg$/);
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByLabel('Theme').selectOption('dark');
+  await expect(providerLogo).toHaveCSS('filter', 'invert(1)');
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '+ Add Provider' }).click();
   await page.getByLabel('Provider', { exact: true }).selectOption('opencode_go');
-  await expect(page.locator('.type-logo-preview')).toHaveAttribute('src', /provider-logos\/opencode\.png$/);
+  const opencodeLogo = page.locator('.type-logo-preview');
+  await expect(opencodeLogo).toHaveAttribute('src', /provider-logos\/opencode\.png$/);
+  await expect(opencodeLogo).toHaveCSS('filter', 'none');
   expect(externalLogos).toEqual([]);
 });
 

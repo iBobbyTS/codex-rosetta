@@ -4,7 +4,7 @@
   import ServerSettingsSection from '../components/ServerSettingsSection.svelte';
   import { api } from '../lib/api';
   import { t } from '../lib/i18n.svelte';
-  import { providerLogo } from '../lib/provider-logos';
+  import { providerLogo, providerLogoNeedsDarkInversion } from '../lib/provider-logos';
 
   type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
   type ModelRoute = string | { provider?: string };
@@ -78,9 +78,9 @@
   function resolvedPresetId(): string { return variant().providerId; }
   function logoFor(vendor: Vendor): string { return providerLogo(vendor.logoShim); }
   function protocolLabel(value: string): string { return ({responses:'OpenAI Responses',chat:'OpenAI Chat Completions',anthropic:'Anthropic Messages',google:'Google GenAI'} as Record<string,string>)[value] ?? value; }
-  function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string } {
+  function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string; invertLogo: boolean } {
     const vendor = vendorById(provider.provider);
-    return { vendor: t(vendor.labelKey, vendor.label), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor) };
+    return { vendor: t(vendor.labelKey, vendor.label), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor), invertLogo: providerLogoNeedsDarkInversion(vendor.logoShim) };
   }
   function setView(value: string): void { view = value === 'list' ? 'list' : 'grid'; localStorage.setItem('provider-view', view); }
   function applySelection(): void {
@@ -142,7 +142,7 @@
       {#each filteredEntries as [providerName, provider]}
         {@const enabled=provider.enabled!==false}{@const info=displayInfo(provider)}
         <div class="provider-card" class:disabled={!enabled} class:config-error={!!provider.validation_error}>
-          <div class="card-header"><div class="name">{#if info.logo}<img class="provider-logo" src={info.logo} alt="" />{/if}{providerName}{#if provider.validation_error}<span class="badge badge-error" title={provider.validation_error}>{t('provider.configError','Config Error')}</span>{/if}</div><label class="toggle" title={enabled?t('provider.enabled','Enabled'):t('provider.disabled','Disabled')}><input type="checkbox" checked={enabled} onchange={()=>void toggle(providerName)} /><span class="slider"></span></label></div>
+          <div class="card-header"><div class="name">{#if info.logo}<img class="provider-logo" class:invert-in-dark={info.invertLogo} src={info.logo} alt="" />{/if}{providerName}{#if provider.validation_error}<span class="badge badge-error" title={provider.validation_error}>{t('provider.configError','Config Error')}</span>{/if}</div><label class="toggle" title={enabled?t('provider.enabled','Enabled'):t('provider.disabled','Disabled')}><input type="checkbox" checked={enabled} onchange={()=>void toggle(providerName)} /><span class="slider"></span></label></div>
           {#if view==='list'}
             <div class="field" title={`${info.vendor} · ${info.protocol}`}><code>{info.vendor} · {info.protocol}</code></div><div class="field" title={provider.base_url ?? ''}><code>{provider.base_url ?? ''}</code></div><div class="field"><code>{config.credential_visible===false?'':provider.api_key ?? ''}</code></div>
           {:else}
@@ -158,7 +158,7 @@
 <Modal open={modalOpen} labelledby="provider-modal-title" onclose={()=>modalOpen=false}>
   <h3 id="provider-modal-title">{editingName?t('modal.editProvider','Edit Provider'):t('modal.addProvider','Add Provider')}</h3>
   <div class="form-group"><label for="provName">{t('label.providerName','Provider Name')}</label><input id="provName" bind:value={name} placeholder="e.g. my-openai, openrouter-claude" /></div>
-  <div class="form-group"><label for="provProvider">{t('label.providerVendor','Provider')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" src={logoFor(selectedVendor)} alt="" />{/if}<select id="provProvider" value={vendorId} onchange={(event)=>chooseVendor(event.currentTarget.value)}>{#each vendors as vendor}<option value={vendor.id}>{t(vendor.labelKey,vendor.label)}</option>{/each}</select></div><select aria-label="Provider variant" value={variantId} onchange={(event)=>chooseVariant(event.currentTarget.value)}>{#each selectedVendor.variants as item}<option value={item.id}>{item.label}</option>{/each}</select></div></div>
+  <div class="form-group"><label for="provProvider">{t('label.providerVendor','Provider')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" class:invert-in-dark={providerLogoNeedsDarkInversion(selectedVendor.logoShim)} src={logoFor(selectedVendor)} alt="" />{/if}<select id="provProvider" value={vendorId} onchange={(event)=>chooseVendor(event.currentTarget.value)}>{#each vendors as vendor}<option value={vendor.id}>{t(vendor.labelKey,vendor.label)}</option>{/each}</select></div><select aria-label="Provider variant" value={variantId} onchange={(event)=>chooseVariant(event.currentTarget.value)}>{#each selectedVendor.variants as item}<option value={item.id}>{item.label}</option>{/each}</select></div></div>
   <div class="form-group"><label for="provApiType">{t('label.providerProtocol','Protocol')}</label><select id="provApiType" value={apiType} onchange={(event)=>chooseProtocol(event.currentTarget.value)}>{#each allowedTypes() as item}<option value={item}>{protocolLabel(item)}</option>{/each}</select></div>
   <div class="form-group"><label for="provBaseUrl">{t('label.baseUrl','Base URL')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker','In Docker, localhost refers to the container itself.')}</span></span></label><input id="provBaseUrl" bind:value={url} oninput={deriveSelection} placeholder="https://api.openai.com/v1" /></div>
   <div class="form-group"><label for="provApiKey">{t('label.apiKey','API Key (or ${ENV_VAR} placeholder)')}</label>{#if multiKey}<div>{#each keyValues as key,index}<div class="multi-key-row"><input aria-label={`API key ${index+1}`} type={keyVisible?'text':'password'} value={key} oninput={(event)=>setKey(index,event.currentTarget.value)} /><button type="button" class="key-btn" onclick={()=>removeKey(index)} aria-label="Remove key">×</button></div>{/each}</div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={addKey}>+ {t('label.addKey','Add key')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label="Toggle visibility">◉</button></div>{:else}<div style="display:flex;gap:4px;align-items:center"><input id="provApiKey" type={keyVisible?'text':'password'} value={keyValues[0]} oninput={(event)=>setKey(0,event.currentTarget.value)} autocomplete="new-password" placeholder={editingName?t('label.keyUnchangedHint','Leave blank to keep current key'):'${OPENAI_API_KEY}'} style="flex:1" /></div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={promoteKeys}>+ {t('label.addKey','Add key')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label="Toggle visibility">◉</button></div>{/if}</div>
