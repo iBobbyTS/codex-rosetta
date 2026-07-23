@@ -5,7 +5,7 @@
   import { api } from '../lib/api';
   import { t } from '../lib/i18n.svelte';
 
-  type Provider = { base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
+  type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
   type Shim = { name?: string; logo?: string };
   type ModelRoute = string | { provider?: string };
   type ModelGroup = { provider?: string; models?: Record<string, unknown> };
@@ -65,14 +65,22 @@
   const normalizeUrl = (value: string) => value.trim().replace(/\/+$/, '');
   function allowedTypes(): string[] { return config.known_api_types ?? []; }
   function presetById(id: string): ProviderPreset { return providerPresets.find((item) => item.id === id) ?? providerPresets[providerPresets.length - 1]; }
+  function vendorById(id: string | undefined): Vendor { return vendors.find((item) => item.id === id) ?? vendors[vendors.length - 1]; }
+  function variantForUrl(vendor: Vendor, value: string): Variant {
+    const normalized = normalizeUrl(value);
+    return vendor.variants.find((item) => {
+      if (item.id === 'custom') return false;
+      const preset = providerPresets.find((entry) => entry.id === item.providerId);
+      return preset ? Object.values(preset.protocols).some((presetUrl) => normalizeUrl(presetUrl) === normalized) : false;
+    }) ?? vendor.variants.find((item) => item.id === 'custom') ?? vendor.variants[0];
+  }
   function variant(): Variant { return selectedVendor.variants.find((item) => item.id === variantId) ?? selectedVendor.variants[0]; }
   function resolvedPresetId(): string { return variant().providerId; }
   function logoFor(vendor: Vendor): string { return config.registered_shims?.find((shim) => shim.name === vendor.logoShim)?.logo ?? ''; }
   function protocolLabel(value: string): string { return ({responses:'OpenAI Responses',chat:'OpenAI Chat Completions',anthropic:'Anthropic Messages',google:'Google GenAI'} as Record<string,string>)[value] ?? value; }
   function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string } {
-    const match = providerPresets.find((preset) => preset.id !== 'custom' && normalizeUrl(preset.protocols[provider.api_type ?? ''] ?? '') === normalizeUrl(provider.base_url ?? ''));
-    const vendor = vendors.find((item) => item.variants.some((entry) => entry.providerId === match?.id)) ?? vendors[vendors.length - 1];
-    return { vendor: match ? t(vendor.labelKey, vendor.label) : t('provider.custom','Custom'), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor) };
+    const vendor = vendorById(provider.provider);
+    return { vendor: t(vendor.labelKey, vendor.label), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor) };
   }
   function setView(value: string): void { view = value === 'list' ? 'list' : 'grid'; localStorage.setItem('provider-view', view); }
   function applySelection(): void {
@@ -82,15 +90,10 @@
     if (!allowedTypes().includes(apiType) || !Object.prototype.hasOwnProperty.call(protocols, apiType)) apiType = supported[0] ?? allowedTypes()[0] ?? '';
     url = selectedVariant.id === 'custom' ? '' : protocols[apiType] ?? '';
   }
-  function chooseVendor(value: string): void { vendorId = value; variantId = selectedVendor.variants[0]?.id ?? 'custom'; applySelection(); }
+  function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=vendor.variants[0]?.id ?? 'custom'; applySelection(); }
   function chooseVariant(value: string): void { variantId = value; applySelection(); }
   function chooseProtocol(value: string): void { apiType = value; if (variant().id !== 'custom') url = presetById(resolvedPresetId()).protocols[value] ?? ''; }
-  function deriveSelection(): void {
-    const normalized = normalizeUrl(url); const preset = providerPresets.find((item) => item.id !== 'custom' && normalizeUrl(item.protocols[apiType] ?? '') === normalized);
-    if (!preset) { const current = vendors.find((item) => item.id === vendorId) ?? vendors[vendors.length - 1]; vendorId = current.id; variantId = current.variants.find((item) => item.id === 'custom')?.id ?? 'custom'; return; }
-    const vendor = vendors.find((item) => item.variants.some((item) => item.providerId === preset.id)) ?? vendors[vendors.length - 1];
-    vendorId = vendor.id; variantId = vendor.variants.find((item) => item.providerId === preset.id && item.id !== 'custom')?.id ?? vendor.variants[0].id;
-  }
+  function deriveSelection(): void { variantId=variantForUrl(selectedVendor,url).id; }
   function clearForm(): void {
     editingName=''; name=''; url=''; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; vendorId='custom'; variantId='custom'; keyValues=['']; keyVisible=false; multiKey=false; error='';
   }
@@ -98,7 +101,7 @@
   async function openEdit(providerName: string, provider: Provider, clone = false): Promise<void> {
     editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; url=provider.base_url ?? ''; proxy=provider.proxy ?? '';
     apiType = allowedTypes().includes(provider.api_type ?? '') ? provider.api_type ?? '' : allowedTypes()[0] ?? '';
-    allowRedirects=provider.allow_redirects === true; keyValues=['']; keyVisible=false; multiKey=false; deriveSelection(); modalOpen=true; error='';
+    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; keyValues=['']; keyVisible=false; multiKey=false; deriveSelection(); modalOpen=true; error='';
     if (!clone && config.credential_visible !== false) {
       try { const result = await api.get<{api_key?: string}>(`/admin/api/config/providers/${encodeURIComponent(providerName)}/key`); const keys=(result.api_key ?? '').split(','); keyValues=keys.length ? keys : ['']; multiKey=keys.length > 1; }
       catch { /* The modal remains usable for replacing or preserving the credential. */ }
@@ -112,7 +115,7 @@
   async function save(): Promise<void> {
     if (!name.trim() || !apiType || !allowedTypes().includes(apiType) || !/^https?:\/\//i.test(url.trim())) { error=t('error.fieldsRequired','Provider name, supported protocol, and HTTP(S) Base URL are required.'); return; }
     const credential=keyValues.map((item)=>item.trim()).filter(Boolean).join(','); if (!editingName && !credential) { error='A provider credential is required when creating a provider.'; return; }
-    busy=true; error=''; try { const body: Record<string,unknown>={api_type:apiType,base_url:url.trim(),proxy:proxy.trim(),allow_redirects:allowRedirects}; if(credential)body.api_key=credential; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',`Provider ${name.trim()} saved.`); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
+    busy=true; error=''; try { const body: Record<string,unknown>={provider:vendorId,api_type:apiType,base_url:url.trim(),proxy:proxy.trim(),allow_redirects:allowRedirects}; if(credential)body.api_key=credential; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',`Provider ${name.trim()} saved.`); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
   }
   async function action(operation:()=>Promise<unknown>,success:string):Promise<void>{busy=true;error='';try{await operation();await load();notice=success;}catch(cause){error=message(cause);}finally{busy=false;}}
   async function toggle(providerName:string):Promise<void>{await action(()=>api.post(`/admin/api/config/providers/${encodeURIComponent(providerName)}/toggle`),t('toast.providerToggled','Provider status changed.'));}

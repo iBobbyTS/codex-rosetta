@@ -9,7 +9,7 @@ The goal is to preserve Codex runtime semantics, not just make the upstream requ
 
 ## One Responses Protocol, Provider-Aware Defaults
 
-Provider configuration stores `api_type: "responses"`. The Provider choice selects the model-group default Profile, while protocol handling remains direct:
+Provider configuration stores the selected `provider` together with `api_type: "responses"`. The Provider sub-option is not stored; the Admin UI derives it only from the persisted Provider and Base URL. The Provider choice selects the model-group default Profile, while protocol handling remains direct:
 
 - OpenAI Official selects **透传（适用于OpenAI官方API）** and keeps the request, tool declarations, response JSON, and SSE bytes on the direct path.
 - OpenAI Custom and Custom + Custom select **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**. This keeps every original tool shape except `web.run`, which is Modified and handled by Rosetta.

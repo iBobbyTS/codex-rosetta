@@ -8,7 +8,7 @@ test.beforeEach(async ({ page }) => {
     else if (path.endsWith('/metrics')) body = { total_requests: 0, error_rate: 0, active_streams: 0, uptime_seconds: 1, by_target_provider: {} };
     else if (path.endsWith('/profiling/status')) body = { enabled: false, remaining: 0 };
     else if (path.endsWith('/profiling/results')) body = { results: [] };
-    else if (path.endsWith('/config')) body = { providers: { upstream: {} }, models: { 'demo-model': { provider: 'upstream' } }, model_groups: { Main: { provider: 'upstream', type: 'llm', models: { 'demo-model': {} } } }, known_api_types: ['responses', 'chat', 'anthropic', 'google'], registered_shims: [], tool_profile_presets: [], model_presets: [], server: { request_body_limit_mb: 128 } };
+    else if (path.endsWith('/config')) body = { providers: { upstream: { provider: 'moonshot', base_url: 'https://api.moonshot.ai/v1', api_type: 'responses' } }, models: { 'demo-model': { provider: 'upstream' } }, model_groups: { Main: { provider: 'upstream', type: 'llm', models: { 'demo-model': {} } } }, known_api_types: ['responses', 'chat', 'anthropic', 'google'], registered_shims: [], tool_profile_presets: [], model_presets: [], server: { request_body_limit_mb: 128 } };
     else if (path === '/admin/api/test') body = { task_id: 'browser-task' };
     else if (path.endsWith('/admin/api/test/browser-task/poll')) body = { status: 'done', status_code: 200, body: { output_text: '<img src="https://audit.invalid/probe" onerror="fetch(\'/stolen\')">', usage: { input_tokens: '<script>bad()</script>', output_tokens: 7, total_tokens: 9007199254740992 } } };
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) });
@@ -54,6 +54,14 @@ test('renders configurable API types with user-facing protocol names', async ({ 
     'responses', 'chat', 'anthropic', 'google',
   ]);
   await expect(page.getByRole('dialog', { name: 'Add Provider' })).not.toContainText('open_responses');
+});
+
+test('derives the provider child option only from persisted provider and URL', async ({ page }) => {
+  await page.goto('/admin/admin.html');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByLabel('Provider', { exact: true })).toHaveValue('moonshot');
+  await expect(page.getByLabel('Provider variant')).toHaveValue('international');
+  await expect(page.getByLabel('Protocol')).toHaveValue('responses');
 });
 
 test('keeps model mapping actions inside the model-group dialog', async ({ page }) => {
