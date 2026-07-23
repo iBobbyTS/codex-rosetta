@@ -16,11 +16,12 @@ describe('model testing', () => {
     expect(apiMock.post).toHaveBeenCalledTimes(2);
   });
 
-  it('builds each test kind through the Responses endpoint contract', () => {
-    expect(buildModelTestPayload('demo', 'stream')).toMatchObject({ model: 'demo', stream: true });
-    expect(buildModelTestPayload('demo', 'tools')).toHaveProperty('tools');
-    expect(buildModelTestPayload('demo', 'vision')).toHaveProperty('input');
-    expect(buildModelTestPayload('demo', 'reasoning')).toMatchObject({ reasoning: { effort: 'low' } });
+  it('builds only the basic text test through the Responses endpoint contract', () => {
+    expect(buildModelTestPayload('demo')).toEqual({
+      model: 'demo',
+      max_output_tokens: 256,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with a short gateway test response.' }] }],
+    });
   });
 
   it('renders only non-negative safe integer usage without coercing hostile values', () => {
