@@ -132,6 +132,13 @@ make build-docker  # Build local gateway image from the current checkout wheel
 
 Tooling config (ruff, ty, complexipy) lives in `pyproject.toml`.
 
+### Local gateway process safety
+
+- Do not proactively restart the main gateway listening on port `8765`. Tell the
+  developer that a restart is required and let them restart it manually.
+- Temporary gateway processes may be started on other ports for testing, but
+  every temporary process must be stopped after the test finishes.
+
 ## Definition of done
 
 1. `make lint` and `make test` exit 0
