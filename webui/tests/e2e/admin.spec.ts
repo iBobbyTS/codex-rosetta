@@ -62,6 +62,19 @@ test('renders configurable API types with user-facing protocol names', async ({ 
   await expect(page.getByRole('dialog', { name: 'Add Provider' })).not.toContainText('open_responses');
 });
 
+test('loads provider logos only from bundled assets', async ({ page }) => {
+  const externalLogos: string[] = [];
+  page.on('request', (request) => {
+    if (request.url().includes('cdn.jsdelivr.net')) externalLogos.push(request.url());
+  });
+  await page.goto('/admin/admin.html');
+  await expect(page.locator('.provider-card .provider-logo')).toHaveAttribute('src', /provider-logos\/moonshot\.svg$/);
+  await page.getByRole('button', { name: '+ Add Provider' }).click();
+  await page.getByLabel('Provider', { exact: true }).selectOption('opencode_go');
+  await expect(page.locator('.type-logo-preview')).toHaveAttribute('src', /provider-logos\/opencode\.png$/);
+  expect(externalLogos).toEqual([]);
+});
+
 test('derives the provider child option only from persisted provider and URL', async ({ page }) => {
   await page.goto('/admin/admin.html');
   await page.getByRole('button', { name: 'Edit', exact: true }).click();

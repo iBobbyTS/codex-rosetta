@@ -1,11 +1,73 @@
 {
   "admin.html": {
-    "file": "assets/admin-Du4wKEha.js",
+    "file": "assets/admin-DJ2kFsI8.js",
     "name": "admin",
     "src": "admin.html",
     "isEntry": true,
     "css": [
       "assets/admin-DmnpCD1m.css"
+    ],
+    "assets": [
+      "assets/anthropic-CW3-N5kA.svg",
+      "assets/deepseek-B8xn57ha.svg",
+      "assets/google-DNRz0BJP.svg",
+      "assets/minimax-Dhz7mBn8.svg",
+      "assets/moonshot-CZZI-XBJ.svg",
+      "assets/openai-DXuoGGqS.svg",
+      "assets/opencode-CQ6-Ag_g.png",
+      "assets/openrouter-CurrtRVf.svg",
+      "assets/qwen-C7wsqEnO.svg",
+      "assets/volcengine-CzlqGJ1H.svg",
+      "assets/xai-CAL-Vlf0.svg",
+      "assets/zhipu-4xYs0ZEH.svg"
     ]
+  },
+  "src/admin/assets/provider-logos/anthropic.svg": {
+    "file": "assets/anthropic-CW3-N5kA.svg",
+    "src": "src/admin/assets/provider-logos/anthropic.svg"
+  },
+  "src/admin/assets/provider-logos/deepseek.svg": {
+    "file": "assets/deepseek-B8xn57ha.svg",
+    "src": "src/admin/assets/provider-logos/deepseek.svg"
+  },
+  "src/admin/assets/provider-logos/google.svg": {
+    "file": "assets/google-DNRz0BJP.svg",
+    "src": "src/admin/assets/provider-logos/google.svg"
+  },
+  "src/admin/assets/provider-logos/minimax.svg": {
+    "file": "assets/minimax-Dhz7mBn8.svg",
+    "src": "src/admin/assets/provider-logos/minimax.svg"
+  },
+  "src/admin/assets/provider-logos/moonshot.svg": {
+    "file": "assets/moonshot-CZZI-XBJ.svg",
+    "src": "src/admin/assets/provider-logos/moonshot.svg"
+  },
+  "src/admin/assets/provider-logos/openai.svg": {
+    "file": "assets/openai-DXuoGGqS.svg",
+    "src": "src/admin/assets/provider-logos/openai.svg"
+  },
+  "src/admin/assets/provider-logos/opencode.png": {
+    "file": "assets/opencode-CQ6-Ag_g.png",
+    "src": "src/admin/assets/provider-logos/opencode.png"
+  },
+  "src/admin/assets/provider-logos/openrouter.svg": {
+    "file": "assets/openrouter-CurrtRVf.svg",
+    "src": "src/admin/assets/provider-logos/openrouter.svg"
+  },
+  "src/admin/assets/provider-logos/qwen.svg": {
+    "file": "assets/qwen-C7wsqEnO.svg",
+    "src": "src/admin/assets/provider-logos/qwen.svg"
+  },
+  "src/admin/assets/provider-logos/volcengine.svg": {
+    "file": "assets/volcengine-CzlqGJ1H.svg",
+    "src": "src/admin/assets/provider-logos/volcengine.svg"
+  },
+  "src/admin/assets/provider-logos/xai.svg": {
+    "file": "assets/xai-CAL-Vlf0.svg",
+    "src": "src/admin/assets/provider-logos/xai.svg"
+  },
+  "src/admin/assets/provider-logos/zhipu.svg": {
+    "file": "assets/zhipu-4xYs0ZEH.svg",
+    "src": "src/admin/assets/provider-logos/zhipu.svg"
   }
 }

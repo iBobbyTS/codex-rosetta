@@ -4,12 +4,12 @@
   import ServerSettingsSection from '../components/ServerSettingsSection.svelte';
   import { api } from '../lib/api';
   import { t } from '../lib/i18n.svelte';
+  import { providerLogo } from '../lib/provider-logos';
 
   type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
-  type Shim = { name?: string; logo?: string };
   type ModelRoute = string | { provider?: string };
   type ModelGroup = { provider?: string; models?: Record<string, unknown> };
-  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; registered_shims?: Shim[]; credential_visible?: boolean };
+  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; credential_visible?: boolean };
   type Protocols = Record<string, string>;
   type ProviderPreset = { id: string; label: string; labelKey: string; logoShim?: string; protocols: Protocols };
   type Variant = { id: string; label: string; providerId: string };
@@ -27,7 +27,7 @@
     { id:'google', label:'Google', labelKey:'provider.google', logoShim:'google', protocols:{ google:'https://generativelanguage.googleapis.com' } },
     { id:'anthropic', label:'Anthropic', labelKey:'provider.anthropic', logoShim:'anthropic', protocols:{ anthropic:'https://api.anthropic.com' } },
     { id:'openrouter', label:'Open Router', labelKey:'provider.openrouter', logoShim:'openrouter--openai_chat', protocols:{ anthropic:'https://openrouter.ai/api', chat:'https://openrouter.ai/api/v1' } },
-    { id:'opencode_go', label:'Opencode Go', labelKey:'provider.opencodeGo', protocols:{ chat:'https://opencode.ai/zen/go/v1' } },
+    { id:'opencode_go', label:'Opencode Go', labelKey:'provider.opencodeGo', logoShim:'opencode_go', protocols:{ chat:'https://opencode.ai/zen/go/v1' } },
     { id:'custom', label:'Custom', labelKey:'provider.custom', protocols:{ responses:'', chat:'', anthropic:'', google:'' } },
   ];
   const vendors: Vendor[] = [
@@ -40,7 +40,7 @@
     { id:'google', label:'Google', labelKey:'provider.google', logoShim:'google', variants:[{id:'official',label:'Official',providerId:'google'},{id:'custom',label:'Custom',providerId:'google'}] },
     { id:'anthropic', label:'Anthropic', labelKey:'provider.anthropic', logoShim:'anthropic', variants:[{id:'official',label:'Official',providerId:'anthropic'},{id:'custom',label:'Custom',providerId:'anthropic'}] },
     { id:'openrouter', label:'Open Router', labelKey:'provider.openrouter', logoShim:'openrouter--openai_chat', variants:[{id:'official',label:'Official',providerId:'openrouter'},{id:'custom',label:'Custom',providerId:'openrouter'}] },
-    { id:'opencode_go', label:'Opencode Go', labelKey:'provider.opencodeGo', variants:[{id:'official',label:'Official',providerId:'opencode_go'},{id:'custom',label:'Custom',providerId:'opencode_go'}] },
+    { id:'opencode_go', label:'Opencode Go', labelKey:'provider.opencodeGo', logoShim:'opencode_go', variants:[{id:'official',label:'Official',providerId:'opencode_go'},{id:'custom',label:'Custom',providerId:'opencode_go'}] },
     { id:'custom', label:'Custom', labelKey:'provider.custom', variants:[{id:'custom',label:'Custom',providerId:'custom'}] },
   ];
 
@@ -76,7 +76,7 @@
   }
   function variant(): Variant { return selectedVendor.variants.find((item) => item.id === variantId) ?? selectedVendor.variants[0]; }
   function resolvedPresetId(): string { return variant().providerId; }
-  function logoFor(vendor: Vendor): string { return config.registered_shims?.find((shim) => shim.name === vendor.logoShim)?.logo ?? ''; }
+  function logoFor(vendor: Vendor): string { return providerLogo(vendor.logoShim); }
   function protocolLabel(value: string): string { return ({responses:'OpenAI Responses',chat:'OpenAI Chat Completions',anthropic:'Anthropic Messages',google:'Google GenAI'} as Record<string,string>)[value] ?? value; }
   function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string } {
     const vendor = vendorById(provider.provider);
