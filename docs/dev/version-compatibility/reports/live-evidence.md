@@ -1,4 +1,34 @@
-# Codex 0.145.0-alpha.23 Live Evidence Appendix
+# Codex Live Evidence Appendix
+
+## Formal 0.145.0 status
+
+Date: 2026-07-23
+Codex version: 0.145.0
+
+The formal source checkout is `rust-v0.145.0` at
+`25af12f7e61572b0bc18ddb1008be543b91519b0`. Deterministic audio/catalog/tool
+adaptation tests have passed. The first formal CLI smoke is recorded below; the
+historical alpha.23 rows must not be used as formal release evidence. Formal
+live reruns must record the exact binary, provider, model, route, task, marker,
+and outcome here.
+
+| Run | Suite/task | Codex binary and model | Observed provider / route | Thread | Exit / marker / evaluation | Evidence |
+| --- | --- | --- | --- | --- | --- | --- |
+| `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |
+
+This smoke proves the formal binary and provider-neutral GPT routing contract for
+the one-shot command path only. It does not prove formal audio behavior, remote
+compaction, Images, Browser, Skills, or the remaining live-agent matrix.
+
+Per-request usage for the smoke, in request order, was
+`80eb8786:20098/125/3840/base` and `06eadb04:20253/10/3840/-16383`, using the
+required delta `3840 - (20098 + 125)`. The second request contains the newly
+inserted native command result and a changed conversation/tool prefix, so this
+large negative delta is expected cache-prefix breakage rather than a cache-rate
+measurement. Both requests carried `cache_write_tokens: 0`.
+
+## Alpha.23 historical evidence
+
 Date: 2026-07-18
 Codex version: 0.145.0-alpha.23
 

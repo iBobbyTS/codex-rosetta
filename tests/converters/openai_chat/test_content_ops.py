@@ -7,7 +7,7 @@ import pytest
 from codex_rosetta.converters.openai_chat.content_ops import OpenAIChatContentOps
 from typing import cast
 
-from codex_rosetta.types.ir import CitationPart, ImagePart, TextPart
+from codex_rosetta.types.ir import AudioPart, CitationPart, ImagePart, TextPart
 
 
 class TestOpenAIChatContentOps:
@@ -128,17 +128,40 @@ class TestOpenAIChatContentOps:
         with pytest.raises(NotImplementedError, match="does not support file"):
             OpenAIChatContentOps.p_file_to_ir({})
 
-    # ==================== Audio (not supported) ====================
+    # ==================== Audio ====================
 
-    def test_ir_audio_to_p_raises(self):
-        """Test ir_audio_to_p raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="does not support audio"):
-            OpenAIChatContentOps.ir_audio_to_p({"type": "audio"})
+    def test_ir_audio_to_p(self):
+        """Test IR audio data → OpenAI Chat input_audio."""
+        result = OpenAIChatContentOps.ir_audio_to_p(
+            AudioPart(
+                type="audio",
+                audio_data={"data": "abc123", "media_type": "audio/wav"},
+            )
+        )
+        assert result == {
+            "type": "input_audio",
+            "input_audio": {"data": "abc123", "format": "wav"},
+        }
 
-    def test_p_audio_to_ir_raises(self):
-        """Test p_audio_to_ir raises NotImplementedError."""
-        with pytest.raises(NotImplementedError, match="does not support audio"):
-            OpenAIChatContentOps.p_audio_to_ir({})
+    def test_p_audio_to_ir(self):
+        """Test OpenAI Chat input_audio → IR audio data."""
+        result = OpenAIChatContentOps.p_audio_to_ir(
+            {
+                "type": "input_audio",
+                "input_audio": {"data": "xyz789", "format": "mp3"},
+            }
+        )
+        assert result == AudioPart(
+            type="audio",
+            audio_data={"data": "xyz789", "media_type": "audio/mpeg"},
+        )
+
+    def test_ir_audio_to_p_rejects_incomplete_audio_data(self):
+        """Test incomplete IR audio data raises a stable conversion error."""
+        with pytest.raises(ValueError, match="data and media_type"):
+            OpenAIChatContentOps.ir_audio_to_p(
+                cast(AudioPart, {"type": "audio", "audio_data": {"data": "abc"}})
+            )
 
     # ==================== Reasoning ====================
 

@@ -523,6 +523,7 @@ def build_exec_script(
   for (const item of result.content) {
     if (item?.type === "text") text(item.text);
     else if (item?.type === "image") image(item);
+    else if (item?.type === "audio") audio(item);
     else text(item);
   }
 } else {

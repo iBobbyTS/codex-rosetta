@@ -147,28 +147,45 @@ class OpenAIChatContentOps(BaseContentOps):
             "Use OpenAI Responses API converter for file support."
         )
 
-    # ==================== Audio (not supported) ====================
+    # ==================== Audio ====================
 
     @staticmethod
     def ir_audio_to_p(ir_audio: AudioPart, **kwargs: Any) -> Any:
-        """IR AudioPart → OpenAI audio content.
-
-        Raises:
-            NotImplementedError: OpenAI Chat Completions does not support audio parts.
-        """
-        raise NotImplementedError(
-            "OpenAI Chat Completions does not support audio content parts."
-        )
+        """IR AudioPart → OpenAI Chat ``input_audio`` content."""
+        audio_data = ir_audio.get("audio_data")
+        if not audio_data:
+            raise ValueError("OpenAI Chat audio requires audio_data")
+        data = audio_data.get("data")
+        media_type = audio_data.get("media_type")
+        if not isinstance(data, str) or not isinstance(media_type, str):
+            raise ValueError("OpenAI Chat audio must have data and media_type")
+        audio_format = media_type.removeprefix("audio/")
+        if audio_format == "mpeg":
+            audio_format = "mp3"
+        return {
+            "type": "input_audio",
+            "input_audio": {"data": data, "format": audio_format},
+        }
 
     @staticmethod
     def p_audio_to_ir(provider_audio: Any, **kwargs: Any) -> AudioPart:
-        """OpenAI audio content → IR AudioPart.
-
-        Raises:
-            NotImplementedError: OpenAI Chat Completions does not support audio parts.
-        """
-        raise NotImplementedError(
-            "OpenAI Chat Completions does not support audio content parts."
+        """OpenAI Chat ``input_audio`` content → IR AudioPart."""
+        if not isinstance(provider_audio, dict):
+            raise ValueError("Audio content must be an object")
+        audio_data = provider_audio.get("input_audio")
+        if not isinstance(audio_data, dict):
+            raise ValueError("Audio content must have input_audio")
+        data = audio_data.get("data")
+        audio_format = audio_data.get("format")
+        if not isinstance(data, str) or not isinstance(audio_format, str):
+            raise ValueError("Audio content must have data and format")
+        media_type = {
+            "mp3": "audio/mpeg",
+            "mpeg": "audio/mpeg",
+        }.get(audio_format.lower(), f"audio/{audio_format.lower()}")
+        return AudioPart(
+            type="audio",
+            audio_data={"data": data, "media_type": media_type},
         )
 
     # ==================== Reasoning ====================

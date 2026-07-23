@@ -20,11 +20,13 @@ logger = logging.getLogger(__name__)
 _IR_TEXT_TYPES = {"text"}
 _IR_IMAGE_TYPES = {"image"}
 _IR_FILE_TYPES = {"file"}
+_IR_AUDIO_TYPES = {"audio"}
 
 # Provider-specific type names that map to IR types
 _PROVIDER_TEXT_TYPES = {"text", "input_text", "output_text"}
 _PROVIDER_IMAGE_TYPES = {"image", "input_image", "image_url"}
 _PROVIDER_FILE_TYPES = {"file", "input_file", "document"}
+_PROVIDER_AUDIO_TYPES = {"audio", "input_audio"}
 
 
 def convert_content_blocks_to_ir(
@@ -102,6 +104,14 @@ def _p_block_to_ir(
     if block_type in _PROVIDER_FILE_TYPES:
         return {**content_ops_class.p_file_to_ir(block)}
 
+    # Audio
+    if block_type in _PROVIDER_AUDIO_TYPES:
+        try:
+            return {**content_ops_class.p_audio_to_ir(block)}
+        except NotImplementedError, ValueError, KeyError:
+            logger.warning("Failed to convert provider audio block: %s", block)
+            return block
+
     # Google-style inline data (no "type" field, uses "inlineData" key)
     if "inlineData" in block or "inline_data" in block:
         return {**content_ops_class.p_image_to_ir(block)}
@@ -146,6 +156,15 @@ def _ir_block_to_p(
         except ValueError, KeyError:
             logger.warning("Failed to convert IR file block: %s", block)
             return None
+
+    # IR audio
+    if block_type in _IR_AUDIO_TYPES:
+        try:
+            result = content_ops_class.ir_audio_to_p(block)
+            return {**result} if result is not None else None
+        except NotImplementedError, ValueError, KeyError:
+            logger.warning("Failed to convert IR audio block: %s", block)
+            return block
 
     # Unknown — pass through as-is
     logger.debug("Unknown IR content block type in tool result: %s", block_type)

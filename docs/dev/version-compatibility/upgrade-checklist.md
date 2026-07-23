@@ -231,7 +231,7 @@ fields. The number of report rows must match the registry. Save reports under a
 descriptive date-free name such as
 `docs/dev/version-compatibility/reports/range-coverage-review.md`, then put
 the date followed by the target label, for example
-`Codex version: 0.145.0-alpha.23`, directly below the title:
+`Codex version: 0.145.0`, directly below the title:
 
 | ID and compatibility point | Classification | Source code/contract evidence | Fix or review plan | Automation results | Real API results |
 | --- | --- | --- | --- | --- | --- |
@@ -300,7 +300,7 @@ You can't incorporate "probably no changes" into the pass, and you can't omit th
 
 Still to be implemented: field types, nested model-catalog structs, serde rename/default/skip strategy, instruction-template precedence, full bundled model values and consumer mapping, SSE match arm digest, full generic tool schema, tool_search defaults, and model fallback initializer. The extractor currently covers the `ModelInfo` field set, key model enums, and a Responses Lite capability subset only. Alpha.23 additionally renames the reasoning-summary capability, adds permission-message fields, types response-item IDs, adds structured Search results and cache-write usage, and changes Code Mode and Realtime contracts. The current baseline therefore cannot claim complete target compatibility, and the extractor must be adapted before baseline refresh.
 
-The `0.144.6` range audit and the alpha.23 source review prove why the manual catalog step is mandatory:
+The `0.144.6` range audit and the formal `0.145.0` source review prove why the manual catalog step is mandatory:
 Codex changed only bundled Sol/Terra/Luna instruction and context-window values,
 while the extracted content groups still matched the `0.144.4` baseline. For
 every routine or full review, diff the complete target `models.json` values
