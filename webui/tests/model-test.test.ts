@@ -17,10 +17,10 @@ describe('model testing', () => {
   });
 
   it('builds only the basic text test through the Responses endpoint contract', () => {
-    expect(buildModelTestPayload('demo', 'Reply with a short gateway test response.')).toEqual({
+    expect(buildModelTestPayload('demo')).toEqual({
       model: 'demo',
       max_output_tokens: 256,
-      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'Reply with a short gateway test response.' }] }],
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
     });
   });
 
