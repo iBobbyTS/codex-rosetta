@@ -6,6 +6,7 @@ export default defineConfig({
   base: '/admin/',
   plugins: [svelte()],
   build: {
+    assetsInlineLimit: 0,
     outDir: resolve(__dirname, '../src/codex_rosetta/gateway/admin/dist'),
     emptyOutDir: true,
     manifest: 'manifest.json',

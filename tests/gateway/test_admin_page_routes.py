@@ -129,6 +129,28 @@ def test_manifest_allows_only_generated_assets() -> None:
         load_admin_asset("assets/not-in-manifest.js")
 
 
+def test_manifest_bundles_all_provider_logos() -> None:
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    manifest = json.loads(
+        package_files.joinpath("dist", "manifest.json").read_text("utf-8")
+    )
+    logo_assets = manifest["admin.html"]["assets"]
+
+    assert len(logo_assets) == 12
+    assert any(
+        path.startswith("assets/opencode-") and path.endswith(".png")
+        for path in logo_assets
+    )
+    assert all(path.startswith("assets/") for path in logo_assets)
+    for path in logo_assets:
+        logo = load_admin_asset(path)
+        assert logo.content_type in {"image/png", "image/svg+xml"}
+        assert logo.body
+
+    script = load_admin_asset(manifest["admin.html"]["file"])
+    assert b"cdn.jsdelivr.net" not in script.body
+
+
 def test_admin_asset_route_uses_immutable_cache_policy() -> None:
     app = _make_app()
     package_files = importlib.resources.files("codex_rosetta.gateway.admin")
