@@ -43,7 +43,10 @@ MAX_TOOL_CALL_CACHE_TTL_HOURS = 720.0
 DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS = True
 DEFAULT_ENABLE_PHASE_DETECTION = True
 LOCALIZED_CODE_TOOL_NAMES = frozenset({"Read", "Edit", "Write", "Glob", "Grep"})
-RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES = LOCALIZED_CODE_TOOL_NAMES | {"Bash"}
+RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES = LOCALIZED_CODE_TOOL_NAMES | {
+    "Bash",
+    "send_line",
+}
 NATIVE_CODE_TOOL_NAMES = frozenset(
     {"apply_patch", "exec_command", "write_stdin", "shell_command"}
 )
@@ -158,6 +161,7 @@ class NativeToolCapabilities:
 
     has_exec_command: bool = False
     has_shell_command: bool = False
+    has_write_stdin: bool = False
     has_custom_apply_patch: bool = True
     has_custom_exec: bool = False
 
@@ -169,6 +173,7 @@ class NativeToolCapabilities:
 
         has_exec_command = False
         has_shell_command = False
+        has_write_stdin = False
         has_custom_apply_patch = False
         has_custom_exec = False
         for tool in tools:
@@ -177,6 +182,8 @@ class NativeToolCapabilities:
                 has_exec_command = True
             elif name == "shell_command":
                 has_shell_command = True
+            elif name == "write_stdin":
+                has_write_stdin = True
             elif name == "apply_patch" and _chat_tool_type(tool) == "custom":
                 has_custom_apply_patch = True
             elif name == "exec" and _chat_tool_type(tool) == "custom":
@@ -185,6 +192,7 @@ class NativeToolCapabilities:
         return cls(
             has_exec_command=has_exec_command,
             has_shell_command=has_shell_command,
+            has_write_stdin=has_write_stdin,
             has_custom_apply_patch=has_custom_apply_patch,
             has_custom_exec=has_custom_exec,
         )
@@ -194,6 +202,7 @@ class NativeToolCapabilities:
         return {
             "has_exec_command": self.has_exec_command,
             "has_shell_command": self.has_shell_command,
+            "has_write_stdin": self.has_write_stdin,
             "has_custom_apply_patch": self.has_custom_apply_patch,
             "has_custom_exec": self.has_custom_exec,
         }
@@ -206,6 +215,7 @@ class NativeToolCapabilities:
         return cls(
             has_exec_command=bool(value.get("has_exec_command")),
             has_shell_command=bool(value.get("has_shell_command")),
+            has_write_stdin=bool(value.get("has_write_stdin")),
             has_custom_apply_patch=bool(value.get("has_custom_apply_patch", True)),
             has_custom_exec=bool(value.get("has_custom_exec")),
         )
@@ -441,8 +451,15 @@ def localize_code_editing_chat_request(
         localized_tools = [
             tool
             for tool in _localized_chat_tool_definitions()
-            if _chat_tool_name(tool) in injected_tool_names
+            if (
+                _chat_tool_name(tool) in injected_tool_names
+                or (
+                    _chat_tool_name(tool) == "send_line"
+                    and native_capabilities.has_write_stdin
+                )
+            )
             and _chat_tool_name(tool) not in existing_names
+            and _chat_tool_name(tool) not in active_projections
         ]
         emitted_localized_names = {
             name for tool in localized_tools if (name := _chat_tool_name(tool))
@@ -780,14 +797,21 @@ def translate_localized_tool_call_part(
             native_input = {"input": build_exec_script(projection, localized_input)}
             native_type = "custom"
         else:
-            native_name, native_input, native_type = _localized_call_to_native(
-                localized_name,
-                localized_input,
-                capabilities=capabilities or NativeToolCapabilities(),
-                read_cache=read_cache,
-                use_apply_patch=use_apply_patch,
-                apply_patch_exec_projection=(exec_projections or {}).get("apply_patch"),
-            )
+            if localized_name == "send_line":
+                native_name, native_input, native_type = _localized_send_line_to_native(
+                    localized_input
+                )
+            else:
+                native_name, native_input, native_type = _localized_call_to_native(
+                    localized_name,
+                    localized_input,
+                    capabilities=capabilities or NativeToolCapabilities(),
+                    read_cache=read_cache,
+                    use_apply_patch=use_apply_patch,
+                    apply_patch_exec_projection=(exec_projections or {}).get(
+                        "apply_patch"
+                    ),
+                )
     except ValueError as exc:
         if projection is not None:
             return _exec_error_translation(
@@ -1232,6 +1256,23 @@ def _localized_call_to_native(
     raise ValueError(f"Unsupported localized tool: {localized_name}")
 
 
+def _localized_send_line_to_native(
+    localized_input: dict[str, Any],
+) -> tuple[str, dict[str, Any], str]:
+    """Translate the explicit line facade without changing raw write_stdin."""
+    session_id = localized_input.get("session_id")
+    line = localized_input.get("line")
+    if isinstance(session_id, bool) or not isinstance(session_id, int):
+        raise ValueError("send_line requires integer field 'session_id'")
+    if not isinstance(line, str):
+        raise ValueError("send_line requires string field 'line'")
+    return (
+        "write_stdin",
+        {"session_id": session_id, "chars": f"{line}\n"},
+        "function",
+    )
+
+
 def _localized_edit_to_native(
     localized_input: dict[str, Any],
     *,
@@ -1346,7 +1387,7 @@ def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
         ),
         _function_tool(
             "Edit",
-            "Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
+            "Edit an existing file. For file changes, you must use Edit rather than Shell or Python. Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
             {
                 "type": "object",
                 "properties": {
@@ -1361,7 +1402,7 @@ def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
         ),
         _function_tool(
             "Write",
-            "Create a new UTF-8 text file with the provided full content.",
+            "Create or overwrite a file. For file creation or replacement, you must use Write rather than Shell or Python. The content must be complete UTF-8 text.",
             {
                 "type": "object",
                 "properties": {
@@ -1369,6 +1410,19 @@ def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
                     "content": {"type": "string"},
                 },
                 "required": ["file_path", "content"],
+                "additionalProperties": False,
+            },
+        ),
+        _function_tool(
+            "send_line",
+            "Send one complete line to an existing interactive command session. Use this instead of write_stdin when submitting line-oriented input; the gateway appends exactly one newline.",
+            {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "integer"},
+                    "line": {"type": "string"},
+                },
+                "required": ["session_id", "line"],
                 "additionalProperties": False,
             },
         ),

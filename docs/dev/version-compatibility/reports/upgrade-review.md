@@ -121,9 +121,9 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 | `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Kimi polling and stdin continuations plus builtin wait/plan/Goal paths reached terminal answers; broader tool/terminal cells pending |
 | `CP-19 — Reasoning` | Changed | Reconstructed summary deltas now include Codex-required `summary_index`; saved-response replay and cross-module gate tests pass | DeepSeek reasoning/tool round completed; broader summary/audio capture pending |
 | `CP-20 — Context compaction resilience` | Possibly unchanged | Remote V2 contract unchanged | Pending protocol/once cells |
-| `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal relevant diff | Pending relay matrix |
+| `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal wire-shape diff; explicit provider/session/profile identity remains the owner boundary | GPT relay C0/C1/C2/C3/C5 passed. C4 did not reach the Gateway because the 0.145 harness sent ordinary `messages` instead of the required `compaction_trigger`; this is a harness contract mismatch, not a Rosetta failure. |
 | `CP-22 — Model-group tool profiles` | Changed | Audio projection plus route-modality filtering for `view_image` | Chat Default passed wait/plan/Goal, Qwen file localization and visual recognition; historical text-only/detail mismatches remain recorded against the old contract |
-| `CP-23 — Static tool catalog` | Changed | Formal tag/commit and audio guidance refreshed | Pending broader tool matrix |
+| `CP-23 — Static tool catalog` | Changed | Formal asset synchronized to `rust-v0.145.0`; catalog, local-mode projection, and tool-name compatibility tests pass | Deferred discovery passed 14/14; built-in, namespace, local-skill, subagent, and orchestrator surfaces were exercised. Exact `0.145.0` GUI Browser behavior remains unverified because the installed GUI is `0.146.0-alpha.3.1`. |
 
 The remainder of this file is the retained alpha.23 live inventory and is
 historical evidence for the predecessor review. Its identities and results do
@@ -242,7 +242,13 @@ call. A later retest after the Chat Default continuation example succeeded: it
 issued one `exec_command`, reused the same session with one `write_stdin`, and
 sent the required newline, returning `RESULT:INPUT_OK`. This confirms the
 original issue was model-facing prompt/tool-use behavior rather than a
-Rosetta session or converter defect. The additional MiMo
+Rosetta session or converter defect. A fresh `202607241636` strict rerun after
+the appended `write_stdin.chars` guidance was reduced to one final `send_line`
+sentence also succeeded. DeepSeek Pro used one command start and one same-session
+raw `write_stdin` with a real newline; it did not select the synthetic facade.
+The result therefore proves that removing the redundant examples did not
+regress task 03, while the earlier focused Flash run remains the live evidence
+for `send_line` reconstruction itself. The additional MiMo
 retest reached the Images endpoint with the refreshed key, but the endpoint
 still did not expose `gpt-image-2`.
 
@@ -332,7 +338,7 @@ They remain missing rather than being synthesized as zero.
 | `CP-10 — Tool history consistency` | Changed | Valid/stable response IDs and replay paths tested. | ID/history/stream tests passed. | Multi-round ordinary history passed; the split DeepSeek protocol task records three model repeats as deviations while the exactly-once control passed. |
 | `CP-11 — Deferred tool discovery` | Changed | Shared MCP Types now include deferred-only MCP declarations with exact authorization. | Projection tests passed. | 14/14 deferred cells passed. |
 | `CP-12 — Codex tool usage tips` | Changed | Refreshed reviewed static descriptions and target binding. | 53-item catalog tests passed. | Built-in tool suites passed. |
-| `CP-13 — Skill delivery surfaces` | Changed | Local skill boundary retained; orchestrator remains provider-owned. | Fixture/full tests passed. | Local skill 2/2 passed; orchestrator runner unsupported. |
+| `CP-13 — Skill delivery surfaces` | Changed | Local skill boundary retained; orchestrator remains provider-owned. | Fixture/full tests passed. | Local skill 2/2 passed; formal orchestrator runs for DeepSeek and Sol completed the native `skills.list → skills.read` sequence with exact resource handles. |
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Kept OAuth and Gateway-key responsibilities separate. | Runtime-auth artifact validation passed for executed cells. | Runnable cells used both required auth sources; no auth mismatch found. |
 | `CP-15 — Web search bridge` | Changed | Preserved opaque search results and reviewed native header forwarding. | Search tests passed. | Tasks 01/02/05 passed for both text models; tasks 03/04 lacked the configured sidecar. |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | Local executor remains separate, but its alpha result envelope is covered. | Bing/search unit coverage passed in full suite. | No sidecar/Bing live backend in supplied config; unresolved. |
@@ -340,9 +346,65 @@ They remain missing rather than being synthesized as zero.
 | `CP-18 — Message phase` | Possibly unchanged | Phase ownership remains client-side; new protocol fields were inventoried. | Phase/tool tests passed. | Subagent and ordinary phase behavior passed; fresh GUI Browser phase was not validly runnable. |
 | `CP-19 — Reasoning` | Changed | Adopted default-true summary parameter and preserved reasoning/include behavior. | Contract, preset, converter tests passed. | Reasoning-capable ordinary continuations passed; no separate formal C-matrix was run. |
 | `CP-20 — Context compaction resilience` | Changed | Extracted retry/output-ID/cache-write changes and added stream/nonstream mappings. | Compaction contracts and full suite passed. | Five completed, one failed, two not scored; split DeepSeek protocol and exactly-once cells passed, while Terra raw-wire remains a CLI-attestation test-design mismatch. |
-| `CP-21 — GPT relay provider identity` | Changed | Audited provider/session/route identity and retained explicit profile selection. | Identity/profile tests passed. | Terra Pixel route was captured repeatedly; formal C0-C5 relay matrix was not run, so unresolved. |
+| `CP-21 — GPT relay provider identity` | Changed | Audited provider/session/route identity and retained explicit profile selection. | Identity/profile tests passed. | Formal C0/C1/C2/C3/C5 relay cells passed. C4 failed before Gateway invocation because the 0.145 harness sent `messages` instead of `compaction_trigger`; no Rosetta relay defect was observed. |
 | `CP-22 — Model-group tool profiles` | Changed | Added permissions/auto-review fields and reviewed third-party profile differences. | Preset/local-mode/tool tests passed. | Terra, DeepSeek, and MiMo selected expected routes/tools; image profile backend failed. |
-| `CP-23 — Static tool catalog` | Changed | Refreshed 53 entries and metadata to exact alpha.23 tag/commit. | Catalog equality and projection tests passed. | Model-visible native/deferred names were exercised; Browser/orchestrator surfaces remain unverified. |
+| `CP-23 — Static tool catalog` | Changed | Refreshed 53 entries and metadata to the formal `rust-v0.145.0` tag/commit. | Catalog equality, local-mode projection, and compatibility tests passed. | Deferred discovery passed 14/14; built-in, namespace, local-skill, subagent, and orchestrator surfaces were exercised. Only exact `0.145.0` GUI Browser behavior remains unverified; the available GUI is `0.146.0-alpha.3.1`. |
+
+## Rosetta Improvements From Model-Facing Failures
+
+These changes improve model-facing usability; they do not reclassify the
+underlying model-tool-use failures as confirmed converter defects. Explicit
+facades must remain separate from raw native tools and must never silently
+rewrite a model-generated call.
+
+1. **Structured presentation of `exec` session handles.** DeepSeek task 02
+   received a valid `exec_command` result but failed to find the nested session
+   identifier in the ordinary `input_text[]` wrapper and started a second
+   command. Rosetta could offer an opt-in Chat result shape with a concise,
+   machine-readable leading summary such as `session_id` and `is_running`,
+   while retaining the original result text unchanged for history and replay.
+   This improves result discoverability without changing the native Codex
+   result contract by default.
+
+2. **Implemented: explicit `send_line` facade.** DeepSeek/GLM task 03 failures
+   involved model-generated literal `rosetta\\n` or a missing newline, while
+   Rosetta faithfully preserved the received `write_stdin.chars`. Rosetta now
+   exposes `send_line(session_id, line)` whenever native `write_stdin` is
+   available and reconstructs the native call with exactly one real newline;
+   raw `write_stdin` remains unchanged. Unit coverage verifies both top-level
+   Chat localization and nested Code Mode projection. In focused DeepSeek run
+   `202607241615`, the model eventually selected the facade and received
+   `RESULT:INPUT_OK`; trace evidence shows the generated native call contained
+   `chars: "rosetta\n"`. The strict task remains failed because the model had
+   already restarted the scenario multiple times. After that run, the appended
+   `write_stdin.chars` guidance was reduced to one final sentence directing
+   line-oriented input to `send_line`; the redundant newline and escaping
+   examples were removed. Strict DeepSeek Pro control run `202607241636` then
+   passed with exactly one start and one same-session write. It chose raw
+   `write_stdin`, so this control verifies the simplified description does not
+   regress the native continuation path but does not add facade coverage.
+
+3. **Implemented: focused precedence guidance for file mutation.** DeepSeek
+   and Kimi selected Shell/Python through `exec_command` even though localized
+   file tools were exposed. Only the `Edit` and `Write` descriptions now state
+   that modifying or creating files must prefer those tools over Shell or
+   Python. `Glob`, `Grep`, and `Read` descriptions are unchanged, and Shell is
+   not hidden from the default profile.
+
+4. **Implemented: `view_image` is eager-only.** MiMo received image data but
+   discarded the first `view_image` result, converted a later result to JSON
+   text, and then attempted unsupported byte parsing. Rosetta now excludes
+   `view_image` from deferred `ALL_TOOLS` search/read discovery while retaining
+   the eager, route-capability-gated image tool. Other deferred MCP tools remain
+   available. Unit coverage verifies that search omits the duplicate and an
+   attempted deferred read fails closed with `eager_only_tool`.
+
+Focused validation passes `121/121` tests across `test_tool_adaptation.py` and
+`test_code_mode_projection.py`; repository lint, format, type, and complexity
+gates pass. The broader Gateway suite reached `1482 passed / 3 failed`; all
+three failures are older stream-trace assertions that still expect
+`stream_start` to precede the newly automatic `original_request` record, not
+failures in the tool changes above.
 
 ## Adoption blockers
 

@@ -93,6 +93,7 @@ DEFERRED_EXEC_GUIDANCE = (
 ALL_TOOLS_SEARCH_CHAT_NAME = "tool_search"
 ALL_TOOLS_READ_CHAT_NAME = "tool_read"
 DEFERRED_TOOL_DISPATCH_CHAT_NAME = "invoke_deferred_tool"
+SEND_LINE_CHAT_NAME = "send_line"
 ALL_TOOLS_SEARCH_RESULT_PROTOCOL = "codex_rosetta.all_tools_search.v2"
 ALL_TOOLS_READ_RESULT_PROTOCOL = "codex_rosetta.all_tools_read.v1"
 ALL_TOOLS_SEARCH_MAX_RESULT_CHARS = 24_000
@@ -114,6 +115,7 @@ NODE_REPL_TOOL_NAMES = (
     "mcp__node_repl__js_reset",
     "mcp__node_repl__js_add_node_module_dir",
 )
+DEFERRED_EXCLUDED_TOOL_NAMES = frozenset({"view_image"})
 _NODE_REPL_EXEC_PROJECTIONS = {
     name: ExecToolProjection(
         item_id=f"deferred.{name}",
@@ -128,6 +130,12 @@ DEFERRED_TOOL_DISPATCH_PROJECTION = ExecToolProjection(
     chat_name=DEFERRED_TOOL_DISPATCH_CHAT_NAME,
     nested_name="",
     input_mode="deferred_dispatch",
+)
+SEND_LINE_PROJECTION = ExecToolProjection(
+    item_id="synthetic.send_line",
+    chat_name=SEND_LINE_CHAT_NAME,
+    nested_name="write_stdin",
+    input_mode="send_line",
 )
 _MAX_DISCOVERED_TOOL_DESCRIPTION_CHARS = 65_536
 _MAX_TOOL_RESULT_TEXT_CHARS = 262_144
@@ -372,6 +380,8 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
     projections[ALL_TOOLS_SEARCH_CHAT_NAME] = ALL_TOOLS_SEARCH_PROJECTION
     projections[ALL_TOOLS_READ_CHAT_NAME] = ALL_TOOLS_READ_PROJECTION
     projections[DEFERRED_TOOL_DISPATCH_CHAT_NAME] = DEFERRED_TOOL_DISPATCH_PROJECTION
+    if "write_stdin" in projections:
+        projections[SEND_LINE_CHAT_NAME] = SEND_LINE_PROJECTION
     return projections
 
 
@@ -407,6 +417,7 @@ def plan_exec_tool_definitions(
     all_tools_search = section_projections.pop(ALL_TOOLS_SEARCH_CHAT_NAME, None)
     all_tools_read = section_projections.pop(ALL_TOOLS_READ_CHAT_NAME, None)
     deferred_dispatch = section_projections.pop(DEFERRED_TOOL_DISPATCH_CHAT_NAME, None)
+    send_line = section_projections.pop(SEND_LINE_CHAT_NAME, None)
     definitions = _deferred_tool_definitions(
         exec_description,
         all_tools_search,
@@ -450,6 +461,7 @@ def plan_exec_tool_definitions(
                     )
             definitions[chat_name] = parsed
             projected_sections[chat_name] = section
+    _add_send_line_definition(definitions, send_line)
     return ExecToolDefinitionPlan(
         definitions=definitions,
         sections=projected_sections,
@@ -457,11 +469,54 @@ def plan_exec_tool_definitions(
     )
 
 
+def send_line_definition() -> dict[str, Any]:
+    """Build the explicit line-input facade for interactive sessions."""
+    return {
+        "type": "function",
+        "function": {
+            "name": SEND_LINE_CHAT_NAME,
+            "description": (
+                "Send one complete line to an existing interactive command "
+                "session. Use this instead of write_stdin for line-oriented "
+                "input; the gateway appends exactly one newline."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "integer"},
+                    "line": {"type": "string"},
+                },
+                "required": ["session_id", "line"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _add_send_line_definition(
+    definitions: dict[str, dict[str, Any]],
+    projection: ExecToolProjection | None,
+) -> None:
+    """Add the facade only when the native continuation tool was parsed."""
+    if projection is not None and "write_stdin" in definitions:
+        definitions[SEND_LINE_CHAT_NAME] = send_line_definition()
+
+
 def build_exec_script(
     projection: ExecToolProjection,
     arguments: dict[str, Any],
 ) -> str:
     """Build deterministic JavaScript for one projected nested-tool call."""
+    if projection.input_mode == "send_line":
+        return _build_send_line_script(arguments)
+    return _build_standard_exec_script(projection, arguments)
+
+
+def _build_standard_exec_script(
+    projection: ExecToolProjection,
+    arguments: dict[str, Any],
+) -> str:
+    """Build JavaScript for parsed native and deferred projections."""
     if projection.input_mode == "all_tools_search":
         return _build_all_tools_search_script(arguments)
     if projection.input_mode == "all_tools_read":
@@ -541,6 +596,18 @@ if (result?.isError) text({ isError: true });
         "generated_image": "generatedImage",
     }[projection.output_mode]
     return invocation + f"{output_helper}(result);\n"
+
+
+def _build_send_line_script(arguments: dict[str, Any]) -> str:
+    """Build a nested call that appends exactly one newline."""
+    session_id = arguments.get("session_id")
+    line = arguments.get("line")
+    if isinstance(session_id, bool) or not isinstance(session_id, int):
+        raise ValueError("send_line requires integer field 'session_id'")
+    if not isinstance(line, str):
+        raise ValueError("send_line requires string field 'line'")
+    literal = _javascript_json_literal({"session_id": session_id, "chars": f"{line}\n"})
+    return f"const result = await tools.write_stdin({literal});\ntext(result);\n"
 
 
 def all_tools_search_definition(
@@ -740,6 +807,7 @@ const maxSummaryChars = {ALL_TOOLS_SEARCH_SUMMARY_CHARS};
 const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];
 const normalize = (value) => String(value ?? "").normalize("NFKC").toLowerCase();
 const queryText = normalize(query);
+const deferredExcludedNames = new Set({_javascript_json_literal(sorted(DEFERRED_EXCLUDED_TOOL_NAMES))});
 let ranked;
 if (searchMode === "regex") {{
   let pattern;
@@ -761,6 +829,7 @@ if (searchMode === "regex") {{
   }}
   ranked = catalog
     .map((entry, index) => ({{ entry, index }}))
+    .filter(({{ entry }}) => !deferredExcludedNames.has(String(entry.name ?? "")))
     .filter(({{ entry }}) =>
       pattern.test(String(entry.name ?? "")) ||
       pattern.test(String(entry.description ?? ""))
@@ -783,7 +852,9 @@ if (searchMode === "regex") {{
       }}
       return {{ entry, index, score }};
     }})
-    .filter(({{ score }}) => score > 0)
+    .filter(({{ entry, score }}) =>
+      score > 0 && !deferredExcludedNames.has(String(entry.name ?? ""))
+    )
     .sort((left, right) => right.score - left.score || left.index - right.index);
 }}
 const buildResult = (matches, truncated) => ({{
@@ -859,6 +930,16 @@ if (entries.length !== 1) {{
   exit();
 }}
 const entry = entries[0];
+if ({_javascript_json_literal(sorted(DEFERRED_EXCLUDED_TOOL_NAMES))}.includes(name)) {{
+  text({{
+    protocol: resultProtocol,
+    name,
+    found: false,
+    tool: null,
+    error: {{ code: "eager_only_tool" }},
+  }});
+  exit();
+}}
 let description = String(entry.description ?? "");
 if (
   includeDispatchGuidance &&
@@ -960,7 +1041,13 @@ def discovered_deferred_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
 
     searched_names = frozenset(discovered_all_tools_search_names(messages))
     candidate_names = frozenset(
-        name for name in searched_names if name.startswith("mcp__") and len(name) <= 512
+        name
+        for name in searched_names
+        if (
+            name.startswith("mcp__")
+            and len(name) <= 512
+            and name not in DEFERRED_EXCLUDED_TOOL_NAMES
+        )
     )
     candidates = node_repl_exec_projections()
     candidates.update(
