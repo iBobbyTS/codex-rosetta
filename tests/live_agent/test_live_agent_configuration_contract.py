@@ -351,9 +351,13 @@ def test_skill_delivery_contracts_use_separate_runners() -> None:
     assert orchestrator_expected["required_runner"] == "app_server_orchestrator"
     assert orchestrator_expected["local_execution_environment_attached"] is False
     assert orchestrator_expected["orchestrator_skills_enabled"] is True
-    assert orchestrator_expected["orchestrator_provider_required"] is True
+    assert orchestrator_expected["codex_apps_resource_backend_required"] is True
     assert orchestrator_expected["expected_native_pattern"]["skills.list"] == 1
     assert orchestrator_expected["expected_native_pattern"]["skills.read"] == 1
+    assert (
+        orchestrator_expected["expected_native_pattern"]["fixture_package"]
+        == "skill://orchestrator-skill-fixture/orchestrator-skill-fixture"
+    )
 
 
 def test_image_generation_contract_requires_codex_auth_gate() -> None:

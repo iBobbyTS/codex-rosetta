@@ -2,8 +2,9 @@ Perform these operations in order using only the named `skills` Namespace
 tools:
 
 1. Call `skills.list` with authority `{ "kind": "orchestrator" }`.
-2. Find the returned entry whose `name` and `package` are both
-   `orchestrator-skill-fixture`.
+2. Find the returned entry whose `name` is `orchestrator-skill-fixture` and
+   whose opaque `package` is exactly
+   `skill://orchestrator-skill-fixture/orchestrator-skill-fixture`.
 3. Call `skills.read` with the same orchestrator authority, that exact returned
    package, and its exact returned `main_resource` as `resource`.
 4. Require the read result to contain `ORCHESTRATOR_SKILL_BODY_OK`.

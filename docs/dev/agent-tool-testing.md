@@ -101,7 +101,7 @@ separate explicit body injection. It deliberately makes zero `skills.list` or
 [`orchestrator_skills`](../../tests/live_agent/orchestrator_skills/README.md)
 suite tests those two Namespace calls instead. It requires app-server, a thread
 without a local execution environment, `[orchestrator.skills]`, and a
-provisioned Codex Apps MCP orchestrator provider. If that runner/provider cannot
+provisioned `codex_apps` MCP resource backend. If that runner/backend cannot
 be established, report `runner_not_supported`, not a model or conversion
 failure.
 

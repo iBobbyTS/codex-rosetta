@@ -28,7 +28,10 @@ and Conda CPython 3.14.6. Text cells used `gpt-5.6-terra` and
 | Summary quality | `202607232140`, `2142`, `2146`, `2148` | Terra and Sol preserved protocol but lost the scenario facts; DeepSeek repeated seven commands/compactions; Kimi resume received upstream 400. |
 | Search | `202607232150`-`202607232156` | DeepSeek 3/3 passed. Terra baseline passed; standalone `web.run` tasks 02/05 failed because it selected hosted search. |
 | Images | `202607232157` | Qwen saw both image tools but made no Images call and returned the failure marker. |
+| Browser (GUI) | `20260724-1152` | GPT-5.6-Sol completed the 23-row IAB matrix under the current GUI. The independent judge classified it `failure` with `17 pass / 3 partial / 3 fail`: navigation history, viewport override, and completed drag failed; prompt handling, download-body observability, and stale-tab error reporting were partial. The matched source requests were native Responses passthrough and captured `exec` with `namespace: null`; no `namespace:exec` or `execexec` appeared, so this run provides no evidence of Rosetta tool-namespace loss. |
 | GPT relay | `202607232204`-`202607232211` | C0/C1/C2/C3/C5 passed. C4 failed because the 0.145 harness request contained messages, not the required `compaction_trigger`; fallback never started. |
+| Orchestrator Skills | `202607232335`, `202607232346` | DeepSeek and Sol both completed the native `skills.list -> skills.read` sequence and exact marker. DeepSeek required post-run evaluator recovery; Sol recovered from seven transient upstream 503 attempts. |
+| Browser (GUI) | `20260724-1046` | DeepSeek V4 Pro completed the 23-row IAB matrix. Rosetta's Responses-to-Chat deferred Browser path passed: 49/49 streams completed, the ordered 28-tool target surface stayed stable, and every observed Browser runtime call used `tool_search -> tool_read -> invoke_deferred_tool` and was rebuilt as source custom `exec`. The result is `success_with_limitations`: reading `JUDGE_TASK.md` is a process deviation, page-assets coverage was skipped after an earlier combined-call error, and IAB drag stopped at `drag-started`. |
 
 The relay runner had two pre-call defects repaired during this matrix: its
 fixture path still named `tests/agent_workspace`, and the capture proxy exposed
@@ -37,15 +40,82 @@ tests pass after selecting the migrated `tests/live_agent` fixture and sending
 a Codex User-Agent. The first invalid setup attempt and initial 403 are not
 model results.
 
-`network_search/03`, `04`, self-hosted Bing, and orchestrator Skills remain
-runner-gated: the supplied config has no authenticated web-run sidecar, and
-orchestrator Skills require a no-local-executor app-server thread with a
-provisioned `codex_apps` MCP resource backend. The audio/profile
-gate remains live-unrun because this checkout contains deterministic audio
-tests but no corresponding live runner. Browser remains manually deferred.
+`network_search/03`, `04`, and self-hosted Bing remain runner-gated because the
+supplied config has no authenticated web-run sidecar. The orchestrator runner
+gate is now complete using a no-local-executor app-server thread with a
+deterministic `codex_apps` MCP resource backend. Run `202607232252` was an
+invalid runner setup because the fixture omitted `tools/list`; run
+`202607232339` exposed an impossible plain-package assertion in the test
+contract. Neither attempt is a model result. The audio/profile gate remains
+live-unrun because this checkout contains deterministic audio tests but no
+corresponding live runner. Browser Rosetta-path evidence is now recorded, but
+the Codex GUI had already updated to `0.146.0-alpha.3.1` when the manual run was
+performed. The current GUI cannot be rolled back to exercise an exact
+`0.145.0` client, so this run proves the current GUI-to-Rosetta path rather than
+the behavior of the `0.145.0` GUI binary.
+
+#### GPT-5.6-Sol current-GUI Browser judge (`20260724-1152`)
+
+The exact run root is `.agent-work/live-agent-test/20260724-1152`, with judge
+output in `evaluation.json` and source thread
+`019f953d-b4c5-7823-b65e-7483b9d129d2`. The GUI reported by the source rollout
+was `0.146.0-alpha.3.1`, not `0.145.0`; the installed GUI had already advanced
+by the time this test was run. Therefore this is current-GUI Rosetta evidence
+only and cannot validate the behavior of the `0.145.0` GUI binary.
+
+The IAB matrix was complete (`23/23`) and execution provenance was valid. The
+judge result was `failure` (`17 pass / 3 partial / 3 fail`). The three failed
+groups were `navigation_history_reload`, `viewport_override_and_reset`, and
+`coordinate_drag_postcondition`. The partial groups were `dialogs` (no prompt
+postcondition), `download` (event returned but download body was not exposed),
+and `stale_tab_recovery` (fresh-tab recovery worked but the closed-tab call did
+not raise a stale error).
+
+Gateway correlation covered 38 source requests on the
+`openai_responses -> openai_responses` raw-passthrough route using
+`gpt-5.6-sol`. The raw request history and response events showed `exec` with
+`namespace: null`; no `namespace: exec` or `execexec` was observed. The
+current evidence therefore does not support attributing these Browser
+limitations to Rosetta dropping or rewriting tool namespace information. The
+fixture's reported PID and port were already stopped during judge cleanup, so
+no process was signaled.
+
+#### DeepSeek V4 Pro Browser limitation attribution
+
+The eight partial observation rows do not identify a Rosetta conversion loss.
+All 49 correlated streams completed, the ordered 28-tool target surface was
+stable, and Rosetta rebuilt all 33 observed structured
+`invoke_deferred_tool` calls as source custom `exec` calls with matching nested
+Browser dispatch and result forwarding. The partial rows are attributed as
+follows:
+
+| Capability | Primary attribution | Evidence and compatibility disposition |
+| --- | --- | --- |
+| `screenshots` | Test expectation/coverage, not a product failure | One default screenshot returned 5,704 bytes. The executor contract names the capability group but does not require separate default, viewport, and full-page branches. This is sufficient Rosetta-path evidence; missing optional branches are not a Codex or Rosetta defect. |
+| `dialogs` | Codex/IAB implementation limitation | Alert dismissal and confirm acceptance passed. DeepSeek then triggered the fixture prompt and correctly called `getJsDialog()` twice, but IAB returned `null` both times even though the Browser API advertises prompt dialogs. No Rosetta call loss occurred. |
+| `download` | Codex Browser API documentation/test-contract mismatch | The download event was captured. The required body could not be read through the model-visible interface: the underlying `PlaywrightDownload.path()` exists but is marked undocumented, so the projected runtime documentation exposes an empty download object. Do not classify this as model or Rosetta failure until the API or test contract supplies a supported body-read path. |
+| `visibility` | Model execution coverage | The visible capability documentation exposes `get()` and `set()`, but DeepSeek only called `get()` and did not exercise `set(false)` followed by restoration. Rosetta exposed and transported the capability correctly. |
+| `viewport_override_and_reset` | Test expectation mismatch with a model API-shape error | `set({width: 1024, height: 768})` and `reset()` both completed. The capability intentionally has no `get()` method; DeepSeek invented `vpCap.get()`. The supported override/reset surface passed and should not be treated as a Codex or Rosetta failure. |
+| `page_assets` | Model execution and reporting | DeepSeek combined viewport and page-assets work in one call. The invented `vpCap.get()` threw before `pageAssets.list()` ran, yet `execution.json` claimed the asset result. This is a recovery/report-accuracy failure by the executor model, not evidence of Rosetta loss. |
+| `cdp_command_and_filtered_event` | Model execution coverage | `Runtime.evaluate` completed and returned the exact fixture title, but DeepSeek omitted the documented `readEvents()` sequence. The CDP command path passed through Rosetta; only the requested coverage was incomplete. |
+| `coordinate_drag_postcondition` | Codex/IAB implementation limitation | After recovering from an off-screen coordinate, DeepSeek obtained fresh geometry and issued a valid `tab.cua.drag()` path. The call returned, but the fixture observed only `pointerdown`/`drag-started`, with no `pointermove`, `pointerup`, or terminal drag marker. Rosetta delivered the structured call and result; the incomplete pointer sequence is attributable to IAB. |
+
+Additional recovered API-shape mistakes (`inputValue()`, `vpCap.get()`, and
+parsing DOM-CUA markup as JSON) are model behavior. A stale tab returning
+`undefined` from `url()` conforms to its declared return type and is not a Codex
+bug. Reading `JUDGE_TASK.md` early remains an executor process deviation only.
+The compatibility conclusion is therefore: two Codex/IAB limitations
+(`dialogs`, coordinate drag), one Codex API/test mismatch (`download`), three
+model-coverage/reporting limitations (`visibility`, `page_assets`, filtered CDP
+events), two rows that should not be treated as failures (`screenshots`,
+viewport override/reset), and zero confirmed Rosetta defects in this run.
 
 | Run | Suite/task | Codex binary and model | Observed provider / route | Thread | Exit / marker / evaluation | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
+| `20260724-1046` | `browser_use/01` | Codex GUI `0.146.0-alpha.3.1` / `deepseek-v4-pro` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9504-4ada-72d1-ab6c-2ea0d0949347` | 23/23 rows / `success_with_limitations` | Rosetta correlated 49 completed streams with one byte-stable ordered 28-tool Chat surface. Deferred discovery returned a bounded versioned search result, paired exact read, and 33 structured `invoke_deferred_tool` Browser calls rebuilt as source custom `exec`; no direct Node Function or raw model-authored Browser wrapper appeared. Browser observations were 15 pass and 8 partial. The executor read the judge prompt early, retained as a process deviation because it did not supply Gateway/session evidence or alter the independently verified Rosetta wire result. Exact `0.145.0` GUI behavior is unverified because the installed GUI had already advanced. |
+| `20260724-1152` | `browser_use/01` | Codex GUI `0.146.0-alpha.3.1` / `gpt-5.6-sol` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f953d-b4c5-7823-b65e-7483b9d129d2` | 23/23 rows / `failure` (`17 pass / 3 partial / 3 fail`) | Independent judge found navigation, viewport, and drag postcondition failures plus prompt/download/stale-tab partials. Thirty-eight matched source requests retained raw `exec` with `namespace: null`; no `namespace:exec` or `execexec` was present. This is current-GUI evidence only; exact `0.145.0` GUI behavior is unverified because the GUI had already advanced to `0.146.0-alpha.3.1`. |
+| `202607232335` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f92a0-404c-7da0-a2d7-957ccc1496f7` | exact marker / `success with deviations` | The app-server had no local execution environment. The model called `skills.list` once, selected the exact returned `skill://orchestrator-skill-fixture/orchestrator-skill-fixture` package and `main_resource`, called `skills.read` once, observed `ORCHESTRATOR_SKILL_BODY_OK`, and made no prohibited fallback call. The live run passed; its temporary evaluator raised a post-run `TypeError`, so the preserved protocol, rollout, and Gateway trace were used to recover the evaluation without rerunning the model. |
+| `202607232346` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `gpt-5.6-sol` | `TURNING` / `openai_responses→openai_responses` | `019f92a9-dfcb-7d61-956b-4248048f11d5` | exact marker / `success with deviations` | The same no-local-executor native sequence passed with exact returned handles, body marker, and no fallback calls. Seven transient upstream 503 attempts were recovered by the existing retry policy before the three logical requests completed, so this is not recorded as a clean pass. All logical requests retained one prompt-cache key and stable instructions/tools; the negative adjacent cache deltas reflect upstream block accounting rather than Rosetta prefix mutation. |
 | `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |
 | `202607231548` | `command_execution/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f90f6-fe4a-7913-9f26-3fc0b79affd7` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One upstream-localized `exec_command` was restored to one native Codex `exec` and one completed command start, with no continuation. Both converted streams reached `response.completed`. |
 | `202607231617` | `command_execution/03` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9110-62f2-71f1-9fa6-fe9f96f74d61` | `124` / marker absent / `failure` | Isolated local-mode Gateway ran under Conda standard-GIL CPython 3.14.6 (`cp314`). The model reused session `9368`, but emitted a double-escaped JavaScript value for `chars`, sending literal `rosetta\\n`; it then polled twice and never obtained the marker. |
@@ -121,12 +191,13 @@ poll, single-input, and two-input continuation paths. The successful DeepSeek on
 specifically verifies that
 reconstructed reasoning-summary deltas include the Codex-consumed
 `summary_index` identity and survive the final-source semantic gate. They do not
-prove formal audio behavior, remote compaction, Images, Browser, Skills,
-or the remaining live-agent matrix. They do not turn the failed Terra or
-DeepSeek behavior cells into model passes. The Sol fallback also does not turn
-the two failed Terra stdin cells into GPT passes: task `03` failed before a
-session existed, while task `04` proved the same-session runtime but violated
-the one-start and final-marker requirements.
+prove formal audio behavior, remote compaction, Images, exact `0.145.0` GUI
+Browser behavior, or the remaining live-agent matrix. The later current-GUI
+Browser run proves the Rosetta deferred-dispatch path separately. These results
+do not turn the failed Terra or DeepSeek behavior cells into model passes. The
+Sol fallback also does not turn the two failed Terra stdin cells into GPT
+passes: task `03` failed before a session existed, while task `04` proved the
+same-session runtime but violated the one-start and final-marker requirements.
 
 The `exec_command` declaration shown to the third-party models does not tell
 them to edit files with Shell. It describes PTY execution, continuation, and

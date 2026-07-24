@@ -9,7 +9,9 @@ Codex version: 0.145.0
   `25af12f7e61572b0bc18ddb1008be543b91519b0`.
 - The installed CLI used by the formal live cells reports `codex-cli 0.145.0`;
   the source checkout and installed CLI remain separate compatibility
-  identifiers. Rosetta remains `0.144.0.r0`.
+  identifiers. The manual Browser GUI was already
+  `0.146.0-alpha.3.1` on 2026-07-24 and cannot provide exact `0.145.0` GUI
+  evidence. Rosetta remains `0.144.0.r0`.
 - The formal source adds `InputAudio`/`Audio` protocol variants, audio in the
   Code Mode MCP forwarding helper, `never`/`unless_trusted` approval fields,
   and a changed Code Mode description builder. The bundled catalog also changes
@@ -51,6 +53,19 @@ Completed formal live cells are retained in
 | `builtin_tools/04` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Passed one `view_image` with exact `detail: "original"`. |
 | `builtin_tools/05` | Terra direct and DeepSeek converted | Both passed ordered Goal lifecycle calls on one fresh thread. |
 | `builtin_tools/06` | `qwen3.7-plus`; `Opencode Go` Responses→Chat | Passed one projected `view_image` call with the schema-default detail and correctly recognized all four quadrants. |
+| `browser_use/01` | `deepseek-v4-pro`; `Deepseek (Official)` Responses→Chat from Codex GUI `0.146.0-alpha.3.1` | Rosetta capability path succeeded with limitations: all 49 streams completed, the ordered 28-tool target surface stayed stable, and deferred Browser calls round-tripped through `tool_search`, `tool_read`, `invoke_deferred_tool`, and source custom `exec`. This is current-GUI Rosetta evidence, not exact `0.145.0` GUI evidence. |
+| `browser_use/01` | `gpt-5.6-sol`; `晚照 (Plus)` native Responses from Codex GUI `0.146.0-alpha.3.1` | The 23-row matrix completed but the independent judge classified it `failure` (`17 pass / 3 partial / 3 fail`). The matched wire evidence retained `exec` with `namespace: null` and showed no `namespace:exec`/`execexec`; the Browser failures therefore do not establish Rosetta namespace loss. This is current-GUI evidence, not exact `0.145.0` GUI evidence. |
+
+The Browser partial-row analysis confirms zero Rosetta defects in that run.
+Prompt handling and coordinate drag are Codex/IAB limitations; download-body
+verification is blocked by a model-visible Browser API documentation/test
+contract mismatch; visibility, page-assets, and filtered CDP-event gaps are
+DeepSeek execution coverage or reporting problems. The default screenshot and
+successful viewport `set()`/`reset()` calls already establish their supported
+Rosetta paths, so missing optional screenshot variants and the nonexistent
+viewport `get()` method must not be treated as product failures. Detailed
+per-capability evidence and disposition are recorded in
+[`live-evidence.md`](live-evidence.md#deepseek-v4-pro-browser-limitation-attribution).
 
 Failed behavior cells remain failures even where Kimi proves the same bridge:
 Terra tasks 03 and 04 never sent the required input; DeepSeek task 02 restarted
@@ -79,8 +94,8 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 | 1 | Context and reasoning | Protocol, exactly-once, attested manual compact, and both switch directions ran successfully. Summary-quality cells remain model failures as recorded in `live-evidence.md`. |
 | 1 | Search and Images | DeepSeek search `01/02/05` passed; Terra only baseline `01` passed. Sidecar tasks `03/04` and Bing are configuration-blocked. Qwen image generation failed before making an Images request. |
 | 2 | Audio and model profiles | Real Responses and Chat `InputAudio`/`Audio` calls; third-party Chat and Responses profile cells that exercise Code Mode audio exposure. |
-| 2 | Provider identity and orchestrator surfaces | GPT relay C0/C1/C2/C3/C5 passed; C4 has a 0.145 harness trigger mismatch. `orchestrator_skills/01` remains runner-gated pending a no-local-executor app-server thread and a provisioned `codex_apps` MCP resource backend. |
-| Deferred manual | Browser | Excluded from the current automated/CLI plan by user direction. Run `browser_use/01` later in a fresh Codex GUI task followed by its independent judge; retain it as manual evidence rather than treating it as passed or failed now. |
+| 2 | Provider identity and orchestrator surfaces | GPT relay C0/C1/C2/C3/C5 passed; C4 has a 0.145 harness trigger mismatch. `orchestrator_skills/01` completed through a no-local-executor app-server thread and deterministic `codex_apps` MCP resource backend: DeepSeek and Sol both passed with deviations, including Sol's seven recovered upstream 503 attempts. |
+| Version-bound manual | Browser | Rosetta's deferred Browser path passed with limitations in the 2026-07-24 GUI run. The GUI had already updated to `0.146.0-alpha.3.1`, so exact `0.145.0` GUI behavior cannot be tested in the current installation and remains explicitly unverified. Do not discard the current-GUI Rosetta evidence or relabel it as `0.145.0` client evidence. |
 
 ## Formal CP Classification
 
@@ -93,12 +108,12 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 | `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot plus Kimi polling/single-input/two-input continuation passed; DeepSeek continuation cells retain separate model failures; audio pending |
 | `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
 | `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
-| `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Terra/DeepSeek `exec` yield and top-level wait passed; direct image and Goal paths exercised; MiMo recognition failed |
-| `CP-09 — Code tool localization` | Changed | MCP audio projection plus text-only `view_image` filtering updated | Direct GPT native patch succeeded with a discovery-read deviation; Qwen selected all five localized file tools on Chat with extra verification reads; DeepSeek and Kimi retained prohibited shell/Python choices |
+| `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Terra/DeepSeek `exec` yield and top-level wait passed; direct image and Goal paths exercised; current GUI Browser custom-`exec` reconstruction passed; MiMo recognition failed |
+| `CP-09 — Code tool localization` | Changed | MCP audio projection plus text-only `view_image` filtering updated | Direct GPT native patch succeeded with a discovery-read deviation; Qwen selected all five localized file tools on Chat with extra verification reads; DeepSeek and Kimi retained prohibited shell/Python choices; current GUI Browser Node dispatch localized and restored without loss |
 | `CP-10 — Tool history consistency` | Possibly unchanged | Item names unchanged; full suite pass | Pending replay cell |
-| `CP-11 — Deferred tool discovery` | Possibly unchanged | Tool mapping unchanged | Pending deferred suite |
+| `CP-11 — Deferred tool discovery` | Possibly unchanged | Tool mapping unchanged | Formal CLI deferred suite passed 14/14; current GUI Browser path also passed bounded search, paired read, structured dispatch, and source custom-`exec` reconstruction. Exact `0.145.0` GUI remains unverified |
 | `CP-12 — Codex tool usage tips` | Changed | Static guidance now includes `audio()` | Pending |
-| `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Pending local/orchestrator gates |
+| `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Local/namespace suites passed; DeepSeek and Sol both completed native orchestrator list/read with exact returned resource handles |
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Twenty-eight valid formal command/builtin cells used Conda/local-mode dual auth; the new Qwen and Sol cells reached the configured isolated Gateway |
 | `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
@@ -260,11 +275,15 @@ Network tasks 03/04 were not runnable because the supplied configuration has no
 `server.web_run.base_url`/token sidecar. The configuration was not expanded
 beyond the user's boundary.
 
-Browser/Computer Use was not executed: its maintained suite requires a fresh
-GUI main-executor task plus a separate judge, which cannot be validly created
-inside this task. This is `invalid_execution`, not evidence that Browser is
-unavailable. Orchestrator-skill cells were `runner_not_supported` because the
-supplied config has no orchestrator provider. Formal `agentabi` was not run
+Browser/Computer Use was not executed in the historical alpha.23 matrix: its
+maintained suite required a fresh GUI main-executor task plus a separate judge,
+which could not be validly created inside that task. The later 2026-07-24 GUI
+run recorded above supplies successful Rosetta-path evidence with limitations,
+but its GUI reports `0.146.0-alpha.3.1` and therefore does not retroactively
+prove alpha.23 or formal `0.145.0` GUI behavior. Orchestrator-skill cells were
+`runner_not_supported` because that runner did not create a no-local-executor
+app-server thread or supply the required `codex_apps` MCP resource backend.
+Formal `agentabi` was not run
 because no `agentabi` Conda environment or importable package exists; nothing
 was installed implicitly.
 
@@ -339,9 +358,11 @@ They remain missing rather than being synthesized as zero.
    before treating the remaining result as a Rosetta defect.
 4. Summary-quality fixtures need a valid below-15k baseline before they can be
    scored.
-5. Network sidecar/Bing, fresh-task Browser plus judge, orchestrator provider,
-   formal agentabi, and the CP-21 C0-C5 relay matrix remain unavailable or
-   unrunnable under the supplied environment.
+5. Network sidecar/Bing and formal agentabi remain unavailable or unrunnable
+   under the supplied environment. Browser plus judge has since completed for
+   the Rosetta path on GUI `0.146.0-alpha.3.1`, and the formal orchestrator
+   Skill and CP-21 C0/C1/C2/C3/C5 gates have since completed in the 0.145.0
+   matrix; exact `0.145.0` GUI Browser behavior remains unverified.
 6. After those gates pass, update the package to the approved alpha.23 `r0`
    version and rerun release validation. Until then, `0.144.0.r0` remains the
    only package claim.

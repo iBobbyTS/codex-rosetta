@@ -20,20 +20,20 @@ The app-server runner must:
 - inherit [`../runtime-contract.json`](../runtime-contract.json), including
   ChatGPT OAuth plus the Provider bearer and the two fixed secret-source
   locations, while keeping all copied credentials out of Git history;
-- provision an enabled orchestrator Skill provider through the Codex Apps MCP
-  resource surface with the deterministic fixture contract below.
+- provide the deterministic Codex Apps MCP resource backend consumed by the
+  app-server's built-in orchestrator Skill provider.
 
 | Field | Required value |
 |---|---|
-| package | `orchestrator-skill-fixture` |
+| package | `skill://orchestrator-skill-fixture/orchestrator-skill-fixture` |
 | name | `orchestrator-skill-fixture` |
 | main resource | opaque provider-owned resource returned by `skills.list` |
 | main resource contents | contains `ORCHESTRATOR_SKILL_BODY_OK` |
 
 If the runner cannot establish all four conditions, classify the cell as
 `runner_not_supported`; do not attribute missing `skills.list`/`skills.read` to
-the tested model or Rosetta. App-server alone is insufficient unless its
-orchestrator Skill provider is also present.
+the tested model or Rosetta. App-server alone is insufficient unless the
+`codex_apps` MCP resource backend is available.
 
 ## Scenario
 

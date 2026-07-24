@@ -39,8 +39,9 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
   injected after explicit selection; it does not use `skills.list` or
   `skills.read`. Those Namespace tools are only for orchestrator-owned
   resources and require the app-server runner, `[orchestrator.skills]`, a
-  provisioned orchestrator provider, and no attached local execution
-  environment.
+  provisioned `codex_apps` MCP resource backend, and no attached local
+  execution environment. App-server registers the provider; the runner
+  supplies its resource backend.
 - Unless the suite explicitly tests a different capability role, use
   `gpt-5.6-sol` as the native GPT shape reference, `deepseek-v4-flash` for
   third-party non-multimodal cells, and `mimo-v2.5` for third-party multimodal

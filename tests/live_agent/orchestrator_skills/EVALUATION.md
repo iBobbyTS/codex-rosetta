@@ -5,15 +5,16 @@ prompt.
 
 Before evaluating model behavior, prove the runner used Codex app-server,
 `[orchestrator.skills]` was enabled, no local execution environment was
-attached, and the deterministic orchestrator provider was provisioned. If any
-precondition is unproven, use `runner_not_supported`.
+attached, and the deterministic `codex_apps` MCP resource backend was
+provisioned. If any precondition is unproven, use `runner_not_supported`.
 
 For a supported run, require this exact native sequence:
 
 1. one successful `skills.list` call with
    `{ "authority": { "kind": "orchestrator" } }`;
-2. a returned enabled entry whose package and name are both
-   `orchestrator-skill-fixture`;
+2. a returned enabled entry whose name is `orchestrator-skill-fixture` and whose
+   package is
+   `skill://orchestrator-skill-fixture/orchestrator-skill-fixture`;
 3. one successful `skills.read` call using that exact authority, returned
    package, and returned `main_resource` as `resource`;
 4. a read result containing `ORCHESTRATOR_SKILL_BODY_OK`;
@@ -38,7 +39,7 @@ Write `artifacts/evaluation.json` with this shape:
   "runner": "app_server_orchestrator",
   "local_execution_environment_attached": false,
   "orchestrator_skills_enabled": true,
-  "orchestrator_provider_provisioned": true,
+  "orchestrator_resource_backend_provisioned": true,
   "skills_list_status": "success | not_exposed | not_called | failed",
   "fixture_package_observed": true,
   "skills_read_status": "success | not_exposed | not_called | failed",
