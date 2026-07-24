@@ -39,8 +39,8 @@
       "chars_guidance": "For line-oriented input, use send_line instead of write_stdin."
     },
     "function.exec_command": {
-      "interactive_guidance": "When an interactive command returns a session_id, the command is still available for follow-up even if the wrapper reports Script completed; reuse that exact session_id with write_stdin instead of starting the command again. Example: exec_command({cmd: \"python3 scenario.py\", tty: true, yield_time_ms: 1000}) -> {session_id: 123}; then write_stdin({chars: \"rosetta\\n\", session_id: 123}) and use its output. For line-oriented input, send the complete line including the newline in one write_stdin call. In the JavaScript string, use one backslash escape (chars: \"rosetta\\n\"), not the literal two-character sequence backslash+n (chars: \"rosetta\\\\n\"). Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
-      },
+      "interactive_guidance": "When an interactive command returns a session_id, reuse that exact session_id instead of starting the command again. Use write_stdin for polling, raw character input, or complex multi-step interaction. Use send_line for simple single-line input; it appends exactly one newline. Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
+    },
       "custom.exec": {
         "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...), image(...), or audio(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
       },
