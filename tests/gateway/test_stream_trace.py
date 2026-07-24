@@ -174,6 +174,31 @@ def test_stream_trace_writes_jsonl_for_stream_events(tmp_path):
     assert stat.S_IMODE(trace_path.stat().st_mode) == 0o600
 
 
+def test_stream_trace_log_full_preserves_original_request_without_truncation(tmp_path):
+    """Enabled stream tracing keeps full redacted original-request values."""
+    trace_path = tmp_path / "original-request.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-original",
+        request_log_id="log-original",
+        model="gpt-test",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="OpenAI passthrough",
+        max_string_chars=4,
+    )
+
+    trace.log_full(
+        "original_request",
+        {"input": "abcdefgh", "authorization": "Bearer secret-token"},
+    )
+
+    record = json.loads(trace_path.read_text().strip())
+    assert record["stage"] == "original_request"
+    assert record["data"]["input"] == "abcdefgh"
+    assert "secret-token" not in json.dumps(record)
+
+
 def test_direct_responses_trace_records_upstream_http_error(tmp_path):
     """A passthrough HTTP error is traced before any stream chunk exists."""
     trace_path = tmp_path / "passthrough-http-error.jsonl"
@@ -202,19 +227,65 @@ def test_direct_responses_trace_records_upstream_http_error(tmp_path):
     assert stream.closed is True
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert [record["stage"] for record in records] == [
+        "original_request",
         "stream_start",
         "raw_passthrough_request",
         "upstream_error",
         "stream_complete",
     ]
-    assert records[2]["data"] == {
+    assert records[3]["data"] == {
         "status_code": 502,
         "error": '{"error":{"message":"compact request rejected"}}',
         "error_phase": "stream_header",
         "upstream_url": "https://api.example.test/v1",
     }
-    assert records[3]["data"]["stream_outcome"] == "error"
-    assert records[3]["data"]["chunk_count"] == 0
+    assert records[4]["data"]["stream_outcome"] == "error"
+    assert records[4]["data"]["chunk_count"] == 0
+
+
+def test_direct_responses_trace_captures_pre_adaptation_request(tmp_path):
+    """Enabled tracing captures the body before tool adaptation changes it."""
+    trace_path = tmp_path / "original-request-direct.jsonl"
+    state = StreamTraceState(
+        StreamTraceConfig(
+            enabled=True,
+            path=str(trace_path),
+        )
+    )
+    body = _direct_responses_body()
+    body["tools"] = [{"type": "function", "name": "view_image"}]
+    stream = _RawStream([b'data: {"type":"response.completed"}\n\n'])
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(return_value=stream)
+    provider_info = MagicMock(base_url="https://api.example.test/v1")
+
+    response, _profile = asyncio.run(
+        handle_streaming(
+            ResolvedRoute(
+                source_provider="openai_responses",
+                target_provider="openai_responses",
+                provider_name="OpenAI passthrough",
+                upstream_model="gpt-test",
+                input_modalities=[],
+            ),
+            provider_info,
+            body,
+            transport=transport,
+            extra_headers={"x-request-id": "req-original-direct"},
+            entry_id="log-original-direct",
+            stream_trace_state=state,
+        )
+    )
+    assert response.status_code == 200
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    original = next(
+        record for record in records if record["stage"] == "original_request"
+    )
+    adapted = next(
+        record for record in records if record["stage"] == "raw_passthrough_request"
+    )
+    assert original["data"]["tools"] == [{"type": "function", "name": "view_image"}]
+    assert "tools" not in adapted["data"]
 
 
 def test_direct_responses_trace_records_upstream_connection_error(tmp_path):
@@ -242,18 +313,19 @@ def test_direct_responses_trace_records_upstream_connection_error(tmp_path):
     assert response.status_code == 502
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert [record["stage"] for record in records] == [
+        "original_request",
         "stream_start",
         "raw_passthrough_request",
         "upstream_connection_error",
         "stream_complete",
     ]
-    assert records[2]["data"] == {
+    assert records[3]["data"] == {
         "status_code": 502,
         "error": "upstream retries exhausted",
         "error_phase": "stream_header",
         "upstream_url": "https://api.example.test/v1",
     }
-    assert records[3]["data"]["stream_error"] == "upstream retries exhausted"
+    assert records[4]["data"]["stream_error"] == "upstream retries exhausted"
 
 
 def test_stream_trace_redacts_known_and_bearer_tokens(tmp_path):
@@ -699,7 +771,8 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert any("response.output_text.delta" in chunk for chunk in chunks)
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     stages = [record["stage"] for record in records]
-    assert stages[:5] == [
+    assert stages[:6] == [
+        "original_request",
         "stream_start",
         "source_request",
         "target_request",
@@ -709,8 +782,8 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert "source_event" in stages
     assert "downstream_sse" in stages
     assert stages[-1] == "stream_complete"
-    assert records[1]["data"] == body
-    assert records[2]["data"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert records[0]["data"] == body
+    assert records[3]["data"]["messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_deferred_response_trace_capacity_drops_the_entire_batch(

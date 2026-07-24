@@ -286,6 +286,12 @@ Body log 会保留 prompt、源码、个人数据，以及普通 `password`、`s
 已配置的 Gateway/Provider token exact value、Bearer/Authorization 值、明确的 token/API
 key 字段，以及 JSON encoded function arguments 内的这些字段都会被脱敏。
 
+启用 `server.stream_trace.enabled` 后，stream trace 会在
+compaction、Tool Profile 过滤和协议转换之前写入一条 `original_request` 记录。该记录
+仍会递归执行 token 脱敏，但有意不受 `stream_trace.max_string_chars` 限制；排查完成后应
+关闭 stream tracing，并严格限制 trace 文件访问权限，因为 prompt、源码和个人数据仍会保留。它
+捕获的是 proxy handler 收到的请求体，不包含认证 header。
+
 Request log 的 success/error 上限会在启动和 Admin 热更新时使用同一规则验证。
 `server.request_log.success_max`、`error_max`、旧版 `max_entries`，以及环境变量
 `REQUEST_LOG_SUCCESS_MAX` / `REQUEST_LOG_ERROR_MAX` 都必须是 0 到 1,000,000 之间的

@@ -15,6 +15,7 @@ Downstream SSE formatting lives in :mod:`transport.sse_format`.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import threading
 import time
@@ -2457,6 +2458,7 @@ async def _handle_direct_responses_streaming(
     upstream_error_log_state: UpstreamErrorLogState | None,
     body_log_state: BodyLogState | None,
     inbound_wire_request: InboundWireRequest | None,
+    original_request_body: dict[str, Any] | None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Handle same-protocol Responses streaming passthrough."""
     profile: dict[str, Any] = {}
@@ -2476,6 +2478,8 @@ async def _handle_direct_responses_streaming(
     )
     trace_started_at = time.monotonic()
     if trace is not None:
+        if original_request_body is not None:
+            trace.log_full("original_request", original_request_body)
         trace.log(
             "stream_start",
             {
@@ -2685,6 +2689,7 @@ async def handle_streaming(  # noqa: C901
         duration, chunks) are written back to the request log entry
         after the stream completes.
     """
+    original_request_body = copy.deepcopy(body)
     transport = CredentialRedactingTransport.wrap(transport)
     model = body.get("model", "")
     scope, store, tool_store = _resolve_state_stores(
@@ -2752,6 +2757,7 @@ async def handle_streaming(  # noqa: C901
             upstream_error_log_state=upstream_error_log_state,
             body_log_state=body_log_state,
             inbound_wire_request=inbound_wire_request,
+            original_request_body=original_request_body,
         )
         profile.update(direct_profile)
         return response, profile
@@ -2909,6 +2915,9 @@ async def handle_streaming(  # noqa: C901
         model=model,
         route=route,
     )
+
+    if trace is not None:
+        trace.log_full("original_request", original_request_body)
 
     def _on_ir_event(ir_event: dict[str, Any]) -> None:
         store.cache_from_stream_event(ir_event)

@@ -362,6 +362,14 @@ sensitive diagnostics and restrict console/file log access. Configured exact
 Gateway/provider tokens, Bearer/Authorization values, explicit token/API-key
 fields, and those fields inside JSON-encoded function arguments are redacted.
 
+When `server.stream_trace.enabled` is enabled, the stream trace writes an
+`original_request` record before compaction, Tool Profile filtering, or protocol
+conversion. The record is recursively token-redacted but is intentionally not
+limited by `stream_trace.max_string_chars`. Disable stream tracing after the
+investigation and restrict the trace file because prompts, source code, and
+personal data remain present. It captures the request body received by the
+proxy handler, not authentication headers.
+
 Request-log success and error caps are validated during both startup and Admin
 hot reload. `server.request_log.success_max`, `error_max`, legacy
 `max_entries`, and the `REQUEST_LOG_SUCCESS_MAX` / `REQUEST_LOG_ERROR_MAX`
