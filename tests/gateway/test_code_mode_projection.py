@@ -703,18 +703,17 @@ def test_exec_description_projects_precise_normal_function_schemas():
         "additionalProperties": False,
     }
     assert definitions["exec_command"]["function"]["description"] == (
-        "Description for exec_command.\n\nWhen an interactive command returns a session_id, "
-        "the command is still available for follow-up even if the wrapper reports "
-        "Script completed; reuse that exact session_id with write_stdin instead of "
-        'starting the command again. Example: exec_command({cmd: "python3 scenario.py", '
-        "tty: true, yield_time_ms: 1000}) -> {session_id: 123}; then "
-        'write_stdin({chars: "rosetta\\n", session_id: 123}) and use its output. '
-        "For line-oriented input, send the complete line "
-        "including the newline in one write_stdin call. In the JavaScript string, use "
-        'one backslash escape (chars: "rosetta\\n"), not the literal two-character '
-        'sequence backslash+n (chars: "rosetta\\\\n"). Boolean parameters such as '
-        "tty must be JSON booleans true or false, not quoted strings."
+        "Description for exec_command.\n\nWhen an interactive command returns a "
+        "session_id, reuse that exact session_id instead of starting the command "
+        "again. Use write_stdin for polling, raw character input, or complex "
+        "multi-step interaction. Use send_line for simple single-line input; it "
+        "appends exactly one newline. Boolean parameters such as tty must be JSON "
+        "booleans true or false, not quoted strings."
     )
+    exec_description = definitions["exec_command"]["function"]["description"]
+    assert "Example:" not in exec_description
+    assert "rosetta" not in exec_description
+    assert "backslash" not in exec_description
     assert definitions["create_goal"]["function"]["description"].endswith(
         "Do not set token_budget unless the user explicitly provided a numeric token "
         "budget."

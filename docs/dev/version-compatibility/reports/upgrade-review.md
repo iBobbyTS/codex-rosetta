@@ -382,7 +382,13 @@ rewrite a model-generated call.
    examples were removed. Strict DeepSeek Pro control run `202607241636` then
    passed with exactly one start and one same-session write. It chose raw
    `write_stdin`, so this control verifies the simplified description does not
-   regress the native continuation path but does not add facade coverage.
+   regress the native continuation path but does not add facade coverage. The
+   appended `exec_command` guidance was subsequently reduced to parameter and
+   responsibility rules only: reuse `session_id`, use `write_stdin` for
+   polling/raw or complex interaction, use `send_line` for simple single-line
+   input, and keep boolean parameters unquoted. Command and newline-escaping
+   examples were removed. This final wording has deterministic projection
+   coverage; run `202607241636` predates that last description-only revision.
 
 3. **Implemented: focused precedence guidance for file mutation.** DeepSeek
    and Kimi selected Shell/Python through `exec_command` even though localized
