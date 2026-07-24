@@ -69,7 +69,8 @@ Require one model-facing projected `view_image` call, one reconstructed
 `tools.view_image(...)` call inside native custom `exec`, and a successful
 image result for `fixtures/quadrants.png`. The native result must contain an
 image content item or data URL; a textual claim that the image exists is not
-enough.
+enough. Accept an omitted `detail` or any value allowed by the model-visible
+schema; do not require a capability that the catalog did not expose.
 
 ### `05` / Goal lifecycle
 
@@ -86,7 +87,8 @@ image result for `fixtures/vision_quadrants.png`. Gateway Logs must prove the
 actual upstream is the selected multimodal model (`mimo-v2.5` by default). The exact success marker must identify red
 top-left, green top-right, blue bottom-left, and yellow bottom-right. Reading
 or inspecting the file through any other tool is a failure even if the marker
-is correct.
+is correct. Accept an omitted `detail` or any value allowed by the visible
+schema.
 
 ## Required result file
 

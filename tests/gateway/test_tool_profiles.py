@@ -43,6 +43,7 @@ def _route(
     inputs: dict[str, dict[str, str]] | None = None,
     *,
     target_provider: ProviderType = "openai_chat",
+    input_modalities: list[str] | None = None,
     tool_runtime_capabilities: frozenset[str] = frozenset(),
 ) -> ResolvedRoute:
     return ResolvedRoute(
@@ -52,6 +53,7 @@ def _route(
         tool_profile_name="custom",
         tool_profile=profile,
         tool_profile_inputs=inputs or {},
+        input_modalities=input_modalities,
         tool_runtime_capabilities=tool_runtime_capabilities,
     )
 
@@ -507,6 +509,52 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
         "token": "image-token",
     }
     assert "tools" not in adapted
+
+
+@pytest.mark.parametrize("target_provider", ["openai_chat", "openai_responses"])
+def test_text_only_model_removes_view_image_from_all_responses_tool_containers(
+    target_provider,
+):
+    route = _route(
+        _profile(),
+        target_provider=target_provider,
+        input_modalities=["text"],
+    )
+    body = {
+        "tool_choice": {"type": "function", "name": "view_image"},
+        "tools": [
+            {"type": "function", "name": "view_image", "parameters": {}},
+            {"type": "function", "name": "update_plan", "parameters": {}},
+        ],
+        "input": [
+            {
+                "type": "additional_tools",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "view_image",
+                        "parameters": {},
+                    }
+                ],
+            }
+        ],
+    }
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert [tool["name"] for tool in adapted["tools"]] == ["update_plan"]
+    assert adapted["input"] == []
+    assert "tool_choice" not in adapted
+
+
+@pytest.mark.parametrize("input_modalities", [None, ["text", "image"]])
+def test_unknown_or_image_model_keeps_view_image(input_modalities):
+    route = _route(_profile(), input_modalities=input_modalities)
+    body = {"tools": [{"type": "function", "name": "view_image", "parameters": {}}]}
+
+    adapted = _apply_tool_adaptation(body, route)
+
+    assert adapted["tools"][0]["name"] == "view_image"
 
 
 def test_gateway_config_rejects_unknown_group_profile():

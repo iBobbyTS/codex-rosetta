@@ -5,7 +5,8 @@ Test image generation followed by projected `view_image` in this exact order.
    `num_last_images_to_include`.
 2. From the successful image-generation result, obtain the path where Codex
    saved the generated artifact. Call `view_image` exactly once with that exact
-   path and detail `original`.
+   path. You may omit `detail` or choose any value allowed by the visible tool
+   schema.
 3. Based only on the image returned by `view_image`, describe the scene in one
    concise Chinese sentence.
 

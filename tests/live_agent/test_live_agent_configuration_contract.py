@@ -199,6 +199,10 @@ def test_gateway_backed_cells_require_dual_auth_local_mode() -> None:
     assert contract["scope"] == "all_gateway_backed_live_agent_cells"
     assert contract["execution_mode"] == "oauth_plus_experimental_bearer_local_mode"
     assert contract["gateway_mode"] == "local_mode"
+    assert contract["gateway_runtime_manager"] == "conda"
+    assert contract["gateway_python_version"] == "3.14.6"
+    assert contract["gateway_python_abi"] == "standard_cp314_gil"
+    assert contract["forbidden_gateway_runtime_managers"] == ["uv"]
     assert (
         contract["gateway_secret_source_directory"] == "~/.config/codex-rosetta-gateway"
     )
@@ -373,6 +377,23 @@ def test_image_generation_contract_requires_codex_auth_gate() -> None:
         expected["mandatory_prerequisites"]["provider_request_auth"]
         == runtime_contract["provider_request_auth"]
     )
+    assert (
+        expected["expected_native_pattern"]["view_image_detail_policy"]
+        == "omit_or_use_visible_schema_value"
+    )
+
+
+@pytest.mark.parametrize("task_id", ["04", "06"])
+def test_view_image_contract_uses_only_model_visible_detail_values(task_id) -> None:
+    task_dir = LIVE_AGENT / "builtin_tools" / task_id
+    expected = json.loads((task_dir / "expected.json").read_text(encoding="utf-8"))
+    task = (task_dir / "TASK.md").read_text(encoding="utf-8")
+
+    assert (
+        expected["expected_native_pattern"]["detail_policy"]
+        == "omit_or_use_visible_schema_value"
+    )
+    assert 'detail: "original"' not in task
 
 
 def test_file_workflow_records_route_specific_tool_selection() -> None:

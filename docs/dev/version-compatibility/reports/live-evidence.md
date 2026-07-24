@@ -16,13 +16,110 @@ and outcome here.
 | --- | --- | --- | --- | --- | --- | --- |
 | `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |
 | `202607231548` | `command_execution/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f90f6-fe4a-7913-9f26-3fc0b79affd7` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One upstream-localized `exec_command` was restored to one native Codex `exec` and one completed command start, with no continuation. Both converted streams reached `response.completed`. |
+| `202607231617` | `command_execution/03` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9110-62f2-71f1-9fa6-fe9f96f74d61` | `124` / marker absent / `failure` | Isolated local-mode Gateway ran under Conda standard-GIL CPython 3.14.6 (`cp314`). The model reused session `9368`, but emitted a double-escaped JavaScript value for `chars`, sending literal `rosetta\\n`; it then polled twice and never obtained the marker. |
+| `202607231629` | `command_execution/03` | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f9119-dc3e-7193-b18c-1d42abeab44c` | `0` / `RESULT:INPUT_OK` / `success` | Targeted minimal rerun under Conda standard-GIL CPython 3.14.6. One command start returned session `4471`; one same-session `write_stdin` sent a real newline and returned the marker. Task 01 was intentionally not rerun by user direction. |
+| `202607231648` | `command_execution/02` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f912a-ad27-7443-a622-3290e3ae11c6` | `0` / `RESULT:DELAYED_OK` / `success` | One scenario start yielded, one empty poll completed the cell, and one same-session empty `write_stdin` returned the marker. All four direct Responses streams completed. |
+| `202607231650` | `command_execution/03` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f912c-dfab-70e0-b554-52c678895c2c` | `0` / `RESULT:INPUT_BAD:''` / `failure` | The model started the scenario once but never continued its returned session and never sent `rosetta` plus newline. The process reached EOF with empty input; both direct Responses streams completed. |
+| `202607231651` | `command_execution/04` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f912d-8337-7fd1-ba2e-77059340d51a` | `0` / `RESULT:TWO_STAGE_BAD:'':''` / `failure` | The model started the scenario once but performed neither required same-session write. The process reached EOF for both inputs; both direct Responses streams completed. |
+| `202607231652` | `command_execution/02` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f912e-22df-73e0-9dda-6222b4a227e6` | `124` / marker absent / `failure` | The first start returned session `43357`, but the model misread the nested result, inspected `scenario.py`, and started the scenario again instead of polling the original session. Three converted streams completed before timeout. |
+| `202607231653` | `command_execution/02` | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f912f-329a-7242-aaf2-e92ee1716c16` | `0` / `RESULT:DELAYED_OK` / `success` | The permitted DeepSeek fallback used exactly one scenario start and one same-session empty continuation. All three converted streams completed. |
+| `202607231654` | `command_execution/04` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f912f-d164-7dd3-85fb-1676e6701b96` | `0` / `RESULT:TWO_STAGE_OK` / `failure` | The model correctly reused session `8680` for ordered `alpha` and `beta` writes, but first ran the forbidden extra command `cat scenario.py`. The marker alone does not satisfy the suite's one-start constraint. |
+| `202607231655` | `command_execution/04` | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f9130-ed14-7251-b858-c1baa2cb6fe5` | `0` / `RESULT:TWO_STAGE_OK` / `success` | The permitted DeepSeek fallback used exactly one scenario start and two ordered non-empty writes to session `10730`. All four converted streams completed. |
+| `202607231701` | `builtin_tools/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f9136-32a0-7991-8f89-fde7e5c3bdbb` | `0` / `RESULT:CODE_MODE_WAIT_OK` / `success` | One native Code Mode `exec` yielded cell 1 and one top-level `wait` returned `WAIT_PHASE_2`; no shell or `write_stdin`. |
+| `202607231702` | `builtin_tools/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9137-2920-7103-98b2-4d04d83c5f07` | `0` / `RESULT:CODE_MODE_WAIT_OK` / `success` | Projected Code Mode `exec` and top-level `wait` were reconstructed with the same cell id; all three converted streams completed. |
+| `202607231703` | `builtin_tools/02` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f9138-ae02-7601-829a-1f3d85b5df68` | `0` / `RESULT:UPDATE_PLAN_OK` / `success` | Two `tools.update_plan` calls produced the required todo-list creation and completion updates. |
+| `202607231704` | `builtin_tools/02` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9139-75c4-7b30-8466-f0186cf308dd` | `0` / `RESULT:UPDATE_PLAN_OK` / `success` | Two projected `update_plan` calls reconstructed to the required native todo-list state transitions. |
+| `202607231705` | `builtin_tools/03` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f913a-7b99-7da0-97ba-327522d799a3` | `0` / `RESULT:FILE_EDIT_OK` / `success with deviations` | Required files were exact and the direct route used native `apply_patch` without shell, but the model skipped the requested fixture discovery and inspection. |
+| `202607231707` | `builtin_tools/03` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f913b-cebc-71b0-94fc-7d16dd8ce088` | `0` / `RESULT:FILE_EDIT_OK` / `failure` | Files were correct, but the model used prohibited `exec_command` Python and `rg` file operations before patching. |
+| `202607231708` | `builtin_tools/03` | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f913c-a02d-7fb0-8350-d8e8d510a9dd` | `0` / `RESULT:FILE_EDIT_OK` / `failure` | The permitted DeepSeek fallback again used prohibited shell/Python file operations, so no further retry is allowed. |
+| `202607231709` | `builtin_tools/04` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f913d-f935-7470-a63d-c828f37f1287` | `0` / `RESULT:VIEW_IMAGE_OK` / `success` | Exactly one `tools.view_image` used `fixtures/quadrants.png` with `detail: "original"` and returned image content. |
+| `202607231710` | `builtin_tools/04` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f913e-9f15-7021-835f-3eeec8c80cb3` | `0` / `RESULT:VIEW_IMAGE_FAILED` / `failure` | The projected call failed because DeepSeek reports that it does not support image inputs. |
+| `202607231711` | `builtin_tools/05` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f913f-72c0-7110-8a4b-1ea765c52e9d` | `0` / `RESULT:GOAL_LIFECYCLE_OK` / `success` | One fresh thread completed `get_goal → create_goal → get_goal → update_goal` with the required objective and no token budget. |
+| `202607231712` | `builtin_tools/05` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9140-d3a9-7ed3-8de2-4c205c290370` | `0` / `RESULT:GOAL_LIFECYCLE_OK` / `success` | The same projected Goal lifecycle completed on one fresh thread with final status `complete`. |
+| `202607231713` | `builtin_tools/06` | `codex-cli 0.145.0` / `mimo-v2.5` | `Opencode Go` / `openai_responses→openai_chat` | `019f9141-895b-74d3-a74a-69b8e719c111` | `124` / marker absent / `failure` | The multimodal model searched/read the tool catalog, called `view_image` more than once, attempted image-byte parsing, and timed out; this violates the exact one-call/no-file-read scenario. |
+| `202607231716` | `builtin_tools/04` | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f9144-9cc6-7782-bb23-2a4be114078e` | `0` / `RESULT:VIEW_IMAGE_OK` / `failure` | The permitted DeepSeek fallback returned image content but omitted required `detail: "original"`; the exact parameter constraint is not met. |
+| `202607231759` | `builtin_tools/03` | `codex-cli 0.145.0` / `qwen3.7-plus` | `Opencode Go` / `openai_responses→openai_chat` | `019f916b-7777-7922-9062-321f3ab3a97d` | `0` / `RESULT:FILE_EDIT_OK` / `success with deviations` | The model-facing route selected `Glob`, `Grep`, `Read`, `Edit`, and `Write`; Rosetta reconstructed the calls and all three file assertions passed. Three extra `Read` calls verified the finished files and are retained as deviations. |
+| `202607231801` | `builtin_tools/06` | `codex-cli 0.145.0` / `qwen3.7-plus` | `Opencode Go` / `openai_responses→openai_chat` | `019f916d-8b68-7432-a6b7-660a2cb1c204` | `0` / exact four-quadrant marker / `success` | The model called projected `view_image` exactly once, omitted the optional `detail`, received one real image with returned detail `high`, and identified all four quadrant colors correctly without fallback tools. |
+| `202607231802` | `command_execution/03` | `codex-cli 0.145.0` / `gpt-5.6-sol` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f916e-4dde-7870-9eaa-b3fe66f32ef9` | `0` / `RESULT:INPUT_BAD:''` / `failure` | The Terra fallback model started the scenario once but omitted `tty: true`; the process received EOF and completed before a resumable session could be returned. No Rosetta continuation path was reached. |
+| `202607231803` | `command_execution/04` | `codex-cli 0.145.0` / `gpt-5.6-sol` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f916f-4930-74b2-bc49-c6659cd958cb` | `124` / final marker absent / `failure` | The model ran one forbidden inspection command, then correctly used `tty: true`, reused session `30758`, sent ordered `alpha\n` and `beta\n`, and received `RESULT:TWO_STAGE_OK`. The final assistant marker did not arrive before the 30-second runner timeout. |
 
-These smokes prove the formal binary's direct Responses and third-party Chat
-bridge one-shot command paths only. The DeepSeek run specifically verifies that
+## Formal Failure Attribution And Improvement Candidates
+
+This classification covers the twelve formal failed cells above, after inspecting
+the Codex rollout, Gateway source/target events, actual Chat tool definitions,
+and the current local-mode model catalog. It does not rewrite the recorded cell
+outcomes: a test-contract failure remains a failed cell until the test is
+corrected and rerun.
+
+| Formal run | Primary attribution | Why this is not a Codex or Rosetta regression | Rosetta improvement candidate |
+| --- | --- | --- | --- |
+| `202607231650` Terra command `03` | Model tool-use behavior | Direct Responses passthrough completed. Terra started the process without a usable interactive continuation and never issued `write_stdin`; no Responses-to-Chat conversion was involved. | None in the converter path. Keep this as a native-model quality gate. |
+| `202607231651` Terra command `04` | Model tool-use behavior | Direct Responses passthrough completed, but Terra never made either required write. | None in the converter path. Keep this as a native-model quality gate. |
+| `202607231652` DeepSeek command `02` | Model result interpretation | The localized output contained session `43357` inside the normal Code Mode `input_text[]` wrapper. Kimi received the same wrapper on the same Chat bridge and correctly polled its session. | Prototype an opt-in Chat result presentation that surfaces a completed `exec_command` session handle as a concise, structured leading summary, while preserving the original tool output for replay. This needs round-trip and history tests before use. |
+| `202607231617` DeepSeek command `03` | Model argument generation | DeepSeek reused the session but generated literal `rosetta\\n`; the trace proves Rosetta preserved that value. Kimi generated one JavaScript newline escape and passed. | Offer an opt-in `send_line` facade that accepts text without a newline and emits the native `write_stdin` call with a real line terminator. Do not silently rewrite literal backslash-plus-`n` input. |
+| `202607231654` DeepSeek command `04` | Model instruction/tool discipline | The required two writes used one session and returned the marker. The only violation was the model's prohibited preliminary `cat scenario.py`. | No semantic repair. Preserve the strict one-start scenario; optional profile guidance can demote shell inspection when localized file tools are available. |
+| `202607231707` DeepSeek file `03` | Model tool selection | `Glob`, `Grep`, `Read`, `Edit`, and `Write` were all exposed, but the model chose Python/`rg` through `exec_command`. Stream reconstruction and workspace mutation both completed. | Strengthen each localized file-tool description with its precedence over `exec_command` for discovery/read/edit/write, and evaluate a profile option that hides shell execution for file-only constrained tasks. |
+| `202607231708` Kimi file `03` | Model tool selection | The permitted fallback made the same shell/Python choices even though the localized tool set was present. This corroborates a model-facing choice issue, not a DeepSeek-specific converter loss. | Same localized-file guidance and constrained-profile experiment as `202607231707`. |
+| `202607231710` DeepSeek image `04` | Model capability / invalid test applicability | The actual `deepseek-v4-flash` local-mode entry declares `input_modalities=["text"]`; Codex correctly rejected `view_image` before an image could reach the upstream. | Implemented in the Gateway: explicit text-only routes remove `view_image` from direct and projected tool surfaces. The live runner must still preflight the catalog and classify the vision cell as unsupported instead of invoking it. |
+| `202607231713` MiMo vision `06` | Model tool-use behavior | Image data reached the Chat history. MiMo first discarded a `view_image` result, then used `notify(JSON.stringify(result))`, converting the image to text, and later attempted PIL/Buffer parsing. The top-level projected `view_image` function with image output was available but unused. | Remove or annotate duplicate already-eager tools in `ALL_TOOLS`, and state on projected image tools that they should be called directly and return visual content. Test this against deferred-tool discovery before changing the catalog. |
+| `202607231716` Kimi image `04` | Test-contract / capability metadata mismatch | The tested `kimi-k3` entry declares `supports_image_detail_original=false`. Codex therefore exposed a `view_image` schema with only `path`; the tool returned a valid high-detail image. Requiring `detail: "original"` was impossible from the advertised schema. | Implemented: image tasks now accept an omitted `detail` or any value in the visible schema. The historical cell keeps its original evaluation; `202607231801` validates the corrected contract. |
+| `202607231802` Sol command `03` | Model tool-argument behavior | Direct Responses passthrough completed. The model omitted `tty: true`, so the local process received EOF and there was no session for Rosetta to lose or restore. | None in the converter path. Keep `tty` and returned-session requirements explicit in the behavior gate. |
+| `202607231803` Sol command `04` | Model instruction discipline plus runner timeout | Direct Responses preserved one interactive scenario start and both writes to the same session. The model nevertheless ran a prohibited inspection command, and the final answer phase exceeded the fixed 30-second task timeout. | No converter repair. The successful same-session result is bridge/runtime evidence, but the cell remains failed under its one-start and final-marker contract. |
+
+No failed formal cell establishes a Codex binary/runtime defect or a
+`0.145.0`-introduced Rosetta incompatibility. The alpha.23 and formal source
+versions have identical `view_image` schema gating, and Rosetta's
+`supported_details` profile also remained `auto,low,high`; the Kimi
+`detail: "original"` discrepancy is therefore not an upgrade regression.
+The already repaired formal upgrade defect is separate: reconstructed reasoning
+summary deltas initially lacked Codex's required `summary_index`, then passed
+the DeepSeek one-shot replay after the repair.
+
+Two bounded corrections are now applied. Explicit text-only compact model
+presets remove `view_image` from both Responses tool containers and the nested
+Code Mode projection, while unknown custom-model modalities remain fail-open.
+The image live tasks also accept an omitted `detail` or any value allowed by
+the visible schema. The remaining result-presentation and file-tool-guidance
+candidates are not applied; they need separate regression coverage and live A/B
+evidence and are not safe as silent normalization of model-generated commands.
+
+The one-shot smokes plus the continuation rows prove the formal binary's direct
+Responses command start/poll path and the third-party Chat bridge's start,
+poll, single-input, and two-input continuation paths. The successful DeepSeek one-shot run
+specifically verifies that
 reconstructed reasoning-summary deltas include the Codex-consumed
 `summary_index` identity and survive the final-source semantic gate. They do not
-prove formal audio behavior, remote compaction, Images, Browser, Skills, or the
-remaining live-agent matrix.
+prove formal audio behavior, remote compaction, Images, Browser, Skills,
+or the remaining live-agent matrix. They do not turn the failed Terra or
+DeepSeek behavior cells into model passes. The Sol fallback also does not turn
+the two failed Terra stdin cells into GPT passes: task `03` failed before a
+session existed, while task `04` proved the same-session runtime but violated
+the one-start and final-marker requirements.
+
+The `exec_command` declaration shown to the third-party models does not tell
+them to edit files with Shell. It describes PTY execution, continuation, and
+session results. The localized `Glob`, `Grep`, `Read`, `Edit`, and `Write`
+Functions were simultaneously visible. Qwen selected all five in
+`202607231759`, while DeepSeek and Kimi selected Shell/Python under the prior
+identical surface. This isolates the earlier file-cell failures to model tool
+selection rather than a Rosetta instruction that required shell editing.
+
+The new Qwen file run completed eleven converted requests on one prompt-cache
+key. Usage was `19434/216/0`, `19675/145/19072`, `19829/87/19072`,
+`19953/46/19072`, `20065/155/19072`, `20272/85/19072`, `20409/70/19072`,
+`20531/49/19072`, `20644/49/19072`, `20757/49/19072`, and
+`20862/107/19072`. The provider retained one fixed cache block while each
+localized call/result suffix grew, so the large negative adjacent deltas are
+provider cache-block accounting rather than evidence that Rosetta rewrote the
+stable instructions or tool definitions. The Qwen visual run used
+`19420/69/0` then `20010/72/0`; the second request included the image result and
+reported no cache hit, yielding the expected large negative delta.
+
+Sol task `03` usage was `20113/134/3840` then `20313/62/19712` with adjacent
+delta `-535`. Sol task `04` omitted usage on the first and fourth requests; the
+middle requests were `20626/135/19200` and `20823/60/20224`, with the only
+calculable adjacent delta `-537`. Missing usage remains missing rather than
+being synthesized as zero.
 
 Per-request usage for the smoke, in request order, was
 `80eb8786:20098/125/3840/base` and `06eadb04:20253/10/3840/-16383`, using the
@@ -38,6 +135,103 @@ The DeepSeek request usage was
 prompt-cache key, stable instructions, and tool set; the second request added
 the native command result while retaining an effective adjacent prefix. No
 large discontinuity analysis was required.
+
+The Conda task-03 rerun returned usage for three completed model requests:
+`68ab09d4:18210/140/cached-missing`, `331d87a9:19210/123/cached-missing`, and
+`d60d37dc:19430/121/cached-missing`. Its remaining retry/terminal requests had
+no source usage. No adjacent-request cache delta is calculable when
+`cached_input_tokens` is absent; no synthetic zero or aggregate cache metric is
+reported. The rollout shows three extra inspection commands before the required
+scenario start, then the session-reused `write_stdin` input as source text
+`"rosetta\\\\n"`, which JavaScript interprets as a literal backslash plus `n`.
+This is a DeepSeek tool-argument discipline failure, not a uv/runtime or
+Rosetta session-ID restoration failure. The isolated evidence is retained at
+`tmp/agent_testing_workspace/202607231617` and
+`/Volumes/RAMDisk/202607231617/rosetta-trace.jsonl`.
+
+The targeted Kimi task-03 rerun completed three upstream requests on one
+prompt-cache key, and all three streams reached `response.completed`. The
+provider omitted usage from every completed response, so no baseline token
+tuple or adjacent-request cache delta can be calculated. The rollout contains
+exactly one native command start and one same-session non-empty continuation;
+the model-facing JavaScript used `chars: "rosetta\\n"`, which represents one
+newline escape rather than the DeepSeek run's double-escaped literal. The
+isolated evidence is retained at `tmp/agent_testing_workspace/202607231629`
+and `/Volumes/RAMDisk/202607231629/rosetta-trace.jsonl`.
+
+The continued command matrix ran under the same Conda 3.14.6 standard-GIL,
+local-mode, dual-auth contract. An earlier `202607231646` Terra task-02 attempt
+was invalidated when the outer test runner was interrupted after the native
+command had completed but before the final model response; its isolated
+Gateway and child process were stopped, and it is not counted as a model cell.
+
+The three new Terra cells exposed no per-request upstream usage, so no adjacent
+cache delta can be calculated for their four, two, and two completed Responses
+requests respectively. This is recorded as missing usage rather than synthetic
+zero. Terra task 02 passed with one start, one wait, and one same-session empty
+continuation. Terra tasks 03 and 04 made only the initial start and returned the
+scenario's explicit empty-input failure markers; Rosetta completed both streams
+for each cell, but the model never requested the required writes.
+
+DeepSeek task 02 returned usage only for its first request:
+`5f35e76a:18196/193/4096/base`; the next two completed streams omitted usage,
+so their adjacent deltas are unavailable. The model saw session `43357` in the
+localized tool result but reasoned that no resumable session existed, read the
+fixture, and issued a second independent start. This is a model session-result
+interpretation failure. Its Kimi fallback used one start and one same-session
+empty continuation. Kimi task 02 usage was
+`2c362c00:17795/119/0/base`,
+`a45c4427:18019/93/17664/-250`, and
+`b070d781:18218/22/17920/-192`. For the `-250` delta, the model, route,
+prompt-cache key, 30-tool definition hash, and stable instructions were
+unchanged; the previous six target messages remained an exact prefix and the
+request added only the assistant tool call and tool result. The bounded
+continuity therefore indicates expected provider token-block alignment around
+the newly appended tool exchange, not a Rosetta prefix rewrite.
+
+DeepSeek task 04 completed the intended session sequence but violated the
+one-start contract by reading `scenario.py` first. Its first two upstream
+requests omitted usage. The remaining requests were
+`049145aa:19036/117/18816/delta-unavailable`,
+`81b063e5:19257/110/19072/-81`, and
+`64c21676:19474/52/19328/-39`; the first available tuple has no calculable
+adjacent delta because the preceding request omitted usage. Its Kimi fallback
+used exactly one start and two same-session writes. Kimi task 04 usage was
+`5566d1e4:17833/117/0/base`,
+`ced1880d:18053/89/17664/-286`,
+`3108e398:18253/89/17920/-222`, and
+`006f8683:18452/21/18176/-166`. For the two deltas whose absolute values exceed
+200, the model, route, prompt-cache key, 30-tool definition hash, and stable
+instructions remained unchanged; each previous Chat message list was an exact
+prefix and the only new suffix was one assistant tool call plus its result.
+The bounded evidence again supports normal provider cache-block alignment and
+tool-result insertion rather than conversion-induced prefix breakage.
+
+All builtin runs have their suite-shaped credential-free `evaluation.json`
+under the isolated run root. Terra's direct Responses provider omitted usage on
+all builtin requests. DeepSeek and MiMo omitted usage from a subset of completed
+streams; these are retained as `usage-missing`, not zero. The available request
+tuples, in stream order, are:
+
+```text
+builtin/01 DeepSeek: a71202be:18366/144/4096/base 4d771bd0:18571/113/18432/-78 1cc09471:18740/47/18560/-124
+builtin/02 DeepSeek: b3dffcc2:usage-missing b8a32428:18542/96/18432/delta-unavailable c34b4906:18688/24/18560/-78
+builtin/03 DeepSeek: 9d2bc661:usage-missing aaaefd3f:18626/94/18560/delta-unavailable 98d100ca:18786/111/18688/-32 8fa914ea:usage-missing 792e29b0:19534/134/19328/delta-unavailable e8cb09df:19838/103/19584/-84
+builtin/03 Kimi: 17a0af7f:17952/157/cached-missing/base 4ac90b7c:18251/88/17920/-189 2cee249e:18475/218/18176/-163 a21e0892:18868/129/18432/-261 1af579d6:19193/21/18688/-309
+builtin/04 DeepSeek: 909c9a02:18232/85/4096/base ff236a05:usage-missing
+builtin/05 DeepSeek: 22752af2:18292/139/4096/base 1813a2f5:18499/68/18304/-127 b4b8050e:18710/52/18560/-7 24cf45c0:18905/71/18688/-74 c1b18aff:usage-missing
+builtin/06 MiMo: 7233b276:usage-missing 801916ae:20498/333/19776/delta-unavailable; later timeout streams: usage-missing
+builtin/04 Kimi: ffcd66cb:17826/93/cached-missing/base f0b2eb20:18180/41/17664/-255
+```
+
+Every delta uses `current.cached_input_tokens - (previous.input_tokens +
+previous.output_tokens)`. The Kimi task-03 `-261` and `-309`, and task-04
+`-255`, were checked against bounded target requests: same model, route,
+prompt-cache key, tool definition fingerprint, and stable instructions; each
+previous Chat message list remained an exact prefix and only assistant tool
+calls/results were appended. They are expected cache-block alignment around
+tool-result insertion, not evidence of a Rosetta rewrite. No other available
+delta exceeds 200 tokens.
 
 Before the converter repair, the saved failing DeepSeek response was replayed
 through the updated safety classification. Its first reconstructed reasoning

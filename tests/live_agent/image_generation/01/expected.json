@@ -27,7 +27,7 @@
     "saved_artifact_required": true,
     "model_facing_view_image_calls": 1,
     "nested_view_image_calls": 1,
-    "view_image_detail": "original",
+    "view_image_detail_policy": "omit_or_use_visible_schema_value",
     "view_image_must_use_saved_artifact": true,
     "image_result_required": true,
     "human_semantic_judgment_required": true,

@@ -37,7 +37,8 @@ The run passes only when every condition below is true:
   the configured OpenAI-compatible generation endpoint succeeds, and Codex
   saves a generated image artifact;
 - the model takes the saved artifact path from that result and makes exactly
-  one projected `view_image` call with `detail: "original"` on the same path;
+  one projected `view_image` call on the same path, omitting `detail` or using
+  any value allowed by the model-visible schema;
 - the native `view_image` result contains image content rather than text-only
   metadata;
 - the final line begins with `RESULT:IMAGE_GENERATION_DESCRIPTION|`;
