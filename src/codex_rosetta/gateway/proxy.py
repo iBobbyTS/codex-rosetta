@@ -92,6 +92,7 @@ from .tool_adaptation import (
 from .tool_profiles import (
     apply_profile_tool_mutations,
     is_internal_container_when_disabled,
+    route_supports_image_input,
     route_tool_state,
     tool_catalog_lookups,
 )
@@ -598,6 +599,8 @@ def _apply_tool_adaptation(
 ) -> dict[str, Any]:
     """Apply the selected profile before passthrough or conversion."""
     adapted = body
+    if not route_supports_image_input(route):
+        adapted = _remove_tool_definition(adapted, "view_image")
     if route.target_provider == "openai_chat":
         adapted = _remove_tool_definition(adapted, "tool_search")
     if getattr(route, "tool_profile", None):

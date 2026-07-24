@@ -56,6 +56,13 @@ Web Admin **Gateway Logs** page belongs on a RAM Disk.
   Provider. Use Provider ID `codex_rosetta` with the exact case-sensitive
   display name `OpenAI`. Do not define suite-specific provider IDs or any
   provider whose display name is `openai`, `custom`, or another spelling.
+- Run the isolated Gateway from a per-run Conda prefix at
+  `RUN_ROOT/conda_env`, using standard-GIL CPython 3.14.6 (`cp314`). Do not use
+  `uv` to create the environment, install dependencies, or launch the Gateway.
+  Constrain away free-threaded `cp314t` builds and verify that the GIL is
+  enabled before invoking the tested model. Launch the current checkout with
+  `PYTHONPATH="$ROOT/src" "$RUN_ROOT/conda_env/bin/python" -m
+  codex_rosetta.gateway`; do not rely on a separately installed Gateway CLI.
 - GPT live cells must not pin an upstream Gateway provider name. Accept any
   configured provider that serves the selected GPT model and records a real
   response. If the model route is missing or the upstream is unavailable,
@@ -98,6 +105,17 @@ exists, stop and use another unused minute rather than adding a suffix.
    mkdir -p "$RUN_ROOT/worktree" "$RUN_ROOT/codex_home" "$RUN_ROOT/gateway" "$RUN_ROOT/artifacts"
    cp -R "$SUITE/common/." "$RUN_ROOT/worktree/"
    cp -R "$SUITE/$TASK_ID/." "$RUN_ROOT/worktree/"
+   ```
+
+   Create the isolated standard-GIL Conda runtime under that same root. The
+   exact build string is platform-specific, so constrain the ABI rather than
+   accepting a solver-selected `cp314t` package:
+
+   ```bash
+   conda create --yes --prefix "$RUN_ROOT/conda_env" --override-channels \
+     -c conda-forge 'python=3.14.6=*_cp314' 'cryptography>=42.0.0'
+   "$RUN_ROOT/conda_env/bin/python" -c \
+     'import sys; assert sys._is_gil_enabled(), "standard GIL build required"'
    ```
 
 3. Select the Web Admin **Gateway Logs** root. On macOS, prefer an existing
@@ -219,7 +237,8 @@ exists, stop and use another unused minute rather than adding a suffix.
    must not be written to the RAM Disk:
 
    ```bash
-   codex-rosetta-gateway --config "$RUN_ROOT/gateway" --codex-home "$RUN_ROOT/codex_home" \
+   PYTHONPATH="$ROOT/src" "$RUN_ROOT/conda_env/bin/python" -m codex_rosetta.gateway \
+     --config "$RUN_ROOT/gateway" --codex-home "$RUN_ROOT/codex_home" \
      --host 127.0.0.1 --port 18765 --no-banner --local-mode \
      --confirm-clear-existing-catalog \
      >"$RUN_ROOT/gateway/stdout.log" 2>"$RUN_ROOT/gateway/stderr.log" &

@@ -1,7 +1,8 @@
 Test projected `view_image` and visual recognition using the provided fixture.
 
 1. Call `view_image` exactly once with path
-   `fixtures/vision_quadrants.png` and detail `original`.
+   `fixtures/vision_quadrants.png`. You may omit `detail` or choose any value
+   allowed by the visible tool schema.
 2. Inspect the returned image and determine the solid color in each quadrant.
 3. Do not read the image file, inspect its bytes or metadata, convert it, or use
    another file, command, image, or browser tool.

@@ -3001,6 +3001,14 @@ def test_view_image_projection_uses_image_output_helper():
     )
 
 
+def test_text_only_model_does_not_project_view_image():
+    route = replace(_route(), input_modalities=["text"])
+
+    projections = exec_tool_projections_for_route(route)
+
+    assert "view_image" not in projections
+
+
 def test_modified_view_image_limits_detail_values_in_schema_and_exec_script():
     route = _route()
     route.tool_profile["function.view_image"] = "modified"

@@ -7,7 +7,7 @@
     "model_facing_view_image_calls": 1,
     "nested_view_image_calls": 1,
     "path": "fixtures/quadrants.png",
-    "detail": "original",
+    "detail_policy": "omit_or_use_visible_schema_value",
     "image_result_required": true,
     "fallback_file_calls_max": 0,
     "gateway_log_evidence_required": true

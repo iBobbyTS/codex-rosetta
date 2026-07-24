@@ -68,7 +68,8 @@ not satisfy the gate.
 
 - `01`: generate a new image for the exact scene `草坪上一只狗在跑`, take the
   saved artifact path from the image-generation result, call `view_image` on
-  that same path, and describe the returned image in Chinese.
+  that same path, and describe the returned image in Chinese. The model may
+  omit `detail` or use any value present in its visible `view_image` schema.
 
 The outer test executor (a developer or development agent) makes the final
 semantic decision. The description passes only when it clearly states all

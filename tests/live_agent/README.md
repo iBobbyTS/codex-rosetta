@@ -69,6 +69,14 @@ auth-gated capability checks; the bearer token is the actual provider request
 credential and keeps model traffic on the isolated localhost Gateway. Neither
 OAuth-only nor bearer-only execution is a valid matrix cell.
 
+Run the Gateway from an isolated Conda environment using standard-GIL CPython
+3.14.6 (`cp314`). Put a per-run prefix at `RUN_ROOT/conda_env`, source the
+current checkout through `PYTHONPATH=src`, and launch
+`python -m codex_rosetta.gateway`. Do not use `uv` to create the environment,
+install dependencies, or start the Gateway. On platforms where the solver can
+select free-threaded Python, constrain the Python build to standard `cp314`
+and verify that the GIL is enabled before the live turn.
+
 All Gateway configuration and credentials required by a test, including model
 API keys, Images credentials, Tavily keys, and sidecar tokens, must be copied
 only from `~/.config/codex-rosetta-gateway` into the ignored timestamp run

@@ -7,8 +7,9 @@ Codex version: 0.145.0
 - Review mode: **full inventory, source-first**. The formal source is detached
   at `rust-v0.145.0`, commit
   `25af12f7e61572b0bc18ddb1008be543b91519b0`.
-- Installed CLI remains `codex-cli 0.144.6`; the source checkout and installed
-  CLI are separate compatibility identifiers. Rosetta remains `0.144.0.r0`.
+- The installed CLI used by the formal live cells reports `codex-cli 0.145.0`;
+  the source checkout and installed CLI remain separate compatibility
+  identifiers. Rosetta remains `0.144.0.r0`.
 - The formal source adds `InputAudio`/`Audio` protocol variants, audio in the
   Code Mode MCP forwarding helper, `never`/`unless_trusted` approval fields,
   and a changed Code Mode description builder. The bundled catalog also changes
@@ -19,44 +20,94 @@ Codex version: 0.145.0
   preserves valid audio on Responses and Chat paths, and fail-open passes
   malformed or unsupported audio blocks. The packaged model and tool catalogs
   are bound to the formal source commit.
-- The full non-integration suite passes (`3749 passed, 4 skipped`), and
+- The full non-integration suite passes (`3756 passed, 4 skipped`), and
   `make check-codex-compat` passes
-  against the refreshed formal baseline. The first formal live smoke
-  (`command_execution/01`, `codex-cli 0.145.0`, `gpt-5.6-terra`) passed through
-  the observed `晚照 (Plus)` Responses route. A second formal smoke with
-  `deepseek-v4-flash` passed through the `Deepseek (Official)`
-  Responses→Chat route after Rosetta added the Codex-required `summary_index`
-  to reconstructed reasoning-summary deltas and separated response-contract
-  failures from actual credential collisions. The remaining formal live-agent
-  matrix is pending, so 0.145.0 remains **not approved** and the package version
-  must not advance.
+  against the refreshed formal baseline. Formal live evidence now has fourteen
+  successful cells and two successes with deviations across command continuation
+  and builtin Code Mode tools. Failed Terra, DeepSeek, Kimi, and MiMo cells
+  remain recorded against their actual models. Kimi generated valid session
+  continuations on the same Responses→Chat bridge, supporting model behavior
+  failures rather than a Rosetta session-restoration defect. The remaining
+  formal live-agent matrix is pending, so 0.145.0 remains **not approved** and
+  the package version must not advance.
+
+## Formal Live Progress And Remaining Gates
+
+Completed formal live cells are retained in
+[`live-evidence.md`](live-evidence.md):
+
+| Suite/task | Model and route | Outcome |
+| --- | --- | --- |
+| `command_execution/01` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Passed one command start and terminal marker. |
+| `command_execution/01` | `deepseek-v4-flash`; `Deepseek (Official)` Responses→Chat | Passed one reconstructed command start and terminal marker. |
+| `command_execution/03` | `kimi-k3`; `Opencode Go` Responses→Chat | Passed one start plus one same-session newline write. This was a targeted rerun; task 01 was not repeated. |
+| `command_execution/02` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Passed one start, one wait, and one same-session empty continuation. |
+| `command_execution/02` | `kimi-k3`; `Opencode Go` Responses→Chat | Passed the permitted DeepSeek fallback with one start and one same-session empty continuation. |
+| `command_execution/04` | `kimi-k3`; `Opencode Go` Responses→Chat | Passed the permitted DeepSeek fallback with one start and two ordered same-session writes. |
+| `builtin_tools/01` | Terra direct and DeepSeek converted | Both passed Code Mode `exec` yield followed by top-level `wait`. |
+| `builtin_tools/02` | Terra direct and DeepSeek converted | Both passed the two-call `update_plan` lifecycle. |
+| `builtin_tools/03` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Core workspace outcome passed with deviations: native patching was correct but fixture reads were skipped. |
+| `builtin_tools/03` | `qwen3.7-plus`; `Opencode Go` Responses→Chat | Passed all workspace assertions and selected all five localized file tools; three extra verification reads are recorded as deviations. |
+| `builtin_tools/04` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Passed one `view_image` with exact `detail: "original"`. |
+| `builtin_tools/05` | Terra direct and DeepSeek converted | Both passed ordered Goal lifecycle calls on one fresh thread. |
+| `builtin_tools/06` | `qwen3.7-plus`; `Opencode Go` Responses→Chat | Passed one projected `view_image` call with the schema-default detail and correctly recognized all four quadrants. |
+
+Failed behavior cells remain failures even where Kimi proves the same bridge:
+Terra tasks 03 and 04 never sent the required input; DeepSeek task 02 restarted
+instead of polling, task 03 sent literal `rosetta\\n`, and task 04 ran a
+forbidden inspection command before the correct two-write sequence. Do not
+substitute Kimi success for Terra or DeepSeek model-quality passes, but use the
+paired results as Rosetta bridge evidence. The detailed attribution in
+[`live-evidence.md`](live-evidence.md) also distinguishes model behavior from
+the two image-cell applicability/expectation mismatches: DeepSeek is text-only,
+and Kimi cannot request `detail: "original"` under its advertised model
+metadata. The corrected tests now derive `detail` from the visible schema, and
+Rosetta suppresses `view_image` for explicitly text-only routed presets.
+`gpt-5.6-sol` fallback reruns did not clear Terra's stdin failures: task `03`
+omitted interactive TTY setup, while task `04` completed both same-session
+writes but ran a forbidden inspection command and timed out before the final
+assistant marker.
+
+The following remains before a formal release decision. Every cell uses the
+shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
+
+| Priority | Remaining formal gate | Minimum evidence to record |
+| --- | --- | --- |
+| 1 | Command continuation disposition | No command cell remains unrun. Direct Terra polling passed, direct Terra stdin cells failed, DeepSeek continuation cells failed their model-specific constraints, Kimi passed all three converted continuation shapes, and Sol fallback retained separate task-03/task-04 failures while proving task-04 same-session runtime behavior. Decide at release review whether the recorded model failures block approval; do not rerun completed one-shot or fallback cells. |
+| 1 | Code Mode and tool localization | `builtin_tools` is complete: wait, plan, Goal, direct image, Qwen localized-file selection, and Qwen visual recognition have live evidence. Terra and Qwen file workflows passed with deviations; DeepSeek/Kimi file selection and MiMo visual recognition remain model-behavior failures. Explicit text-only routes now suppress `view_image`, and image tests follow the visible detail schema. Next run `deferred_tool_search/01` through `07`; capture native/tool-localized calls and result replay. |
+| 1 | Tool history and collaboration | `subagent_tools/01` through `06`, plus `namespace_tools/01` and `local_skills/01`. |
+| 1 | Context and reasoning | `context_compaction/01` through `04`, the attested manual app-server compact cell, and `context_compaction_summary_quality/01` through `02`; record native/converted replay and exact-once behavior separately. |
+| 1 | Search and Images | `network_search/01` through `05`, self-hosted Bing RSS/Browser cells, visual-recognition prerequisite, and `image_generation/01` once the configured Images endpoint serves the required model. |
+| 2 | Audio and model profiles | Real Responses and Chat `InputAudio`/`Audio` calls; third-party Chat and Responses profile cells that exercise Code Mode audio exposure. |
+| 2 | Provider identity and orchestrator surfaces | GPT relay C0–C5 matrix; `orchestrator_skills/01` after an app-server orchestrator provider is provisioned. |
+| Deferred manual | Browser | Excluded from the current automated/CLI plan by user direction. Run `browser_use/01` later in a fresh Codex GUI task followed by its independent judge; retain it as manual evidence rather than treating it as passed or failed now. |
 
 ## Formal CP Classification
 
 | ID and compatibility point | Classification | Source/automation evidence | Formal live result |
 | --- | --- | --- | --- |
-| `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint/header extraction and full suite pass | One-shot local-mode smoke only |
+| `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint/header extraction and full suite pass | Direct and converted command start/continuation surfaces executed; model-specific failures remain; broader surface pending |
 | `CP-02 — Responses transparent handling` | High-confidence unchanged | Transport contract unchanged; full suite pass | Direct Responses smoke completed |
 | `CP-03 — Codex Search and Images endpoints` | Possibly unchanged | No extracted formal change | Pending search/Images cells |
 | `CP-04 — Request and window identity` | Possibly unchanged | Metadata keys unchanged | Pending multi-turn wire capture |
-| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot Chat bridge passed; audio cell pending |
+| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot plus Kimi polling/single-input/two-input continuation passed; DeepSeek continuation cells retain separate model failures; audio pending |
 | `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
 | `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
-| `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Code Mode cell pending |
-| `CP-09 — Code tool localization` | Changed | MCP audio projection updated | Code Mode cell pending |
+| `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Terra/DeepSeek `exec` yield and top-level wait passed; direct image and Goal paths exercised; MiMo recognition failed |
+| `CP-09 — Code tool localization` | Changed | MCP audio projection plus text-only `view_image` filtering updated | Direct GPT native patch succeeded with a discovery-read deviation; Qwen selected all five localized file tools on Chat with extra verification reads; DeepSeek and Kimi retained prohibited shell/Python choices |
 | `CP-10 — Tool history consistency` | Possibly unchanged | Item names unchanged; full suite pass | Pending replay cell |
 | `CP-11 — Deferred tool discovery` | Possibly unchanged | Tool mapping unchanged | Pending deferred suite |
 | `CP-12 — Codex tool usage tips` | Changed | Static guidance now includes `audio()` | Pending |
 | `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Pending local/orchestrator gates |
-| `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Formal dual-auth smoke passed |
+| `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Twenty-eight valid formal command/builtin cells used Conda/local-mode dual auth; the new Qwen and Sol cells reached the configured isolated Gateway |
 | `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
-| `CP-17 — Stream lifecycle` | Changed | Consumer-visible identity failures now use a response-contract error distinct from credential collision | Direct and converted smoke streams completed |
-| `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Pending tool/terminal cell |
+| `CP-17 — Stream lifecycle` | Changed | Consumer-visible identity failures now use a response-contract error distinct from credential collision | Direct and converted command streams completed across successful and model-failed cells; no converter stream loss observed |
+| `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Kimi polling and stdin continuations plus builtin wait/plan/Goal paths reached terminal answers; broader tool/terminal cells pending |
 | `CP-19 — Reasoning` | Changed | Reconstructed summary deltas now include Codex-required `summary_index`; saved-response replay and cross-module gate tests pass | DeepSeek reasoning/tool round completed; broader summary/audio capture pending |
 | `CP-20 — Context compaction resilience` | Possibly unchanged | Remote V2 contract unchanged | Pending protocol/once cells |
 | `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal relevant diff | Pending relay matrix |
-| `CP-22 — Model-group tool profiles` | Changed | Audio now model-visible in Code Mode | Pending Chat/Responses live paths |
+| `CP-22 — Model-group tool profiles` | Changed | Audio projection plus route-modality filtering for `view_image` | Chat Default passed wait/plan/Goal, Qwen file localization and visual recognition; historical text-only/detail mismatches remain recorded against the old contract |
 | `CP-23 — Static tool catalog` | Changed | Formal tag/commit and audio guidance refreshed | Pending broader tool matrix |
 
 The remainder of this file is the retained alpha.23 live inventory and is

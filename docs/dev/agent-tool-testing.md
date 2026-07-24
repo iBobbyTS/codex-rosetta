@@ -35,6 +35,14 @@ reports, staged files, or Git history. Retain only credential-free
 state, Provider identity, bearer presence, and localhost routing. The GUI-only
 `browser_use` suite is not Gateway-backed and is outside this contract.
 
+The isolated Gateway runtime is Conda-managed. Each run creates
+`RUN_ROOT/conda_env` with standard-GIL CPython 3.14.6 (`cp314`) and the Gateway
+dependencies, then starts the current checkout with
+`PYTHONPATH=src "$RUN_ROOT/conda_env/bin/python" -m codex_rosetta.gateway`.
+Free-threaded `cp314t` is not a substitute for the standard build. Do not use
+`uv` for live-agent Gateway environment creation, dependency installation, or
+process launch.
+
 ## Design principles
 
 - Give the model one obvious operation and a fixed result marker.
@@ -156,6 +164,14 @@ task verifies that projected `view_image` returns real image content to a
 vision-capable upstream model rather than only proving that Codex can open the
 fixture.
 
+Before any image cell, resolve the selected model's local-mode catalog entry.
+If its input modalities explicitly omit `image`, Rosetta removes `view_image`
+from both the Responses request and the Responses-to-Chat Code Mode projection;
+classify the cell as unsupported instead of asking Codex to call a tool the
+model cannot consume. Unknown custom-model modalities remain fail-open. When
+`view_image` is exposed, the task may omit `detail` or use any value in the
+visible schema. Never require `original` when Codex did not advertise it.
+
 The image-generation suite is
 [`tests/live_agent/image_generation`](../../tests/live_agent/image_generation/README.md).
 It may run only after projected `view_image` transport and deterministic visual
@@ -213,6 +229,7 @@ Every invocation uses one repository-local run root:
 tmp/agent_testing_workspace/YYYYMMDDHHMM/
 ├── worktree/       # merged common files and one selected task
 ├── codex_home/      # isolated Codex configuration and sessions
+├── conda_env/       # isolated standard-GIL Python 3.14.6 Gateway runtime
 ├── gateway/         # copied Rosetta configuration and gateway process output
 └── artifacts/       # Codex JSONL, stderr, paths, and evaluation notes
 ```

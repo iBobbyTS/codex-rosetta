@@ -10,6 +10,7 @@ from typing import Any
 from .tool_profiles import (
     apply_profile_tool_mutations,
     apply_view_image_detail_profile,
+    route_supports_image_input,
     route_tool_state,
     tool_profile_contract,
     view_image_detail_values,
@@ -345,6 +346,8 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
     """Return model-visible and internal Profile-owned exec projections."""
     projections: dict[str, ExecToolProjection] = {}
     for item_id, definition in tool_profile_contract()["exec_projections"].items():
+        if item_id == "function.view_image" and not route_supports_image_input(route):
+            continue
         state = route_tool_state(route, item_id)
         model_visible = state in {"passthrough", "modified"}
         internal_when_disabled = definition.get("internal_when_disabled", False)

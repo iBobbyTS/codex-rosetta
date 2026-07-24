@@ -1203,6 +1203,16 @@ def view_image_detail_values(route: Any) -> tuple[str, ...] | None:
     )
 
 
+def route_supports_image_input(route: Any) -> bool:
+    """Return whether a route may expose tools that produce image input.
+
+    Unknown model capabilities remain fail-open for custom models. A route is
+    filtered only when its resolved model preset explicitly omits ``image``.
+    """
+    input_modalities = getattr(route, "input_modalities", None)
+    return input_modalities is None or "image" in input_modalities
+
+
 def apply_view_image_detail_profile(tool: Any, route: Any) -> Any:
     """Restrict a Modified view_image declaration to selected detail values."""
     details = view_image_detail_values(route)
