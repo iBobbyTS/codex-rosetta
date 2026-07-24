@@ -274,6 +274,30 @@ class StreamTraceLogger:
             return
         self._append_lines([line])
 
+    def log_full(self, stage: str, data: Any) -> None:
+        """Append a redacted, non-truncated diagnostic record.
+
+        This is intentionally separate from ``log`` because the enabled trace
+        mode keeps the original request body complete instead of truncating it.
+        """
+        if self._disabled or self._defer_response:
+            return
+
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "request_id": self.request_id,
+            "request_log_id": self.request_log_id,
+            "model": self.model,
+            "source_provider": self.source_provider,
+            "target_provider": self.target_provider,
+            "provider_name": self.provider_name,
+            "chunk_index": None,
+            "stage": stage,
+            "data": self._redactor.redact(data),
+        }
+        line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
+        self._append_lines([line])
+
     def _append_lines(self, lines: list[str]) -> None:
         """Append a prepared record batch to the configured JSONL path."""
         try:
