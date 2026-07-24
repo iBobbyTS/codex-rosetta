@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -11,6 +12,15 @@ from .capture_proxy import (
     summarize_request,
 )
 from .evaluate import evaluate
+from .run import _copy_fixture
+
+
+def test_relay_fixture_uses_current_live_agent_tree(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[3]
+    prompt = _copy_fixture(root, tmp_path)
+
+    assert "Run `python3 scenario.py` once" in prompt
+    assert (tmp_path / "worktree" / "scenario.py").is_file()
 
 
 def test_join_upstream_deduplicates_v1() -> None:

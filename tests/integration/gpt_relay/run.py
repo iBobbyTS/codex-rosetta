@@ -53,7 +53,7 @@ def _wait_ready(port: int, process: subprocess.Popen[bytes]) -> None:
 
 
 def _copy_fixture(root: Path, run_root: Path) -> str:
-    suite = root / "tests" / "agent_workspace" / "command_execution"
+    suite = root / "tests" / "live_agent" / "command_execution"
     for source in (suite / "common", suite / "01"):
         shutil.copytree(source, run_root / "worktree", dirs_exist_ok=True)
     return (run_root / "worktree" / "TASK.md").read_text(encoding="utf-8")
