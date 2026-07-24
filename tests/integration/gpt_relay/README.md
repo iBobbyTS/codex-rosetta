@@ -52,7 +52,7 @@ provider credential or starting a subprocess. Audit and deterministic tests do
 not set the marker.
 
 Run C0 through C5 separately. C1 and C2 copy
-`tests/agent_workspace/command_execution/01`, adding a small real agent/tool
+`tests/live_agent/command_execution/01`, adding a small real agent/tool
 loop without scoring general model ability. C3-C5 use the path-pinned Codex
 source harness in `codex_harness/`.
 

@@ -260,6 +260,8 @@ class CaptureHandler(BaseHTTPRequestHandler):
             not in {"host", "content-length", "authorization", "api-key"}
         }
         headers["Authorization"] = f"Bearer {self.server.state.upstream_api_key}"
+        # The capture client is a test harness, but the forwarded request models Codex.
+        headers["User-Agent"] = "codex-cli/0.145.0"
         if (
             self.server.state.normalize_zstd_upstream
             and encoding

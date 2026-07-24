@@ -12,6 +12,38 @@ historical alpha.23 rows must not be used as formal release evidence. Formal
 live reruns must record the exact binary, provider, model, route, task, marker,
 and outcome here.
 
+### Remaining-matrix rerun
+
+The 2026-07-23 continuation used installed `codex-cli 0.145.0`, current-checkout
+Gateway code, isolated local mode, ChatGPT OAuth, the configured Provider key,
+and Conda CPython 3.14.6. Text cells used `gpt-5.6-terra` and
+`deepseek-v4-flash`; Qwen 3.7 Plus handled the remaining multimodal cell.
+
+| Scope | Runs | Result |
+| --- | --- | --- |
+| Deferred discovery | `202607232004`-`202607232018` | Terra 7/7 and DeepSeek 7/7 passed. |
+| Collaboration | `202607232019`-`202607232031` | Terra 6/6; DeepSeek 5/6; DeepSeek task 02 omitted the parent marker and Kimi fallback passed. |
+| Namespace and local Skills | `202607232032`-`202607232035` | Both models passed both suites. |
+| Compaction protocol/switch | `202607232037`, `2038`, `2132`, `2135`, `2137`, `2139` | Protocol, exact-once, attested raw-wire, and both model-switch directions passed. |
+| Summary quality | `202607232140`, `2142`, `2146`, `2148` | Terra and Sol preserved protocol but lost the scenario facts; DeepSeek repeated seven commands/compactions; Kimi resume received upstream 400. |
+| Search | `202607232150`-`202607232156` | DeepSeek 3/3 passed. Terra baseline passed; standalone `web.run` tasks 02/05 failed because it selected hosted search. |
+| Images | `202607232157` | Qwen saw both image tools but made no Images call and returned the failure marker. |
+| GPT relay | `202607232204`-`202607232211` | C0/C1/C2/C3/C5 passed. C4 failed because the 0.145 harness request contained messages, not the required `compaction_trigger`; fallback never started. |
+
+The relay runner had two pre-call defects repaired during this matrix: its
+fixture path still named `tests/agent_workspace`, and the capture proxy exposed
+Python urllib's User-Agent to a relay that accepts Codex traffic. Targeted relay
+tests pass after selecting the migrated `tests/live_agent` fixture and sending
+a Codex User-Agent. The first invalid setup attempt and initial 403 are not
+model results.
+
+`network_search/03`, `04`, self-hosted Bing, and orchestrator Skills remain
+runner-gated: the supplied config has no authenticated web-run sidecar, and
+orchestrator Skills require a no-local-executor app-server thread with a
+provisioned `codex_apps` MCP resource backend. The audio/profile
+gate remains live-unrun because this checkout contains deterministic audio
+tests but no corresponding live runner. Browser remains manually deferred.
+
 | Run | Suite/task | Codex binary and model | Observed provider / route | Thread | Exit / marker / evaluation | Evidence |
 | --- | --- | --- | --- | --- | --- | --- |
 | `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |
