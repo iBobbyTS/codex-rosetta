@@ -217,6 +217,21 @@ result = run_sync(
 - **No AI co-author tags in commits.** Do not add `Co-authored-by` lines for AI
   tools in git commit messages. Disclose AI usage in PR descriptions instead.
 
+## Tool modification ownership
+
+- Every modification to a model-visible tool must be declared through the Tool
+  Profile and its catalog data. This includes tool exposure or suppression,
+  names, descriptions, schemas, parameters, injected definitions, capability
+  policy, and other model-visible behavior.
+- Do not hard-code tool modifications directly in gateway, converter, or
+  runtime implementation code. Program code may implement only the generic
+  mechanics needed to apply behavior that the selected Tool Profile declares.
+- If the current Tool Profile or catalog contract cannot express a requested
+  tool change, stop before implementing it. Prepare a concrete proposal for the
+  required program-layer or Tool Profile engine extension, explain why the
+  existing contract is insufficient, and ask the user whether to proceed with
+  that extension.
+
 ## Documentation
 
 Documentation is versioned on `main` under `docs/`:
