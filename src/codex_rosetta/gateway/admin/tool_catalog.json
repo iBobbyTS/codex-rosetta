@@ -36,7 +36,7 @@
         "supported_details": "auto,low,high"
       },
     "function.write_stdin": {
-      "chars_guidance": "For line-oriented interactive input, include the line terminator in the same non-empty chars value. Example: after exec_command returns session_id 123, call write_stdin with {chars: \"rosetta\\n\", session_id: 123}; this submits one line to the existing process. In the JavaScript string passed to exec, type exactly one backslash before n; do not send the two literal characters backslash+n (chars: \"rosetta\\\\n\"). Omitting chars or sending an empty string only polls; it does not submit input. Reuse the session_id returned by exec_command and do not restart the command."
+      "chars_guidance": "For line-oriented input, use send_line instead of write_stdin."
     },
     "function.exec_command": {
       "interactive_guidance": "When an interactive command returns a session_id, the command is still available for follow-up even if the wrapper reports Script completed; reuse that exact session_id with write_stdin instead of starting the command again. Example: exec_command({cmd: \"python3 scenario.py\", tty: true, yield_time_ms: 1000}) -> {session_id: 123}; then write_stdin({chars: \"rosetta\\n\", session_id: 123}) and use its output. For line-oriented input, send the complete line including the newline in one write_stdin call. In the JavaScript string, use one backslash escape (chars: \"rosetta\\n\"), not the literal two-character sequence backslash+n (chars: \"rosetta\\\\n\"). Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."

@@ -162,6 +162,7 @@ def test_localize_code_editing_chat_request_replaces_native_tools():
     names = _tool_names(adapted["tools"])
     assert {"exec_command", "write_stdin", "apply_patch"}.isdisjoint(names)
     assert LOCALIZED_CODE_TOOL_NAMES.issubset(names)
+    assert "send_line" in names
     assert "view_image" in names
     assert adapted["tool_choice"] == "auto"
     assert body["tools"][0]["function"]["name"] == "exec_command"
@@ -171,7 +172,38 @@ def test_localize_code_editing_chat_request_replaces_native_tools():
         if tool.get("function", {}).get("name") == "Edit"
     )
     assert "complete lines" in edit_tool["function"]["description"]
+    assert (
+        "must use Edit rather than Shell or Python"
+        in edit_tool["function"]["description"]
+    )
     assert "rather than substrings" in edit_tool["function"]["description"]
+    write_tool = next(
+        tool
+        for tool in adapted["tools"]
+        if tool.get("function", {}).get("name") == "Write"
+    )
+    assert (
+        "must use Write rather than Shell or Python"
+        in write_tool["function"]["description"]
+    )
+
+
+def test_send_line_adds_one_newline_without_rewriting_write_stdin():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_line",
+            "tool_name": "send_line",
+            "tool_input": {"session_id": 123, "line": "rosetta"},
+        },
+        capabilities=NativeToolCapabilities(has_write_stdin=True),
+    )
+    assert translated is not None
+    assert translated.part["tool_name"] == "write_stdin"
+    assert translated.part["tool_input"] == {
+        "session_id": 123,
+        "chars": "rosetta\n",
+    }
 
 
 def test_translate_localized_bash_to_exec_command():

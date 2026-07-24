@@ -621,6 +621,7 @@ def test_chat_default_retains_apply_patch_as_an_internal_exec_projection():
         "report_agent_job_result",
         "request_permissions",
         "request_plugin_install",
+        "send_line",
         "skills-list",
         "skills-read",
         "spawn_agents_on_csv",
@@ -665,13 +666,31 @@ def test_exec_description_projects_precise_normal_function_schemas():
     ]
     write_stdin_schema = definitions["write_stdin"]["function"]["parameters"]
     chars_description = write_stdin_schema["properties"]["chars"]["description"]
-    assert "type exactly one backslash before n" in chars_description
-    assert "after exec_command returns session_id 123" in chars_description
-    assert (
-        'write_stdin with {chars: "rosetta\\n", session_id: 123}' in chars_description
+    assert chars_description.endswith(
+        "For line-oriented input, use send_line instead of write_stdin."
     )
-    assert "do not send the two literal characters backslash+n" in chars_description
-    assert "only polls; it does not submit input" in chars_description
+    assert "rosetta" not in chars_description
+    assert "backslash" not in chars_description
+    assert definitions["send_line"] == {
+        "type": "function",
+        "function": {
+            "name": "send_line",
+            "description": (
+                "Send one complete line to an existing interactive command "
+                "session. Use this instead of write_stdin for line-oriented "
+                "input; the gateway appends exactly one newline."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "integer"},
+                    "line": {"type": "string"},
+                },
+                "required": ["session_id", "line"],
+                "additionalProperties": False,
+            },
+        },
+    }
     plan_schema = definitions["update_plan"]["function"]["parameters"]
     assert plan_schema["properties"]["plan"]["items"]["required"] == [
         "step",
@@ -843,6 +862,71 @@ def test_all_tools_search_script_uses_live_catalog_without_gateway_cache():
     assert "selectedMatches.length < ranked.length" in script
     assert "matches: ranked.slice(0, limit).map" not in script
     assert "tools." not in script
+
+
+def test_send_line_exec_projection_appends_exactly_one_newline():
+    projection = exec_tool_projections_for_route(_route())["send_line"]
+
+    script = build_exec_script(
+        projection,
+        {"session_id": 123, "line": "rosetta"},
+    )
+
+    assert script == (
+        'const result = await tools.write_stdin({"session_id":123,'
+        '"chars":"rosetta\\n"});\n'
+        "text(result);\n"
+    )
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
+def test_deferred_catalog_hides_eager_view_image():
+    projections = exec_tool_projections_for_route(_route())
+    catalog = [
+        {"name": "view_image", "description": "View a local image."},
+        {"name": "mcp__archive__lookup", "description": "Look up an archive."},
+    ]
+
+    search_script = build_exec_script(
+        projections["tool_search"], {"query": "image archive", "limit": 10}
+    )
+    search = subprocess.run(
+        ["node", "--input-type=module"],
+        input=(
+            f"const ALL_TOOLS = {json.dumps(catalog)};\n"
+            "const text = (value) => console.log(JSON.stringify(value));\n"
+            f"{search_script}"
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    search_result = json.loads(search.stdout)
+    assert [match["name"] for match in search_result["matches"]] == [
+        "mcp__archive__lookup"
+    ]
+
+    read_projection = replace(
+        projections["tool_read"], authorized_names=("view_image",)
+    )
+    read_script = build_exec_script(read_projection, {"name": "view_image"})
+    read = subprocess.run(
+        ["node", "--input-type=module"],
+        input=(
+            f"const ALL_TOOLS = {json.dumps(catalog)};\n"
+            "const text = (value) => console.log(JSON.stringify(value));\n"
+            "const exit = () => process.exit(0);\n"
+            f"{read_script}"
+        ),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=5,
+    )
+    read_result = json.loads(read.stdout)
+    assert read_result["found"] is False
+    assert read_result["error"] == {"code": "eager_only_tool"}
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
