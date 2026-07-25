@@ -299,8 +299,18 @@ describe('ModelsPage', () => {
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    const restorePreset = screen.getByRole('button', { name: 'Restore GPT Demo preset' });
+    const displayName = screen.getByLabelText('Display Name');
+    const identity = screen.getByLabelText('Identity');
+    expect(identity).toHaveValue('demo');
+    expect(restorePreset).toBeDisabled();
+    expect(displayName).not.toHaveClass('model-info-field-modified');
+    expect(identity).not.toHaveClass('model-info-field-modified');
     expect(screen.queryByText('hidden system prompt')).toBeNull();
-    await fireEvent.input(screen.getByLabelText('Display Name'), { target: { value: 'Changed' } });
+    await fireEvent.input(displayName, { target: { value: 'Changed' } });
+    expect(restorePreset).toBeEnabled();
+    expect(displayName).toHaveClass('model-info-field-modified');
+    expect(identity).not.toHaveClass('model-info-field-modified');
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {

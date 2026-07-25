@@ -207,7 +207,7 @@ Rosetta Tool Profile：直传 / 修改 / 禁用 / 注入
 
 模型组仍是 provider、upstream model、protocol 和 Tool Profile 的唯一事实来源。catalog 决定 Codex 尝试发送什么；Rosetta 必须支持这种形态，或者在 catalog 中声明更保守的能力。
 
-Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。选择手动填写模型信息后，会打开独立的可视化字段编辑弹窗；界面不会显示完整 catalog JSON 或其中包含的系统提示词。编辑可见字段时，Rosetta 会保留完整 resolved Codex 记录中的隐藏字段。Provider 还可以提供第二个独立的“{Provider}额外配置”弹窗，而不是拆分模型信息弹窗。只有当当前 Provider 与该行模型按上游优先、暴露名回退的精确规则命中额外配置 preset 时，Admin 才显示该按钮。
+Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。选择手动填写模型信息后，会打开独立的可视化字段编辑弹窗；界面不会显示完整 catalog JSON 或其中包含的系统提示词。编辑可见字段时，Rosetta 会保留完整 resolved Codex 记录中的隐藏字段。Provider 还可以提供第二个独立的“{Provider}额外配置”弹窗，而不是拆分模型信息弹窗。只有当当前 Provider 与该行模型按上游优先、暴露名回退的精确规则命中额外配置 preset 时，Admin 才显示该按钮。在模型信息编辑器中，草稿与命中的 preset 相同时，“恢复预设配置”按钮不可点击；每个存在差异的可见字段单独显示黄色边框，任一草稿差异都会启用恢复按钮。
 
 配置只保存相对命中内置 preset 的规范化递归差异。读取时，Rosetta 深度复制 preset，递归覆盖 `model_info`；再复制所选 provider 的 runtime preset，并递归覆盖 `runtime_capabilities`。对象递归合并，数组整体替换，标量直接替换，`null` 表示显式覆盖；字段缺失表示继承，删除 override 表示恢复 preset。保存时重新计算深度 diff，因此空的 `model_info` 和 `runtime_capabilities` 不会写入。未命中 preset 的模型没有继承基础，必须保存完整且有效的 `model_info`。
 

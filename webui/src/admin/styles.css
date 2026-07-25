@@ -239,6 +239,7 @@ code.copyable:hover { background: var(--bg-hover); }
 .model-group-modal-shell { display:flex;align-items:flex-start;gap:12px;max-width:calc(100vw - 32px); }
 .model-info-modal { display:none;width:min(820px,calc(100vw - 560px)); }
 .model-info-modal.open { display:flex; }
+.model-info-field-modified { border-color:var(--orange)!important;box-shadow:0 0 0 1px var(--orange); }
 .field-hint { color:var(--text-dim);font-size:11px;line-height:1.4; }
 .model-info-grid { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
 .model-info-grid .span-2 { grid-column:1 / -1; }

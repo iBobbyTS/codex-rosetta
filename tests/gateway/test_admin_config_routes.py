@@ -1254,7 +1254,11 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         preset["slug"] == "gpt-5.6-terra" and preset["display_name"] == "GPT-5.6-Terra"
         for preset in body["model_presets"]
     )
-    assert any(preset["slug"] == "deepseek-v4-pro" for preset in body["model_presets"])
+    assert any(
+        preset["slug"] == "deepseek-v4-pro"
+        and preset["identity"] == "DeepSeek V4 Pro Preview"
+        for preset in body["model_presets"]
+    )
     assert body["codex"] == {}
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "gpt-5.6-terra"
@@ -1265,6 +1269,10 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
             "context_window"
         ]
         > 0
+    )
+    assert (
+        body["model_groups"]["OpenAI"]["models"]["grouped"]["model_info"]["identity"]
+        == "GPT-5.6-Terra"
     )
     assert body["models"]["grouped"]["provider"] == "openai"
 
