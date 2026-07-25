@@ -334,6 +334,16 @@ class SecretRedactor:
         """Create an independent exact-value redactor for a chunked byte stream."""
         return StreamingSecretRedactor(self._wire_token_values)
 
+    def streaming_value_detector(self) -> StreamingSecretDetector:
+        """Create a detector for decoded credential values across fragments."""
+        return StreamingSecretDetector(
+            token.encode("utf-8") for token in self._token_values
+        )
+
+    def streaming_wire_detector(self) -> StreamingSecretDetector:
+        """Create a detector for raw or JSON-escaped wire credentials."""
+        return StreamingSecretDetector(self._wire_token_values)
+
     def _redact(self, value: Any, *, token_field: bool = False) -> Any:
         if token_field:
             return REDACTED
@@ -533,6 +543,43 @@ class StreamingSecretRedactor:
         output = self._pattern.sub(REDACTED.encode("ascii"), self._pending)
         self._pending = b""
         return output
+
+
+class StreamingSecretDetector:
+    """Detect exact byte patterns while retaining only a bounded overlap tail."""
+
+    def __init__(self, patterns: Iterable[bytes]) -> None:
+        self._patterns = tuple(pattern for pattern in patterns if pattern)
+        self._max_pattern_len = max(map(len, self._patterns), default=0)
+        self._pattern = (
+            re.compile(b"|".join(re.escape(pattern) for pattern in self._patterns))
+            if self._patterns
+            else None
+        )
+        self._pending = b""
+        self._finished = False
+
+    def feed(self, chunk: bytes) -> bool:
+        """Consume bytes and report a collision across any fragment boundary."""
+        if self._finished:
+            raise RuntimeError("streaming detector is already finished")
+        if not self._patterns:
+            return False
+
+        data = self._pending + chunk
+        assert self._pattern is not None
+        if self._pattern.search(data) is not None:
+            self._pending = b""
+            return True
+
+        tail_len = self._max_pattern_len - 1
+        self._pending = data[-tail_len:] if tail_len > 0 else b""
+        return False
+
+    def finish(self) -> None:
+        """Release the bounded overlap state and prevent further input."""
+        self._finished = True
+        self._pending = b""
 
 
 class SecretCollisionError(ValueError):

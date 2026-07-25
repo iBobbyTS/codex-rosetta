@@ -109,7 +109,7 @@ def _sse_frame_contains_credential(
 
 
 class _SSECredentialGate:
-    """Release only complete SSE events proven free of configured credentials."""
+    """Release complete SSE events using bounded cross-event credential state."""
 
     def __init__(
         self,
@@ -118,13 +118,13 @@ class _SSECredentialGate:
     ) -> None:
         self._redactor = redactor
         self._semantic_gate = ProviderCredentialSemanticGate(redactor, target_provider)
+        self._wire_detector = redactor.streaming_wire_detector()
         self._buffer = b""
-        self._held_frame = b""
         self._finished = False
         self._initial_frame = True
 
     def feed(self, chunk: bytes) -> bytes:
-        """Consume raw bytes while retaining one frame for cross-frame detection."""
+        """Consume raw bytes and immediately release complete safe SSE events."""
         if self._finished:
             raise RuntimeError("SSE credential gate is already finished")
 
@@ -133,26 +133,19 @@ class _SSECredentialGate:
         offset = 0
         while match := _SSE_EVENT_BOUNDARY.search(data, offset):
             frame = data[offset : match.end()]
-            if self._redactor.contains_wire_bytes(
-                self._held_frame + frame
-            ) or _sse_frame_contains_credential(
+            if _sse_frame_contains_credential(
                 self._redactor,
                 self._semantic_gate,
                 frame,
                 initial_frame=self._initial_frame,
-            ):
+            ) or self._wire_detector.feed(frame):
                 self._clear()
                 raise SecretCollisionError
             self._initial_frame = False
-            if self._held_frame:
-                output.append(self._held_frame)
-            self._held_frame = frame
+            output.append(frame)
             offset = match.end()
 
         self._buffer = data[offset:]
-        if self._redactor.contains_wire_bytes(self._held_frame + self._buffer):
-            self._clear()
-            raise SecretCollisionError
         return b"".join(output)
 
     def finish(self) -> bytes:
@@ -160,12 +153,15 @@ class _SSECredentialGate:
         if self._finished:
             return b""
         self._finished = True
-        output = self._held_frame + self._buffer
-        if self._redactor.contains_wire_bytes(output) or _sse_frame_contains_credential(
-            self._redactor,
-            self._semantic_gate,
-            self._buffer,
-            initial_frame=self._initial_frame,
+        output = self._buffer
+        if output and (
+            _sse_frame_contains_credential(
+                self._redactor,
+                self._semantic_gate,
+                output,
+                initial_frame=self._initial_frame,
+            )
+            or self._wire_detector.feed(output)
         ):
             self._clear()
             raise SecretCollisionError
@@ -174,7 +170,7 @@ class _SSECredentialGate:
 
     def _clear(self) -> None:
         self._semantic_gate.finish()
-        self._held_frame = b""
+        self._wire_detector.finish()
         self._buffer = b""
 
 

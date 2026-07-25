@@ -349,6 +349,16 @@ ordinary model text must not be scanned. Search, Images, web-run, model
 discovery, and other credential-bearing auxiliary clients retain their exact
 credential-return protection.
 
+Those auxiliary clients currently use non-streaming passthrough in production.
+Their internal streaming guard keeps only a per-consumer overlap tail for
+ordinary decoded fields and raw SSE wire bytes. Complete tool-argument JSON is
+retained only until its top-level value closes, then duplicate-preserving JSON
+inspection runs and the buffer is released. There is no total fragment-count
+limit: only unfinished structured arguments remain subject to the aggregate
+1 MiB and identity limits, while rolling text windows have their own identity
+limit. Each complete safe SSE event is released immediately. These controls do
+not apply to model-generation routes.
+
 ## Diagnostic data retention
 
 Error diagnostics may contain prompts, source code, and tool payloads. Request,

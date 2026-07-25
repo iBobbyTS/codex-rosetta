@@ -191,6 +191,45 @@ def test_streaming_wire_redaction_covers_every_token_split_and_prefix_overlap():
     assert actual == expected
 
 
+def test_streaming_value_detector_covers_splits_unicode_and_prefix_overlap():
+    token = "credential-U0001f600-long"
+    payload = f"before {token} after".encode()
+    redactor = SecretRedactor({"credential", token})
+
+    for split in range(len(payload) + 1):
+        detector = redactor.streaming_value_detector()
+        detected = detector.feed(payload[:split])
+        if not detected:
+            detected = detector.feed(payload[split:])
+        assert detected
+
+
+def test_streaming_wire_detector_detects_json_escaped_value_across_splits():
+    token = 'provider-"quoted\\key-N{SNOWMAN}'
+    encoded = json.dumps(token, ensure_ascii=True)[1:-1].encode()
+    redactor = SecretRedactor({token})
+
+    for split in range(len(encoded) + 1):
+        detector = redactor.streaming_wire_detector()
+        detected = detector.feed(encoded[:split])
+        if not detected:
+            detected = detector.feed(encoded[split:])
+        assert detected
+
+
+def test_streaming_detector_has_bounded_tail_and_empty_set_is_noop():
+    detector = SecretRedactor({"secret-token"}).streaming_value_detector()
+    assert not detector.feed(b"x" * 1_000_000)
+    assert len(detector._pending) <= len(b"secret-token") - 1
+    detector.finish()
+    with pytest.raises(RuntimeError):
+        detector.feed(b"ordinary")
+
+    empty = SecretRedactor().streaming_wire_detector()
+    assert not empty.feed(b"anything")
+    empty.finish()
+
+
 @pytest.mark.parametrize(
     "value",
     [

@@ -1036,6 +1036,49 @@ def test_stream_blocks_split_text_credentials_for_every_provider(
     asyncio.run(run_raw())
 
 
+def _ordinary_text_event(
+    target_provider: ProviderType,
+    value: str,
+) -> dict[str, Any]:
+    if target_provider == "openai_responses":
+        return {
+            "type": "response.output_text.delta",
+            "delta": value,
+        }
+    if target_provider == "openai_chat":
+        return {"choices": [{"index": 0, "delta": {"content": value}}]}
+    if target_provider == "anthropic":
+        return {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "text_delta", "text": value},
+        }
+    return {"candidates": [{"index": 0, "content": {"parts": [{"text": value}]}}]}
+
+
+@pytest.mark.parametrize(
+    "target_provider",
+    ["openai_responses", "openai_chat", "anthropic", "google"],
+)
+def test_text_windows_allow_more_than_4096_fragments_and_one_mibibyte(
+    target_provider: ProviderType,
+) -> None:
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"configured-secret"}),
+        target_provider,
+    )
+
+    for _ in range(4097):
+        gate.inspect_stream_event(_ordinary_text_event(target_provider, "x"))
+    gate.inspect_stream_event(
+        _ordinary_text_event(target_provider, "x" * (1_048_576 + 1))
+    )
+
+    gate.finish()
+    assert gate._buffers == {}
+    assert gate._text_windows == {}
+
+
 @pytest.mark.parametrize(
     ("event_type", "retained_identity", "first_ignored", "second_ignored"),
     [
@@ -1286,7 +1329,7 @@ def test_stream_blocks_split_codex_source_shaped_reasoning_credentials() -> None
     raw = asyncio.run(run_raw())
     assert token not in json.dumps(parsed, separators=(",", ":"))
     assert all(event.get("delta") != "token" for event in parsed)
-    assert raw == b""
+    assert raw == frames[0]
 
 
 def test_codex_text_identity_state_is_bounded_and_cleared() -> None:
@@ -1652,34 +1695,174 @@ def test_raw_sse_initial_bom_does_not_bypass_semantic_check() -> None:
     asyncio.run(run())
 
 
-@pytest.mark.parametrize(
-    ("max_bytes", "max_fragments", "fragments"),
-    [
-        (4, 10, ["12345"]),
-        (100, 2, ["1", "2", "3"]),
-    ],
-)
-def test_argument_accumulator_limits_fail_closed(
-    max_bytes: int,
-    max_fragments: int,
-    fragments: list[str],
-) -> None:
+def test_argument_accumulator_byte_limit_fails_closed() -> None:
     gate = ProviderCredentialSemanticGate(
         SecretRedactor({"secret"}),
         "openai_responses",
-        max_argument_bytes=max_bytes,
-        max_argument_fragments=max_fragments,
+        max_argument_bytes=4,
     )
 
     with pytest.raises(ProviderResponseContractError):
-        for fragment in fragments:
-            gate.inspect_stream_event(
+        gate.inspect_stream_event(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": "call-1",
+                "delta": "12345",
+            }
+        )
+
+
+def test_argument_accumulator_has_no_fragment_count_limit() -> None:
+    gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_responses",
+    )
+    fragments = ['{"value":"', *(["x"] * 4097), '"}']
+
+    for fragment in fragments:
+        gate.inspect_stream_event(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": "call-1",
+                "delta": fragment,
+            }
+        )
+    assert gate._buffers == {}
+    assert gate._live_bytes == 0
+
+    arguments = "".join(fragments)
+    gate.inspect_stream_event(
+        {
+            "type": "response.function_call_arguments.done",
+            "call_id": "call-1",
+            "arguments": arguments,
+        }
+    )
+
+    assert gate._buffers == {}
+
+
+def test_structured_argument_and_text_window_identity_limits_fail_closed() -> None:
+    argument_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_responses",
+        max_argument_identities=1,
+    )
+    argument_gate.inspect_stream_event(
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-1",
+            "delta": "{",
+        }
+    )
+    with pytest.raises(ProviderResponseContractError):
+        argument_gate.inspect_stream_event(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": "call-2",
+                "delta": "{",
+            }
+        )
+
+    completed_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_responses",
+        max_argument_identities=1,
+    )
+    completed_gate.inspect_stream_event(
+        {
+            "type": "response.function_call_arguments.delta",
+            "call_id": "call-1",
+            "delta": "{}",
+        }
+    )
+    with pytest.raises(ProviderResponseContractError):
+        completed_gate.inspect_stream_event(
+            {
+                "type": "response.function_call_arguments.delta",
+                "call_id": "call-2",
+                "delta": "{}",
+            }
+        )
+
+    text_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "google",
+        max_text_windows=1,
+    )
+    text_gate.inspect_stream_event(_ordinary_text_event("google", "first"))
+    with pytest.raises(ProviderResponseContractError):
+        text_gate.inspect_stream_event(
+            {
+                "candidates": [
+                    {
+                        "index": 1,
+                        "content": {"parts": [{"text": "second"}]},
+                    }
+                ]
+            }
+        )
+
+
+def test_protocol_terminal_events_clear_only_live_stream_state() -> None:
+    chat_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "openai_chat",
+    )
+    chat_gate.inspect_stream_event(
+        {
+            "choices": [
                 {
-                    "type": "response.function_call_arguments.delta",
-                    "call_id": "call-1",
-                    "delta": fragment,
+                    "index": 0,
+                    "delta": {
+                        "content": "ordinary",
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-1",
+                                "function": {"arguments": '{"value":"ordinary"}'},
+                            }
+                        ],
+                    },
                 }
-            )
+            ]
+        }
+    )
+    chat_gate.inspect_stream_event(
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]}
+    )
+    assert chat_gate._buffers == {}
+    assert chat_gate._text_windows == {}
+    assert chat_gate._chat_call_ids == set()
+
+    anthropic_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "anthropic",
+    )
+    anthropic_gate.inspect_stream_event(_ordinary_text_event("anthropic", "ordinary"))
+    anthropic_gate.inspect_stream_event(
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {
+                "type": "input_json_delta",
+                "partial_json": '{"value":"ordinary"}',
+            },
+        }
+    )
+    anthropic_gate.inspect_stream_event({"type": "content_block_stop", "index": 0})
+    anthropic_gate.inspect_stream_event({"type": "content_block_stop", "index": 1})
+    assert anthropic_gate._buffers == {}
+    assert anthropic_gate._text_windows == {}
+
+    google_gate = ProviderCredentialSemanticGate(
+        SecretRedactor({"secret"}),
+        "google",
+    )
+    event = _ordinary_text_event("google", "ordinary")
+    event["candidates"][0]["finishReason"] = "STOP"
+    google_gate.inspect_stream_event(event)
+    assert google_gate._text_windows == {}
 
 
 def test_responses_identity_mapping_limit_and_done_cleanup() -> None:
