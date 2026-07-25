@@ -360,6 +360,18 @@ server's worker thread.
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
 
+- Every `/v1` HTTP error message must begin with exactly one of
+  `Codex Rosetta: `, `Codex Rosetta blocked: `, or `Upstream: ` while retaining
+  the Provider envelope, status, code, and non-message fields. Verify parser,
+  auth, ingress, local routing/conversion, auxiliary safety, upstream JSON and
+  non-JSON bodies, connection failures, and framework fallback errors. Safe
+  successful bodies and ordinary model strings must remain byte-identical;
+- Verify raw and converted `response.failed`, `response.incomplete`, network,
+  protocol, safety, and local mid-stream failures. Codex must receive one
+  labeled protocol-valid terminal failure event after HTTP 200, while client
+  cancellation emits none. Any Codex source change to HTTP status mapping,
+  nested error extraction, `response.failed`, `response.incomplete`, or
+  premature-EOF retry is an explicit `CP-01`/`CP-02`/`CP-17` review trigger;
 - The single Admin Responses protocol always uses direct Responses transport for every Provider. Unknown non-tool fields and allowed end-to-end request headers remain unchanged below the transport safety envelope. Inbound `Authorization` is removed and Provider auth is overlaid last. Current OpenAI Responses, OpenAI Chat, Anthropic Messages, and Google GenAI response contracts have an empty authentication-field inventory, so model response JSON/errors/SSE are not scanned for configured credential strings. More than 4096 ordinary response fragments must complete normally. The internal credential-bearing auxiliary streaming guard must likewise accept more than 4096 ordinary fragments and more than 4096 structured fragments below its byte bound, keep full content only for unfinished embedded JSON, release complete safe SSE events immediately, and clear rolling/structured state on every termination path. Unchanged attested streaming requests retain their original compressed body, encoding, attestation, and filtered client headers; any request mutation rebuilds JSON and conservatively omits the original encoding and attestation. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction uses the previous model with Rosetta's prompt and a seven-day plaintext mapping;
 - the Responses-direct `Authorization` removal across rebuilt and exact raw-wire modes; preservation of other unknown end-to-end headers; unchanged capability headers across Tool Profile enabled/disabled bodies; conversion-route isolation; Provider-owned Authorization with case-insensitive final precedence; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request; canonical `computer_call` remains structurally lossless through the non-streaming Responses IR round trip, while Chat/Anthropic/Google targets and streaming bridge conversion reject it explicitly instead of inventing a function call or silently dropping it. `computer_call_output` remains an open contract item after the 20260721-1148 omission audit: until the owner chooses explicit rejection or complete native output/screenshot support, do not claim lossless computer-call history;
@@ -596,7 +608,7 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
   separately; synthetic backend-auth cells are wire-compatibility evidence,
   not native relay authentication support;
 - If these capabilities are not implemented, it must be physically confirmed that Codex will fall back to HTTP/SSE safely;
-- Actually create an upstream current limit, authentication failure or interruption, and confirm that Codex can display understandable errors and will not enter infinite retry/repeat tool execution.
+- Actually create an upstream current limit, authentication failure or interruption, and confirm the Rosetta wire error has the correct origin label, Codex receives an understandable failure, and it does not enter infinite retry/repeat tool execution. Record separately when Codex's status-specific UI mapping replaces or wraps the labeled wire message.
 
 The actual test can be repeatedly executed by agentabi or scripts, but the passing conditions must come from the real Codex + the results and traces of the real upstream, and cannot be replaced by local fake upstream.
 

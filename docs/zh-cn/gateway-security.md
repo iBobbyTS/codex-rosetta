@@ -258,7 +258,29 @@ keepalive 和普通 SSE comment。若非空 event 既不是 JSON 也不是 `[DON
 视为 upstream protocol failure：只关闭一次底层响应，并以稳定的 502 类错误终止转换流。
 malformed event 正文绝不会进入 client-visible error 或普通/body logs。同协议 Responses
 streaming 继续执行 byte-preserving passthrough；它只应用上述 wire-size limit，不解析
-Provider event JSON。
+普通 Provider event JSON。完整的 `response.failed` 与 `response.incomplete` event 是下述
+精确错误边界的例外。
+
+## 返回 Codex 的错误来源
+
+通过 `/v1` agent surface 返回的每条错误消息都带一个稳定的来源前缀：
+
+- 请求、路由、转换、配置及其他 Gateway 故障使用 `Codex Rosetta: `；
+- 认证、SSRF、credential-return、parser/resource limit 及其他主动安全策略拒绝使用
+  `Codex Rosetta blocked: `；
+- Provider HTTP 错误、连接失败、协议错误和上游流中断使用 `Upstream: `。
+
+Rosetta 保留各 Provider 的 HTTP/SSE envelope、状态码、错误 code 和非 message 字段，只
+修改协议明确约定的错误消息位置；非 JSON 上游错误会包装成 source-compatible JSON 错误
+envelope。成功响应和普通模型字符串保持不变。对于 SSE，上游 `response.failed` 的 message
+会标记来源；上游 `response.incomplete` 会携带原 reason 作为 `response.failed` 下发；若
+HTTP 200 已开始后发生故障，则发送一个协议合法的终止错误 event，不再只留下无来源的
+EOF。客户端取消不会合成错误 event。
+
+Codex 仍可能按 HTTP 状态码映射成自己的 UI 错误：当前 Codex 会把 HTTP 400 的完整 body
+作为 invalid request，令 429 进入 rate-limit 流程，并可能把 HTTP 500 文本替换成通用
+internal message。Gateway wire message 始终带来源；这些状态分支最终 UI 的精确文案由
+Codex 所有。
 
 ## 模型认证边界
 
@@ -269,7 +291,8 @@ Responses 直通路由，Rosetta 会大小写不敏感地删除该入站头，�
 
 当前支持的 OpenAI Responses、OpenAI Chat、Anthropic Messages 与 Google GenAI
 响应协议都没有定义 API 认证字段，Rosetta 也不会转发上游 HTTP response header。因此
-模型响应 JSON、错误正文和 SSE 字节不会按已配置 credential 字符串扫描，并保持原样。
+模型响应 JSON 和 SSE 字节不会按已配置 credential 字符串扫描。成功内容保持原样；错误
+message 字段只可能增加上述来源标签。
 若未来协议明确新增响应认证字段，必须登记并测试该字段的精确路径；不得扫描普通模型
 文本。Search、Images、web-run、模型发现及其他携带 credential 的辅助客户端继续保留
 现有 exact credential-return protection。

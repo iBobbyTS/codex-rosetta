@@ -39,6 +39,12 @@ from .config import (
 from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
 from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
+from .downstream_errors import (
+    DownstreamErrorOrigin,
+    classify_downstream_exception,
+    format_stream_error_event,
+    prefix_error_body,
+)
 from .headers import (
     build_direct_responses_headers,
     build_upstream_extra_headers,
@@ -88,6 +94,47 @@ _INBOUND_REQUEST_LINE_TIMEOUT_SECONDS = 5.0
 _INBOUND_HEADER_TIMEOUT_SECONDS = 10.0
 _INBOUND_BODY_TIMEOUT_SECONDS = 30.0
 _INBOUND_MAX_CONCURRENT_REQUEST_PARSES = 64
+
+
+class GatewayApp(App):
+    """HTTP app that applies the Gateway error contract outside route code."""
+
+    async def _handle_error(
+        self, request: Any, exc: Exception
+    ) -> Response | StreamingResponse:
+        response = await super()._handle_error(request, exc)
+        if (request.path == "/v1" or request.path.startswith("/v1/")) and isinstance(
+            response, Response
+        ):
+            _prefix_fixed_error_response(response, DownstreamErrorOrigin.ROSETTA)
+        return response
+
+    @staticmethod
+    async def _send_error_and_close(
+        writer: asyncio.StreamWriter,
+        response: Response | JSONResponse,
+    ) -> None:
+        # Parser limits and deadlines are intentional safety/resource guards;
+        # syntax and framing failures remain ordinary Rosetta errors.
+        origin = (
+            DownstreamErrorOrigin.BLOCKED
+            if response.status_code in {408, 413, 431, 503}
+            else DownstreamErrorOrigin.ROSETTA
+        )
+        _prefix_fixed_error_response(response, origin)
+        await App._send_error_and_close(writer, response)
+
+
+def _prefix_fixed_error_response(
+    response: Response,
+    origin: DownstreamErrorOrigin,
+) -> None:
+    """Prefix one fixed error response in place before any bytes are written."""
+    if response.status_code < 400:
+        return
+    response.body = prefix_error_body(response.body, origin)
+    response.headers["Content-Type"] = "application/json; charset=utf-8"
+    response.headers.pop("Content-Length", None)
 
 
 def _record_request_log_entry(
@@ -252,20 +299,25 @@ class _InstrumentedStream:
         self,
         source: AsyncIterator[bytes | str],
         *,
+        source_provider: ProviderType,
         success_status: int,
         finalize: Callable[[int, str | None], None],
     ) -> None:
         self._source = source
         self._iterator = source.__aiter__()
+        self._source_provider = source_provider
         self._success_status = success_status
         self._finalize_callback = finalize
         self._finished = False
         self._source_closed = False
+        self._terminal_chunk_sent = False
 
     def __aiter__(self) -> _InstrumentedStream:
         return self
 
     async def __anext__(self) -> bytes | str:
+        if self._terminal_chunk_sent:
+            raise StopAsyncIteration
         try:
             return await self._iterator.__anext__()
         except StopAsyncIteration:
@@ -280,15 +332,6 @@ class _InstrumentedStream:
             finally:
                 self._finish(499, "Stream cancelled or client disconnected")
             raise
-        except UpstreamNetworkError as exc:
-            try:
-                await self._close_source()
-            except BaseException:
-                logger.debug("Failed to close disconnected stream", exc_info=True)
-            finally:
-                self._finish(502, str(exc))
-            logger.error("Upstream stream disconnected: %s", exc)
-            raise StopAsyncIteration from None
         except Exception as exc:
             try:
                 await self._close_source()
@@ -296,7 +339,14 @@ class _InstrumentedStream:
                 logger.debug("Failed to close errored stream", exc_info=True)
             finally:
                 self._finish(502, str(exc))
-            raise
+            if isinstance(exc, UpstreamNetworkError):
+                logger.error("Upstream stream disconnected: %s", exc)
+            self._terminal_chunk_sent = True
+            return format_stream_error_event(
+                self._source_provider,
+                str(exc),
+                classify_downstream_exception(exc),
+            )
 
     async def aclose(self) -> None:
         """Close an incomplete stream and record a client-disconnect outcome."""
@@ -402,6 +452,7 @@ def _instrument_stream_response(
 
     response._generator = _InstrumentedStream(
         response._generator,
+        source_provider=source_provider,
         success_status=response.status_code,
         finalize=_finalize_stream,
     )
@@ -800,7 +851,12 @@ async def _proxy_handler(
         status_code = 413
         pre_entry_id = None
         logger.warning("[%s] provider metadata capacity rejected", request_id)
-        resp = error_response_for_source(source_provider, 413, str(exc))
+        resp = error_response_for_source(
+            source_provider,
+            413,
+            str(exc),
+            origin=DownstreamErrorOrigin.BLOCKED,
+        )
         resp.headers["x-request-id"] = request_id
         return resp
     except Exception as exc:
@@ -907,11 +963,7 @@ async def handle_google_genai(
             request, source_provider="google", model_override=model
         )
     else:
-        return Response(
-            body='{"error": "Unknown Google GenAI method"}',
-            status_code=404,
-            content_type="application/json",
-        )
+        return error_response_for_source("google", 404, "Unknown Google GenAI method")
 
 
 async def handle_list_models(request: Any) -> Response:
@@ -1069,7 +1121,7 @@ def create_app(
     web_run_health_state = WebRunHealthState()
     transport = HttpTransport()
 
-    app = App(
+    app = GatewayApp(
         max_body_size=config.request_body_limit_bytes,
         request_line_timeout=_INBOUND_REQUEST_LINE_TIMEOUT_SECONDS,
         header_timeout=_INBOUND_HEADER_TIMEOUT_SECONDS,

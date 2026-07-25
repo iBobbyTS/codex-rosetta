@@ -27,6 +27,12 @@ from .codex_search import (
 )
 from .codex_search_references import CodexSearchReferenceStore
 from .config import GatewayConfig
+from .downstream_errors import (
+    DownstreamErrorOrigin,
+    classify_downstream_exception,
+    format_downstream_error,
+    prefix_error_body,
+)
 from .headers import build_upstream_extra_headers, resolve_request_id
 from .logging import record_request_stat
 from .proxy import error_response_for_source, extract_model
@@ -144,7 +150,10 @@ async def handle_codex_auxiliary(
             {
                 "error": {
                     "message": (
-                        f"Unknown model: '{model}'. Configured models: {configured}"
+                        format_downstream_error(
+                            f"Unknown model: '{model}'. Configured models: {configured}",
+                            DownstreamErrorOrigin.ROSETTA,
+                        )
                     ),
                     "type": "model_not_found",
                     "code": None,
@@ -193,6 +202,11 @@ async def handle_codex_auxiliary(
             "openai_responses",
             501,
             _with_browser_use_hint(message),
+            origin=(
+                DownstreamErrorOrigin.BLOCKED
+                if "disabled by the selected Tool Profile" in message
+                else DownstreamErrorOrigin.ROSETTA
+            ),
         )
 
     active_provider_info = provider_info
@@ -260,8 +274,19 @@ async def handle_codex_auxiliary(
             enabled=use_profile_images,
             status_code=response.status_code,
         )
+        response_body = (
+            prefix_error_body(
+                response.raw_content,
+                DownstreamErrorOrigin.UPSTREAM,
+                fallback=(
+                    f"HTTP {response.status_code} error response did not include a message"
+                ),
+            )
+            if response.is_error
+            else response.raw_content
+        )
         return Response(
-            body=response.raw_content,
+            body=response_body,
             status_code=response.status_code,
             content_type="application/json",
         )
@@ -269,7 +294,10 @@ async def handle_codex_auxiliary(
         error_detail = str(exc)
         status_code = 502
         return error_response_for_source(
-            "openai_responses", 502, f"Upstream request failed: {exc}"
+            "openai_responses",
+            502,
+            str(exc),
+            origin=classify_downstream_exception(exc),
         )
     except Exception as exc:
         error_detail = str(exc)
@@ -342,12 +370,28 @@ async def _handle_local_search(
         error = str(exc)
         if trace is not None:
             trace.log("codex_search_invalid_request", {"error": error})
-        return error_response_for_source("openai_responses", 400, error), 400, error
+        return (
+            error_response_for_source(
+                "openai_responses",
+                400,
+                error,
+                origin=classify_downstream_exception(exc),
+            ),
+            400,
+            error,
+        )
     except CodexSearchExecutionError as exc:
         error = str(exc)
         if trace is not None:
             trace.log("codex_search_execution_error", {"error": error})
-        return error_response_for_source("openai_responses", 502, error), 502, error
+        origin = classify_downstream_exception(exc)
+        if origin is DownstreamErrorOrigin.ROSETTA:
+            origin = DownstreamErrorOrigin.UPSTREAM
+        return (
+            error_response_for_source("openai_responses", 502, error, origin=origin),
+            502,
+            error,
+        )
 
     if trace is not None:
         trace.log("codex_search_response", result.trace_summary())
@@ -358,7 +402,9 @@ def _not_implemented_response(message: str) -> JSONResponse:
     return JSONResponse(
         {
             "error": {
-                "message": _with_browser_use_hint(message),
+                "message": format_downstream_error(
+                    _with_browser_use_hint(message), DownstreamErrorOrigin.ROSETTA
+                ),
                 "type": "not_implemented_error",
                 "code": "not_implemented",
             }

@@ -154,7 +154,9 @@ def test_public_post_endpoints_reject_invalid_model_types(path: str, model: obje
     assert response.status_code == 400
     payload = json.loads(response.body)
     assert payload["error"]["type"] == "invalid_request_error"
-    assert payload["error"]["message"] == "'model' must be a non-empty string"
+    assert payload["error"]["message"] == (
+        "Codex Rosetta: 'model' must be a non-empty string"
+    )
 
 
 @pytest.mark.parametrize(
@@ -175,7 +177,9 @@ def test_public_post_endpoints_keep_missing_model_error(path: str):
 
     assert response.status_code == 400
     payload = json.loads(response.body)
-    assert payload["error"]["message"] == "Missing 'model' in request body"
+    assert payload["error"]["message"] == (
+        "Codex Rosetta: Missing 'model' in request body"
+    )
 
 
 @pytest.mark.parametrize(
@@ -215,7 +219,7 @@ def test_public_post_endpoints_bound_model_utf8_bytes(
     if expected_status == 400:
         payload = json.loads(response.body)
         assert payload["error"]["message"] == (
-            f"'model' must be at most {MAX_MODEL_ID_BYTES} UTF-8 bytes"
+            f"Codex Rosetta: 'model' must be at most {MAX_MODEL_ID_BYTES} UTF-8 bytes"
         )
 
 
@@ -242,7 +246,7 @@ def test_all_proxy_source_formats_share_model_byte_limit(
     payload = json.loads(response.body)
     error = payload["error"]
     assert error["message"] == (
-        f"'model' must be at most {MAX_MODEL_ID_BYTES} UTF-8 bytes"
+        f"Codex Rosetta: 'model' must be at most {MAX_MODEL_ID_BYTES} UTF-8 bytes"
     )
 
 
@@ -281,7 +285,7 @@ def test_all_proxy_source_formats_reject_invalid_request_id_at_ingress(
     assert response.status_code == 400
     assert not isinstance(response, StreamingResponse)
     payload = json.loads(response.body)
-    assert payload["error"]["message"] == expected_message
+    assert payload["error"]["message"] == f"Codex Rosetta: {expected_message}"
     assert request_id not in response.headers.values()
     uuid.UUID(response.headers["x-request-id"])
 

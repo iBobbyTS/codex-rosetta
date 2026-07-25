@@ -10,11 +10,16 @@ from typing import Any, Protocol
 from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.observability.redaction import SecretRedactor
 
+from .downstream_errors import CodexRosettaBlockedError
 from .transport.http.transport import request_bounded_response
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
 WEB_SEARCH_TOOL_NAMES = {"web_search", "web_search_preview"}
 WEB_SEARCH_PROFILE_ITEM_ID = "hosted.web_search"
+
+
+class TavilyCredentialCollisionError(CodexRosettaBlockedError, RuntimeError):
+    """A Tavily response reflected the active outbound credential."""
 
 
 def profile_search_config(route: Any, item_id: str) -> dict[str, str]:
@@ -115,7 +120,7 @@ class TavilyHTTPClient:
                 raise RuntimeError(f"Tavily request failed: {safe_error}") from None
 
         if self._redactor.contains_json_semantic(response.content):
-            raise RuntimeError(
+            raise TavilyCredentialCollisionError(
                 "Tavily response contains a configured credential; response blocked"
             )
         if response.status_code >= 400:

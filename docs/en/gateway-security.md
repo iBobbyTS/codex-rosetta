@@ -328,7 +328,36 @@ closes it once and terminates the converted stream with a stable 502-class
 error. The malformed event body is never included in the client-visible error
 or ordinary/body logs. Same-protocol Responses streaming remains a
 byte-preserving passthrough; it enforces the wire-size limits above without
-parsing provider event JSON.
+parsing ordinary provider event JSON. Complete `response.failed` and
+`response.incomplete` events are the narrow exception described below.
+
+## Codex-facing error origins
+
+Every error message returned through the `/v1` agent surface has one stable
+owner prefix:
+
+- `Codex Rosetta: ` for request, routing, conversion, configuration, and other
+  Gateway failures;
+- `Codex Rosetta blocked: ` for authentication, SSRF, credential-return,
+  parser/resource-limit, and other intentional safety-policy rejections;
+- `Upstream: ` for provider HTTP errors, connection failures, protocol errors,
+  and upstream stream interruptions.
+
+Rosetta preserves the provider-specific HTTP/SSE envelope, status, error code,
+and non-message fields. It changes only documented error-message locations; a
+non-JSON upstream error is wrapped in the source-compatible JSON error
+envelope. Successful response bodies and ordinary model strings are unchanged.
+For SSE, upstream `response.failed` messages are labeled, an upstream
+`response.incomplete` is emitted downstream as `response.failed` with the
+original reason, and a failure after HTTP 200 has started produces one
+protocol-valid terminal error event instead of an unlabeled EOF. Client
+cancellation does not synthesize an error event.
+
+Codex may still map particular HTTP statuses to its own UI errors: current
+Codex treats HTTP 400 as an invalid request using the complete body, maps 429
+to its rate-limit flow, and may replace HTTP 500 text with a generic internal
+message. The Gateway wire message remains labeled; exact final UI wording for
+those status-specific client branches is owned by Codex.
 
 ## Model authentication boundary
 
@@ -341,9 +370,10 @@ their explicit minimal header set.
 
 The supported OpenAI Responses, OpenAI Chat, Anthropic Messages, and Google
 GenAI response protocols currently define no API-authentication fields. Rosetta
-also does not forward upstream HTTP response headers. Model response JSON,
-errors, and SSE bytes are therefore not scanned for configured credential
-strings and remain unchanged. If a future protocol declares an authentication
+also does not forward upstream HTTP response headers. Model response JSON and
+SSE bytes are therefore not scanned for configured credential strings.
+Successful content remains unchanged; error-message fields may receive only
+the origin label described above. If a future protocol declares an authentication
 field in a response body, that exact field path must be registered and tested;
 ordinary model text must not be scanned. Search, Images, web-run, model
 discovery, and other credential-bearing auxiliary clients retain their exact

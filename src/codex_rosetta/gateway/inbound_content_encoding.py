@@ -11,6 +11,7 @@ from compression import zstd
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from .headers import build_codex_wire_headers
+from .downstream_errors import DownstreamErrorOrigin, format_downstream_error
 
 _DECOMPRESS_CHUNK_BYTES = 64 * 1024
 
@@ -139,9 +140,15 @@ async def decode_inbound_zstd(request: Any) -> Response | None:
             max_body_size=max_body_size,
         )
     except ZstdRequestBodyTooLargeError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=413)
+        return JSONResponse(
+            {"error": format_downstream_error(exc, DownstreamErrorOrigin.BLOCKED)},
+            status_code=413,
+        )
     except ZstdRequestBodyError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse(
+            {"error": format_downstream_error(exc, DownstreamErrorOrigin.ROSETTA)},
+            status_code=400,
+        )
 
     request.body = decoded
     request.headers.pop("content-encoding", None)
