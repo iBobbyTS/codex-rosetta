@@ -55,22 +55,22 @@ def test_runtime_override_wins_and_is_saved_as_minimal_override() -> None:
         provider_id="opencode_go",
         model_info_override={"context_window": 262_144},
         runtime_capabilities_override={
-            "input_modalities": ["text"],
-            "supported_reasoning_levels": ["high"],
+            "temperature": 0.55,
+            "top_p": 1.0,
         },
     )
 
     model_info, runtime = canonical_model_overrides(profile)
 
     assert profile.input_modalities == ("text",)
-    assert profile.supported_reasoning_levels == ("high",)
+    assert profile.supported_reasoning_levels == ("high", "max")
     assert model_info == {
         "context_window": 262_144,
         "max_context_window": 262_144,
     }
     assert runtime == {
-        "input_modalities": ["text"],
-        "supported_reasoning_levels": ["high"],
+        "temperature": 0.55,
+        "top_p": 1.0,
     }
 
 
@@ -79,13 +79,92 @@ def test_provider_runtime_preset_is_copied_before_user_override() -> None:
         exposed_model="glm-public",
         upstream_model="glm-5.2",
         provider_id="opencode_go",
-        runtime_capabilities_override={"input_modalities": ["text"]},
+        runtime_capabilities_override={"temperature": 1.0},
     )
 
     assert profile.runtime_preset == {}
-    assert profile.runtime_capabilities == {"input_modalities": ["text"]}
+    assert profile.runtime_capabilities == {"temperature": 1.0}
     _model_info, runtime = canonical_model_overrides(profile)
-    assert runtime == {"input_modalities": ["text"]}
+    assert runtime == {"temperature": 1.0}
+
+
+def test_provider_runtime_preset_matches_upstream_then_exposed_model() -> None:
+    upstream_match = resolve_model_profile(
+        exposed_model="public-qwen",
+        upstream_model="qwen3.7-plus",
+        provider_id="opencode_go",
+    )
+    exposed_fallback = resolve_model_profile(
+        exposed_model="qwen3.7-plus",
+        upstream_model="unknown-upstream",
+        provider_id="opencode_go",
+    )
+    upstream_wins = resolve_model_profile(
+        exposed_model="minimax-m2.5",
+        upstream_model="qwen3.7-plus",
+        provider_id="opencode_go",
+    )
+
+    expected = {"temperature": 0.55, "top_p": 1.0}
+    assert upstream_match.runtime_preset == expected
+    assert exposed_fallback.runtime_preset == expected
+    assert upstream_wins.runtime_preset == expected
+    assert canonical_model_overrides(upstream_match)[1] == {}
+
+
+def test_provider_runtime_override_is_diffed_against_model_preset() -> None:
+    profile = resolve_model_profile(
+        exposed_model="qwen-public",
+        upstream_model="qwen3.7-plus",
+        provider_id="opencode_go",
+        runtime_capabilities_override={"temperature": 0.4},
+    )
+
+    assert profile.runtime_capabilities == {"temperature": 0.4, "top_p": 1.0}
+    assert canonical_model_overrides(profile)[1] == {"temperature": 0.4}
+
+
+def test_explicit_null_runtime_override_is_preserved_by_canonical_diff() -> None:
+    profile = resolve_model_profile(
+        exposed_model="glm-public",
+        upstream_model="glm-5.2",
+        provider_id="opencode_go",
+        runtime_capabilities_override={"temperature": None},
+    )
+
+    assert profile.runtime_capabilities == {"temperature": None}
+    _model_info, runtime = canonical_model_overrides(profile)
+    assert runtime == {"temperature": None}
+
+
+def test_runtime_override_is_rejected_for_provider_without_declared_fields() -> None:
+    with pytest.raises(ValueError, match="unsupported fields.*temperature"):
+        resolve_model_profile(
+            exposed_model="gpt-5.6-terra",
+            upstream_model=None,
+            provider_id="openai",
+            runtime_capabilities_override={"temperature": 0.5},
+        )
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"temperature": 2.1}, "between 0 and 2"),
+        ({"top_p": -0.1}, "between 0 and 1"),
+        ({"temperature": True}, "number or null"),
+    ],
+)
+def test_runtime_sampling_override_validation(
+    override: dict[str, object], message: str
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        resolve_model_profile(
+            exposed_model="glm-5.2",
+            upstream_model=None,
+            provider_id="opencode_go",
+            runtime_capabilities_override=override,
+        )
 
 
 def test_unknown_preset_requires_complete_model_info() -> None:

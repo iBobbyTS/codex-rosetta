@@ -19,6 +19,15 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
     assert providers["anthropic"]["recommended_api_type"] == "anthropic"
     assert providers["google"]["recommended_api_type"] == "google"
     assert providers["opencode_go"]["recommended_api_type"] == "chat"
+    assert providers["opencode_go"]["runtime_capability_fields"] == [
+        "temperature",
+        "top_p",
+    ]
+    assert providers["openai"]["runtime_capability_fields"] == []
+    assert providers["opencode_go"]["runtime_capabilities_by_model"][
+        "qwen3.7-plus"
+    ] == {"temperature": 0.55, "top_p": 1.0}
+    assert providers["openai"]["runtime_capabilities_by_model"] == {}
 
 
 def test_unadapted_combination_uses_only_selected_standard() -> None:

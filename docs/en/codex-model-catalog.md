@@ -251,11 +251,14 @@ protocol, and Tool Profile. The catalog determines what Codex attempts to send;
 Rosetta must then either support that shape or advertise a safer catalog value.
 
 In the Admin model-group dialog, Rosetta matches the configured upstream model
-first and falls back to the exposed model name. Matching is exact. The dialog
-uses three columns while a model is selected: routing and Tool Profile on the
-left, the complete Codex `model_info` record in the middle, and provider runtime
-capabilities on the right. `model_info` is not a compact eight-field document;
-it is the complete current Codex catalog record.
+first and falls back to the exposed model name. Matching is exact. Selecting
+manual model information opens a separate visual field editor; it does not show
+the complete catalog JSON or embedded system instructions. Rosetta preserves
+the hidden fields from the complete resolved Codex record when the visible
+fields are edited. A provider may expose a second, separate
+`{Provider} Extra Configuration` dialog rather than splitting the model-information
+dialog. Admin shows its button only when the selected Provider and the row's
+exact upstream-first/exposed-fallback model match an extra-configuration preset.
 
 Configuration stores only a normalized recursive diff from the matched bundled
 preset. On load, Rosetta deep-copies that preset, recursively overlays
@@ -267,12 +270,19 @@ deep diff, so empty `model_info` and `runtime_capabilities` objects are omitted.
 An unmatched model has no inheritance base and must save a complete valid
 `model_info` record.
 
-Runtime overrides currently support only `input_modalities` and
-`supported_reasoning_levels`. When either is present, it owns the effective
-value and the corresponding middle-column field is read-only. Any effective
-diff is shown in yellow; restoring the preset removes the diff. The same single
+Provider runtime overrides currently support only `temperature` and `top_p`,
+and only the OpenCode Go Provider Profile declares those fields. A numeric value
+replaces the corresponding sampling value in the request IR; an explicit
+`null` removes it, while an absent field inherits the request value. Other
+providers reject these overrides. OpenCode's catalog binds known defaults to
+exact model names. Matching prefers `upstream_model` and falls back to the
+exposed model name, so the separate limits dialog is auto-filled without adding
+model-name branches to request serialization. Config stores only the diff from
+that model-specific Provider preset. Any effective diff is shown in yellow;
+clearing the limits restores the matched preset. Input modalities and reasoning
+levels remain ordinary `model_info` capabilities. The same single
 `ResolvedModelProfile` supplies both the generated Codex catalog and Gateway
-capability enforcement. Unsupported reasoning effort is clamped to the nearest
+request enforcement. Unsupported reasoning effort is clamped to the nearest
 declared level with a warning, and unsupported image input follows the existing
 placeholder behavior with a trace record.
 

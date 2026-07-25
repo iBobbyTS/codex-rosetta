@@ -62,6 +62,62 @@ class ProviderProfile:
         return self.shim_name is not None
 
 
+def _validate_runtime_capability_fields(provider_id: str, value: Any) -> list[str]:
+    """Validate the Admin-editable runtime fields declared by one provider."""
+    valid = (
+        isinstance(value, list)
+        and all(isinstance(item, str) for item in value)
+        and len(value) == len(set(value))
+        and set(value) <= {"temperature", "top_p"}
+    )
+    if not valid:
+        raise ValueError(
+            f"provider {provider_id!r} has invalid runtime capability fields"
+        )
+    return value
+
+
+def _validate_runtime_capabilities_by_model(
+    provider_id: str, value: Any, allowed_fields: list[str]
+) -> dict[str, dict[str, float | None]]:
+    """Validate exact model-name presets for Provider sampling limits."""
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"provider {provider_id!r} has invalid model runtime capabilities"
+        )
+    result: dict[str, dict[str, float | None]] = {}
+    for model, capabilities in value.items():
+        if (
+            not isinstance(model, str)
+            or not model
+            or not isinstance(capabilities, dict)
+        ):
+            raise ValueError(
+                f"provider {provider_id!r} has invalid model runtime capabilities"
+            )
+        if not set(capabilities) <= set(allowed_fields):
+            raise ValueError(
+                f"provider {provider_id!r} model {model!r} has invalid runtime fields"
+            )
+        normalized: dict[str, float | None] = {}
+        for field, item in capabilities.items():
+            if item is None:
+                normalized[field] = None
+                continue
+            maximum = 2.0 if field == "temperature" else 1.0
+            if (
+                not isinstance(item, (int, float))
+                or isinstance(item, bool)
+                or not 0 <= item <= maximum
+            ):
+                raise ValueError(
+                    f"provider {provider_id!r} model {model!r} has invalid runtime value"
+                )
+            normalized[field] = float(item)
+        result[model] = normalized
+    return result
+
+
 @lru_cache(maxsize=1)
 def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
     raw = (
@@ -85,6 +141,14 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
         known = entry.get("known_supported_api_types")
         variants = entry.get("variants")
         runtime_capabilities = entry.get("runtime_capabilities", {})
+        runtime_capability_fields = _validate_runtime_capability_fields(
+            provider_id, entry.get("runtime_capability_fields", [])
+        )
+        runtime_capabilities_by_model = _validate_runtime_capabilities_by_model(
+            provider_id,
+            entry.get("runtime_capabilities_by_model", {}),
+            runtime_capability_fields,
+        )
         if recommended not in API_TYPE_TO_PROVIDER_TYPE:
             raise ValueError(f"provider {provider_id!r} has invalid recommendation")
         if not isinstance(adapted, dict) or not set(adapted) <= set(api_types):
@@ -102,6 +166,8 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
                 f"provider {provider_id!r} has invalid runtime capabilities"
             )
         entry["runtime_capabilities"] = runtime_capabilities
+        entry["runtime_capability_fields"] = runtime_capability_fields
+        entry["runtime_capabilities_by_model"] = runtime_capabilities_by_model
         normalized[provider_id] = _freeze(entry)
     return tuple(api_types), MappingProxyType(normalized)
 

@@ -1401,6 +1401,74 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.tool_profile_name == "builtin"
 
 
+def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
+    """OpenCode model rows persist only declared sampling overrides."""
+    config = _config_data()
+    config["providers"]["opencode"] = {
+        "provider": "opencode_go",
+        "api_type": "chat",
+        "base_url": "https://opencode.ai/zen/go/v1",
+        "api_key": "test-opencode-key",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "OpenCode"})
+    request.json = lambda: {
+        "provider": "opencode",
+        "type": "llm",
+        "models": {
+            "qwen3.7-plus": {"runtime_capabilities": {"temperature": 0.4, "top_p": 1.0}}
+        },
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenCode"]["models"]["qwen3.7-plus"] == {
+        "runtime_capabilities": {"temperature": 0.4}
+    }
+    route, _provider = app.gateway_config.resolve("openai_responses", "qwen3.7-plus")
+    assert route.resolved_model_profile is not None
+    assert route.resolved_model_profile.runtime_capabilities == {
+        "temperature": 0.4,
+        "top_p": 1.0,
+    }
+
+
+def test_put_model_group_rejects_sampling_limits_for_other_providers(tmp_path):
+    config = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(config)
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "OpenAI"})
+    request.json = lambda: {
+        "provider": "openai",
+        "type": "llm",
+        "models": {"gpt-5.6-terra": {"runtime_capabilities": {"temperature": 0.4}}},
+    }
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert "unsupported fields" in response.body.decode("utf-8")
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_put_model_group_rejects_tool_profile_for_other_protocol(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["api_type"] = "responses"
