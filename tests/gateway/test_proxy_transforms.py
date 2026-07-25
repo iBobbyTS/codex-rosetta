@@ -41,7 +41,7 @@ def _clean_registry():
 def volcengine_shim():
     """Register a volcengine-like shim with to_transforms that strip fields."""
     shim = ProviderShim(
-        name="volcengine--openai_chat",
+        name="test-volcengine",
         base="openai_chat",
         to_transforms=(strip_fields("logprobs", "top_logprobs"),),
     )
@@ -79,7 +79,7 @@ class TestPipelineTransformResolution:
         assert p._to_transforms == ()
 
     def test_volcengine_shim(self, volcengine_shim):
-        p = ConversionPipeline("openai_chat", "openai_chat", "volcengine--openai_chat")
+        p = ConversionPipeline("openai_chat", "openai_chat", "test-volcengine")
         assert p._to_transforms == volcengine_shim.to_transforms
         assert p._from_transforms == ()
 

@@ -70,7 +70,7 @@ def test_discover_config_resolves_explicit_directory() -> None:
             "openai",
             "responses",
             "https://relay.example/v1",
-            "web-run-injection",
+            "passthrough",
         ),
         ("custom", "responses", "https://relay.example", "web-run-injection"),
         (
@@ -95,7 +95,7 @@ def test_provider_selection_chooses_expected_builtin_tool_profile(
     )
 
 
-def test_provider_option_does_not_override_url_derived_profile() -> None:
+def test_provider_identity_not_url_selects_profile() -> None:
     assert (
         default_tool_profile_for_provider(
             {
@@ -104,7 +104,7 @@ def test_provider_option_does_not_override_url_derived_profile() -> None:
                 "base_url": "https://api.openai.com/v1",
             }
         )
-        == "passthrough"
+        == "web-run-injection"
     )
 
 
@@ -119,7 +119,7 @@ def test_provider_option_does_not_override_url_derived_profile() -> None:
         (
             "openai",
             "https://relay.example/v1",
-            "web-run-injection",
+            "passthrough",
         ),
         (
             "custom",
@@ -147,7 +147,7 @@ def test_unified_responses_protocol_resolves_direct_profile(
             "models": {
                 "provider": "upstream",
                 "type": "llm",
-                "models": {"test-model": {}},
+                "models": {"test-model": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": {
@@ -239,6 +239,7 @@ def _minimal_raw(**server_overrides) -> dict:
             "test": {
                 "api_key": "sk-test",
                 "base_url": "https://api.example.com",
+                "provider": "custom",
                 "api_type": "chat",
             }
         },
@@ -246,7 +247,7 @@ def _minimal_raw(**server_overrides) -> dict:
             "test-llm": {
                 "provider": "test",
                 "type": "llm",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": _secure_server(),
@@ -699,7 +700,7 @@ class TestStreamTraceConfig:
 class TestProviderApiTypeResolution:
     """Provider entries can use provider/api_type instead of legacy type."""
 
-    def test_api_type_takes_precedence_over_legacy_type(self):
+    def test_legacy_type_is_rejected_even_with_api_type(self):
         raw = {
             "providers": {
                 "DeepSeek": {
@@ -720,14 +721,8 @@ class TestProviderApiTypeResolution:
             "server": _secure_server(),
         }
 
-        cfg = GatewayConfig(raw)
-        route, provider = cfg.resolve("openai_responses", "deepseek-test")
-
-        assert cfg.provider_types["DeepSeek"] == "openai_chat"
-        assert cfg.provider_shim_names["DeepSeek"] == "deepseek"
-        assert route.target_provider == "openai_chat"
-        assert route.shim_name == "deepseek"
-        assert provider.base_url == "https://api.deepseek.com"
+        with pytest.raises(ValueError, match="shim/type options are unsupported"):
+            GatewayConfig(raw)
 
     def test_provider_api_type_can_derive_mixed_shim(self):
         raw = {
@@ -735,7 +730,7 @@ class TestProviderApiTypeResolution:
                 "MiniMax": {
                     "api_key": "sk-test",
                     "base_url": "https://api.minimaxi.com/anthropic",
-                    "provider": "minimax_china",
+                    "provider": "minimax",
                     "api_type": "anthropic",
                 }
             },
@@ -743,7 +738,7 @@ class TestProviderApiTypeResolution:
                 "MiniMax": {
                     "provider": "MiniMax",
                     "type": "llm",
-                    "models": {"minimax-test": {}},
+                    "models": {"minimax-test": {"upstream_model": "minimax-m3"}},
                 }
             },
             "server": _secure_server(),
@@ -771,7 +766,7 @@ class TestProviderApiTypeResolution:
                 "Pixel": {
                     "provider": "Pixel",
                     "type": "llm",
-                    "models": {"pixel-test": {}},
+                    "models": {"pixel-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": _secure_server(),
@@ -788,7 +783,7 @@ class TestProviderApiTypeResolution:
         assert route.tool_profile_name == "web-run-injection"
         assert route.tool_profile["namespace.web.run"] == "modified"
 
-    def test_provider_shim_is_derived_from_authoritative_preset_url(self):
+    def test_missing_provider_identity_fails_closed_even_for_known_url(self):
         raw = {
             "providers": {
                 "DeepSeek": {
@@ -807,12 +802,12 @@ class TestProviderApiTypeResolution:
             "server": _secure_server(),
         }
 
-        cfg = GatewayConfig(raw)
+        with pytest.raises(
+            ValueError, match="requires an explicit provider main identity"
+        ):
+            GatewayConfig(raw)
 
-        assert cfg.provider_types["DeepSeek"] == "openai_chat"
-        assert cfg.provider_shim_names["DeepSeek"] == "deepseek"
-
-    def test_custom_url_is_allowed_without_persisted_provider_option(self):
+    def test_custom_url_without_persisted_provider_option_fails_closed(self):
         raw = {
             "providers": {
                 "Relay": {
@@ -831,10 +826,10 @@ class TestProviderApiTypeResolution:
             "server": _secure_server(),
         }
 
-        cfg = GatewayConfig(raw)
-
-        assert cfg.provider_types["Relay"] == "openai_chat"
-        assert cfg.provider_shim_names["Relay"] is None
+        with pytest.raises(
+            ValueError, match="requires an explicit provider main identity"
+        ):
+            GatewayConfig(raw)
 
     def test_listed_responses_provider_uses_direct_mode(self):
         raw = {
@@ -850,7 +845,7 @@ class TestProviderApiTypeResolution:
                 "Qwen": {
                     "provider": "Qwen",
                     "type": "llm",
-                    "models": {"qwen-test": {}},
+                    "models": {"qwen-test": {"upstream_model": "qwen3.7-plus"}},
                 }
             },
             "server": _secure_server(),
@@ -879,22 +874,12 @@ class TestProviderApiTypeResolution:
             {},
         ],
     )
-    def test_unrecognized_api_types_are_treated_as_missing(self, api_type, caplog):
+    def test_unrecognized_api_types_fail_closed(self, api_type, caplog):
         raw = _minimal_raw()
         raw["providers"]["test"]["api_type"] = api_type
 
-        with caplog.at_level("WARNING", logger="codex-rosetta-gateway"):
-            cfg = GatewayConfig(raw)
-
-        assert cfg.provider_types["test"] == "openai_responses"
-        assert raw["providers"]["test"]["api_type"] == api_type
-        assert (
-            sum(
-                "provider 'test' has missing or unsupported api_type" in record.message
-                for record in caplog.records
-            )
-            == 1
-        )
+        with pytest.raises(ValueError, match="requires api_type"):
+            GatewayConfig(raw)
 
     def test_legacy_type_config_is_rejected(self):
         raw = _minimal_raw()
@@ -904,61 +889,34 @@ class TestProviderApiTypeResolution:
         with pytest.raises(ValueError, match="shim/type options are unsupported"):
             GatewayConfig(raw)
 
-    def test_custom_url_without_explicit_protocol_defaults_to_responses(self, caplog):
+    def test_custom_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["test"] = {
             "api_key": "sk-test",
             "base_url": "https://provider.example",
+            "provider": "custom",
         }
+        with pytest.raises(ValueError, match="requires api_type"):
+            GatewayConfig(raw)
 
-        with caplog.at_level("WARNING", logger="codex-rosetta-gateway"):
-            cfg = GatewayConfig(raw)
-
-        assert cfg.provider_types["test"] == "openai_responses"
-        assert cfg.provider_shim_names["test"] is None
-        assert cfg.model_tool_profile_names["gpt-test"] == "web-run-injection"
-        assert "api_type" not in raw["providers"]["test"]
-        assert (
-            sum(
-                "provider 'test' has missing or unsupported api_type" in record.message
-                for record in caplog.records
-            )
-            == 1
-        )
-
-    def test_preset_url_without_explicit_protocol_uses_canonical_first_protocol(
-        self, caplog
-    ):
+    def test_preset_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["openai"] = {
             "api_key": "sk-test",
             "base_url": "https://api.openai.com/v1",
+            "provider": "openai",
         }
+        with pytest.raises(ValueError, match="requires api_type"):
+            GatewayConfig(raw)
 
-        with caplog.at_level("WARNING", logger="codex-rosetta-gateway"):
-            cfg = GatewayConfig(raw)
-
-        assert cfg.provider_types["openai"] == "openai_responses"
-        assert cfg.provider_shim_names["openai"] == "openai_responses"
-        assert "api_type" not in raw["providers"]["openai"]
-        assert (
-            sum(
-                "provider 'openai' has missing or unsupported api_type"
-                in record.message
-                for record in caplog.records
-            )
-            == 1
-        )
-
-    def test_deepseek_preset_url_without_explicit_protocol_uses_chat(self):
+    def test_deepseek_preset_url_without_explicit_protocol_fails_closed(self):
         raw = _minimal_raw()
         raw["providers"]["test"].pop("api_type")
         raw["providers"]["test"]["base_url"] = "https://api.deepseek.com"
+        raw["providers"]["test"]["provider"] = "deepseek"
 
-        cfg = GatewayConfig(raw)
-
-        assert cfg.provider_types["test"] == "openai_chat"
-        assert cfg.provider_shim_names["test"] == "deepseek"
+        with pytest.raises(ValueError, match="requires api_type"):
+            GatewayConfig(raw)
 
 
 class TestModelGroups:
@@ -970,6 +928,11 @@ class TestModelGroups:
         cfg = GatewayConfig(raw)
         assert "ignored" not in cfg.models
         assert cfg.models == {"gpt-test": "test"}
+
+    def test_unadapted_provider_profile_records_config_warning(self, caplog):
+        GatewayConfig(_minimal_raw())
+
+        assert "selects unadapted profile custom:chat" in caplog.text
 
     def test_llm_group_uses_compact_preset_modalities(self):
         raw = _minimal_raw()
@@ -985,8 +948,12 @@ class TestModelGroups:
         assert cfg.models == {"qwen-public": "test"}
         assert route.upstream_model == "qwen3.7-plus"
         assert route.input_modalities == ["text", "image"]
+        assert route.provider_profile is not None
+        assert route.provider_profile.provider_id == "custom"
+        assert route.provider_profile.api_type == "chat"
+        assert route.resolved_model_profile is cfg.model_profiles["qwen-public"]
 
-    def test_full_codex_catalog_does_not_impose_runtime_modalities(self):
+    def test_full_codex_catalog_supplies_runtime_modalities(self):
         raw = _minimal_raw()
         raw["model_groups"]["test-llm"]["models"] = {
             "gpt-public": {"upstream_model": "gpt-5.6-sol"}
@@ -994,7 +961,7 @@ class TestModelGroups:
 
         route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-public")
 
-        assert route.input_modalities is None
+        assert route.input_modalities == ["text", "image"]
 
     def test_embedding_group_is_rejected(self):
         raw = _minimal_raw()

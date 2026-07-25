@@ -40,6 +40,7 @@ def _config_data() -> dict[str, Any]:
     return {
         "providers": {
             "openai": {
+                "provider": "openai",
                 "api_type": "chat",
                 "base_url": "https://api.example.com",
                 "api_key": "sk-test",
@@ -49,7 +50,7 @@ def _config_data() -> dict[str, Any]:
             "OpenAI": {
                 "provider": "openai",
                 "type": "llm",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": {
@@ -1163,7 +1164,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     config["model_groups"]["DeepSeek"] = {
         "provider": "DeepSeek",
         "type": "llm",
-        "models": {"deepseek-test": {}},
+        "models": {"deepseek-test": {"upstream_model": "deepseek-v4-flash"}},
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -1202,7 +1203,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         "OpenAI": {
             "provider": "openai",
             "type": "llm",
-            "models": {"grouped": {"upstream_model": "grouped-upstream"}},
+            "models": {"grouped": {"upstream_model": "gpt-5.6-terra"}},
         }
     }
     config_path = tmp_path / "config.jsonc"
@@ -1256,12 +1257,19 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     assert any(preset["slug"] == "deepseek-v4-pro" for preset in body["model_presets"])
     assert body["codex"] == {}
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
-        "grouped-upstream"
+        "gpt-5.6-terra"
+    )
+    assert body["model_groups"]["OpenAI"]["models"]["grouped"]["has_overrides"] is False
+    assert (
+        body["model_groups"]["OpenAI"]["models"]["grouped"]["model_info"][
+            "context_window"
+        ]
+        > 0
     )
     assert body["models"]["grouped"]["provider"] == "openai"
 
 
-def test_get_config_renders_inferred_provider_api_type_and_group(tmp_path):
+def test_get_config_marks_missing_provider_api_type_invalid(tmp_path):
     valid_config = _config_data()
     runtime_config = GatewayConfig(valid_config)
     invalid_config = json.loads(json.dumps(valid_config))
@@ -1279,15 +1287,18 @@ def test_get_config_renders_inferred_provider_api_type_and_group(tmp_path):
 
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
-    assert body["providers"]["openai"]["api_type"] == "responses"
-    assert body["providers"]["openai"]["default_tool_profile"] == "web-run-injection"
-    assert "validation_error" not in body["providers"]["openai"]
-    assert "validation_error" not in body["model_groups"]["OpenAI"]
+    assert "api_type" not in body["providers"]["openai"]
+    assert "default_tool_profile" not in body["providers"]["openai"]
+    assert (
+        "requires api_type to be one of"
+        in body["providers"]["openai"]["validation_error"]
+    )
+    assert "validation_error" in body["model_groups"]["OpenAI"]
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
     assert "api_type" not in persisted["providers"]["openai"]
 
 
-def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
+def test_get_config_marks_unrecognized_provider_api_type_invalid(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["api_type"] = "removed-protocol"
     config_path = tmp_path / "config.jsonc"
@@ -1295,7 +1306,7 @@ def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
     request = SimpleNamespace(
         app=SimpleNamespace(
             config_path=str(config_path),
-            gateway_config=GatewayConfig(config),
+            gateway_config=GatewayConfig(_config_data()),
         )
     )
 
@@ -1303,9 +1314,12 @@ def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
 
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
-    assert body["providers"]["openai"]["api_type"] == "responses"
-    assert "validation_error" not in body["providers"]["openai"]
-    assert "validation_error" not in body["model_groups"]["OpenAI"]
+    assert body["providers"]["openai"]["api_type"] == "removed-protocol"
+    assert (
+        "requires api_type to be one of"
+        in body["providers"]["openai"]["validation_error"]
+    )
+    assert "validation_error" in body["model_groups"]["OpenAI"]
     persisted = json.loads(config_path.read_text(encoding="utf-8"))
     assert persisted["providers"]["openai"]["api_type"] == "removed-protocol"
 
@@ -1317,7 +1331,7 @@ def test_get_config_treats_unrecognized_provider_api_type_as_missing(tmp_path):
             "https://api.openai.com/v1/",
             "passthrough",
         ),
-        ("https://relay.example/v1", "web-run-injection"),
+        ("https://relay.example/v1", "passthrough"),
     ],
 )
 def test_get_config_derives_responses_default_profile_from_authoritative_url(
@@ -1361,7 +1375,7 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
         "tool_profile": "builtin",
         "models": {
             "gpt-grouped": {
-                "upstream_model": "gpt-upstream",
+                "upstream_model": "gpt-5.6-terra",
             }
         },
     }
@@ -1376,14 +1390,14 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
         "tool_profile": "builtin",
         "models": {
             "gpt-grouped": {
-                "upstream_model": "gpt-upstream",
+                "upstream_model": "gpt-5.6-terra",
             }
         },
     }
     route, _provider = app.gateway_config.resolve("openai_responses", "gpt-grouped")
     assert route.provider_name == "openai"
-    assert route.upstream_model == "gpt-upstream"
-    assert route.input_modalities is None
+    assert route.upstream_model == "gpt-5.6-terra"
+    assert route.input_modalities == ["text", "image"]
     assert route.tool_profile_name == "builtin"
 
 
@@ -1405,7 +1419,7 @@ def test_put_model_group_rejects_tool_profile_for_other_protocol(tmp_path):
         "provider": "openai",
         "type": "llm",
         "tool_profile": "builtin",
-        "models": {"gpt-grouped": {}},
+        "models": {"gpt-grouped": {"upstream_model": "gpt-5.6-terra"}},
     }
 
     response = _run(put_model_group(request))
@@ -1439,7 +1453,7 @@ def test_put_model_group_persists_responses_passthrough_without_runtime_profile(
         "provider": "openai",
         "type": "llm",
         "tool_profile": "passthrough",
-        "models": {"gpt-grouped": {}},
+        "models": {"gpt-grouped": {"upstream_model": "gpt-5.6-terra"}},
     }
 
     response = _run(put_model_group(request))
@@ -1472,7 +1486,7 @@ def test_put_model_group_persists_no_implicit_profile_for_anthropic_or_google(
     request.json = lambda: {
         "provider": "openai",
         "type": "llm",
-        "models": {"gpt-grouped": {}},
+        "models": {"gpt-grouped": {"upstream_model": "gpt-5.6-terra"}},
     }
 
     response = _run(put_model_group(request))
@@ -1519,11 +1533,12 @@ def test_put_model_group_persists_model_info_without_runtime_modality_override(
 
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["model_groups"]["Vision"]["models"]["vision-alias"] == {
-        "model_info": model_info
-    }
+    saved_info = saved["model_groups"]["Vision"]["models"]["vision-alias"]["model_info"]
+    assert saved_info["slug"] == "vision-alias"
+    assert saved_info["display_name"] == "Vision Alias"
+    assert saved_info["context_window"] == 262_144
     route, _provider = app.gateway_config.resolve("openai_responses", "vision-alias")
-    assert route.input_modalities is None
+    assert route.input_modalities == ["text", "image"]
     assert route.tool_profile
 
 
@@ -1568,7 +1583,7 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
         "provider": "openai",
         "type": "llm",
         "tool_profile": "builtin",
-        "models": {"third-party-model": {}},
+        "models": {"third-party-model": {"upstream_model": "gpt-5.6-terra"}},
     }
 
     response = _run(put_model_group(request))
@@ -1580,7 +1595,7 @@ def test_local_mode_model_save_syncs_catalog_and_disable_clears_it(tmp_path):
     custom = next(
         model for model in catalog["models"] if model["slug"] == "third-party-model"
     )
-    assert custom["display_name"] == custom["description"] == "third-party-model"
+    assert custom["display_name"] == "GPT-5.6-Terra"
     config_toml = (codex_home / "config.toml").read_text(encoding="utf-8")
     assert str(codex_home / "model_catalog.json") in config_toml
     assert 'model_provider = "codex_rosetta"' in config_toml
@@ -1624,9 +1639,9 @@ def test_put_codex_settings_syncs_task_models_to_catalog_and_memories(tmp_path):
     config = _config_data()
     config["server"].update({"local_mode": True, "local_mode_confirmed": True})
     config["model_groups"]["OpenAI"]["models"] = {
-        "review-alias": {},
-        "consolidation-alias": {},
-        "extract-alias": {},
+        "review-alias": {"upstream_model": "gpt-5.6-terra"},
+        "consolidation-alias": {"upstream_model": "gpt-5.4"},
+        "extract-alias": {"upstream_model": "gpt-5.4-mini"},
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -1777,7 +1792,7 @@ def test_local_mode_sync_failure_rolls_back_admin_config_and_codex_files(
         "provider": "openai",
         "type": "llm",
         "tool_profile": "builtin",
-        "models": {"new-model": {}},
+        "models": {"new-model": {"upstream_model": "gpt-5.6-terra"}},
     }
     real_atomic_write = local_mode._atomic_write_bytes
     failed = False
@@ -1807,7 +1822,7 @@ def test_delete_model_group_removes_group_and_runtime_models(tmp_path):
         "OpenAI": {
             "provider": "openai",
             "type": "llm",
-            "models": {"gpt-grouped": "gpt-upstream"},
+            "models": {"gpt-grouped": "gpt-5.6-terra"},
         }
     }
     config_path = tmp_path / "config.jsonc"

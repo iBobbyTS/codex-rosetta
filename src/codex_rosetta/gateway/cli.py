@@ -146,16 +146,19 @@ def _create_initial_config(config_path: str) -> None:
     template = {
         "providers": {
             "openai_chat": {
+                "provider": "openai",
                 "api_key": "${OPENAI_API_KEY}",
                 "base_url": "https://api.openai.com/v1",
                 "api_type": "chat",
             },
             "anthropic": {
+                "provider": "anthropic",
                 "api_key": "${ANTHROPIC_API_KEY}",
                 "base_url": "https://api.anthropic.com",
                 "api_type": "anthropic",
             },
             "google": {
+                "provider": "google",
                 "api_key": "${GOOGLE_API_KEY}",
                 "base_url": "https://generativelanguage.googleapis.com",
                 "api_type": "google",
@@ -166,17 +169,17 @@ def _create_initial_config(config_path: str) -> None:
                 "provider": "openai_chat",
                 "type": "llm",
                 "tool_profile": "builtin",
-                "models": {"gpt-4o": {}},
+                "models": {"gpt-5.6-terra": {}},
             },
             "Anthropic": {
                 "provider": "anthropic",
                 "type": "llm",
-                "models": {"claude-sonnet-4-20250514": {}},
+                "models": {},
             },
             "Google": {
                 "provider": "google",
                 "type": "llm",
-                "models": {"gemini-2.0-flash": {}},
+                "models": {},
             },
         },
         "tool_profiles": {},

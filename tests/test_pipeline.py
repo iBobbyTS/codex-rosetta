@@ -1,18 +1,16 @@
 """Tests for codex_rosetta.pipeline and codex_rosetta.capabilities.
 
-Note: This file imports private helpers (resolve_shim, _apply_config_reasoning_override)
-directly from codex_rosetta.capabilities for unit-testing internal logic.
+Provider capability behavior is exercised without model-name or config-level
+wire overrides.
 """
 
 import copy
+import inspect
 from typing import Any
 
 import pytest
 
-from codex_rosetta.capabilities import (
-    _apply_config_reasoning_override,
-    enforce_reasoning,
-)
+from codex_rosetta.capabilities import enforce_reasoning
 from codex_rosetta.converters.base.context import ConversionContext
 from codex_rosetta.pipeline import apply_ir_transforms
 from codex_rosetta.shims.provider_shim import (
@@ -37,14 +35,6 @@ _REASONING_CAP = ReasoningCapability(
     disabled="omit",
     effort_field="reasoning_effort",
     effort_map={"low": "low", "medium": "medium", "high": "high"},
-)
-
-_MODEL_REASONING_CAP = ReasoningCapability(
-    disabled="thinking_disabled",
-    effort_field="output_config.effort",
-    thinking_type="enabled",
-    effort_map={"low": "low", "high": "high"},
-    budget_tokens_default_ratio=0.8,
 )
 
 
@@ -130,49 +120,6 @@ class TestEnforceReasoning:
         enforce_reasoning(ctx, shim)
         assert ctx.options["reasoning_cap"] is _REASONING_CAP
 
-    def test_model_level_override(self):
-        ctx = ConversionContext()
-        shim = _make_shim(
-            reasoning=_REASONING_CAP,
-            model_reasoning={"gpt-4": _MODEL_REASONING_CAP},
-        )
-        enforce_reasoning(ctx, shim, model="gpt-4")
-        assert ctx.options["reasoning_cap"] is _MODEL_REASONING_CAP
-
-    def test_model_not_in_overrides_falls_back(self):
-        ctx = ConversionContext()
-        shim = _make_shim(
-            reasoning=_REASONING_CAP,
-            model_reasoning={"gpt-4": _MODEL_REASONING_CAP},
-        )
-        enforce_reasoning(ctx, shim, model="gpt-3.5")
-        assert ctx.options["reasoning_cap"] is _REASONING_CAP
-
-    def test_config_override_highest_priority(self):
-        ctx = ConversionContext()
-        shim = _make_shim(reasoning=_REASONING_CAP)
-        enforce_reasoning(ctx, shim, config_override={"thinking_type": "adaptive"})
-        cap = ctx.options["reasoning_cap"]
-        assert cap.thinking_type == "adaptive"
-        # Other fields inherited from base
-        assert cap.disabled == _REASONING_CAP.disabled
-        assert cap.effort_field == _REASONING_CAP.effort_field
-
-    def test_config_override_on_model_override(self):
-        """Config override should apply on top of model-level override."""
-        ctx = ConversionContext()
-        shim = _make_shim(
-            reasoning=_REASONING_CAP,
-            model_reasoning={"gpt-4": _MODEL_REASONING_CAP},
-        )
-        enforce_reasoning(
-            ctx, shim, model="gpt-4", config_override={"disabled": "block"}
-        )
-        cap = ctx.options["reasoning_cap"]
-        assert cap.disabled == "block"
-        # Rest inherited from model-level
-        assert cap.thinking_type == _MODEL_REASONING_CAP.thinking_type
-
     def test_accepts_registered_name(self):
         ctx = ConversionContext()
         shim = _make_shim(reasoning=_REASONING_CAP)
@@ -246,32 +193,9 @@ class TestApplyIrTransforms:
         image_parts = [p for p in content if p.get("type") == "image"]
         assert len(image_parts) <= 2
 
-    def test_image_limit_pattern_match(self):
-        """Image limit should only fire when model matches pattern."""
-        ir = _simple_ir_request(n_images=5)
-        shim = _make_shim(
-            name="test-shim-img",
-            ir_transforms=(truncate_images_transform(2, pattern="^gpt"),),
-        )
-        # Matching model
-        result = apply_ir_transforms(copy.deepcopy(ir), shim, upstream_model="gpt-4o")
-        content = result["messages"][0]["content"]
-        image_parts = [p for p in content if p.get("type") == "image"]
-        assert len(image_parts) <= 2
-
-    def test_image_limit_pattern_no_match(self):
-        """Image limit should NOT fire when model doesn't match pattern."""
-        ir = _simple_ir_request(n_images=5)
-        shim = _make_shim(
-            name="test-shim-img",
-            ir_transforms=(truncate_images_transform(2, pattern="^gpt"),),
-        )
-        result = apply_ir_transforms(
-            copy.deepcopy(ir), shim, upstream_model="gemini-pro"
-        )
-        content = result["messages"][0]["content"]
-        image_parts = [p for p in content if p.get("type") == "image"]
-        assert len(image_parts) == 5  # untouched
+    def test_image_limit_rejects_model_pattern(self):
+        """Model-name scoped transforms are no longer a runtime entry."""
+        assert "pattern" not in inspect.signature(truncate_images_transform).parameters
 
     def test_unwind_parallel_tool_calls(self):
         """Shim with unwind should split parallel tool calls."""
@@ -325,59 +249,9 @@ class TestApplyIrTransforms:
         # After unwind: user + (assistant+tool) + (assistant+tool) = 5
         assert len(result["messages"]) == 5
 
-    def test_unwind_pattern_no_match(self):
-        """Unwind should NOT fire when model doesn't match pattern."""
-        ir = {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "hi"}]},
-                {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "tool_call",
-                            "tool_call_id": "call_1",
-                            "tool_name": "fn_a",
-                            "tool_input": {},
-                            "tool_type": "function",
-                        },
-                        {
-                            "type": "tool_call",
-                            "tool_call_id": "call_2",
-                            "tool_name": "fn_b",
-                            "tool_input": {},
-                            "tool_type": "function",
-                        },
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_call_id": "call_1",
-                            "result": "a",
-                        },
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_call_id": "call_2",
-                            "result": "b",
-                        },
-                    ],
-                },
-            ],
-            "tools": [],
-        }
-        shim = _make_shim(
-            name="test-shim-unwind",
-            ir_transforms=(unwind_transform(pattern="^gemini"),),
-        )
-        result = apply_ir_transforms(ir, shim, upstream_model="gpt-4o")
-        assert len(result["messages"]) == 4  # untouched
+    def test_unwind_rejects_model_pattern(self):
+        """Parallel-tool behavior cannot be selected by model name."""
+        assert "pattern" not in inspect.signature(unwind_transform).parameters
 
     def test_accepts_registered_name(self):
         ir = _simple_ir_request(n_images=5)
@@ -389,44 +263,6 @@ class TestApplyIrTransforms:
         content = result["messages"][0]["content"]
         image_parts = [p for p in content if p.get("type") == "image"]
         assert len(image_parts) <= 2
-
-
-# ---------------------------------------------------------------------------
-# _apply_config_reasoning_override
-# ---------------------------------------------------------------------------
-
-
-class TestApplyConfigReasoningOverride:
-    def test_partial_override(self):
-        result = _apply_config_reasoning_override(
-            _REASONING_CAP, {"thinking_type": "adaptive"}
-        )
-        assert result.thinking_type == "adaptive"
-        assert result.disabled == _REASONING_CAP.disabled
-        assert result.effort_field == _REASONING_CAP.effort_field
-        assert result.effort_map == _REASONING_CAP.effort_map
-
-    def test_full_override(self):
-        override = {
-            "disabled": "block",
-            "effort_field": "custom_effort",
-            "max_effort": "high",
-            "thinking_type": "enabled",
-            "unsigned_reasoning_blocks": "drop",
-            "effort_map": {"a": "b"},
-            "budget_tokens_default_ratio": 0.5,
-        }
-        result = _apply_config_reasoning_override(_REASONING_CAP, override)
-        assert result.disabled == "block"
-        assert result.effort_field == "custom_effort"
-        assert result.thinking_type == "enabled"
-        assert result.budget_tokens_default_ratio == 0.5
-
-    def test_empty_override_preserves_base(self):
-        result = _apply_config_reasoning_override(_REASONING_CAP, {})
-        assert result.disabled == _REASONING_CAP.disabled
-        assert result.effort_field == _REASONING_CAP.effort_field
-        assert result.effort_map == _REASONING_CAP.effort_map
 
 
 # ---------------------------------------------------------------------------
@@ -468,98 +304,77 @@ class TestConversionPipeline:
         assert target["include"] == ["reasoning.encrypted_content"]
         assert target["reasoning"] == {"effort": "low"}
 
-    def test_responses_to_deepseek_v4_chat_applies_reasoning_mapping(self):
-        """Responses effort maps to DeepSeek V4 thinking and capped effort."""
+    def test_opencode_go_profile_applies_chat_reasoning_effort(self):
+        """Provider profile, not model name, selects Chat reasoning fields."""
         from codex_rosetta.pipeline import ConversionPipeline
 
         pipeline = ConversionPipeline(
             "openai_responses",
             "openai_chat",
-            upstream_model="deepseek-v4-flash",
-            reasoning_mapping="deepseek_v4",
+            shim="opencode_go",
+            supported_reasoning_levels=["medium"],
         )
         target = pipeline.convert_request(
             {
-                "model": "deepseek-v4-flash",
+                "model": "arbitrary-model-name",
                 "input": "test",
                 "reasoning": {"effort": "medium"},
             }
         )
 
-        assert target["thinking"] == {"type": "enabled"}
-        assert target["reasoning_effort"] == "high"
-
-    def test_responses_to_qwen_3_7_chat_auto_mapping_uses_budget(self):
-        """Auto mapping detects Qwen 3.7 from the upstream model name."""
-        from codex_rosetta.pipeline import ConversionPipeline
-
-        pipeline = ConversionPipeline(
-            "openai_responses",
-            "openai_chat",
-            upstream_model="qwen3.7-plus",
-            reasoning_mapping="auto",
-        )
-        target = pipeline.convert_request(
-            {
-                "model": "qwen3.7-plus",
-                "input": "test",
-                "reasoning": {"effort": "medium"},
-            }
-        )
-
-        assert target["enable_thinking"] is True
-        assert target["thinking_budget"] == 4096
-        assert target["preserve_thinking"] is True
-
-    def test_anthropic_target_fallback_applies_official_reasoning_format(self):
-        """Unknown model on Anthropic target uses Anthropic official fields."""
-        from codex_rosetta.pipeline import ConversionPipeline
-
-        pipeline = ConversionPipeline(
-            "openai_chat",
-            "anthropic",
-            upstream_model="unknown-model",
-            reasoning_mapping="auto",
-        )
-        target = pipeline.convert_request(
-            {
-                "model": "unknown-model",
-                "messages": [{"role": "user", "content": "test"}],
-                "reasoning_effort": "xhigh",
-            }
-        )
-
-        assert target["thinking"] == {"type": "adaptive"}
-        assert target["output_config"] == {"effort": "xhigh"}
-
-    def test_kimi_mapping_preserves_empty_reasoning_content(self):
-        """Kimi mapping is no-op for controls and keeps empty reasoning_content."""
-        from codex_rosetta.pipeline import ConversionPipeline
-
-        pipeline = ConversionPipeline(
-            "openai_chat",
-            "openai_chat",
-            upstream_model="kimi-k2.7-code",
-            reasoning_mapping="kimi_k2_7_code",
-        )
-        target = pipeline.convert_request(
-            {
-                "model": "kimi-k2.7-code",
-                "messages": [
-                    {
-                        "role": "assistant",
-                        "content": "",
-                        "reasoning_content": "",
-                    },
-                    {"role": "user", "content": "continue"},
-                ],
-                "reasoning_effort": "high",
-            }
-        )
-
-        assert target["messages"][0]["reasoning_content"] == ""
+        assert target["reasoning_effort"] == "medium"
         assert "thinking" not in target
-        assert "reasoning_effort" not in target
+
+    def test_opencode_go_profile_parses_chat_reasoning_and_cached_usage(self):
+        """OpenCode Go response extensions use the declared Chat profile."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline(
+            "openai_responses",
+            "openai_chat",
+            shim="opencode_go",
+            supported_reasoning_levels=["medium"],
+        )
+        pipeline.convert_request(
+            {
+                "model": "arbitrary-model-name",
+                "input": "test",
+                "reasoning": {"effort": "medium"},
+            }
+        )
+        captured = {}
+        pipeline.convert_response(
+            {
+                "id": "chatcmpl-opencode",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "arbitrary-model-name",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "reasoning_content": "thinking",
+                            "content": "hi",
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 3,
+                    "total_tokens": 13,
+                    "prompt_tokens_details": {"cached_tokens": 4},
+                },
+            },
+            on_ir_ready=lambda response: captured.update(response),
+        )
+
+        assert captured["choices"][0]["message"]["content"][0] == {
+            "type": "reasoning",
+            "reasoning": "thinking",
+        }
+        assert captured["usage"]["cache_read_tokens"] == 4
 
     def test_responses_namespace_tools_are_flattened_for_chat_target(self):
         """Responses namespace tools become Chat functions for upstream models."""
@@ -723,7 +538,7 @@ class TestConversionPipeline:
             }
         )
 
-        assert target["reasoning_effort"] == "high"
+        assert target["reasoning_effort"] == "medium"
         assert "context" not in target
         assert "reasoning" not in target
 

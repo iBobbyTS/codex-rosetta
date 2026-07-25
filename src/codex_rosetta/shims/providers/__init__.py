@@ -52,8 +52,11 @@ from __future__ import annotations
 
 import importlib.util
 import logging
+from collections.abc import Mapping
+from functools import cache
 from importlib.metadata import entry_points
 from pathlib import Path
+from types import MappingProxyType
 
 from codex_rosetta._vendor.yaml import load as yaml_load
 
@@ -100,7 +103,11 @@ def _load_transforms(
 
 
 def _load_single_provider(
-    provider_dir: Path, *, group: str | None = None, _builtin: bool = True
+    provider_dir: Path,
+    *,
+    group: str | None = None,
+    _builtin: bool = True,
+    register: bool = True,
 ) -> ProviderShim | None:
     """Load a single provider from *provider_dir* and register it.
 
@@ -139,33 +146,11 @@ def _load_single_provider(
             ),
         )
 
-    # Parse per-model reasoning overrides (inherit provider defaults).
-    model_reasoning: dict[str, ReasoningCapability] | None = None
-    if isinstance(reasoning_cfg, dict) and isinstance(
-        reasoning_cfg.get("model_overrides"), dict
-    ):
-        model_reasoning = {}
-        for model_id, overrides in reasoning_cfg["model_overrides"].items():
-            if not isinstance(overrides, dict):
-                continue
-            assert reasoning_cap is not None  # model_overrides requires reasoning
-            model_reasoning[model_id] = ReasoningCapability(
-                disabled=overrides.get("disabled", reasoning_cap.disabled),
-                effort_field=overrides.get("effort_field", reasoning_cap.effort_field),
-                max_effort=overrides.get("max_effort", reasoning_cap.max_effort),
-                thinking_type=overrides.get(
-                    "thinking_type", reasoning_cap.thinking_type
-                ),
-                unsigned_reasoning_blocks=overrides.get(
-                    "unsigned_reasoning_blocks",
-                    reasoning_cap.unsigned_reasoning_blocks,
-                ),
-                effort_map=overrides.get("effort_map", reasoning_cap.effort_map),
-                budget_tokens_default_ratio=overrides.get(
-                    "budget_tokens_default_ratio",
-                    reasoning_cap.budget_tokens_default_ratio,
-                ),
-            )
+    if isinstance(reasoning_cfg, dict) and "model_overrides" in reasoning_cfg:
+        raise ValueError(
+            f"{yaml_path}: reasoning.model_overrides is unsupported; "
+            "model identity cannot select provider request fields"
+        )
 
     shim = ProviderShim(
         name=cfg["name"],
@@ -178,15 +163,15 @@ def _load_single_provider(
         to_transforms=to_t,
         ir_transforms=ir_t,
         reasoning=reasoning_cap,
-        model_reasoning=model_reasoning,
     )
-    register_shim(shim)
-    logger.debug("Registered provider shim: %s (base=%s)", shim.name, shim.base)
+    if register:
+        register_shim(shim)
+        logger.debug("Registered provider shim: %s (base=%s)", shim.name, shim.base)
     return shim
 
 
 def load_providers_from_dir(
-    providers_dir: Path, *, group: str | None = None
+    providers_dir: Path, *, group: str | None = None, register: bool = True
 ) -> list[ProviderShim]:
     """Scan *providers_dir* for provider shims and register them.
 
@@ -220,7 +205,9 @@ def load_providers_from_dir(
             continue
         yaml_path = d / "provider.yaml"
         if yaml_path.exists():
-            shim = _load_single_provider(d, group=group, _builtin=builtin)
+            shim = _load_single_provider(
+                d, group=group, _builtin=builtin, register=register
+            )
             if shim is not None:
                 shims.append(shim)
         else:
@@ -231,11 +218,36 @@ def load_providers_from_dir(
                     continue
                 if (sub / "provider.yaml").exists():
                     shim = _load_single_provider(
-                        sub, group=child_group, _builtin=builtin
+                        sub,
+                        group=child_group,
+                        _builtin=builtin,
+                        register=register,
                     )
                     if shim is not None:
                         shims.append(shim)
     return shims
+
+
+@cache
+def _builtin_provider_shims_for(
+    providers_dir: Path,
+) -> Mapping[str, ProviderShim]:
+    """Load an immutable shim mapping for one built-in provider directory."""
+
+    loaded = load_providers_from_dir(providers_dir, register=False)
+    return MappingProxyType({shim.name: shim for shim in loaded})
+
+
+def builtin_provider_shims() -> Mapping[str, ProviderShim]:
+    """Return immutable built-in shims independent of the plugin registry."""
+
+    return _builtin_provider_shims_for(_PROVIDERS_DIR)
+
+
+def get_builtin_provider_shim(name: str) -> ProviderShim | None:
+    """Return one immutable built-in provider shim."""
+
+    return builtin_provider_shims().get(name)
 
 
 def load_providers() -> list[ProviderShim]:
@@ -249,8 +261,9 @@ def load_providers() -> list[ProviderShim]:
         Combined list of all registered :class:`ProviderShim` instances
         (built-in + plugin).
     """
-    # 1. Built-in shims
-    shims = load_providers_from_dir(_PROVIDERS_DIR)
+    # 1. Built-ins come from the immutable cached mapping and never enter the
+    # mutable plugin registry.
+    shims = list(builtin_provider_shims().values())
 
     # 2. Plugin shims via entry points
     shims.extend(_load_plugin_shims())

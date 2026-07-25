@@ -21,6 +21,7 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
         {
             "providers": {
                 "test-provider": {
+                    "provider": "custom",
                     "api_key": "sk-upstream-test",
                     "base_url": "https://api.example.test/v1",
                     "api_type": "chat",
@@ -30,7 +31,7 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
                 "test": {
                     "provider": "test-provider",
                     "type": "llm",
-                    "models": {"gpt-test": {}},
+                    "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {

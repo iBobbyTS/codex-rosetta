@@ -8,7 +8,7 @@ from typing import Any
 from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.observability.redaction import SecretRedactor
-from codex_rosetta.shims import list_shims
+from codex_rosetta.shims.providers import builtin_provider_shims
 
 from ...config import (
     API_TYPE_ORDER,
@@ -22,11 +22,12 @@ from ...config import (
     resolve_provider_api_type,
 )
 from ...local_mode import config_toml_has_model_catalog
-from ...model_presets import (
-    detect_model_preset,
-    model_presets_for_admin,
-    normalize_model_info,
+from ...model_presets import full_model_presets
+from ...model_profiles import (
+    canonical_model_overrides,
+    resolve_model_profile,
 )
+from ...provider_profiles import provider_catalog_for_admin
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     TOOL_PROFILE_PASSTHROUGH_OPTION,
@@ -197,6 +198,8 @@ def _normalize_model_entry(
             entry["upstream_model"] = value["upstream_model"]
         if isinstance(value.get("model_info"), dict):
             entry["model_info"] = value["model_info"]
+        if isinstance(value.get("runtime_capabilities"), dict):
+            entry["runtime_capabilities"] = value["runtime_capabilities"]
     elif isinstance(value, str):
         entry = {"provider": value}
     elif isinstance(value, dict):
@@ -205,16 +208,11 @@ def _normalize_model_entry(
             entry["upstream_model"] = value["upstream_model"]
         if isinstance(value.get("model_info"), dict):
             entry["model_info"] = value["model_info"]
+        if isinstance(value.get("runtime_capabilities"), dict):
+            entry["runtime_capabilities"] = value["runtime_capabilities"]
     else:
         return {}
 
-    preset = detect_model_preset(
-        model_name,
-        entry.get("upstream_model"),
-    )
-    entry["input_modalities"] = (
-        list(preset["input_modalities"]) if preset is not None else None
-    )
     return entry
 
 
@@ -229,6 +227,42 @@ def _normalize_models_for_admin(
             continue
         normalized[name] = entry
     return normalized
+
+
+def _resolved_admin_model_entry(
+    model_name: str,
+    model_value: Any,
+    *,
+    provider: str,
+    provider_config: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve one persisted model entry for Admin display."""
+
+    entry = _normalize_model_entry(
+        model_value,
+        model_name=model_name,
+        group_provider=provider,
+    )
+    entry.pop("provider", None)
+    try:
+        profile = resolve_model_profile(
+            exposed_model=model_name,
+            upstream_model=entry.get("upstream_model"),
+            provider_id=provider_config.get("provider", "custom"),
+            model_info_override=entry.get("model_info"),
+            runtime_capabilities_override=entry.get("runtime_capabilities"),
+        )
+    except ValueError as exc:
+        entry["validation_error"] = str(exc)
+        return entry
+
+    entry["model_info"] = profile.catalog_model()
+    entry["preset_slug"] = profile.preset_slug
+    model_diff, runtime_diff = canonical_model_overrides(profile)
+    entry["has_overrides"] = bool(model_diff or runtime_diff)
+    if entry["has_overrides"]:
+        entry["runtime_capabilities"] = dict(profile.runtime_capabilities)
+    return entry
 
 
 def _normalize_model_groups_for_admin(
@@ -249,14 +283,14 @@ def _normalize_model_groups_for_admin(
         raw_group_models = group_value.get("models", {})
         models: dict[str, Any] = {}
         if isinstance(raw_group_models, dict):
+            provider_config = raw_providers.get(provider, {})
             for model_name, model_value in raw_group_models.items():
-                entry = _normalize_model_entry(
+                models[model_name] = _resolved_admin_model_entry(
+                    model_name,
                     model_value,
-                    model_name=model_name,
-                    group_provider=provider,
+                    provider=provider,
+                    provider_config=provider_config,
                 )
-                entry.pop("provider", None)
-                models[model_name] = entry
         normalized_group = {
             "provider": provider,
             "type": group_type,
@@ -287,11 +321,13 @@ def _normalize_model_groups_for_admin(
     return groups
 
 
-def _clean_group_model_entry(value: Any) -> dict[str, Any]:
+def _clean_group_model_entry(
+    model_name: str, value: Any, *, provider_id: str
+) -> dict[str, Any]:
     """Normalize one model entry inside a model group request."""
     if isinstance(value, str):
-        return {"upstream_model": value} if value else {}
-    if not isinstance(value, dict):
+        value = {"upstream_model": value} if value else {}
+    elif not isinstance(value, dict):
         raise ValueError("model entries must be objects or strings")
 
     entry: dict[str, Any] = {}
@@ -299,9 +335,18 @@ def _clean_group_model_entry(value: Any) -> dict[str, Any]:
     if upstream_model:
         entry["upstream_model"] = upstream_model
 
-    model_info = value.get("model_info")
-    if model_info is not None:
-        entry["model_info"] = normalize_model_info(model_info, field="LLM model_info")
+    profile = resolve_model_profile(
+        exposed_model=model_name,
+        upstream_model=entry.get("upstream_model"),
+        provider_id=provider_id,
+        model_info_override=value.get("model_info"),
+        runtime_capabilities_override=value.get("runtime_capabilities"),
+    )
+    model_info, runtime_capabilities = canonical_model_overrides(profile)
+    if model_info:
+        entry["model_info"] = model_info
+    if runtime_capabilities:
+        entry["runtime_capabilities"] = runtime_capabilities
 
     return entry
 
@@ -347,14 +392,18 @@ def _handle_model_group_rename(
     return None
 
 
-def _clean_group_models(models_body: dict[str, Any]) -> dict[str, Any]:
+def _clean_group_models(
+    models_body: dict[str, Any], *, provider_id: str
+) -> dict[str, Any]:
     """Normalize all model entries from a model group request."""
     cleaned_models: dict[str, Any] = {}
     for model_name, model_value in models_body.items():
         clean_name = str(model_name).strip()
         if not clean_name:
             continue
-        cleaned_models[clean_name] = _clean_group_model_entry(model_value)
+        cleaned_models[clean_name] = _clean_group_model_entry(
+            clean_name, model_value, provider_id=provider_id
+        )
     return cleaned_models
 
 
@@ -496,7 +545,8 @@ async def get_config(request: Any) -> Response:
                 "id": TOOL_PROFILE_PASSTHROUGH_OPTION,
                 "api_types": ["responses"],
             },
-            "model_presets": model_presets_for_admin(),
+            "model_presets": list(full_model_presets().values()),
+            "provider_catalog": provider_catalog_for_admin(),
             "codex": config.codex,
             "server": server,
             "credential_visible": config.credential_visible,
@@ -510,7 +560,7 @@ async def get_config(request: Any) -> Response:
                     "default_base_url": s.default_base_url,
                     "default_api_key_env": s.default_api_key_env,
                 }
-                for s in list_shims()
+                for s in builtin_provider_shims().values()
             ],
         }
     )
@@ -737,7 +787,12 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return rename_error
 
     try:
-        cleaned_models = _clean_group_models(models_body)
+        provider_id = providers[provider].get("provider")
+        if not isinstance(provider_id, str):
+            raise ValueError(
+                f"provider {provider!r} has no recognized provider main identity"
+            )
+        cleaned_models = _clean_group_models(models_body, provider_id=provider_id)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 

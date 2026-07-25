@@ -29,6 +29,7 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
     return {
         "providers": {
             "test-provider": {
+                "provider": "custom",
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
                 "api_type": "chat",
@@ -38,7 +39,7 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
             "test": {
                 "provider": "test-provider",
                 "type": "llm",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": {

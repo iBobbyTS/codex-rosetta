@@ -21,6 +21,7 @@ def _config_data() -> dict[str, Any]:
     return {
         "providers": {
             "test-provider": {
+                "provider": "custom",
                 "api_key": "sk-test",
                 "base_url": "https://api.example.test/v1",
                 "api_type": "chat",
@@ -30,7 +31,7 @@ def _config_data() -> dict[str, Any]:
             "test": {
                 "provider": "test-provider",
                 "type": "llm",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": {
@@ -221,7 +222,7 @@ def test_model_group_provider_change_does_not_rewrite_codex_files_or_require_res
             {
                 "provider": "second-provider",
                 "type": "llm",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         ).encode("utf-8"),
         client_addr=("198.51.100.10", 12345),

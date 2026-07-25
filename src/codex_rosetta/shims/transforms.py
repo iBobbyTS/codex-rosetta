@@ -18,7 +18,6 @@ Design principles:
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -158,36 +157,6 @@ def default_message_field(field: str, default: Any) -> Transform:
     )
 
 
-def strip_fields_for_model(pattern: str, *keys: str) -> Transform:
-    """Return a transform that removes *keys* from the body only when
-    ``body["model"]`` matches *pattern* (regex search).
-
-    No-op if ``model`` is absent or doesn't match (idempotent).
-
-    Example::
-
-        strip_fields_for_model(r"^claudeopus47", "temperature")
-    """
-    compiled = re.compile(pattern)
-
-    def _strip(body: dict[str, Any]) -> dict[str, Any]:
-        model = body.get("model")
-        if not model or not isinstance(model, str):
-            return body
-        # Normalise for matching: strip non-alphanumeric, lowercase
-        normalised = re.sub(r"[^a-z0-9]", "", model.lower())
-        if not compiled.search(normalised):
-            return body
-        for k in keys:
-            body.pop(k, None)
-        return body
-
-    return _NamedTransform(
-        _strip,
-        f"strip_fields_for_model({pattern!r}, {', '.join(repr(k) for k in keys)})",
-    )
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -287,60 +256,32 @@ def strip_non_vision_images() -> IRTransform:
     return _NamedIRTransform(_strip, "strip_non_vision_images()")
 
 
-def truncate_images(max_images: int, pattern: str | None = None) -> IRTransform:
-    """Return an IR transform that truncates images exceeding *max_images*.
+def truncate_images(max_images: int) -> IRTransform:
+    """Return a provider-wide image-count transform.
 
-    When *pattern* is set, truncation only fires if the upstream model
-    matches the regex (search on raw model string).
-
-    Example::
-
-        truncate_images(50, pattern=r"^(gpt|o\\d)")
+    Model-pattern arguments are intentionally unsupported. Model capability
+    enforcement belongs to :class:`ResolvedModelProfile`.
     """
-    compiled = re.compile(pattern) if pattern else None
 
     def _truncate(body: dict[str, Any], context: TransformContext) -> dict[str, Any]:
-        if compiled is not None:
-            if not context.model or not compiled.search(context.model):
-                return body
         from codex_rosetta.converters.base.helpers.image_limit import (
             truncate_images as _truncate_impl,
         )
 
         return _truncate_impl(body, max_images, request_id=context.request_id)
 
-    label = f"truncate_images({max_images}"
-    if pattern:
-        label += f", pattern={pattern!r}"
-    label += ")"
-    return _NamedIRTransform(_truncate, label)
+    return _NamedIRTransform(_truncate, f"truncate_images({max_images})")
 
 
-def unwind_parallel_tool_calls(pattern: str | None = None) -> IRTransform:
-    """Return an IR transform that splits parallel tool calls into
-    sequential call-result pairs.
-
-    When *pattern* is set, unwinding only fires if the upstream model
-    matches the regex (search on raw model string).
-
-    Example::
-
-        unwind_parallel_tool_calls(pattern=r"^gemini")
-    """
-    compiled = re.compile(pattern) if pattern else None
+def unwind_parallel_tool_calls() -> IRTransform:
+    """Return a provider-wide parallel-tool-call compatibility transform."""
 
     def _unwind(body: dict[str, Any], context: TransformContext) -> dict[str, Any]:
-        if compiled is not None:
-            if not context.model or not compiled.search(context.model):
-                return body
+        del context
         from codex_rosetta.converters.base.helpers.tool_call_unwind import (
             unwind_parallel_tool_calls_ir,
         )
 
         return unwind_parallel_tool_calls_ir(body)
 
-    label = "unwind_parallel_tool_calls("
-    if pattern:
-        label += f"pattern={pattern!r}"
-    label += ")"
-    return _NamedIRTransform(_unwind, label)
+    return _NamedIRTransform(_unwind, "unwind_parallel_tool_calls()")

@@ -221,7 +221,7 @@ def convert(
         >>> normalised = convert(body, "openai_chat", force_conversion=True)
     """
     from .converters.base.context import ConversionContext
-    from .shims import get_shim
+    from .shims import resolve_shim
     from .shims.transforms import apply_transforms
 
     # Detect source provider
@@ -237,8 +237,8 @@ def convert(
         return source_body
 
     # --- Resolve shims and transforms ---
-    source_shim = get_shim(source_provider)
-    target_shim = get_shim(target_provider)
+    source_shim = resolve_shim(source_provider)
+    target_shim = resolve_shim(target_provider)
 
     source_from_t = source_shim.from_transforms if source_shim else ()
     target_to_t = target_shim.to_transforms if target_shim else ()
@@ -253,10 +253,6 @@ def convert(
     ctx = ConversionContext()
     if target_shim is not None:
         cap = target_shim.reasoning
-        # Model-level override (keyed by upstream/body model ID)
-        req_model = body.get("model", "")
-        if target_shim.model_reasoning and req_model in target_shim.model_reasoning:
-            cap = target_shim.model_reasoning[req_model]
         if cap is not None:
             ctx.options["reasoning_cap"] = cap
 

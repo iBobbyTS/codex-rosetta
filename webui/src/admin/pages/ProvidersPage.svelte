@@ -9,40 +9,10 @@
   type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
   type ModelRoute = string | { provider?: string };
   type ModelGroup = { provider?: string; models?: Record<string, unknown> };
-  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; credential_visible?: boolean };
-  type Protocols = Record<string, string>;
-  type ProviderPreset = { id: string; labelKey: string; logoShim?: string; protocols: Protocols };
-  type Variant = { id: string; providerId: string };
-  type Vendor = { id: string; labelKey: string; logoShim?: string; variants: Variant[] };
-
-  const providerPresets: ProviderPreset[] = [
-    { id:'deepseek', labelKey:'provider.deepseek', logoShim:'deepseek', protocols:{ chat:'https://api.deepseek.com', anthropic:'https://api.deepseek.com/anthropic' } },
-    { id:'zhipu', labelKey:'provider.zhipu', logoShim:'zhipu', protocols:{ chat:'https://open.bigmodel.cn/api/paas/v4' } },
-    { id:'moonshot_china', labelKey:'provider.moonshotChina', logoShim:'moonshot', protocols:{ chat:'https://api.moonshot.cn/v1', anthropic:'https://api.moonshot.cn/anthropic' } },
-    { id:'moonshot_international', labelKey:'provider.moonshotInternational', logoShim:'moonshot', protocols:{ chat:'https://api.moonshot.ai/v1', anthropic:'https://api.moonshot.ai/anthropic' } },
-    { id:'minimax_china', labelKey:'provider.minimaxChina', logoShim:'minimax--openai_chat', protocols:{ anthropic:'https://api.minimaxi.com/anthropic', chat:'https://api.minimaxi.com/v1', responses:'https://api.minimaxi.com/v1' } },
-    { id:'minimax_international', labelKey:'provider.minimaxInternational', logoShim:'minimax--openai_chat', protocols:{ anthropic:'https://api.minimax.io/anthropic', chat:'https://api.minimax.io/v1', responses:'https://api.minimax.io/v1' } },
-    { id:'qwen', labelKey:'provider.qwen', logoShim:'qwen', protocols:{ responses:'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1', chat:'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1', anthropic:'https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/apps/anthropic' } },
-    { id:'openai', labelKey:'provider.openai', logoShim:'openai', protocols:{ responses:'https://api.openai.com/v1', chat:'https://api.openai.com/v1' } },
-    { id:'google', labelKey:'provider.google', logoShim:'google', protocols:{ google:'https://generativelanguage.googleapis.com' } },
-    { id:'anthropic', labelKey:'provider.anthropic', logoShim:'anthropic', protocols:{ anthropic:'https://api.anthropic.com' } },
-    { id:'openrouter', labelKey:'provider.openrouter', logoShim:'openrouter--openai_chat', protocols:{ anthropic:'https://openrouter.ai/api', chat:'https://openrouter.ai/api/v1' } },
-    { id:'opencode_go', labelKey:'provider.opencodeGo', logoShim:'opencode_go', protocols:{ chat:'https://opencode.ai/zen/go/v1' } },
-    { id:'custom', labelKey:'provider.custom', protocols:{ responses:'', chat:'', anthropic:'', google:'' } },
-  ];
-  const vendors: Vendor[] = [
-    { id:'deepseek', labelKey:'provider.deepseek', logoShim:'deepseek', variants:[{id:'official',providerId:'deepseek'},{id:'custom',providerId:'deepseek'}] },
-    { id:'zhipu', labelKey:'provider.zhipu', logoShim:'zhipu', variants:[{id:'official',providerId:'zhipu'},{id:'custom',providerId:'zhipu'}] },
-    { id:'moonshot', labelKey:'provider.kimi', logoShim:'moonshot', variants:[{id:'china',providerId:'moonshot_china'},{id:'international',providerId:'moonshot_international'},{id:'custom',providerId:'moonshot_china'}] },
-    { id:'minimax', labelKey:'provider.minimax', logoShim:'minimax--openai_chat', variants:[{id:'china',providerId:'minimax_china'},{id:'international',providerId:'minimax_international'},{id:'custom',providerId:'minimax_china'}] },
-    { id:'qwen', labelKey:'provider.qwen', logoShim:'qwen', variants:[{id:'official',providerId:'qwen'},{id:'custom',providerId:'qwen'}] },
-    { id:'openai', labelKey:'provider.openai', logoShim:'openai', variants:[{id:'official',providerId:'openai'},{id:'custom',providerId:'openai'}] },
-    { id:'google', labelKey:'provider.google', logoShim:'google', variants:[{id:'official',providerId:'google'},{id:'custom',providerId:'google'}] },
-    { id:'anthropic', labelKey:'provider.anthropic', logoShim:'anthropic', variants:[{id:'official',providerId:'anthropic'},{id:'custom',providerId:'anthropic'}] },
-    { id:'openrouter', labelKey:'provider.openrouter', logoShim:'openrouter--openai_chat', variants:[{id:'official',providerId:'openrouter'},{id:'custom',providerId:'openrouter'}] },
-    { id:'opencode_go', labelKey:'provider.opencodeGo', logoShim:'opencode_go', variants:[{id:'official',providerId:'opencode_go'},{id:'custom',providerId:'opencode_go'}] },
-    { id:'custom', labelKey:'provider.custom', variants:[{id:'custom',providerId:'custom'}] },
-  ];
+  type Variant = { endpoints: Record<string,string> };
+  type Vendor = { id:string; label_key:string; logo_shim?:string; recommended_api_type:string; adapted_api_types:Record<string,string>; known_supported_api_types:string[]; variants:Record<string,Variant> };
+  type ProviderCatalog = { api_types:string[]; providers:Record<string,Omit<Vendor,'id'>> };
+  type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; provider_catalog?:ProviderCatalog; credential_visible?: boolean };
 
   let config = $state<Config>({});
   let loading = $state(true); let busy = $state(false); let error = $state(''); let notice = $state('');
@@ -58,42 +28,37 @@
     const display = displayInfo(provider);
     return [providerName, provider.base_url, provider.api_type, provider.validation_error, display.vendor, display.protocol].some((value) => String(value ?? '').toLowerCase().includes(query));
   }));
-  const selectedVendor = $derived(vendors.find((item) => item.id === vendorId) ?? vendors[vendors.length - 1]);
+  const selectedVendor = $derived(vendorById(vendorId));
   const affectedModels = $derived(Object.entries(config.models ?? {}).filter(([, route]) => (typeof route === 'string' ? route : route.provider) === pendingDelete).map(([model]) => model));
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
   const normalizeUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  function allowedTypes(): string[] { return config.known_api_types ?? []; }
-  function presetById(id: string): ProviderPreset { return providerPresets.find((item) => item.id === id) ?? providerPresets[providerPresets.length - 1]; }
-  function vendorById(id: string | undefined): Vendor { return vendors.find((item) => item.id === id) ?? vendors[vendors.length - 1]; }
+  function allowedTypes(): string[] { return config.provider_catalog?.api_types ?? config.known_api_types ?? []; }
+  function vendors(): Vendor[] { return Object.entries(config.provider_catalog?.providers??{}).map(([id,value])=>({id,...value})); }
+  function vendorById(id: string | undefined): Vendor { const values=vendors();return values.find((item) => item.id === id) ?? values.find((item)=>item.id==='custom') ?? {id:'custom',label_key:'provider.custom',recommended_api_type:'chat',adapted_api_types:{},known_supported_api_types:[],variants:{custom:{endpoints:{}}}}; }
   function variantForUrl(vendor: Vendor, value: string): Variant {
     const normalized = normalizeUrl(value);
-    return vendor.variants.find((item) => {
-      if (item.id === 'custom') return false;
-      const preset = providerPresets.find((entry) => entry.id === item.providerId);
-      return preset ? Object.values(preset.protocols).some((presetUrl) => normalizeUrl(presetUrl) === normalized) : false;
-    }) ?? vendor.variants.find((item) => item.id === 'custom') ?? vendor.variants[0];
+    const match=Object.entries(vendor.variants).find(([id,item]) => id!=='custom'&&Object.values(item.endpoints).some((presetUrl) => normalizeUrl(presetUrl) === normalized));
+    return match?.[1] ?? vendor.variants.custom ?? Object.values(vendor.variants)[0] ?? {endpoints:{}};
   }
-  function variant(): Variant { return selectedVendor.variants.find((item) => item.id === variantId) ?? selectedVendor.variants[0]; }
-  function resolvedPresetId(): string { return variant().providerId; }
-  function logoFor(vendor: Vendor): string { return providerLogo(vendor.logoShim); }
+  function variant(): Variant { return selectedVendor.variants[variantId] ?? Object.values(selectedVendor.variants)[0] ?? {endpoints:{}}; }
+  function logoFor(vendor: Vendor): string { return providerLogo(vendor.logo_shim); }
   function protocolLabel(value: string): string { return ['responses','chat','anthropic','google'].includes(value) ? t(`protocol.${value}`) : value; }
   function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string; invertLogo: boolean } {
     const vendor = vendorById(provider.provider);
-    return { vendor: t(vendor.labelKey), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor), invertLogo: providerLogoNeedsDarkInversion(vendor.logoShim) };
+    return { vendor: t(vendor.label_key), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor), invertLogo: providerLogoNeedsDarkInversion(vendor.logo_shim) };
   }
   function setView(value: string): void { view = value === 'list' ? 'list' : 'grid'; localStorage.setItem('provider-view', view); }
   function applySelection(): void {
-    const selectedVariant = variant();
-    const protocols = presetById(selectedVariant.providerId).protocols;
-    const supported = allowedTypes().filter((item) => Object.prototype.hasOwnProperty.call(protocols, item));
-    if (!allowedTypes().includes(apiType) || !Object.prototype.hasOwnProperty.call(protocols, apiType)) apiType = supported[0] ?? allowedTypes()[0] ?? '';
-    url = selectedVariant.id === 'custom' ? '' : protocols[apiType] ?? '';
+    const protocols = variant().endpoints;
+    if (!allowedTypes().includes(apiType)) apiType = selectedVendor.recommended_api_type;
+    url = variantId === 'custom' ? '' : protocols[apiType] ?? '';
   }
-  function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=vendor.variants[0]?.id ?? 'custom'; applySelection(); }
+  function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=Object.keys(vendor.variants)[0]??'custom';apiType=vendor.recommended_api_type;applySelection(); }
   function chooseVariant(value: string): void { variantId = value; applySelection(); }
-  function chooseProtocol(value: string): void { apiType = value; if (variant().id !== 'custom') url = presetById(resolvedPresetId()).protocols[value] ?? ''; }
-  function deriveSelection(): void { variantId=variantForUrl(selectedVendor,url).id; }
+  function chooseProtocol(value: string): void { apiType = value; url = variantId==='custom'?'':variant().endpoints[value] ?? ''; }
+  function deriveSelection(): void { const found=Object.entries(selectedVendor.variants).find(([,item])=>item===variantForUrl(selectedVendor,url));variantId=found?.[0]??'custom'; }
+  function protocolGroups():{label:string;items:string[]}[]{const adapted=Object.keys(selectedVendor.adapted_api_types);const known=selectedVendor.known_supported_api_types.filter((item)=>!adapted.includes(item));const other=allowedTypes().filter((item)=>!adapted.includes(item)&&!known.includes(item));return[{label:'',items:adapted},{label:t('provider.rosettaUnadapted'),items:known},{label:t('provider.maybeUnsupported',{provider:t(selectedVendor.label_key)}),items:other}].filter((group)=>group.items.length);}
   function clearForm(): void {
     editingName=''; name=''; url=''; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; vendorId='custom'; variantId='custom'; keyValues=['']; keyVisible=false; multiKey=false; error='';
   }
@@ -158,8 +123,8 @@
 <Modal open={modalOpen} labelledby="provider-modal-title" onclose={()=>modalOpen=false}>
   {#snippet header()}<h3 id="provider-modal-title">{editingName?t('modal.editProvider'):t('modal.addProvider')}</h3>{/snippet}
   <div class="form-group"><label for="provName">{t('label.providerName')}</label><input id="provName" bind:value={name} placeholder={t('placeholder.providerName')} /></div>
-  <div class="form-group"><label for="provProvider">{t('label.providerVendor')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" class:invert-in-dark={providerLogoNeedsDarkInversion(selectedVendor.logoShim)} src={logoFor(selectedVendor)} alt="" />{/if}<select id="provProvider" value={vendorId} onchange={(event)=>chooseVendor(event.currentTarget.value)}>{#each vendors as vendor}<option value={vendor.id}>{t(vendor.labelKey)}</option>{/each}</select></div><select aria-label={t('aria.providerVariant')} value={variantId} onchange={(event)=>chooseVariant(event.currentTarget.value)}>{#each selectedVendor.variants as item}<option value={item.id}>{t(`providerVariant.${item.id}`)}</option>{/each}</select></div></div>
-  <div class="form-group"><label for="provApiType">{t('label.providerProtocol')}</label><select id="provApiType" value={apiType} onchange={(event)=>chooseProtocol(event.currentTarget.value)}>{#each allowedTypes() as item}<option value={item}>{protocolLabel(item)}</option>{/each}</select></div>
+  <div class="form-group"><label for="provProvider">{t('label.providerVendor')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" class:invert-in-dark={providerLogoNeedsDarkInversion(selectedVendor.logo_shim)} src={logoFor(selectedVendor)} alt="" />{/if}<select id="provProvider" value={vendorId} onchange={(event)=>chooseVendor(event.currentTarget.value)}>{#each vendors() as vendor}<option value={vendor.id}>{t(vendor.label_key)}</option>{/each}</select></div><select aria-label={t('aria.providerVariant')} value={variantId} onchange={(event)=>chooseVariant(event.currentTarget.value)}>{#each Object.keys(selectedVendor.variants) as item}<option value={item}>{t(`providerVariant.${item}`)}</option>{/each}</select></div></div>
+  <div class="form-group"><label for="provApiType">{t('label.providerProtocol')}</label><select id="provApiType" value={apiType} onchange={(event)=>chooseProtocol(event.currentTarget.value)}>{#each protocolGroups() as group}{#if group.label}<optgroup label={group.label}>{#each group.items as item}<option value={item}>{protocolLabel(item)}</option>{/each}</optgroup>{:else}{#each group.items as item}<option value={item}>{protocolLabel(item)}</option>{/each}{/if}{/each}</select></div>
   <div class="form-group"><label for="provBaseUrl">{t('label.baseUrl')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label><input id="provBaseUrl" bind:value={url} oninput={deriveSelection} placeholder={t('placeholder.baseUrl')} /></div>
   <div class="form-group"><label for="provApiKey">{t('label.apiKey')}</label>{#if multiKey}<div>{#each keyValues as key,index}<div class="multi-key-row"><input aria-label={t('format.apiKeyIndex',{index:index+1})} type={keyVisible?'text':'password'} value={key} oninput={(event)=>setKey(index,event.currentTarget.value)} /><button type="button" class="key-btn" onclick={()=>removeKey(index)} aria-label={t('aria.removeKey')}>×</button></div>{/each}</div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={addKey}>+ {t('label.addKey')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label={t('aria.toggleVisibility')}>◉</button></div>{:else}<div style="display:flex;gap:4px;align-items:center"><input id="provApiKey" type={keyVisible?'text':'password'} value={keyValues[0]} oninput={(event)=>setKey(0,event.currentTarget.value)} autocomplete="new-password" placeholder={editingName?t('label.keyUnchangedHint'):'${OPENAI_API_KEY}'} style="flex:1" /></div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={promoteKeys}>+ {t('label.addKey')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label={t('aria.toggleVisibility')}>◉</button></div>{/if}</div>
   <div class="form-group"><label for="provProxy">{t('label.proxyUrl')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label><input id="provProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} /></div>

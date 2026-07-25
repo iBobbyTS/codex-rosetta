@@ -32,7 +32,6 @@ from .transforms import (
     replace_message_field,
     set_defaults,
     strip_fields,
-    strip_fields_for_model,
 )
 
 # Scan provider directories and register shims from YAML + transforms.py.
@@ -58,7 +57,6 @@ __all__ = [
     "set_defaults",
     "replace_message_field",
     "default_message_field",
-    "strip_fields_for_model",
     # IR transforms
     "IRTransform",
     "TransformContext",

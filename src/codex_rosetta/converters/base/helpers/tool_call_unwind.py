@@ -10,8 +10,8 @@ The algorithm operates on **IR messages** (``role: "assistant"`` with
 ``type: "tool_call"`` content parts, ``role: "tool"`` with
 ``type: "tool_result"`` content parts).
 
-Enabled per-provider via ``ProviderShim.unwind_parallel_tool_calls`` and
-``unwind_parallel_tool_calls_pattern`` (model-scoped regex).
+Enabled only by an explicit provider-wide IR transform. Model identity never
+selects this behavior.
 """
 
 from __future__ import annotations

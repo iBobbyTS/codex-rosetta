@@ -1,0 +1,15 @@
+name: opencode_go
+base: openai_chat
+logo: https://opencode.ai/favicon.ico
+default_base_url: https://opencode.ai/zen/go/v1
+default_api_key_env: OPENCODE_API_KEY
+reasoning:
+  disabled: omit
+  effort_field: reasoning_effort
+  effort_map:
+    minimal: minimal
+    low: low
+    medium: medium
+    high: high
+    xhigh: xhigh
+    max: max

@@ -250,25 +250,37 @@ The model group remains the source of truth for provider, upstream model,
 protocol, and Tool Profile. The catalog determines what Codex attempts to send;
 Rosetta must then either support that shape or advertise a safer catalog value.
 
-In the Admin model-group dialog, Rosetta checks the configured upstream model
-name first, or the exposed model name when no upstream mapping is present. An
-exact slug match in the unified `codex_models.json` catalog or
-`codex_model_presets.json` displays the model's `display_name` and derives
-text/vision badges from `input_modalities`; partial or suffixed names do not
-match. Gateway-side image filtering is narrower: it reads `input_modalities`
-only from an exact match in `codex_model_presets.json`. Full Codex catalog
-metadata and saved `model_info` remain Codex-facing metadata and do not impose
-runtime modality restrictions. The always-visible manual button opens a panel
-to the right with every per-model preset field: `slug`, `display_name`,
-`description`, `identity`, `priority`, `context_window`, `input_modalities`, and
-`supported_reasoning_levels`. A detected preset pre-fills the panel; an
-unmatched model starts empty. Saved `model_info` overrides the detected preset,
-while the exposed model name remains the catalog slug used for routing. Input
-modalities and supported reasoning levels use checkboxes constrained to values
-that the catalog template can materialize. When a saved override differs from
-the detected preset in any editable field, Admin marks the detection as
-modified; the panel's restore action names the detected preset and removes the
-override so the preset becomes authoritative again.
+In the Admin model-group dialog, Rosetta matches the configured upstream model
+first and falls back to the exposed model name. Matching is exact. The dialog
+uses three columns while a model is selected: routing and Tool Profile on the
+left, the complete Codex `model_info` record in the middle, and provider runtime
+capabilities on the right. `model_info` is not a compact eight-field document;
+it is the complete current Codex catalog record.
+
+Configuration stores only a normalized recursive diff from the matched bundled
+preset. On load, Rosetta deep-copies that preset, recursively overlays
+`model_info`, copies the selected provider's runtime preset, then recursively
+overlays `runtime_capabilities`. Objects merge recursively, arrays replace as a
+whole, scalars replace directly, and `null` is an explicit override. Missing
+fields inherit; deleting an override restores the preset. Saving repeats the
+deep diff, so empty `model_info` and `runtime_capabilities` objects are omitted.
+An unmatched model has no inheritance base and must save a complete valid
+`model_info` record.
+
+Runtime overrides currently support only `input_modalities` and
+`supported_reasoning_levels`. When either is present, it owns the effective
+value and the corresponding middle-column field is read-only. Any effective
+diff is shown in yellow; restoring the preset removes the diff. The same single
+`ResolvedModelProfile` supplies both the generated Codex catalog and Gateway
+capability enforcement. Unsupported reasoning effort is clamped to the nearest
+declared level with a warning, and unsupported image input follows the existing
+placeholder behavior with a trace record.
+
+Provider identity plus `api_type`—never the model name—selects the wire
+converter and provider extensions. Endpoint variants and `base_url` select only
+the connection address. Model identity is limited to preset matching, catalog
+metadata, capabilities, the upstream `model` value, and logs. Tool Profile data
+remains the sole owner of model-visible tool exposure and schema changes.
 
 ### Required baseline for current third-party models
 

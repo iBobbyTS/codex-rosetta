@@ -207,7 +207,13 @@ Rosetta Tool Profile：直传 / 修改 / 禁用 / 注入
 
 模型组仍是 provider、upstream model、protocol 和 Tool Profile 的唯一事实来源。catalog 决定 Codex 尝试发送什么；Rosetta 必须支持这种形态，或者在 catalog 中声明更保守的能力。
 
-Admin 的模型组弹窗会优先检查配置的上游模型名；未填写上游映射时检查暴露模型名。只有与统一的 `codex_models.json` 目录或 `codex_model_presets.json` 中 slug 完整一致才算匹配，匹配后显示模型的 `display_name`，并根据 `input_modalities` 显示 text/image 标签；带额外后缀或仅部分一致不会命中。网关运行时的图片过滤范围更窄：只读取 `codex_model_presets.json` 中完整匹配项的 `input_modalities`。完整 Codex catalog 和保存的 `model_info` 仍是面向 Codex 的目录元数据，不会施加网关运行时模态限制。每行始终显示“手动填写模型信息”按钮，点击后会在模型组弹窗右侧打开面板，包含单个预设的全部字段：`slug`、`display_name`、`description`、`identity`、`priority`、`context_window`、`input_modalities` 和 `supported_reasoning_levels`。已匹配时使用预设预填，未匹配时为空表；保存的 `model_info` 会覆盖自动预设，但暴露模型名仍作为实际路由使用的 catalog slug。输入模态和支持的推理等级使用 checkbox，并且只提供 catalog 模板能够物化的值。保存的覆盖配置只要任一可编辑字段与命中的预设不同，Admin 就会把自动检测标记为“已修改”；右侧面板的恢复按钮会显示命中的预设名称，点击后删除覆盖配置并重新以该预设为准。
+Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。编辑具体模型时使用横向三栏：左栏管理路由与 Tool Profile，中栏编辑完整 Codex `model_info` 记录，右栏编辑 provider 运行时能力。`model_info` 不再是旧的八字段紧凑结构，而是当前 Codex catalog 的完整记录。
+
+配置只保存相对命中内置 preset 的规范化递归差异。读取时，Rosetta 深度复制 preset，递归覆盖 `model_info`；再复制所选 provider 的 runtime preset，并递归覆盖 `runtime_capabilities`。对象递归合并，数组整体替换，标量直接替换，`null` 表示显式覆盖；字段缺失表示继承，删除 override 表示恢复 preset。保存时重新计算深度 diff，因此空的 `model_info` 和 `runtime_capabilities` 不会写入。未命中 preset 的模型没有继承基础，必须保存完整且有效的 `model_info`。
+
+本次 runtime override 只支持 `input_modalities` 和 `supported_reasoning_levels`。任一 override 存在时，它拥有有效值，中栏对应字段只读。存在有效差异时状态显示黄色；恢复 preset 会删除差异。同一个 `ResolvedModelProfile` 同时供生成 Codex catalog 和 Gateway 能力约束使用。不支持的 reasoning effort 会降到最近的已声明档位并记录 warning；不支持图片时沿用现有兼容占位行为并记录 trace。
+
+只有 provider 主选项与 `api_type` 决定 wire converter 和 provider 扩展；endpoint 子选项及 `base_url` 只决定连接地址。模型名只用于 preset 匹配、catalog 元数据、能力、上游 `model` 值和日志，禁止参与请求字段构造。Tool Profile 数据继续独占模型可见工具曝光与 schema 修改职责。
 
 ### 当前第三方模型的固定基线
 

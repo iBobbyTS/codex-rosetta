@@ -27,6 +27,7 @@ def _request(
         {
             "providers": {
                 "test-provider": {
+                    "provider": "custom",
                     "api_key": api_key,
                     "base_url": "https://api.example.test/v1",
                     "api_type": api_type,
@@ -37,7 +38,7 @@ def _request(
                 "test": {
                     "provider": "test-provider",
                     "type": "llm",
-                    "models": {"gpt-test": {}},
+                    "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {

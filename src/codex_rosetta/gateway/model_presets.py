@@ -250,10 +250,104 @@ def detect_model_preset(
 ) -> dict[str, Any] | None:
     """Return an exact-slug preset, preferring the configured upstream model."""
     candidate = upstream_model.strip() if isinstance(upstream_model, str) else ""
-    slug = candidate or exposed_model
-    for preset in model_presets_for_admin():
-        if preset["slug"] == slug:
-            return preset
+    for slug in (candidate, exposed_model):
+        if not slug:
+            continue
+        for preset in model_presets_for_admin():
+            if preset["slug"] == slug:
+                return preset
+    return None
+
+
+def _replace_identity(value: Any, source: str, identity: str) -> Any:
+    if isinstance(value, str):
+        return value.replace(source, identity)
+    if isinstance(value, list):
+        return [_replace_identity(item, source, identity) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_identity(item, source, identity)
+            for key, item in value.items()
+        }
+    return copy.deepcopy(value)
+
+
+def _materialize_full_preset(
+    terra: dict[str, Any], resource: dict[str, Any], raw: dict[str, Any]
+) -> dict[str, Any]:
+    shared = resource["shared_overrides"]
+    preset = normalize_model_preset(
+        raw, field="bundled model preset", shared_overrides=shared
+    )
+    explicit = (
+        MODEL_INFO_FIELDS
+        | MODEL_PRESET_EXTRA_OVERRIDE_FIELDS
+        | MODEL_PRESET_IGNORED_CATALOG_FIELDS
+        | MODEL_PRESET_LEGACY_FIELDS
+        | MODEL_PRESET_TEMPLATE_FIELDS
+        | frozenset(shared)
+    )
+    model = {
+        key: copy.deepcopy(value) for key, value in terra.items() if key not in explicit
+    }
+    for key in ("base_instructions", "model_messages"):
+        model[key] = _replace_identity(
+            terra.get(key), resource["identity_source"], preset["identity"]
+        )
+    model.update(copy.deepcopy(shared))
+    model.update(
+        {
+            key: copy.deepcopy(value)
+            for key, value in preset.items()
+            if key not in {"identity", "supported_reasoning_levels"}
+        }
+    )
+    requested = preset["supported_reasoning_levels"]
+    levels = terra["supported_reasoning_levels"]
+    by_effort = {item.get("effort"): item for item in levels if isinstance(item, dict)}
+    missing = [effort for effort in requested if effort not in by_effort]
+    if missing:
+        raise ValueError(f"model preset references unknown reasoning levels: {missing}")
+    model["supported_reasoning_levels"] = [
+        copy.deepcopy(by_effort[effort]) for effort in requested
+    ]
+    model["max_context_window"] = model["context_window"]
+    default = terra.get("default_reasoning_level")
+    model["default_reasoning_level"] = default if default in requested else requested[0]
+    return model
+
+
+@lru_cache(maxsize=1)
+def _cached_full_model_presets() -> dict[str, dict[str, Any]]:
+    models = copy.deepcopy(_cached_model_catalog_resource()["models"])
+    result = {model["slug"]: model for model in models}
+    terra = result.get("gpt-5.6-terra")
+    if not isinstance(terra, dict):
+        raise ValueError("bundled Codex model catalog has no gpt-5.6-terra preset")
+    resource = load_model_preset_resource()
+    for raw in resource["models"]:
+        model = _materialize_full_preset(terra, resource, raw)
+        slug = model["slug"]
+        if slug in result:
+            raise ValueError(f"duplicate bundled Codex model preset: {slug}")
+        result[slug] = model
+    return result
+
+
+def full_model_presets() -> dict[str, dict[str, Any]]:
+    """Return isolated complete Codex records keyed by preset slug."""
+    return copy.deepcopy(_cached_full_model_presets())
+
+
+def match_full_model_preset(
+    exposed_model: str, upstream_model: str | None = None
+) -> dict[str, Any] | None:
+    """Match upstream first, then the exposed model name."""
+    presets = _cached_full_model_presets()
+    upstream = upstream_model.strip() if isinstance(upstream_model, str) else ""
+    for slug in (upstream, exposed_model):
+        if slug in presets:
+            return copy.deepcopy(presets[slug])
     return None
 
 

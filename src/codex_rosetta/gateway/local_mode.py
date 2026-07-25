@@ -21,9 +21,9 @@ from .model_presets import (
     MODEL_PRESET_LEGACY_FIELDS,
     MODEL_PRESET_TEMPLATE_FIELDS,
     load_model_preset_resource,
-    normalize_model_info,
     normalize_model_preset,
 )
+from .model_profiles import resolve_model_profile
 
 CATALOG_FILENAME = "model_catalog.json"
 CODEX_CONFIG_FILENAME = "config.toml"
@@ -561,12 +561,43 @@ def _model_presets(terra: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return presets
 
 
+def _configured_model_spec(
+    raw_model: Any,
+    *,
+    provider_name: Any,
+    providers: Any,
+) -> dict[str, Any]:
+    """Normalize one configured model into a catalog-resolution spec."""
+
+    raw_upstream = (
+        raw_model.get("upstream_model") if isinstance(raw_model, dict) else raw_model
+    )
+    spec: dict[str, Any] = {
+        "provider": provider_name,
+        "upstream_model": (
+            raw_upstream.strip()
+            if isinstance(raw_upstream, str) and raw_upstream.strip()
+            else None
+        ),
+    }
+    if isinstance(raw_model, dict) and "model_info" in raw_model:
+        spec["model_info"] = copy.deepcopy(raw_model["model_info"])
+    if isinstance(raw_model, dict) and "runtime_capabilities" in raw_model:
+        spec["runtime_capabilities"] = copy.deepcopy(raw_model["runtime_capabilities"])
+    provider = providers.get(provider_name, {}) if isinstance(providers, dict) else {}
+    spec["provider_id"] = (
+        provider.get("provider") if isinstance(provider, dict) else None
+    )
+    return spec
+
+
 def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, Any]]:
     configured: dict[str, dict[str, Any]] = {}
     model_groups = raw_config.get("model_groups", {})
     if not isinstance(model_groups, dict):
         return configured
 
+    providers = raw_config.get("providers", {})
     for group in model_groups.values():
         if not isinstance(group, dict):
             continue
@@ -576,24 +607,11 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
         for name, raw_model in models.items():
             if not isinstance(name, str) or not name:
                 continue
-            raw_upstream = (
-                raw_model.get("upstream_model")
-                if isinstance(raw_model, dict)
-                else raw_model
+            configured[name] = _configured_model_spec(
+                raw_model,
+                provider_name=group.get("provider"),
+                providers=providers,
             )
-            spec: dict[str, Any] = {
-                "upstream_model": (
-                    raw_upstream.strip()
-                    if isinstance(raw_upstream, str) and raw_upstream.strip()
-                    else None
-                )
-            }
-            if isinstance(raw_model, dict) and "model_info" in raw_model:
-                spec["model_info"] = normalize_model_info(
-                    raw_model["model_info"],
-                    field=f"model_groups model {name!r}.model_info",
-                )
-            configured[name] = spec
     return configured
 
 
@@ -707,36 +725,21 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
 
     selected_models: list[dict[str, Any]] = []
     preset_compaction_hashes: dict[str, str] = {}
-    preset_resource = load_model_preset_resource()
     for name in sorted(configured_specs):
         spec = configured_specs[name]
         upstream_name = spec.get("upstream_model")
-        detected_slug = upstream_name or name
-        raw_model_info = spec.get("model_info")
-        if isinstance(raw_model_info, dict):
-            raw_model_info = dict(raw_model_info, slug=name)
-            model = _materialize_model_preset(
-                terra,
-                preset_resource["shared_overrides"],
-                raw_model_info,
-                preset_resource["identity_source"],
-            )
-        else:
-            detected_preset = presets.get(detected_slug)
-            model = copy.deepcopy(by_slug.get(name) or detected_preset or terra)
-            if detected_preset is not None:
-                model["slug"] = name
-                preset_comp_hash = detected_preset.get("comp_hash")
-                if isinstance(preset_comp_hash, str):
-                    preset_compaction_hashes[name] = preset_comp_hash
-        if (
-            not isinstance(raw_model_info, dict)
-            and name not in by_slug
-            and detected_slug not in presets
-        ):
-            model["slug"] = name
-            model["display_name"] = name
-            model["description"] = name
+        profile = resolve_model_profile(
+            exposed_model=name,
+            upstream_model=upstream_name,
+            provider_id=spec.get("provider_id") or "custom",
+            model_info_override=spec.get("model_info"),
+            runtime_capabilities_override=spec.get("runtime_capabilities"),
+        )
+        model = profile.catalog_model()
+        if profile.preset_slug in presets:
+            preset_comp_hash = presets[profile.preset_slug].get("comp_hash")
+            if isinstance(preset_comp_hash, str):
+                preset_compaction_hashes[name] = preset_comp_hash
         if name == "codex-auto-review":
             if upstream_name is not None and upstream_name != name:
                 model["tool_mode"] = "code_mode_only"
