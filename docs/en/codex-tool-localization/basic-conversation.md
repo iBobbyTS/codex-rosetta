@@ -7,6 +7,24 @@ Codex talks to models through the OpenAI Responses API surface. Many third-party
 
 The goal is to preserve Codex runtime semantics, not just make the upstream request syntactically valid.
 
+## Provider Profiles and Protocol Fallback
+
+Provider configuration is explicit. The provider main identity plus `api_type`
+selects the standard converter and any adapted provider extension; endpoint
+variants and Base URL select only the network address. Rosetta never infers the
+provider or protocol from a URL, and model names never select request fields.
+
+The Admin protocol selector lists adapted protocols first, then selectable
+provider-known but Rosetta-unadapted protocols, then selectable protocols that
+the provider may not support. Unadapted choices are saved and invoked using only
+the selected official standard: Chat Completions, Responses, Anthropic
+Messages, or Google GenAI. They receive a UI/config/trace warning and no
+provider-specific extension. A protocol without an endpoint preset clears the
+URL and requires an explicit address.
+
+The declared recommendations are OpenAI Responses, Anthropic Messages, Google
+GenAI, and Chat Completions for every other bundled provider.
+
 ## One Responses Protocol, Provider-Aware Defaults
 
 Provider configuration stores the selected `provider` together with `api_type: "responses"`. The Provider sub-option is not stored; the Admin UI derives it only from the persisted Provider and Base URL. The Provider choice selects the model-group default tool handling, while protocol handling remains direct:

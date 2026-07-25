@@ -1,13 +1,12 @@
-"""Provider shim definitions with a global registry.
+"""Provider shim definitions with immutable built-ins and explicit plugins.
 
 A **ProviderShim** is a lightweight identity card that declares which API
 standard (converter) a provider uses, along with connection defaults and
 optional transforms to bridge schema differences.
 
-The global registry (``_SHIM_REGISTRY``) is a plain dict populated at
-import time by ``shims/__init__.py``.  Registration functions
-(``register_shim``, ``load_providers_from_dir``) write to it; query
-functions (``get_shim``, ``list_shims``) read from it.
+Built-in shims are loaded once into an immutable mapping.  The legacy plugin
+registry is isolated from built-ins and is never consulted by Gateway Provider
+Profile resolution.
 """
 
 from __future__ import annotations
@@ -116,9 +115,6 @@ class ProviderShim:
             provider (standard → dialect).
         reasoning: Reasoning capability config for this provider.
             When ``None``, the converter uses its built-in default.
-        model_reasoning: Per-model reasoning overrides keyed by
-            **upstream model ID** (post-alias).  Each entry inherits
-            from the provider-level ``reasoning`` for unset fields.
     """
 
     name: str
@@ -131,14 +127,13 @@ class ProviderShim:
     to_transforms: tuple[Transform, ...] = ()
     ir_transforms: tuple[IRTransform, ...] = ()
     reasoning: ReasoningCapability | None = None
-    model_reasoning: dict[str, ReasoningCapability] | None = None
 
 
 # ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
-_SHIM_REGISTRY: dict[str, ProviderShim] = {}
+_PLUGIN_SHIM_REGISTRY: dict[str, ProviderShim] = {}
 
 # Base converter types — used by resolve_base() for pass-through detection
 _BASE_TYPES: frozenset[str] = frozenset(
@@ -153,19 +148,27 @@ def register_shim(shim: ProviderShim) -> None:
     replaced and an INFO-level log is emitted.  This allows plugin shims
     to override built-in defaults without raising errors.
     """
-    if shim.name in _SHIM_REGISTRY:
+    from .providers import get_builtin_provider_shim
+
+    if get_builtin_provider_shim(shim.name) is not None:
+        raise ValueError(
+            f"built-in shim {shim.name!r} is immutable and cannot be overridden"
+        )
+    if shim.name in _PLUGIN_SHIM_REGISTRY:
         logger.info("Shim %r overridden (base: %s)", shim.name, shim.base)
-    _SHIM_REGISTRY[shim.name] = shim
+    _PLUGIN_SHIM_REGISTRY[shim.name] = shim
 
 
 def unregister_shim(name: str) -> ProviderShim | None:
     """Remove and return a shim by name.  Returns ``None`` if not found."""
-    return _SHIM_REGISTRY.pop(name, None)
+    return _PLUGIN_SHIM_REGISTRY.pop(name, None)
 
 
 def get_shim(name: str) -> ProviderShim | None:
     """Look up a registered :class:`ProviderShim` by *name*."""
-    return _SHIM_REGISTRY.get(name)
+    from .providers import get_builtin_provider_shim
+
+    return get_builtin_provider_shim(name) or _PLUGIN_SHIM_REGISTRY.get(name)
 
 
 def resolve_shim(shim: ProviderShim | str | None) -> ProviderShim | None:
@@ -178,12 +181,18 @@ def resolve_shim(shim: ProviderShim | str | None) -> ProviderShim | None:
         return None
     if isinstance(shim, ProviderShim):
         return shim
-    return get_shim(shim)
+    # Gateway/provider profiles use an immutable built-in catalog.  The
+    # mutable legacy registry remains available only for explicit plugins.
+    from .providers import get_builtin_provider_shim
+
+    return get_builtin_provider_shim(shim) or _PLUGIN_SHIM_REGISTRY.get(shim)
 
 
 def list_shims() -> list[ProviderShim]:
     """Return all registered provider shims."""
-    return list(_SHIM_REGISTRY.values())
+    from .providers import builtin_provider_shims
+
+    return [*builtin_provider_shims().values(), *_PLUGIN_SHIM_REGISTRY.values()]
 
 
 def resolve_base(name: str) -> str:
@@ -196,7 +205,9 @@ def resolve_base(name: str) -> str:
     """
     if name in _BASE_TYPES:
         return name
-    shim = _SHIM_REGISTRY.get(name)
+    from .providers import get_builtin_provider_shim
+
+    shim = get_builtin_provider_shim(name) or _PLUGIN_SHIM_REGISTRY.get(name)
     if shim is not None:
         return shim.base
     return name
@@ -204,4 +215,4 @@ def resolve_base(name: str) -> str:
 
 def _reset_registry() -> None:
     """Clear the registry.  Intended for testing only."""
-    _SHIM_REGISTRY.clear()
+    _PLUGIN_SHIM_REGISTRY.clear()

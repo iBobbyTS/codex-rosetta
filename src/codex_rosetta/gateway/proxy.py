@@ -1639,10 +1639,15 @@ async def handle_non_streaming(
         route.shim_name,
         upstream_model=model,
         input_modalities=route.input_modalities,
-        reasoning_mapping=None,
-        provider_name=route.provider_name,
+        supported_reasoning_levels=route.supported_reasoning_levels,
         conversion_options={
             "image_fetch_policy": image_fetch_policy,
+            "provider_profile_warning": (
+                None
+                if route.provider_profile_adapted
+                else f"Provider profile {route.provider_profile_name} is not "
+                "adapted by Rosetta; applying only the selected standard protocol."
+            ),
         },
     )
 
@@ -2710,10 +2715,15 @@ async def handle_streaming(  # noqa: C901
         route.shim_name,
         upstream_model=model,
         input_modalities=route.input_modalities,
-        reasoning_mapping=None,
-        provider_name=route.provider_name,
+        supported_reasoning_levels=route.supported_reasoning_levels,
         conversion_options={
             "image_fetch_policy": image_fetch_policy,
+            "provider_profile_warning": (
+                None
+                if route.provider_profile_adapted
+                else f"Provider profile {route.provider_profile_name} is not "
+                "adapted by Rosetta; applying only the selected standard protocol."
+            ),
         },
     )
 

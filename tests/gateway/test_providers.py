@@ -45,7 +45,7 @@ def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
                 "test": {
                     "provider": "upstream",
                     "type": "llm",
-                    "models": {"test-model": {}},
+                    "models": {"test-model": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {
@@ -76,6 +76,7 @@ def test_gateway_registers_raw_csv_and_every_selectable_provider_credential():
     raw_keys = " prefix ,prefix-long, , prefix,final "
     config = _gateway_config(
         {
+            "provider": "custom",
             "api_type": "chat",
             "api_key": raw_keys,
             "base_url": "https://upstream.example/v1",
@@ -96,6 +97,7 @@ def test_gateway_registers_environment_fallback_credential(monkeypatch):
 
     config = _gateway_config(
         {
+            "provider": "openai",
             "api_type": "chat",
             "base_url": "https://upstream.example/v1",
         }

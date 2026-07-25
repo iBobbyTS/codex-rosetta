@@ -20,6 +20,25 @@ from typing import Protocol
 from codex_rosetta.auto_detect import ProviderType
 
 
+class ProviderProfileView(Protocol):
+    """Structural route view of an immutable provider profile."""
+
+    provider_id: str
+    api_type: str
+    target_provider: ProviderType
+    shim_name: str | None
+
+
+class ResolvedModelProfileView(Protocol):
+    """Structural route view of one fully resolved model profile."""
+
+    exposed_model: str
+    upstream_model: str
+    preset_slug: str | None
+    model_info: dict[str, object]
+    runtime_capabilities: dict[str, object]
+
+
 @dataclass(slots=True, frozen=True)
 class ResolvedRoute:
     """Result of resolving a model name to a target route.
@@ -52,9 +71,17 @@ class ResolvedRoute:
     source_provider: ProviderType
     target_provider: ProviderType
     provider_name: str
+    provider_id: str | None = None
+    api_type: str | None = None
+    provider_profile_name: str | None = None
+    provider_profile_adapted: bool = True
+    provider_profile: ProviderProfileView | None = None
     shim_name: str | None = None
     upstream_model: str | None = None
     input_modalities: list[str] | None = None
+    model_info: dict[str, object] = field(default_factory=dict)
+    resolved_model_profile: ResolvedModelProfileView | None = None
+    supported_reasoning_levels: list[str] | None = None
     tool_profile_name: str | None = None
     tool_profile: dict[str, str] = field(default_factory=dict)
     tool_profile_inputs: dict[str, dict[str, str]] = field(default_factory=dict)

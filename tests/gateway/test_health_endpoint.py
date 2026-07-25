@@ -355,6 +355,7 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
         {
             "providers": {
                 "private-provider": {
+                    "provider": "custom",
                     "api_key": "sk-provider-secret",
                     "base_url": "https://api.example.test/v1",
                     "api_type": "chat",
@@ -364,7 +365,7 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
                 "private": {
                     "provider": "private-provider",
                     "type": "llm",
-                    "models": {"model-a": {}},
+                    "models": {"model-a": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {

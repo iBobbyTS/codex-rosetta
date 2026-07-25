@@ -88,7 +88,7 @@ class TestLoadProviders:
         return d
 
     def test_loads_from_builtin_directory(self):
-        """Verify the real providers/ directory loads all 16 built-in shims."""
+        """Verify the real providers directory loads every built-in shim."""
         shims = load_providers()
         names = {s.name for s in shims}
         assert names == {
@@ -104,6 +104,7 @@ class TestLoadProviders:
             "minimax--openai_chat",
             "minimax--anthropic",
             "moonshot",
+            "opencode_go",
             "qwen",
             "volcengine--openai_chat",
             "volcengine--openai_responses",

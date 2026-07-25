@@ -24,11 +24,14 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from typing import Any, cast
+from typing import Any
 
-from codex_rosetta.capabilities import enforce_reasoning, enforce_vision
+from codex_rosetta.capabilities import (
+    enforce_reasoning,
+    enforce_reasoning_levels,
+    enforce_vision,
+)
 from codex_rosetta.converters.base.context import ConversionContext, StreamContext
-from codex_rosetta.reasoning_mapping import apply_reasoning_mapping_to_provider_request
 from codex_rosetta.shims.provider_shim import ProviderShim, resolve_shim
 from codex_rosetta.shims.transforms import (
     Transform,
@@ -63,7 +66,6 @@ def apply_ir_transforms(
         ir_request: The IR request dict.  Some operations mutate in-place,
             others return a new dict — **always use the return value**.
         shim: ProviderShim instance, registered name, or None (no-op).
-        upstream_model: The upstream model ID (for pattern matching).
         input_modalities: Preset input modalities (e.g. ``["text", "image"]``).
             When ``None``, transforms treat the model as unknown and do not
             strip images.
@@ -73,12 +75,12 @@ def apply_ir_transforms(
         The IR request dict after all applicable transforms.  Always
         assign the return value: ``ir = apply_ir_transforms(ir, shim, ...)``.
     """
+    del upstream_model  # Model identity must never select request transforms.
     resolved = resolve_shim(shim)
     if resolved is None or not resolved.ir_transforms:
         return ir_request
 
     ctx = TransformContext(
-        model=upstream_model or "",
         input_modalities=input_modalities,
         request_id=request_id,
     )
@@ -140,8 +142,8 @@ class ConversionPipeline:
         shim: Provider shim instance, registered name, or ``None``.
         upstream_model: The upstream model ID (for shim pattern matching).
         input_modalities: Input modalities declared by the bundled model preset.
-        reasoning_mapping: Optional gateway reasoning mapping.
-        provider_name: User-configured upstream provider name.
+        supported_reasoning_levels: Reasoning efforts declared by the resolved
+            model profile.
     """
 
     def __init__(
@@ -152,8 +154,7 @@ class ConversionPipeline:
         *,
         upstream_model: str | None = None,
         input_modalities: list[str] | None = None,
-        reasoning_mapping: str | None = None,
-        provider_name: str | None = None,
+        supported_reasoning_levels: list[str] | None = None,
         conversion_options: dict[str, Any] | None = None,
     ) -> None:
         from codex_rosetta import get_converter_for_provider
@@ -163,8 +164,7 @@ class ConversionPipeline:
         self._shim = shim
         self._upstream_model = upstream_model
         self._input_modalities = input_modalities
-        self._reasoning_mapping = reasoning_mapping
-        self._provider_name = provider_name
+        self._supported_reasoning_levels = supported_reasoning_levels
         self._conversion_options = dict(conversion_options or {})
 
         self._source_converter = get_converter_for_provider(source_provider)
@@ -286,15 +286,14 @@ class ConversionPipeline:
         ctx = ConversionContext()
         ctx.options["metadata_mode"] = "preserve"
         ctx.options.update(self._conversion_options)
+        profile_warning = ctx.options.get("provider_profile_warning")
+        if isinstance(profile_warning, str) and profile_warning:
+            ctx.warnings.append(profile_warning)
         if self._target_provider == "google":
             ctx.options["output_format"] = "rest"
 
         # Capability enforcement: reasoning (pre-IR)
-        enforce_reasoning(
-            ctx,
-            self._shim,
-            model=self._upstream_model or body.get("model"),
-        )
+        enforce_reasoning(ctx, self._shim)
         self._ctx = ctx
 
         t_total = time.perf_counter()
@@ -313,6 +312,12 @@ class ConversionPipeline:
         if on_ir_ready is not None:
             on_ir_ready(ir_request)
 
+        ir_request = enforce_reasoning_levels(
+            ir_request,
+            supported_levels=self._supported_reasoning_levels,
+            warnings=ctx.warnings,
+        )
+
         request_id = ctx.options.get("request_id", "-")
 
         # Capability enforcement: vision (post-IR) + shim IR transforms
@@ -328,7 +333,6 @@ class ConversionPipeline:
         ir_request = apply_ir_transforms(
             ir_request,
             self._shim,
-            upstream_model=self._upstream_model or body.get("model"),
             input_modalities=self._input_modalities,
             request_id=request_id,
         )
@@ -346,22 +350,6 @@ class ConversionPipeline:
                 f"Conversion error: {exc}", phase="ir_to_target"
             ) from exc
         self._profile["ir_to_target_ms"] = round((time.perf_counter() - t0) * 1000, 2)
-
-        target_body = apply_reasoning_mapping_to_provider_request(
-            target_body,
-            ir_request=ir_request,
-            target_provider=self._target_provider,
-            reasoning_mapping=self._reasoning_mapping,
-            provider_name=self._provider_name,
-            shim_name=(
-                self._shim.name
-                if isinstance(self._shim, ProviderShim)
-                else cast(str | None, self._shim)
-            ),
-            upstream_model=self._upstream_model,
-            model_name=body.get("model"),
-            context=ctx,
-        )
 
         # Phase 2c: Body-level shim to_transforms
         t0 = time.perf_counter()

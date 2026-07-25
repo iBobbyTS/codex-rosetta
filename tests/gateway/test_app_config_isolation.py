@@ -26,6 +26,7 @@ def _config(
         {
             "providers": {
                 f"provider-{label}": {
+                    "provider": "custom",
                     "api_key": f"sk-{label}",
                     "base_url": f"https://{label}.example.test/v1",
                     "api_type": "chat",
@@ -35,7 +36,7 @@ def _config(
                 f"group-{label}": {
                     "provider": f"provider-{label}",
                     "type": "llm",
-                    "models": {f"model-{label}": {}},
+                    "models": {f"model-{label}": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {

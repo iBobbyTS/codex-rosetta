@@ -52,7 +52,17 @@ def _make_config(
         "anthropic": "anthropic",
         "google": "google",
     }
-    model: dict[str, Any] = {}
+    model: dict[str, Any] = {
+        "model_info": {
+            "slug": "gateway-model",
+            "display_name": "Gateway model",
+            "description": "Gateway model used by auxiliary route tests",
+            "priority": 1,
+            "context_window": 128_000,
+            "input_modalities": ["text", "image"],
+            "supported_reasoning_levels": ["medium"],
+        }
+    }
     if upstream_model is not None:
         model["upstream_model"] = upstream_model
     tool_profiles: dict[str, Any] = {}

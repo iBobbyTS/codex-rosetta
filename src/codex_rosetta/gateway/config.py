@@ -10,7 +10,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlsplit
 
 from codex_rosetta.auto_detect import ProviderType
@@ -19,6 +19,11 @@ from codex_rosetta.observability.retention import resolve_request_log_caps
 from codex_rosetta.routing import ResolvedRoute
 
 from .providers import build_provider_info
+from .provider_profiles import (
+    API_TYPE_TO_PROVIDER_TYPE as PROFILE_API_TYPE_TO_PROVIDER_TYPE,
+    api_type_order,
+    resolve_provider_profile,
+)
 from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
@@ -30,7 +35,7 @@ from .tool_profiles import (
     resolve_tool_profile_inputs,
     validate_tool_profile_reference,
 )
-from .model_presets import model_input_modalities, normalize_model_info
+from .model_profiles import ResolvedModelProfile, resolve_model_profile
 from .web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from .transport import ProviderInfo
 
@@ -46,13 +51,8 @@ CONFIG_DIRS_TO_TRY = [DEFAULT_CONFIG_DIR]
 CODEX_HOME_ENV = "CODEX_HOME"
 DEFAULT_CODEX_HOME = os.path.expanduser("~/.codex")
 
-API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = {
-    "responses": "openai_responses",
-    "chat": "openai_chat",
-    "anthropic": "anthropic",
-    "google": "google",
-}
-API_TYPE_ORDER = tuple(API_TYPE_TO_PROVIDER_TYPE)
+API_TYPE_TO_PROVIDER_TYPE: dict[str, str] = dict(PROFILE_API_TYPE_TO_PROVIDER_TYPE)
+API_TYPE_ORDER = api_type_order()
 
 CHAT_DEFAULT_TOOL_PROFILE = BUILTIN_TOOL_PROFILE
 WEB_RUN_INJECTION_TOOL_PROFILE = "web-run-injection"
@@ -70,73 +70,6 @@ SELF_HOSTED_WEB_SEARCH_PROVIDERS = frozenset(
 WEB_SEARCH_PROVIDERS = frozenset({"tavily", *SELF_HOSTED_WEB_SEARCH_PROVIDERS})
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
 
-# The Admin supplier is persisted as ``provider`` while its variant remains a
-# UI-derived value. Runtime shim selection independently uses these exact
-# protocol URL matches. Any other URL remains an allowed custom endpoint.
-_PRESET_SHIMS_BY_URL: dict[tuple[str, str], str] = {
-    ("chat", "https://api.deepseek.com"): "deepseek",
-    ("chat", "https://open.bigmodel.cn/api/paas/v4"): "zhipu",
-    ("chat", "https://api.moonshot.cn/v1"): "moonshot",
-    ("chat", "https://api.moonshot.ai/v1"): "moonshot",
-    ("chat", "https://api.minimaxi.com/v1"): "minimax--openai_chat",
-    ("anthropic", "https://api.minimaxi.com/anthropic"): "minimax--anthropic",
-    ("chat", "https://dashscope.aliyuncs.com/compatible-mode/v1"): "qwen",
-    ("chat", "https://api.openai.com/v1"): "openai",
-    ("responses", "https://api.openai.com/v1"): "openai_responses",
-    ("google", "https://generativelanguage.googleapis.com"): "google",
-    ("anthropic", "https://api.anthropic.com"): "anthropic",
-    ("chat", "https://openrouter.ai/api/v1"): "openrouter--openai_chat",
-    ("anthropic", "https://openrouter.ai/api"): "openrouter--anthropic",
-}
-
-_PRESET_PROTOCOL_URLS = frozenset(
-    {
-        *_PRESET_SHIMS_BY_URL,
-        ("anthropic", "https://api.deepseek.com/anthropic"),
-        ("anthropic", "https://api.moonshot.cn/anthropic"),
-        ("anthropic", "https://api.moonshot.ai/anthropic"),
-        ("responses", "https://api.minimaxi.com/v1"),
-        ("responses", "https://api.minimax.io/v1"),
-        ("chat", "https://api.minimax.io/v1"),
-        ("anthropic", "https://api.minimax.io/anthropic"),
-        (
-            "responses",
-            "https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1",
-        ),
-        (
-            "chat",
-            "https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/compatible-mode/v1",
-        ),
-        (
-            "anthropic",
-            "https://{WorkspaceId}.{RegionId}.maas.aliyuncs.com/apps/anthropic",
-        ),
-        ("chat", "https://opencode.ai/zen/go/v1"),
-    }
-)
-
-
-def _provider_shim_for_url(api_type: str, base_url: Any) -> str | None:
-    if not isinstance(base_url, str) or not base_url.strip():
-        return None
-    normalized = base_url.strip().rstrip("/")
-    shim_name = _PRESET_SHIMS_BY_URL.get((api_type, normalized))
-    if shim_name is None:
-        return None
-    from codex_rosetta.shims import get_shim
-
-    return shim_name if get_shim(shim_name) is not None else None
-
-
-def _infer_provider_api_type(base_url: Any) -> str:
-    """Choose the first protocol supported by an exact preset URL."""
-    if isinstance(base_url, str) and base_url.strip():
-        normalized = base_url.strip().rstrip("/")
-        for api_type in API_TYPE_ORDER:
-            if (api_type, normalized) in _PRESET_PROTOCOL_URLS:
-                return api_type
-    return API_TYPE_ORDER[0]
-
 
 def resolve_provider_api_type(
     name: str,
@@ -144,28 +77,20 @@ def resolve_provider_api_type(
     *,
     warn_on_default: bool = False,
 ) -> str:
-    """Return explicit or URL-inferred protocol without changing persisted config."""
+    """Return an explicitly configured standard protocol."""
     api_type = cfg.get("api_type")
-    if isinstance(api_type, str) and api_type in API_TYPE_TO_PROVIDER_TYPE:
-        return api_type
-
     if "shim" in cfg or "type" in cfg:
         raise ValueError(
             "config: provider shim/type options are unsupported; "
             "declare api_type and base_url"
         )
+    if isinstance(api_type, str) and api_type in API_TYPE_TO_PROVIDER_TYPE:
+        return api_type
 
-    inferred = _infer_provider_api_type(cfg.get("base_url"))
-    if warn_on_default:
-        logger.warning(
-            "config: provider %r has missing or unsupported api_type %r; "
-            "defaulting to %r for base_url %r",
-            name,
-            api_type,
-            inferred,
-            cfg.get("base_url"),
-        )
-    return inferred
+    raise ValueError(
+        f"config: provider {name!r} requires api_type to be one of "
+        f"{list(API_TYPE_ORDER)}"
+    )
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -418,9 +343,12 @@ def default_tool_profile_for_provider(cfg: Any) -> str | None:
 
     api_type = cfg.get("api_type")
     if api_type not in API_TYPE_TO_PROVIDER_TYPE:
-        api_type = _infer_provider_api_type(cfg.get("base_url"))
+        return None
     if api_type == "responses":
-        shim_name = _provider_shim_for_url(api_type, cfg.get("base_url"))
+        provider_id = cfg.get("provider")
+        if not isinstance(provider_id, str):
+            return None
+        shim_name = resolve_provider_profile(provider_id, api_type).shim_name
         if shim_name == "openai_responses":
             return TOOL_PROFILE_PASSTHROUGH_OPTION
         if shim_name is None:
@@ -484,8 +412,13 @@ def resolve_provider_config_type_and_shim(
         cfg,
         warn_on_default=warn_on_default,
     )
-    provider_type = api_type_to_provider_type(api_type) or api_type
-    return provider_type, _provider_shim_for_url(api_type, cfg.get("base_url"))
+    provider_id = cfg.get("provider")
+    if not isinstance(provider_id, str) or not provider_id.strip():
+        raise ValueError(
+            f"config: provider {name!r} requires an explicit provider main identity"
+        )
+    profile = resolve_provider_profile(provider_id.strip(), api_type)
+    return profile.target_provider, profile.shim_name
 
 
 # ---------------------------------------------------------------------------
@@ -744,9 +677,12 @@ class GatewayConfig:
         self._expanded_raw_models = self._expand_model_groups(
             raw.get("model_groups", {})
         )
-        self.models, self.model_input_modalities, self.model_upstream_names = (
-            self._parse_models(self._expanded_raw_models, self._raw_providers)
-        )
+        (
+            self.models,
+            self.model_profiles,
+            self.model_input_modalities,
+            self.model_upstream_names,
+        ) = self._parse_models(self._expanded_raw_models, self._raw_providers)
         self.tool_profile_documents = normalize_tool_profile_documents(
             raw.get("tool_profiles")
         )
@@ -923,7 +859,7 @@ class GatewayConfig:
     def _resolve_provider_types(
         raw_providers: dict[str, dict[str, Any]],
     ) -> tuple[dict[str, str], dict[str, str | None]]:
-        """Resolve each provider's explicit protocol and URL-derived shim.
+        """Resolve each provider's explicit protocol and Provider Profile.
 
         Returns:
             Tuple of (provider_types, provider_shim_names).
@@ -940,6 +876,14 @@ class GatewayConfig:
             api_type = resolve_provider_api_type(name, cfg, warn_on_default=True)
             cfg["api_type"] = api_type
             provider_type, shim_name = resolve_provider_config_type_and_shim(name, cfg)
+            if shim_name is None:
+                logger.warning(
+                    "config: provider %r selects unadapted profile %s:%s; "
+                    "Rosetta will apply only the selected standard protocol",
+                    name,
+                    cfg["provider"],
+                    api_type,
+                )
             provider_types[name] = provider_type
             provider_shim_names[name] = shim_name
         return provider_types, provider_shim_names
@@ -967,16 +911,12 @@ class GatewayConfig:
                 f"in model group '{group_name}'"
             )
 
-        model_info = entry.pop("model_info", None)
-        if model_info is not None:
-            model_info = normalize_model_info(
-                model_info,
-                field=(
-                    f"config: model '{model_name}' in model group "
-                    f"'{group_name}'.model_info"
-                ),
-            )
-        unsupported = set(entry) - {"provider", "upstream_model"}
+        unsupported = set(entry) - {
+            "provider",
+            "upstream_model",
+            "model_info",
+            "runtime_capabilities",
+        }
         if unsupported:
             raise ValueError(
                 f"config: model '{model_name}' in model group "
@@ -1035,7 +975,12 @@ class GatewayConfig:
         cls,
         raw_models: dict[str, Any],
         raw_providers: dict[str, dict[str, Any]],
-    ) -> tuple[dict[str, ProviderType], dict[str, list[str] | None], dict[str, str]]:
+    ) -> tuple[
+        dict[str, ProviderType],
+        dict[str, ResolvedModelProfile],
+        dict[str, list[str] | None],
+        dict[str, str],
+    ]:
         """Parse model routing entries from config.
 
         Entries have already been normalized from model groups.
@@ -1046,6 +991,7 @@ class GatewayConfig:
             Tuple of (models, model input modalities, model upstream names).
         """
         models: dict[str, ProviderType] = {}
+        model_profiles: dict[str, ResolvedModelProfile] = {}
         input_modalities: dict[str, list[str] | None] = {}
         model_upstream_names: dict[str, str] = {}
         for name, value in raw_models.items():
@@ -1058,13 +1004,19 @@ class GatewayConfig:
 
             models[name] = provider_name
             upstream = value.get("upstream_model")
-            input_modalities[name] = model_input_modalities(
-                name,
-                upstream,
+            provider_id = cast(str, raw_providers[provider_name]["provider"])
+            profile = resolve_model_profile(
+                exposed_model=name,
+                upstream_model=upstream,
+                provider_id=provider_id,
+                model_info_override=value.get("model_info"),
+                runtime_capabilities_override=value.get("runtime_capabilities"),
             )
+            model_profiles[name] = profile
+            input_modalities[name] = list(profile.input_modalities)
             if upstream:
                 model_upstream_names[name] = upstream
-        return models, input_modalities, model_upstream_names
+        return models, model_profiles, input_modalities, model_upstream_names
 
     @property
     def api_key(self) -> str | None:
@@ -1101,15 +1053,27 @@ class GatewayConfig:
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
         input_modalities = self.model_input_modalities.get(model)
+        model_profile = self.model_profiles[model]
+        provider_id = self._raw_providers[provider_name]["provider"]
+        api_type = self._raw_providers[provider_name]["api_type"]
+        provider_profile = resolve_provider_profile(provider_id, api_type)
         tool_profile_name = self.model_tool_profile_names.get(model)
 
         route = ResolvedRoute(
             source_provider=source_provider,
             target_provider=cast(ProviderType, provider_type),
             provider_name=provider_name,
+            provider_id=provider_id,
+            api_type=api_type,
+            provider_profile_name=f"{provider_id}:{api_type}",
+            provider_profile_adapted=provider_profile.adapted,
+            provider_profile=provider_profile,
             shim_name=shim_name,
             upstream_model=upstream_model,
             input_modalities=input_modalities,
+            model_info=model_profile.catalog_model(),
+            resolved_model_profile=model_profile,
+            supported_reasoning_levels=list(model_profile.supported_reasoning_levels),
             tool_profile_name=tool_profile_name,
             tool_profile=(
                 resolve_tool_profile(tool_profile_name, self.tool_profiles)

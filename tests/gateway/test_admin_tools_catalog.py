@@ -193,6 +193,7 @@ def _make_app():
         {
             "providers": {
                 "test-provider": {
+                    "provider": "custom",
                     "api_key": "sk-test",
                     "base_url": "https://api.example.test/v1",
                     "api_type": "chat",
@@ -202,7 +203,7 @@ def _make_app():
                 "test": {
                     "provider": "test-provider",
                     "type": "llm",
-                    "models": {"gpt-test": {}},
+                    "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
             },
             "server": {
@@ -754,7 +755,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                 "provider": "test-provider",
                 "type": "llm",
                 "tool_profile": "builtin",
-                "models": {"gpt-test": {}},
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
         "server": {
@@ -879,7 +880,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                     "provider": "test-provider",
                     "type": "llm",
                     "tool_profile": "restricted",
-                    "models": {"gpt-test": {}},
+                    "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 },
             )
         )

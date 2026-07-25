@@ -7,9 +7,8 @@ to Anthropic Messages format.  Argo's ``/v1/messages`` endpoint inconsistently
 returns ``choices[0].message`` for some Claude model versions; this transform
 normalises those responses before the Anthropic converter sees them.
 
-Request-side thinking normalization (``enabled`` ↔ ``adaptive`` per model) is
-handled declaratively via ``reasoning.model_overrides`` in ``provider.yaml``
-and the generic ``reasoning_helpers.py`` machinery.
+Request-side reasoning is provider-wide and declared by the Provider Profile;
+this module deliberately contains no model-specific request transforms.
 """
 
 from __future__ import annotations

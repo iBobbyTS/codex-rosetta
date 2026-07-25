@@ -92,18 +92,23 @@ class TestRegistry:
     def test_unregister_nonexistent(self):
         assert unregister_shim("nonexistent") is None
 
-    def test_list_shims(self):
+    def test_list_shims_includes_plugin_and_immutable_builtins(self):
         s1 = ProviderShim(name="a", base="openai_chat")
         s2 = ProviderShim(name="b", base="anthropic")
         register_shim(s1)
         register_shim(s2)
         shims = list_shims()
-        assert len(shims) == 2
+        assert len(shims) > 2
         names = {s.name for s in shims}
-        assert names == {"a", "b"}
+        assert {"a", "b", "openai", "anthropic"} <= names
 
-    def test_list_shims_empty(self):
-        assert list_shims() == []
+    def test_reset_clears_only_plugins(self):
+        assert get_shim("openai") is not None
+        assert all(shim.name != "test-provider" for shim in list_shims())
+
+    def test_builtin_cannot_be_overridden(self):
+        with pytest.raises(ValueError, match="immutable"):
+            register_shim(ProviderShim(name="deepseek", base="anthropic"))
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +125,6 @@ class TestResolveBase:
         assert resolve_base("open_responses") == "open_responses"
 
     def test_shim_name_resolves(self):
-        register_shim(ProviderShim(name="deepseek", base="openai_chat"))
         assert resolve_base("deepseek") == "openai_chat"
 
     def test_unknown_name_passthrough(self):
@@ -178,10 +182,6 @@ class TestBuiltinShims:
         assert shim is not None
         assert shim.reasoning is not None
         assert shim.reasoning.unsigned_reasoning_blocks == "preserve"
-        assert shim.model_reasoning is not None
-        assert (
-            shim.model_reasoning["claudeopus47"].unsigned_reasoning_blocks == "preserve"
-        )
 
     def test_google_base_type(self):
         shim = get_shim("google")
@@ -278,18 +278,6 @@ class TestGroupedProviders:
         assert anth.reasoning.effort_field == "output_config.effort"
         assert anth.reasoning.effort_map["xhigh"] == "xhigh"
         assert oai.reasoning.effort_map["max"] == "max"
-
-    def test_argo_anthropic_model_reasoning_overrides(self):
-        """Argo anthropic has model_reasoning for claudeopus47."""
-        anth = get_shim("argo--anthropic")
-        assert anth is not None
-        assert anth.model_reasoning is not None
-        assert "claudeopus47" in anth.model_reasoning
-        override = anth.model_reasoning["claudeopus47"]
-        assert override.thinking_type == "adaptive"
-        # Inherits provider defaults for other fields
-        assert override.effort_field == "output_config.effort"
-        assert override.effort_map["xhigh"] == "xhigh"
 
     def test_argo_anthropic_provider_thinking_type(self):
         """Argo anthropic provider-level thinking_type is enabled."""

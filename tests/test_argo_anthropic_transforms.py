@@ -2,9 +2,8 @@
 
 Covers the response-side ``_normalize_openai_response`` (from_transform).
 
-Request-side thinking normalization is handled declaratively via
-``reasoning.model_overrides`` in ``provider.yaml`` and tested through
-the generic reasoning_helpers test suite.
+Request-side reasoning is provider-wide and contains no model-specific
+transforms.
 """
 
 from __future__ import annotations

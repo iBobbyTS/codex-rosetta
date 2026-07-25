@@ -17,7 +17,6 @@ from codex_rosetta.shims.transforms import (
     replace_message_field,
     set_defaults,
     strip_fields,
-    strip_fields_for_model,
 )
 
 
@@ -507,52 +506,6 @@ class TestDefaultMessageField:
         assert repr(t) == "default_message_field('content', '')"
 
 
-class TestStripFieldsForModel:
-    def test_strips_when_model_matches(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        body = {"model": "claudeopus47", "temperature": 0.7, "messages": []}
-        result = t(body)
-        assert "temperature" not in result
-        assert result["model"] == "claudeopus47"
-
-    def test_strips_with_normalised_model(self):
-        """Model name is normalised (lowercase, non-alnum stripped)."""
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        body = {"model": "Claude-Opus-4.7", "temperature": 0.7, "messages": []}
-        result = t(body)
-        assert "temperature" not in result
-
-    def test_noop_when_model_no_match(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        body = {"model": "gpt-4o", "temperature": 0.7, "messages": []}
-        result = t(body)
-        assert result["temperature"] == 0.7
-
-    def test_noop_when_no_model(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        body = {"temperature": 0.7, "messages": []}
-        result = t(body)
-        assert result["temperature"] == 0.7
-
-    def test_multiple_keys(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature", "top_p")
-        body = {"model": "claudeopus47", "temperature": 0.7, "top_p": 0.9}
-        result = t(body)
-        assert "temperature" not in result
-        assert "top_p" not in result
-
-    def test_idempotent(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        body = {"model": "claudeopus47", "temperature": 0.7}
-        result1 = t(body)
-        result2 = t(result1)
-        assert result1 == result2
-
-    def test_repr(self):
-        t = strip_fields_for_model(r"^claudeopus47", "temperature")
-        assert repr(t) == "strip_fields_for_model('^claudeopus47', 'temperature')"
-
-
 # ---------------------------------------------------------------------------
 # Argo OpenAI Chat shim integration
 # ---------------------------------------------------------------------------
@@ -587,7 +540,7 @@ class TestArgoOpenaiChatTransforms:
         result = apply_transforms(shim.to_transforms, body)
         assert result["messages"][0]["content"] == ""
 
-    def test_argo_strips_temperature_for_opus47(self):
+    def test_argo_does_not_apply_model_scoped_temperature_transform(self):
         shim = get_shim("argo--openai_chat")
         assert shim is not None
         body = {
@@ -596,7 +549,7 @@ class TestArgoOpenaiChatTransforms:
             "messages": [{"role": "user", "content": "hi"}],
         }
         result = apply_transforms(shim.to_transforms, body)
-        assert "temperature" not in result
+        assert result["temperature"] == 0.7
 
     def test_argo_keeps_temperature_for_other_models(self):
         shim = get_shim("argo--openai_chat")

@@ -51,3 +51,37 @@ This is a protocol-selection decision, not a claim that every model currently
 listed by `GET /models` is callable. `hy3-preview`, `mimo-v2-omni`, and
 `mimo-v2-pro` failed on both probed endpoints and must remain unavailable until
 OpenCode Go exposes a working route for them.
+
+## Rosetta Provider Profile Verification
+
+> Last tested: 2026-07-25 14:27:29 MDT (UTC-06:00)
+
+OpenCode Go is now one adapted Provider Profile using the OpenAI Chat
+Completions standard. The Profile constructs `reasoning_effort`, parses
+`reasoning_content`, and normalizes
+`usage.prompt_tokens_details.cached_tokens` using OpenAI Chat semantics. Model
+names do not select any of these fields.
+
+The following minimal checks sent an OpenAI Responses request containing only
+`input: "hi"` through an isolated current-worktree Gateway. The Gateway then
+used each resolved Provider Profile and target protocol. No tools, images,
+multi-turn history, or live agent were exercised.
+
+| Model | Provider Profile | Target protocol | Result |
+| --- | --- | --- | --- |
+| `gpt-5.6-terra` | `openai:responses` | OpenAI Responses | HTTP 200 |
+| `deepseek-v4-flash` | `deepseek:chat` | OpenAI Chat Completions | HTTP 200 |
+| `glm-5.2` | `opencode_go:chat` | OpenAI Chat Completions | HTTP 200 |
+| `kimi-k3` | `opencode_go:chat` | OpenAI Chat Completions | HTTP 200 |
+
+The OpenCode edge returned Cloudflare error 1010 when the diagnostic client
+used Python's default `Python-urllib` User-Agent. Direct control requests and
+the Gateway route both succeeded with the Codex `codex_cli_rs/0.145.0`
+User-Agent. This is recorded as an edge policy observation, not a request-body
+conversion failure and not a reason to override the client User-Agent in the
+Provider Profile.
+
+These checks verify only basic routing and response reconstruction. They do not
+claim complete reasoning, cached usage, tools, image, streaming, or long-session
+compatibility; those semantics remain covered by deterministic tests or
+separate live-agent gates as applicable.

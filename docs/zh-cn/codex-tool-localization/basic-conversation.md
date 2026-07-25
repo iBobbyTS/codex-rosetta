@@ -7,6 +7,14 @@ Codex 通过 OpenAI Responses API 接口与模型通信。许多第三方供应�
 
 目标是保留 Codex 运行时的语义，而不仅仅是让上游请求在语法上有效。
 
+## Provider Profile 与协议 fallback
+
+Provider 配置必须显式声明。provider 主选项与 `api_type` 共同选择标准转换器和已适配的 provider 扩展；endpoint 子选项与 Base URL 只选择网络地址。Rosetta 不再根据 URL 推断 provider 或协议，模型名也不能选择请求字段。
+
+Admin 协议选择器会先列出 Rosetta 已适配协议，再列出 provider 已知支持但 Rosetta 未适配的可选协议，最后列出 provider 可能不支持的其他可选协议。后两组均可保存并调用，但只使用所选官方标准：Chat Completions、Responses、Anthropic Messages 或 Google GenAI；UI、配置与 trace 会标记 warning，且不执行 provider 专属扩展。所选协议没有 endpoint preset 时会清空 URL，并要求填写明确地址。
+
+内置推荐协议为：OpenAI 推荐 Responses，Anthropic 推荐 Messages，Google 推荐 GenAI，其余 provider 推荐 Chat Completions。
+
 ## 单一 Responses 协议与供应商感知默认值
 
 Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应商子选项不入库；管理界面只根据已保存的供应商和 Base URL 推导子选项。供应商选择只决定模型组默认工具处理方式，协议处理始终保持直接传输：

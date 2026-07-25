@@ -9,6 +9,16 @@ import SettingsPage from '../src/admin/pages/SettingsPage.svelte';
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 
+const providerCatalog = {
+  api_types: ['responses', 'chat', 'anthropic', 'google'],
+  providers: {
+    openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, custom: { endpoints: {} } } },
+    moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
+    deepseek: { label_key: 'provider.deepseek', recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
+    custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
+  },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.setItem('codex-rosetta-lang', 'en');
@@ -22,6 +32,7 @@ describe('ProvidersPage', () => {
     const config = {
       providers: { official: { provider: 'openai', base_url: 'https://api.openai.com/v1', api_type: 'responses', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
       credential_visible: true,
     };
@@ -62,6 +73,7 @@ describe('ProvidersPage', () => {
         mismatch: { provider: 'deepseek', base_url: 'https://api.openai.com/v1', api_type: 'chat' },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
       registered_shims: [],
       credential_visible: false,
     });
@@ -80,6 +92,7 @@ describe('ProvidersPage', () => {
     apiMock.get.mockResolvedValue({
       providers: {},
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
       registered_shims: [],
       credential_visible: false,
     });
@@ -286,8 +299,9 @@ describe('ModelsPage', () => {
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
-    expect(screen.getByDisplayValue('Preset description')).toBeInTheDocument();
-    await fireEvent.input(screen.getByLabelText('Display Name'), { target: { value: 'Changed' } });
+    const modelInfo = screen.getByLabelText('model_info') as HTMLTextAreaElement;
+    expect(JSON.parse(modelInfo.value)).toEqual(preset);
+    await fireEvent.input(modelInfo, { target: { value: JSON.stringify({ ...preset, display_name: 'Changed' }) } });
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {

@@ -49,6 +49,11 @@ High-confidence unchanged rows may record the live API result as "not triggered 
 
 ## Current documentation baseline
 
+- [`provider-profile-review.md`](provider-profile-review.md): full inventory of
+  the provider/request-construction responsibility refactor, removed
+  model-specific adaptations, deterministic coverage, and the four limited
+  real route checks. It does not approve broader live-agent compatibility or a
+  package-version change.
 - [`upgrade-review.md`](upgrade-review.md): full
   source-first inventory and implementation review for `0.145.0`, including
   direct comparison with `0.142.0`, `0.144.6`, and alpha.23, deterministic

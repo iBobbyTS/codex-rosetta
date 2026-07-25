@@ -110,11 +110,12 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert "request_conversion_ms" not in profile
 
 
-def test_unmatched_provider_url_renders_custom_responses_behavior():
-    """An unmatched URL uses the custom protocol profile, not the preset shim."""
+def test_unadapted_provider_protocol_uses_standard_responses_behavior():
+    """An unadapted provider/protocol pair uses the selected standard."""
     raw = {
         "providers": {
             "Qwen": {
+                "provider": "qwen",
                 "api_key": "sk-test",
                 "base_url": "https://qwen.example.test/v1",
                 "api_type": "responses",
@@ -124,7 +125,7 @@ def test_unmatched_provider_url_renders_custom_responses_behavior():
             "Qwen": {
                 "provider": "Qwen",
                 "type": "llm",
-                "models": {"qwen-test": {}},
+                "models": {"qwen-test": {"upstream_model": "qwen3.7-plus"}},
             }
         },
         "server": {

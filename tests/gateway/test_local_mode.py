@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import tomllib
 from pathlib import Path
@@ -40,17 +39,15 @@ def _sync_transaction(
     )
 
 
-def test_catalog_uses_only_configured_models_and_clones_terra_for_custom_names() -> (
-    None
-):
+def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -> None:
     raw = {
         "model_groups": {
             "llm": {
                 "type": "llm",
                 "models": {
                     "gpt-5.6-sol": {},
-                    "zeta-model": {},
-                    "alpha-model": {},
+                    "zeta-model": {"upstream_model": "gpt-5.6-terra"},
+                    "alpha-model": {"upstream_model": "gpt-5.6-terra"},
                 },
             },
         }
@@ -76,12 +73,11 @@ def test_catalog_uses_only_configured_models_and_clones_terra_for_custom_names()
 
     terra = next(model for model in bundled if model["slug"] == "gpt-5.6-terra")
     custom = next(model for model in models if model["slug"] == "alpha-model")
-    assert custom["slug"] == custom["display_name"] == custom["description"]
     assert custom["slug"] == "alpha-model"
+    assert custom["display_name"] == terra["display_name"]
     for key, value in terra.items():
-        if key not in {"slug", "display_name", "description", "comp_hash"}:
+        if key != "slug":
             assert custom[key] == value
-    assert custom["comp_hash"].startswith("rosetta-comp-v1:custom:")
 
 
 def test_catalog_emits_legacy_summary_capability_for_codex_0144_clients() -> None:
@@ -109,7 +105,10 @@ def test_catalog_applies_auto_review_override_to_every_selected_model() -> None:
         "model_groups": {
             "models": {
                 "type": "llm",
-                "models": {"review-alias": {}, "work-alias": {}},
+                "models": {
+                    "review-alias": {"upstream_model": "gpt-5.6-terra"},
+                    "work-alias": {"upstream_model": "gpt-5.6-terra"},
+                },
             }
         },
     }
@@ -174,7 +173,7 @@ def test_catalog_preserves_auto_review_tool_mode_without_model_mapping(
     "model_config",
     [{"upstream_model": "deepseek-v4-flash"}, "deepseek-v4-flash"],
 )
-def test_catalog_forces_code_mode_for_mapped_auto_review_model(
+def test_catalog_uses_upstream_preset_for_mapped_auto_review_model(
     model_config: dict[str, str] | str,
 ) -> None:
     raw = {
@@ -186,18 +185,16 @@ def test_catalog_forces_code_mode_for_mapped_auto_review_model(
         }
     }
 
-    default = next(
-        model
-        for model in build_model_catalog({})["models"]
-        if model["slug"] == "codex-auto-review"
-    )
-    expected = dict(
-        default,
-        tool_mode="code_mode_only",
-        comp_hash="dsv4-pre",
-    )
+    [model] = build_model_catalog(raw)["models"]
 
-    assert build_model_catalog(raw)["models"] == [expected]
+    assert model["slug"] == "codex-auto-review"
+    assert model["display_name"] == "DeepSeek V4 Flash"
+    assert model["tool_mode"] == "code_mode_only"
+    assert model["comp_hash"] == "dsv4-pre"
+    assert [item["effort"] for item in model["supported_reasoning_levels"]] == [
+        "high",
+        "max",
+    ]
 
 
 def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
@@ -439,7 +436,7 @@ def test_catalog_honors_explicit_preset_compaction_hash(
         assert model["comp_hash"] == expected_hash
 
 
-def test_catalog_compaction_hash_depends_only_on_upstream_model_name() -> None:
+def test_catalog_rejects_unknown_upstream_without_complete_model_info() -> None:
     def comp_hash(alias: str, upstream: str, provider: str) -> str:
         raw = {
             "model_groups": {
@@ -453,12 +450,8 @@ def test_catalog_compaction_hash_depends_only_on_upstream_model_name() -> None:
         [model] = build_model_catalog(raw)["models"]
         return model["comp_hash"]
 
-    expected = (
-        "rosetta-comp-v1:custom:" + hashlib.sha256(b"shared-upstream-model").hexdigest()
-    )
-    assert comp_hash("first-alias", "shared-upstream-model", "provider-a") == expected
-    assert comp_hash("second-alias", "shared-upstream-model", "provider-b") == expected
-    assert comp_hash("first-alias", "different-upstream", "provider-a") != expected
+    with pytest.raises(ValueError, match="complete model_info"):
+        comp_hash("first-alias", "shared-upstream-model", "provider-a")
 
     defaults = {model["slug"]: model for model in build_model_catalog({})["models"]}
     assert (
@@ -520,7 +513,6 @@ def test_catalog_compaction_hash_groups_are_stable_and_non_null() -> None:
         "mimo-v2.5-pro": {},
         "minimax-m3": {},
         "kimi-k2.7-code": {},
-        "unlisted-model": {},
     }
     catalog = build_model_catalog(
         {"model_groups": {"models": {"type": "llm", "models": requested}}}
@@ -543,9 +535,8 @@ def test_catalog_compaction_hash_groups_are_stable_and_non_null() -> None:
         hashes["mimo-v2.5"],
         hashes["minimax-m3"],
         hashes["kimi-k2.7-code"],
-        hashes["unlisted-model"],
     }
-    assert len(groups) == 12
+    assert len(groups) == 11
 
 
 def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) -> None:

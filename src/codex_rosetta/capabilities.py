@@ -18,38 +18,13 @@ appropriate pipeline stages.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 from codex_rosetta.converters.base.context import ConversionContext
 from codex_rosetta.shims.provider_shim import (
     ProviderShim,
-    ReasoningCapability,
     resolve_shim,
 )
-
-
-def _apply_config_reasoning_override(
-    base: ReasoningCapability,
-    override: dict[str, Any],
-) -> ReasoningCapability:
-    """Merge config-level reasoning overrides onto a base capability.
-
-    Only fields present in *override* are replaced; the rest inherit
-    from *base*.
-    """
-    return ReasoningCapability(
-        disabled=override.get("disabled", base.disabled),
-        effort_field=override.get("effort_field", base.effort_field),
-        max_effort=override.get("max_effort", base.max_effort),
-        thinking_type=override.get("thinking_type", base.thinking_type),
-        unsigned_reasoning_blocks=override.get(
-            "unsigned_reasoning_blocks", base.unsigned_reasoning_blocks
-        ),
-        effort_map=override.get("effort_map", base.effort_map),
-        budget_tokens_default_ratio=override.get(
-            "budget_tokens_default_ratio", base.budget_tokens_default_ratio
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -60,9 +35,6 @@ def _apply_config_reasoning_override(
 def enforce_reasoning(
     ctx: ConversionContext,
     shim: ProviderShim | str | None,
-    *,
-    model: str | None = None,
-    config_override: dict[str, Any] | None = None,
 ) -> None:
     """Configure reasoning capability in the conversion context.
 
@@ -72,33 +44,52 @@ def enforce_reasoning(
     Must be called **before** source → IR conversion (converters read
     ``ctx.options["reasoning_cap"]`` during parsing).
 
-    Resolution priority (highest first):
-
-    1. *config_override* — per-model override from external config
-       (e.g. gateway admin UI).
-    2. ``shim.model_reasoning[model]`` — per-model override from the
-       provider YAML.
-    3. ``shim.reasoning`` — provider-level default.
-
     Args:
         ctx: Conversion context to mutate.
         shim: ProviderShim instance, registered name, or None (no-op).
-        model: Upstream model ID (for per-model reasoning overrides).
-        config_override: External reasoning override (highest priority).
     """
     resolved = resolve_shim(shim)
     if resolved is None:
         return
 
     cap = resolved.reasoning
-    # Model-level override (keyed by upstream model ID)
-    if model and resolved.model_reasoning and model in resolved.model_reasoning:
-        cap = resolved.model_reasoning[model]
-    # Config-level override (from admin UI, keyed by gateway model name)
-    if cap is not None and config_override:
-        cap = _apply_config_reasoning_override(cap, config_override)
     if cap is not None:
         ctx.options["reasoning_cap"] = cap
+
+
+_REASONING_LADDER = ("minimal", "low", "medium", "high", "xhigh", "max", "ultra")
+
+
+def enforce_reasoning_levels(
+    ir_request: dict[str, object],
+    *,
+    supported_levels: list[str] | None,
+    warnings: list[str],
+) -> dict[str, object]:
+    """Clamp IR reasoning effort to the nearest declared model capability."""
+    reasoning = ir_request.get("reasoning")
+    if not isinstance(reasoning, dict) or not supported_levels:
+        return ir_request
+    reasoning_fields = cast(dict[str, object], reasoning)
+    requested = reasoning_fields.get("effort")
+    if not isinstance(requested, str) or requested in supported_levels:
+        return ir_request
+    rank = {value: index for index, value in enumerate(_REASONING_LADDER)}
+    if requested not in rank:
+        return ir_request
+    candidates = [value for value in supported_levels if value in rank]
+    if not candidates:
+        return ir_request
+    effective = min(
+        candidates,
+        key=lambda value: (abs(rank[value] - rank[requested]), rank[value]),
+    )
+    reasoning_fields["effort"] = effective
+    warnings.append(
+        f"Reasoning effort '{requested}' is unsupported by the resolved model "
+        f"profile; using nearest supported level '{effective}'."
+    )
+    return ir_request
 
 
 def enforce_vision(
