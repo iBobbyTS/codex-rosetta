@@ -62,6 +62,30 @@ Completions standard. The Profile constructs `reasoning_effort`, parses
 `usage.prompt_tokens_details.cached_tokens` using OpenAI Chat semantics. Model
 names do not select any of these fields.
 
+The Provider catalog also exposes optional `temperature` and `top_p` request
+overrides for OpenCode Go. Admin edits them in a separate Provider-limits
+dialog. A numeric value replaces the corresponding request-IR sampling value,
+an explicit `null` removes it, and an absent field preserves the client value.
+No other Provider Profile currently declares these overrides. These are local
+Rosetta routing controls, not a claim that OpenCode Go publishes proprietary
+wire parameters beyond the OpenAI Chat standard.
+
+Rosetta stores the OpenCode defaults as exact model-name presets derived from
+the local OpenCode source checkout's `ProviderTransform.temperature()` and
+`ProviderTransform.topP()` behavior. Resolution prefers `upstream_model` and
+falls back to the exposed alias. The currently bound Go models are:
+
+| Models | `temperature` | `top_p` |
+| --- | ---: | ---: |
+| `qwen3.5-plus`, `qwen3.6-plus`, `qwen3.7-max`, `qwen3.7-plus` | 0.55 | 1.0 |
+| `minimax-m2.5`, `minimax-m2.7` | 1.0 | 0.95 |
+| `kimi-k2.5` | 1.0 | 0.95 |
+| `kimi-k2.6`, `kimi-k2.7-code` | 1.0 | inherited |
+
+This is catalog data rather than a model-name conditional in the converter.
+Admin auto-fills the matched values, and config persists only differences from
+the matched Provider preset.
+
 The following minimal checks sent an OpenAI Responses request containing only
 `input: "hi"` through an isolated current-worktree Gateway. The Gateway then
 used each resolved Provider Profile and target protocol. No tools, images,

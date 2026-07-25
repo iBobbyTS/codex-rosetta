@@ -291,21 +291,105 @@ describe('ModelsPage', () => {
     ));
   });
 
-  it('detects, modifies, restores and saves all model preset metadata', async () => {
-    const preset = { slug: 'gpt-demo', display_name: 'GPT Demo', description: 'Preset description', identity: 'demo', priority: 2, context_window: 64000, input_modalities: ['text', 'image'], supported_reasoning_levels: ['low', 'high'] };
+  it('visually edits model metadata while preserving hidden preset fields', async () => {
+    const preset = { slug: 'gpt-demo', display_name: 'GPT Demo', description: 'Preset description', identity: 'demo', priority: 2, context_window: 64000, input_modalities: ['text', 'image'], supported_reasoning_levels: ['low', 'high'], base_instructions: 'hidden system prompt' };
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
-    const modelInfo = screen.getByLabelText('model_info') as HTMLTextAreaElement;
-    expect(JSON.parse(modelInfo.value)).toEqual(preset);
-    await fireEvent.input(modelInfo, { target: { value: JSON.stringify({ ...preset, display_name: 'Changed' }) } });
+    expect(screen.queryByText('hidden system prompt')).toBeNull();
+    await fireEvent.input(screen.getByLabelText('Display Name'), { target: { value: 'Changed' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
       provider: 'upstream', type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed' } } },
     }));
+  });
+
+  it('shows OpenCode extra configuration only for a bound provider-model pair', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        opencode: { provider: 'opencode_go', api_type: 'chat' },
+        openai: { provider: 'openai', api_type: 'chat' },
+      },
+      provider_catalog: {
+        providers: {
+          opencode_go: {
+            label_key: 'provider.opencodeGo',
+            runtime_capability_fields: ['temperature', 'top_p'],
+            runtime_capabilities_by_model: { 'glm-5.2': {} },
+          },
+          openai: { label_key: 'provider.openai', runtime_capability_fields: [] },
+        },
+      },
+      model_groups: {}, tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'glm-5.2' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'opencode Extra Configuration' }));
+    expect(screen.getByRole('dialog', { name: 'opencode Extra Configuration' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Model Information' })).toBeNull();
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'temperature' }));
+    await fireEvent.input(screen.getByRole('spinbutton', { name: 'temperature' }), { target: { value: '0.4' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
+      provider: 'opencode', type: 'llm', models: { 'glm-5.2': { runtime_capabilities: { temperature: 0.4 } } },
+    }));
+  });
+
+  it('hides extra configuration when the provider-model pair has no preset', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { opencode: { provider: 'opencode_go', api_type: 'chat' } },
+      provider_catalog: {
+        providers: {
+          opencode_go: {
+            label_key: 'provider.opencodeGo',
+            runtime_capability_fields: ['temperature', 'top_p'],
+            runtime_capabilities_by_model: {
+              'qwen3.7-plus': { temperature: 0.55, top_p: 1 },
+            },
+          },
+        },
+      },
+      model_groups: {}, tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'glm-5.2' } });
+
+    expect(screen.queryByRole('button', { name: 'opencode Extra Configuration' })).toBeNull();
+  });
+
+  it('auto-fills OpenCode limits from the exact upstream model preset', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { opencode: { provider: 'opencode_go', api_type: 'chat' } },
+      provider_catalog: {
+        providers: {
+          opencode_go: {
+            label_key: 'provider.opencodeGo',
+            runtime_capability_fields: ['temperature', 'top_p'],
+            runtime_capabilities_by_model: {
+              'qwen3.7-plus': { temperature: 0.55, top_p: 1 },
+            },
+          },
+        },
+      },
+      model_groups: {}, tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'public-qwen' } });
+    await fireEvent.input(screen.getByLabelText('Upstream model'), { target: { value: 'qwen3.7-plus' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'opencode Extra Configuration' }));
+
+    expect(screen.getByRole('spinbutton', { name: 'temperature' })).toHaveValue(0.55);
+    expect(screen.getByRole('spinbutton', { name: 'top_p' })).toHaveValue(1);
+    expect(screen.getByRole('checkbox', { name: 'temperature' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'top_p' })).toBeChecked();
   });
 });

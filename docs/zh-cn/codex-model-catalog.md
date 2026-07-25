@@ -207,11 +207,11 @@ Rosetta Tool Profile：直传 / 修改 / 禁用 / 注入
 
 模型组仍是 provider、upstream model、protocol 和 Tool Profile 的唯一事实来源。catalog 决定 Codex 尝试发送什么；Rosetta 必须支持这种形态，或者在 catalog 中声明更保守的能力。
 
-Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。编辑具体模型时使用横向三栏：左栏管理路由与 Tool Profile，中栏编辑完整 Codex `model_info` 记录，右栏编辑 provider 运行时能力。`model_info` 不再是旧的八字段紧凑结构，而是当前 Codex catalog 的完整记录。
+Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。选择手动填写模型信息后，会打开独立的可视化字段编辑弹窗；界面不会显示完整 catalog JSON 或其中包含的系统提示词。编辑可见字段时，Rosetta 会保留完整 resolved Codex 记录中的隐藏字段。Provider 还可以提供第二个独立的“{Provider}额外配置”弹窗，而不是拆分模型信息弹窗。只有当当前 Provider 与该行模型按上游优先、暴露名回退的精确规则命中额外配置 preset 时，Admin 才显示该按钮。
 
 配置只保存相对命中内置 preset 的规范化递归差异。读取时，Rosetta 深度复制 preset，递归覆盖 `model_info`；再复制所选 provider 的 runtime preset，并递归覆盖 `runtime_capabilities`。对象递归合并，数组整体替换，标量直接替换，`null` 表示显式覆盖；字段缺失表示继承，删除 override 表示恢复 preset。保存时重新计算深度 diff，因此空的 `model_info` 和 `runtime_capabilities` 不会写入。未命中 preset 的模型没有继承基础，必须保存完整且有效的 `model_info`。
 
-本次 runtime override 只支持 `input_modalities` 和 `supported_reasoning_levels`。任一 override 存在时，它拥有有效值，中栏对应字段只读。存在有效差异时状态显示黄色；恢复 preset 会删除差异。同一个 `ResolvedModelProfile` 同时供生成 Codex catalog 和 Gateway 能力约束使用。不支持的 reasoning effort 会降到最近的已声明档位并记录 warning；不支持图片时沿用现有兼容占位行为并记录 trace。
+Provider runtime override 暂时只支持 `temperature` 和 `top_p`，且目前只有 OpenCode Go Provider Profile 声明这两个字段。数值会替换请求 IR 中对应的采样参数；显式 `null` 会删除该参数，字段缺失则继承请求值。其他 Provider 会拒绝这些 override。OpenCode catalog 会把已知默认值绑定到精确模型名，匹配时优先使用 `upstream_model`，未命中再回退到暴露模型名，因此独立的额外配置弹窗可以自动填充，而请求序列化不需要增加模型名分支。配置只保存相对该模型级 Provider preset 的差异。存在有效差异时状态显示黄色；清除额外配置会恢复命中的 preset。输入模态和 reasoning 档位仍属于普通 `model_info` 能力。同一个 `ResolvedModelProfile` 同时供生成 Codex catalog 和 Gateway 请求约束使用。不支持的 reasoning effort 会降到最近的已声明档位并记录 warning；不支持图片时沿用现有兼容占位行为并记录 trace。
 
 只有 provider 主选项与 `api_type` 决定 wire converter 和 provider 扩展；endpoint 子选项及 `base_url` 只决定连接地址。模型名只用于 preset 匹配、catalog 元数据、能力、上游 `model` 值和日志，禁止参与请求字段构造。Tool Profile 数据继续独占模型可见工具曝光与 schema 修改职责。
 

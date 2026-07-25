@@ -325,6 +325,43 @@ class TestConversionPipeline:
         assert target["reasoning_effort"] == "medium"
         assert "thinking" not in target
 
+    def test_runtime_sampling_overrides_replace_source_values(self):
+        """Resolved provider limits own the target sampling values."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline(
+            "openai_responses",
+            "openai_chat",
+            shim="opencode_go",
+            runtime_capabilities={"temperature": 0.55, "top_p": 1.0},
+        )
+        target = pipeline.convert_request(
+            {
+                "model": "arbitrary-model-name",
+                "input": "test",
+                "temperature": 0.2,
+                "top_p": 0.3,
+            }
+        )
+
+        assert target["temperature"] == 0.55
+        assert target["top_p"] == 1.0
+
+    def test_null_runtime_sampling_override_removes_source_value(self):
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline(
+            "openai_responses",
+            "openai_chat",
+            shim="opencode_go",
+            runtime_capabilities={"temperature": None},
+        )
+        target = pipeline.convert_request(
+            {"model": "arbitrary-model-name", "input": "test", "temperature": 0.2}
+        )
+
+        assert "temperature" not in target
+
     def test_opencode_go_profile_parses_chat_reasoning_and_cached_usage(self):
         """OpenCode Go response extensions use the declared Chat profile."""
         from codex_rosetta.pipeline import ConversionPipeline

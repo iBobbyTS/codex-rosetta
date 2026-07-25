@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,9 +14,7 @@ from .model_presets import (
 )
 from .provider_profiles import get_provider_catalog_entry
 
-RUNTIME_CAPABILITY_FIELDS = frozenset(
-    {"input_modalities", "supported_reasoning_levels"}
-)
+RUNTIME_CAPABILITY_FIELDS = frozenset({"temperature", "top_p"})
 REQUIRED_MODEL_INFO_FIELDS = frozenset(
     {
         "slug",
@@ -80,18 +79,30 @@ def _string_array(value: Any, *, field: str) -> list[str]:
     return list(dict.fromkeys(item.strip() for item in value))
 
 
-def normalize_runtime_capabilities(value: Any, *, field: str) -> dict[str, Any]:
+def normalize_runtime_capabilities(
+    value: Any, *, field: str, allowed_fields: frozenset[str]
+) -> dict[str, Any]:
     """Validate the deliberately small runtime-capability override schema."""
     if value is None:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{field} must be an object")
-    unknown = sorted(set(value) - RUNTIME_CAPABILITY_FIELDS)
+    unknown = sorted(set(value) - allowed_fields)
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {unknown}")
-    return {
-        key: _string_array(item, field=f"{field}.{key}") for key, item in value.items()
-    }
+    result: dict[str, Any] = {}
+    for key, item in value.items():
+        if item is None:
+            result[key] = None
+            continue
+        if not isinstance(item, (int, float)) or isinstance(item, bool):
+            raise ValueError(f"{field}.{key} must be a number or null")
+        number = float(item)
+        maximum = 2.0 if key == "temperature" else 1.0
+        if not 0.0 <= number <= maximum:
+            raise ValueError(f"{field}.{key} must be between 0 and {maximum:g}")
+        result[key] = number
+    return result
 
 
 def _reasoning_efforts(value: Any, *, field: str) -> list[str]:
@@ -235,21 +246,41 @@ def resolve_model_profile(
     provider_entry = get_provider_catalog_entry(provider_id)
     if provider_entry is None:
         raise ValueError(f"unknown provider main identity {provider_id!r}")
+    declared_runtime_fields = provider_entry.get("runtime_capability_fields", ())
+    allowed_runtime_fields = frozenset(
+        item
+        for item in declared_runtime_fields
+        if isinstance(item, str) and item in RUNTIME_CAPABILITY_FIELDS
+    )
     runtime_preset = normalize_runtime_capabilities(
         dict(provider_entry.get("runtime_capabilities", {})),
         field=f"provider {provider_id!r} runtime_capabilities",
+        allowed_fields=allowed_runtime_fields,
     )
+    model_runtime_presets = provider_entry.get("runtime_capabilities_by_model", {})
+    if isinstance(model_runtime_presets, Mapping):
+        matched_runtime_preset = model_runtime_presets.get(upstream)
+        if matched_runtime_preset is None and upstream != exposed_model:
+            matched_runtime_preset = model_runtime_presets.get(exposed_model)
+        if isinstance(matched_runtime_preset, Mapping):
+            runtime_preset = deep_merge(
+                runtime_preset,
+                normalize_runtime_capabilities(
+                    dict(matched_runtime_preset),
+                    field=f"provider {provider_id!r} model {upstream!r} runtime preset",
+                    allowed_fields=allowed_runtime_fields,
+                ),
+            )
     runtime_override = normalize_runtime_capabilities(
-        runtime_capabilities_override, field="runtime_capabilities"
+        runtime_capabilities_override,
+        field="runtime_capabilities",
+        allowed_fields=allowed_runtime_fields,
     )
     runtime = deep_merge(runtime_preset, runtime_override)
-    modalities = runtime.get("input_modalities", model_info["input_modalities"])
-    reasoning = runtime.get(
-        "supported_reasoning_levels",
-        _reasoning_efforts(
-            model_info["supported_reasoning_levels"],
-            field="model_info.supported_reasoning_levels",
-        ),
+    modalities = model_info["input_modalities"]
+    reasoning = _reasoning_efforts(
+        model_info["supported_reasoning_levels"],
+        field="model_info.supported_reasoning_levels",
     )
     return ResolvedModelProfile(
         exposed_model=exposed_model,

@@ -144,6 +144,9 @@ class ConversionPipeline:
         input_modalities: Input modalities declared by the bundled model preset.
         supported_reasoning_levels: Reasoning efforts declared by the resolved
             model profile.
+        runtime_capabilities: Provider-declared sampling overrides applied to
+            the request IR. Supported values are ``temperature`` and ``top_p``.
+            An explicit ``None`` removes the corresponding source value.
     """
 
     def __init__(
@@ -155,6 +158,7 @@ class ConversionPipeline:
         upstream_model: str | None = None,
         input_modalities: list[str] | None = None,
         supported_reasoning_levels: list[str] | None = None,
+        runtime_capabilities: dict[str, Any] | None = None,
         conversion_options: dict[str, Any] | None = None,
     ) -> None:
         from codex_rosetta import get_converter_for_provider
@@ -165,6 +169,7 @@ class ConversionPipeline:
         self._upstream_model = upstream_model
         self._input_modalities = input_modalities
         self._supported_reasoning_levels = supported_reasoning_levels
+        self._runtime_capabilities = dict(runtime_capabilities or {})
         self._conversion_options = dict(conversion_options or {})
 
         self._source_converter = get_converter_for_provider(source_provider)
@@ -311,6 +316,19 @@ class ConversionPipeline:
         # Hook: let caller inject metadata before IR transforms
         if on_ir_ready is not None:
             on_ir_ready(ir_request)
+
+        generation = ir_request.get("generation")
+        for field in ("temperature", "top_p"):
+            if field not in self._runtime_capabilities:
+                continue
+            if not isinstance(generation, dict):
+                generation = {}
+                ir_request["generation"] = generation
+            value = self._runtime_capabilities[field]
+            if value is None:
+                generation.pop(field, None)
+            else:
+                generation[field] = value
 
         ir_request = enforce_reasoning_levels(
             ir_request,

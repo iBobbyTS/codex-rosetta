@@ -1640,6 +1640,11 @@ async def handle_non_streaming(
         upstream_model=model,
         input_modalities=route.input_modalities,
         supported_reasoning_levels=route.supported_reasoning_levels,
+        runtime_capabilities=(
+            route.resolved_model_profile.runtime_capabilities
+            if route.resolved_model_profile is not None
+            else None
+        ),
         conversion_options={
             "image_fetch_policy": image_fetch_policy,
             "provider_profile_warning": (
@@ -2716,6 +2721,11 @@ async def handle_streaming(  # noqa: C901
         upstream_model=model,
         input_modalities=route.input_modalities,
         supported_reasoning_levels=route.supported_reasoning_levels,
+        runtime_capabilities=(
+            route.resolved_model_profile.runtime_capabilities
+            if route.resolved_model_profile is not None
+            else None
+        ),
         conversion_options={
             "image_fetch_policy": image_fetch_policy,
             "provider_profile_warning": (
