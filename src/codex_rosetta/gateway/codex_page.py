@@ -15,6 +15,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
+from .downstream_errors import CodexRosettaBlockedError
+
 _ALLOWED_CONTENT_TYPES = frozenset({"text/html", "application/xhtml+xml", "text/plain"})
 _BLOCKED_HOST_SUFFIXES = (".localhost", ".local", ".internal", ".home.arpa")
 _MAX_REDIRECTS = 5
@@ -32,6 +34,10 @@ class PageOpenError(RuntimeError):
 
 class PageOpenInvalidRequest(PageOpenError):
     """The open operation contains an invalid URL or line number."""
+
+
+class PageOpenBlocked(CodexRosettaBlockedError, PageOpenInvalidRequest):
+    """The open target violates the static fetcher's SSRF policy."""
 
 
 class PageOpenNotImplemented(PageOpenError):
@@ -208,12 +214,12 @@ def _validate_public_url(url: str, resolver: Callable[..., Iterable[Any]]) -> st
             "open.ref_id must be a direct public HTTP(S) URL; stored references are not implemented"
         )
     if parsed.username is not None or parsed.password is not None:
-        raise PageOpenInvalidRequest("open.ref_id must not contain URL credentials")
+        raise PageOpenBlocked("open.ref_id must not contain URL credentials")
     if not hostname:
         raise PageOpenInvalidRequest("open.ref_id must include a hostname")
     hostname = hostname.rstrip(".").lower()
     if hostname == "localhost" or hostname.endswith(_BLOCKED_HOST_SUFFIXES):
-        raise PageOpenInvalidRequest("open.ref_id hostname is not public")
+        raise PageOpenBlocked("open.ref_id hostname is not public")
     try:
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
     except ValueError as exc:
@@ -232,10 +238,10 @@ def _validate_public_url(url: str, resolver: Callable[..., Iterable[Any]]) -> st
             raise PageOpenExecutionError(f"Could not resolve page hostname {hostname}")
         resolved_ips = {entry[4][0] for entry in addresses}
         if any(not _is_public_ip(value) for value in resolved_ips):
-            raise PageOpenInvalidRequest("open.ref_id resolves to a non-public address")
+            raise PageOpenBlocked("open.ref_id resolves to a non-public address")
     else:
         if not literal_ip.is_global:
-            raise PageOpenInvalidRequest("open.ref_id address is not public")
+            raise PageOpenBlocked("open.ref_id address is not public")
 
     netloc = f"[{hostname}]" if ":" in hostname else hostname
     if parsed.port is not None:

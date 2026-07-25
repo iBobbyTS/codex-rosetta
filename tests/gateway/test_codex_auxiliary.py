@@ -12,7 +12,7 @@ import pytest
 
 from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
-from codex_rosetta.gateway.codex_page import OpenedPage
+from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
@@ -208,7 +208,9 @@ def test_auxiliary_provider_return_blocks_credential_collision(
 
     assert response.status_code == 502
     assert token.encode() not in response.body
-    assert b"response blocked" in response.body
+    assert json.loads(response.body)["error"]["message"].startswith(
+        "Codex Rosetta blocked: Upstream response contains a configured credential"
+    )
 
 
 def test_auxiliary_transport_failure_is_redacted_before_metrics() -> None:
@@ -270,7 +272,7 @@ def test_auxiliary_endpoint_rejects_non_object_json(invalid_body: Any) -> None:
 
     assert response.status_code == 400
     assert json.loads(response.body)["error"]["message"] == (
-        "JSON body must be an object"
+        "Codex Rosetta: JSON body must be an object"
     )
     request.app.transport.send_passthrough.assert_not_awaited()
 
@@ -299,9 +301,7 @@ def test_auxiliary_endpoint_maps_upstream_connection_error() -> None:
 
     assert response.status_code == 502
     payload = json.loads(response.body)
-    assert payload["error"]["message"] == (
-        "Upstream request failed: connection refused"
-    )
+    assert payload["error"]["message"] == ("Upstream: connection refused")
 
 
 class _FakeTavilyClient:
@@ -562,6 +562,35 @@ def test_local_search_open_returns_static_page_content() -> None:
     payload = json.loads(response.body)
     assert "Python 3 Documentation" in payload["output"]
     assert page_client.calls == ["https://docs.python.org/3/"]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_local_search_open_ssrf_rejection_uses_blocked_origin() -> None:
+    class _BlockedPageClient:
+        async def open(self, url: str) -> OpenedPage:
+            raise PageOpenBlocked(f"open.ref_id address is not public: {url}")
+
+    config = _make_config(
+        tavily_api_key="tvly-test", tool_profile="test-web-run-mapping"
+    )
+    request = _make_request(
+        _search_body({"open": [{"ref_id": "https://private.example/"}]})
+    )
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            page_client=_BlockedPageClient(),
+        )
+    )
+
+    assert response.status_code == 400
+    assert json.loads(response.body)["error"]["message"] == (
+        "Codex Rosetta blocked: "
+        "open.ref_id address is not public: https://private.example/"
+    )
     request.app.transport.send_passthrough.assert_not_awaited()
 
 

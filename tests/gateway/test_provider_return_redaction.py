@@ -170,7 +170,11 @@ def test_responses_passthrough_preserves_ordinary_provider_token_text(
     )
 
     assert response.status_code == status_code
-    assert response.body == raw
+    if status_code < 400:
+        assert response.body == raw
+    else:
+        returned = json.loads(response.body)
+        assert returned["message"] == f"Upstream: before {token} after"
 
 
 @pytest.mark.parametrize(

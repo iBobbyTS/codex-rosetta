@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -97,6 +98,9 @@ class TestWithApiKey:
         resp = _run(hook(req))
         assert resp is not None
         assert resp.status_code == 401
+        assert json.loads(resp.body)["error"]["message"] == (
+            "Codex Rosetta blocked: Invalid or missing API key"
+        )
 
     def test_openai_responses_wrong(self, hook: Any):
         req = _make_request(

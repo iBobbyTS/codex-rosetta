@@ -262,6 +262,7 @@ def test_zstd_decoded_body_uses_same_live_limit_as_compressed_body() -> None:
         )
 
         assert b" 413 " in response.split(b"\r\n", 1)[0]
+        assert b"Codex Rosetta blocked:" in response
         assert b"too large after Zstd decompression" in response
         assert running.app.active_request_parses == 0
 
@@ -280,6 +281,7 @@ def test_zstd_compressed_body_uses_existing_live_limit_before_decode() -> None:
         )
 
         assert b" 413 " in response.split(b"\r\n", 1)[0]
+        assert b"Codex Rosetta blocked:" in response
         assert b"Request body too large (33 bytes)" in response
         assert running.app.active_request_parses == 0
 
@@ -347,6 +349,7 @@ def test_parser_capacity_rejects_the_sixty_fifth_connection_without_waiting() ->
             elapsed = time.monotonic() - started
 
             assert b" 503 " in response.split(b"\r\n", 1)[0]
+            assert b"Codex Rosetta blocked:" in response
             assert elapsed < 1
             assert running.app.active_request_parses == 64
         finally:

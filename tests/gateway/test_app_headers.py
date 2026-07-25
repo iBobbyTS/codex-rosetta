@@ -874,7 +874,7 @@ def test_proxy_handler_rejects_oversized_window_id_before_state(
     assert response.status_code == 400
     assert not isinstance(response, StreamingResponse)
     assert json.loads(response.body)["error"]["message"] == (
-        "'x-codex-window-id' must be at most 128 UTF-8 bytes"
+        "Codex Rosetta: 'x-codex-window-id' must be at most 128 UTF-8 bytes"
     )
     assert called is False
 

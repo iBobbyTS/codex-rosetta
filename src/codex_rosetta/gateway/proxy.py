@@ -53,6 +53,14 @@ from .code_mode_projection import (
     exec_tool_projections_for_route,
     project_modified_exec_web_run_description,
 )
+from .downstream_errors import (
+    DownstreamErrorOrigin,
+    SSEErrorPrefixer,
+    classify_downstream_exception,
+    format_downstream_error,
+    prefix_error_body,
+    prefix_protocol_error_event,
+)
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -106,6 +114,7 @@ from .tool_search_bridge import (
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
+    UpstreamProtocolError,
     UpstreamTransport,
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
@@ -175,9 +184,14 @@ async def _convert_request(
 
 
 def error_response_for_source(
-    source_provider: ProviderType, status_code: int, message: str
+    source_provider: ProviderType,
+    status_code: int,
+    message: str,
+    *,
+    origin: DownstreamErrorOrigin = DownstreamErrorOrigin.ROSETTA,
 ) -> Response:
     """Return an error response formatted for the source provider's envelope."""
+    message = format_downstream_error(message, origin)
     if source_provider == "openai_chat":
         body = {
             "error": {
@@ -213,13 +227,35 @@ def error_response_for_source(
     return JSONResponse(body, status_code=status_code)
 
 
+def _upstream_http_error_response(
+    *,
+    body: bytes | str,
+    status_code: int,
+) -> Response:
+    """Preserve an upstream error envelope while labeling its message owner."""
+    return Response(
+        body=prefix_error_body(
+            body,
+            DownstreamErrorOrigin.UPSTREAM,
+            fallback=f"HTTP {status_code} error response did not include a message",
+        ),
+        status_code=status_code,
+        content_type="application/json",
+    )
+
+
 def _conversion_failure_response(
     source_provider: ProviderType,
     exc: ImageWorkerCapacityError | ImageWorkerTimeoutError | ConversionError,
 ) -> Response:
     """Map conversion scheduling/fetch failures to stable Gateway statuses."""
     if isinstance(exc, ImageWorkerCapacityError):
-        return error_response_for_source(source_provider, 503, str(exc))
+        return error_response_for_source(
+            source_provider,
+            503,
+            str(exc),
+            origin=DownstreamErrorOrigin.BLOCKED,
+        )
     if isinstance(exc, ImageWorkerTimeoutError) or isinstance(
         exc.__cause__, ImageFetchTimeoutError
     ):
@@ -1536,7 +1572,10 @@ async def handle_non_streaming(
             profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
             return (
                 error_response_for_source(
-                    route.source_provider, 502, f"Upstream request failed: {exc}"
+                    route.source_provider,
+                    502,
+                    str(exc),
+                    origin=classify_downstream_exception(exc),
                 ),
                 profile,
             )
@@ -1566,10 +1605,9 @@ async def handle_non_streaming(
                 response_redaction="protocol_fields",
             )
             return (
-                Response(
+                _upstream_http_error_response(
                     body=resp.raw_content,
                     status_code=resp.status_code,
-                    content_type="application/json",
                 ),
                 profile,
             )
@@ -1662,7 +1700,10 @@ async def handle_non_streaming(
         profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
         return (
             error_response_for_source(
-                route.source_provider, 502, f"Upstream request failed: {exc}"
+                route.source_provider,
+                502,
+                str(exc),
+                origin=classify_downstream_exception(exc),
             ),
             profile,
         )
@@ -1697,10 +1738,9 @@ async def handle_non_streaming(
             response_redaction="protocol_fields",
         )
         return (
-            Response(
+            _upstream_http_error_response(
                 body=resp.raw_content,
                 status_code=resp.status_code,
-                content_type="application/json",
             ),
             profile,
         )
@@ -1967,7 +2007,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
             if current_stream.is_error:
                 error_text = await current_stream.read_error()
                 await current_stream.close()
-                raise RuntimeError(
+                raise UpstreamProtocolError(
                     f"Upstream request after web_search failed: {error_text}"
                 )
             round_index += 1
@@ -2094,7 +2134,12 @@ def _format_buffered_events_sse(
     for event in events:
         if trace is not None:
             trace.log("source_event", event, chunk_index=chunk_count)
-        sse_event = format_sse(event)
+        downstream_event = (
+            prefix_protocol_error_event(event, DownstreamErrorOrigin.UPSTREAM)
+            if event.get("type") in {"response.failed", "response.incomplete"}
+            else event
+        )
+        sse_event = format_sse(downstream_event)
         if trace is not None:
             trace.log("downstream_sse", sse_event, chunk_index=chunk_count)
         sse_events.append(sse_event)
@@ -2288,6 +2333,7 @@ async def _raw_stream_event_generator(
     terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
+    error_prefixer = SSEErrorPrefixer(DownstreamErrorOrigin.UPSTREAM)
 
     try:
         async with stream:
@@ -2303,7 +2349,13 @@ async def _raw_stream_event_generator(
                 chunk_count += 1
                 if trace is not None:
                     trace.log("raw_passthrough_chunk", chunk, chunk_index=chunk_count)
-                yield chunk
+                released = error_prefixer.feed(chunk)
+                if released:
+                    yield released
+
+            remaining = error_prefixer.finish()
+            if remaining:
+                yield remaining
 
         log_stream_summary(
             model=model,
@@ -2453,7 +2505,10 @@ async def _handle_direct_responses_streaming(
         )
         return (
             error_response_for_source(
-                route.source_provider, 502, f"Upstream request failed: {exc}"
+                route.source_provider,
+                502,
+                str(exc),
+                origin=classify_downstream_exception(exc),
             ),
             profile,
         )
@@ -2509,12 +2564,9 @@ async def _handle_direct_responses_streaming(
             response_redaction="protocol_fields",
         )
         return (
-            Response(
-                body=error_text.encode("utf-8")
-                if isinstance(error_text, str)
-                else error_text,
+            _upstream_http_error_response(
+                body=error_text,
                 status_code=stream.status_code,
-                content_type="application/json",
             ),
             profile,
         )
@@ -2741,7 +2793,10 @@ async def handle_streaming(  # noqa: C901
         )
         return (
             error_response_for_source(
-                route.source_provider, 502, f"Upstream request failed: {exc}"
+                route.source_provider,
+                502,
+                str(exc),
+                origin=classify_downstream_exception(exc),
             ),
             profile,
         )
@@ -2754,9 +2809,8 @@ async def handle_streaming(  # noqa: C901
 
     profile["stream_connect_ms"] = round((time.perf_counter() - t_connect) * 1000, 2)
 
-    # Application-level error — upstream returned a valid HTTP response with
-    # a 4xx/5xx status.  Pass the original body through as-is so the client
-    # SDK can parse the real error (e.g. "context_length_exceeded").
+    # Application-level error — preserve the upstream envelope and codes while
+    # labeling its exact human-readable message for the client.
     if stream.is_error:
         error_text = await stream.read_error()
         await stream.close()
@@ -2784,12 +2838,9 @@ async def handle_streaming(  # noqa: C901
             response_redaction="protocol_fields",
         )
         return (
-            Response(
-                body=error_text.encode("utf-8")
-                if isinstance(error_text, str)
-                else error_text,
+            _upstream_http_error_response(
+                body=error_text,
                 status_code=stream.status_code,
-                content_type="application/json",
             ),
             profile,
         )

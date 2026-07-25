@@ -530,12 +530,12 @@ def test_raw_stream_trace_records_early_close_as_cancelled(tmp_path):
 
     async def scenario() -> None:
         generator = _raw_stream_event_generator(
-            stream=_RawStream([b"first", b"second"]),
+            stream=_RawStream([b"data: first\n\n", b"data: second\n\n"]),
             source_provider="openai_responses",
             model="model",
             trace=trace,
         )
-        assert await generator.__anext__() == b"first"
+        assert await generator.__anext__() == b"data: first\n\n"
         await cast(Any, generator).aclose()
 
     asyncio.run(scenario())

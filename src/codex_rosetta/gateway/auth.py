@@ -19,6 +19,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from .cors import apply_cors_headers
+from .downstream_errors import DownstreamErrorOrigin, format_downstream_error
 
 # Per-request API key label — set by auth hook, read by proxy handler.
 api_key_label_var: contextvars.ContextVar[str | None] = contextvars.ContextVar(
@@ -60,7 +61,9 @@ def _error_for_path(path: str, status: int, message: str) -> Response:
     return JSONResponse(
         {
             "error": {
-                "message": message,
+                "message": format_downstream_error(
+                    message, DownstreamErrorOrigin.BLOCKED
+                ),
                 "type": "invalid_request_error",
                 "code": "invalid_api_key",
             }

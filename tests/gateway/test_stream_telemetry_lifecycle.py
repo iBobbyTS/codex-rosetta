@@ -148,7 +148,10 @@ def test_stream_generator_failure_records_502_and_provider_error(monkeypatch):
         response, request = await _open_stream(monkeypatch, _stream)
         assert await response._generator.__anext__() == "first"
 
-        with pytest.raises(RuntimeError, match="upstream stream exploded"):
+        terminal = await response._generator.__anext__()
+        assert isinstance(terminal, bytes)
+        assert b'"message":"Codex Rosetta: upstream stream exploded"' in terminal
+        with pytest.raises(StopAsyncIteration):
             await response._generator.__anext__()
 
         metrics = request.app.metrics
@@ -178,11 +181,9 @@ def test_stream_protocol_failure_records_stable_502_exactly_once(monkeypatch):
     async def _scenario():
         response, request = await _open_stream(monkeypatch, _stream)
 
-        with pytest.raises(
-            UpstreamProtocolError,
-            match="^Upstream SSE data is not valid JSON$",
-        ):
-            await response._generator.__anext__()
+        terminal = await response._generator.__anext__()
+        assert isinstance(terminal, bytes)
+        assert b'"message":"Upstream: Upstream SSE data is not valid JSON"' in terminal
         with pytest.raises(StopAsyncIteration):
             await response._generator.__anext__()
 
@@ -216,6 +217,11 @@ def test_stream_network_failure_logs_one_error_without_escaping(
     async def _scenario():
         response, request = await _open_stream(monkeypatch, _stream)
 
+        terminal = await response._generator.__anext__()
+        assert isinstance(terminal, bytes)
+        assert (
+            b'"message":"Upstream: Streaming read timed out for upstream"' in terminal
+        )
         with pytest.raises(StopAsyncIteration):
             await response._generator.__anext__()
 

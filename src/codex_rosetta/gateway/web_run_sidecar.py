@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.observability.redaction import SecretRedactor
 
+from .downstream_errors import CodexRosettaBlockedError
 from .transport.http.transport import request_bounded_response
 from .web_search import WebSearchSettings
 
@@ -23,6 +24,12 @@ class WebRunSidecarInvalidRequest(WebRunSidecarError):
 
 class WebRunSidecarNotImplemented(WebRunSidecarError):
     """The browser operation is recognized but unavailable."""
+
+
+class WebRunSidecarCredentialCollisionError(
+    CodexRosettaBlockedError, WebRunSidecarError
+):
+    """The sidecar response reflected the active outbound credential."""
 
 
 class WebRunBrowserClient(Protocol):
@@ -107,7 +114,7 @@ class WebRunSidecarHTTPClient:
         assert response is not None
 
         if self._redactor.contains_json_semantic(response.content):
-            raise WebRunSidecarError(
+            raise WebRunSidecarCredentialCollisionError(
                 "web-run sidecar response contains a configured credential; "
                 "response blocked"
             )
@@ -175,7 +182,7 @@ class WebRunSidecarHTTPClient:
         assert response is not None
 
         if self._redactor.contains_json_semantic(response.content):
-            raise WebRunSidecarError(
+            raise WebRunSidecarCredentialCollisionError(
                 "web-run sidecar response contains a configured credential; "
                 "response blocked"
             )
