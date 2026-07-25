@@ -42,7 +42,7 @@ The upgrade must be completed in the following order, and the latter step cannot
 5. Define repair plans for changed items and manual-review/live-test plans for possibly unchanged items;
 6. Review the complete Codex model catalog contract and refresh `docs/en/codex-model-catalog.md` plus its Chinese counterpart when fields, defaults, bundled values, consumers, or third-party guidance changed; recheck configured Provider ID/name resolution, `is_openai()` and explicit bearer-token precedence used by local mode; then review and refresh `src/codex_rosetta/gateway/admin/tool_catalog.json` against the target tool specifications and bundled extensions, including its CLI/source metadata binding;
 7. Complete repairs and run all automated checks, including compatibility-specific tests, lint, and the full non-integration test suite;
-8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-sol` as the native Codex/GPT request-shape reference, low-cost `deepseek-v4-flash` by default for third-party non-multimodal conversion debugging, and `mimo-v2.5` for third-party multimodal tests; record substitutions and reasons;
+8. Run real API tests for every possibly unchanged or changed compatibility point. Use `gpt-5.6-terra` as the default GPT cell with one permitted `gpt-5.6-sol` fallback after model-behavior failure, low-cost `deepseek-v4-flash` by default for third-party non-multimodal conversion debugging with one permitted `kimi-k3` fallback, and `qwen3.7-plus` for third-party multimodal tests; record original failures, substitutions, and reasons separately;
 9. After every gate passes, update the contract baseline, upgrade report, documentation, and package version, and record the exact source commit.
 
 For a full inventory review, complete the reverse-map and documentation scan
@@ -309,24 +309,30 @@ even when the contract output reports only source-commit drift.
 
 #### B. Fixture and unit/component testing
 
-The attested-wire allowlist is an exact, case-insensitive 12-header baseline for
-the current Codex version. Every routine and full Codex version review must
-enumerate the target Codex request headers from both source and a real captured
-request, diff them against this list, and explicitly accept, reject, add, or
-retire every difference:
+Responses→Responses direct transport uses a case-insensitive denylist rather
+than a version-frozen allowlist. Unknown end-to-end headers, including future
+`x-codex-*` capability headers, pass through on that route only. Every routine
+and full Codex version review must enumerate the target Codex request headers
+from both source and a real captured request, then review whether a new header
+belongs in one of these denied classes:
 
-1. `Accept`
-2. `Content-Encoding`
-3. `Content-Type`
-4. `Originator`
-5. `Session-Id`
-6. `Thread-Id`
-7. `x-client-request-id`
-8. `x-codex-beta-features`
-9. `x-codex-turn-metadata`
-10. `x-codex-window-id`
-11. `x-oai-attestation`
-12. `x-openai-internal-codex-responses-lite`
+1. client credentials: `Authorization`, `Proxy-Authorization`, `x-api-key`,
+   `api-key`, `x-goog-api-key`, `Cookie`, and `x-admin-token`;
+2. hop-by-hop or request framing: `Host`, `Content-Length`,
+   `Transfer-Encoding`, `Connection`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`,
+   and `Proxy-Connection`, plus every comma-separated field name declared by
+   `Connection`;
+3. network-origin identity: `Forwarded`, every `X-Forwarded-*`, `Via`,
+   `CF-Connecting-IP`, `True-Client-IP`, and `X-Real-IP`.
+
+Rebuilt JSON additionally removes the original `Content-Encoding` and
+`x-oai-attestation`, forces `Content-Type: application/json` and
+`Accept-Encoding: identity`, and forwards the validated/generated
+`x-request-id`. Unchanged raw wire preserves the original body encoding,
+attestation, and only a client-supplied request ID. Tool Profile, alias, and
+rehydration body changes must not recompute or otherwise narrow the remaining
+direct header set. Responses→Chat/Anthropic/Google continue to use the explicit
+minimal header set.
 
 The runtime owners are
 `src/codex_rosetta/gateway/headers.py`,
@@ -337,13 +343,14 @@ contract owners are `tests/gateway/test_app_headers.py`,
 `tests/gateway/test_inbound_content_encoding.py`,
 `tests/gateway/test_responses_passthrough.py`, and
 `tests/gateway/test_http_transport_limits.py`. An upgrade report must name the
-captured target-version header set and the resulting allowlist decision; a
+captured target-version header set and the resulting denylist decision; a
 passing old fixture or the absence of a new header from Rosetta source is not
-sufficient evidence. Client `Authorization`, `Cookie`, `Host`, and inbound
-`Content-Length` remain excluded, and Provider configuration must continue to
-own upstream authentication. The Gateway-owned `x-request-id` is also excluded
-from exact attested-wire forwarding even though it remains valid ordinary
-upstream correlation metadata; injecting a header absent from the captured
+sufficient evidence. Provider configuration must continue to own upstream
+authentication and is overlaid last with case-insensitive replacement, so an
+inbound case variant cannot create a second credential or override the Provider
+key. The Gateway-owned `x-request-id` is excluded from exact attested-wire
+forwarding even though it remains valid rebuilt-request correlation metadata;
+injecting a header absent from the captured
 client wire invalidates the transparency contract. The ingress contract test must run the decoder
 through the real App dispatcher, not only call it directly, so request-local
 wire capture cannot be lost if a synchronous middleware hook is moved to the
@@ -351,12 +358,13 @@ server's worker thread.
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
 
-- The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields and credential-free response JSON/SSE bytes remain unchanged below the transport safety envelope. Any return containing a configured Provider credential fails closed before semantic conversion or persistence; raw passthrough releases only complete credential-free SSE events and emits a source-compatible terminal error from a valid event boundary on collision. Unchanged attested streaming requests retain their original compressed body and allowlisted Codex wire headers; any request mutation rebuilds JSON without stale attestation. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
-- header allowlists for ordinary metadata and exact attested-wire passthrough; Provider-owned Authorization on every upstream request; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
+- The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields, allowed end-to-end request headers, and credential-free response JSON/SSE bytes remain unchanged below the transport safety envelope. Any return containing a configured Provider credential fails closed before semantic conversion or persistence; raw passthrough releases only complete credential-free SSE events and emits a source-compatible terminal error from a valid event boundary on collision. Unchanged attested streaming requests retain their original compressed body, encoding, attestation, and denylist-filtered client headers; any request mutation rebuilds JSON and conservatively omits the original encoding and attestation while preserving other allowed direct headers such as `x-codex-beta-features`. This omission is a Rosetta provenance policy, not proof that the opaque token is body-bound: the public Codex provider context exposes only `thread_id`, and the upstream effect of retaining the token after reconstruction remains unknown. When exact-wire and rebuilt requests differ in status, compaction mode, routing, or retry behavior, compare body bytes and the complete credential-free header set with attestation retention/removal as an early diagnostic. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
+- the Responses-direct denylist across rebuilt and exact raw-wire modes; unchanged unknown capability headers across Tool Profile enabled/disabled bodies; conversion-route isolation; Provider-owned Authorization with case-insensitive final precedence on every upstream request; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request; canonical `computer_call` remains structurally lossless through the non-streaming Responses IR round trip, while Chat/Anthropic/Google targets and streaming bridge conversion reject it explicitly instead of inventing a function call or silently dropping it. `computer_call_output` remains an open contract item after the 20260721-1148 omission audit: until the owner chooses explicit rejection or complete native output/screenshot support, do not claim lossless computer-call history;
 - Responses Namespace children expand to canonical regex-safe `namespace-function` names; streaming and non-streaming return paths restore hyphenated names, unique `namespace_function` and `namespace.function` compatible names, and unique bare children, while ordinary Function conflicts, shared child names, and alias collisions remain flat and fail closed;
 - Responses→Chat converts `agent_message` into model-visible user content, including its inter-agent `encrypted_content` payload, without exposing encrypted content from ordinary message or reasoning items;
 - Verify model-group Tool Profiles on Responses, Chat, Anthropic, and Google routes, including all four Admin categories, Disabled filtering, Modified handling, applicable-protocol-set and input persistence, immutable bundled protocol sets/delivery states, and endpoint selection. Verify the three bundled Profile names, protocol sets, and states: Chat Default is Chat-only and retains its established mapping; Responses-only web.run 注入 preserves native tools except for Modified `web.run`; Responses-only 工具映射 inherits Chat Default. Verify the separate Responses-only 透传 option is not a Profile, cannot be used as a custom Profile ID, and results in no tool mapping at runtime. Verify custom Profiles can select any non-empty combination of the four supported protocols, model-group Admin choices include only the 透传 option for Responses plus bundled and user Profiles whose set contains the Provider protocol, and backend/config loading reject mismatches and empty/unsupported sets. Verify new model groups choose 透传 for OpenAI Official, web.run 注入 for OpenAI Custom and Custom + Custom Responses, 工具映射 for listed-provider Responses, and Chat Default for Chat; Anthropic and Google have no bundled default but accept an explicitly compatible user Profile. All Responses choices must use identical direct protocol handling;
+- Compile Tool Catalog schema v6 at startup and require exactly the reviewed 57 item identities. Reject unknown top-level/item/delivery fields, unknown adapter IDs, unknown or cyclic dependencies, duplicate qualified identities and history aliases, invalid state/API combinations, and incomplete catalog definitions. Verify every injected definition and all model-visible schema/description/state/delivery decisions change with a catalog fixture rather than a gateway/converter constant. `ToolRuntimePlan` trace output may contain only catalog version, item ID, action, and reason—never schema, prompt text, arguments, credentials, or declaration bodies;
 - Verify model-group rows prefer an exact upstream-model slug, fall back to the exposed model name, search the unified `codex_models.json` resource and `codex_model_presets.json`, reject partial/suffixed matches, display modalities from matched catalog metadata, and always expose the right-side manual model-info editor. Confirm gateway image filtering uses only exact compact-preset `input_modalities`, while full-catalog and saved `model_info` values do not impose runtime restrictions; matched rows prefill all compact editable fields, unmatched rows start empty, saved `model_info` survives reload, and the exposed alias remains the generated catalog slug;
 - Responses Lite `additional_tools`, developer instructions, `reasoning.context=all_turns` and embedded tool filtering/deduplication;
 - non-streaming/streaming upstream response → Codex Responses output;
@@ -372,7 +380,7 @@ The following behavior can be automatically verified using the fixed Codex reque
   global row+byte budgets, replacement accounting, TTL release, transaction
   rollback, abnormal replay bounds, failure results and subsequent-round replay;
 - provider continuation metadata principal entry quotas, same-principal global-oldest replacement, no cross-principal eviction, replacement/TTL/clear accounting, and concurrent saturation;
-- request-local `ALL_TOOLS` discovery only with live deferred guidance; fixed `tool_search`, `tool_read`, and `invoke_deferred_tool` definitions beside raw `exec`; byte-identical top-level Chat `tools` across search/read/call; exact schemas and validation; natural-language/regex search JavaScript; versioned `{name, summary}` output with 240-character summaries and a 24,000-character whole-match budget; exact-name read JavaScript with a complete-declaration 24,000-character fail-closed budget; custom `exec` round trips; direct-name conflicts; and no Gateway discovery state. Verify search alone cannot authorize the dispatcher; paired read history authorizes exact `mcp__` names only after same-name declaration parsing; the three Node REPL names retain their static projections while unknown MCP names use JSON-safe bracket dispatch; latest same-name reads replace older outcomes while unrelated reads do not revoke authorization; `js` does not imply helper authorization; structured dispatcher arguments produce custom `exec` with text/image/`isError` forwarding in streaming and non-streaming paths; malformed, oversized, unpaired, fake-protocol, mismatched-name, unauthorized, non-MCP, non-object, legacy-v1, and direct-call inputs fail closed; direct MCP/read/dispatcher Functions take precedence. Verify search summaries and complete read results retain history order, unsupported non-MCP declarations retain raw-`exec` instructions, and no discovered MCP Function is added to top-level `tools`. Keep native `tool_search_call/output` converter fixtures separately as protocol compatibility coverage;
+- request-local `ALL_TOOLS` discovery only with live deferred guidance and catalog-owned definitions. Verify `tool_search` Disabled/Modified/Passthrough semantics: Modified is Chat-only and needs deferred guidance; Responses Passthrough preserves native wire; Chat Passthrough requires a live native client-executed declaration, projects its actual description/schema, reversibly restores `tool_search_call`, and pairs `tool_search_output`; missing source tools never synthesize one; a direct same-name Function wins. Reject missing/malformed execution metadata, malformed definitions, mapping conflicts, and orphan call/output history. Verify `tool_read` depends on effective Modified search plus deferred guidance, while `invoke_deferred_tool` also depends on effective read. Retain byte-identical top-level Chat `tools` across search/read/call; exact schemas and validation; natural-language/regex search JavaScript; bounded whole-match summaries and exact reads; paired-read authorization; custom `exec` round trips; direct-name conflicts; and no Gateway discovery state. Keep streaming, non-streaming, Lite `additional_tools`, resume/compaction history, tool-choice, and native converter fixtures separate;
 - Captured wire fixtures for `multi_agent_v1`, `multi_agent_v2/collaboration`;
 - Captured wire fixtures for code mode `exec/wait`, nested call and wait continuation;
 - web search multi-round event reconstruction, downgrade paths for disabled/missing search executors, bounded identity-encoded auxiliary HTTP responses, Tavily and self-hosted Google result normalization into the unchanged Codex string `output`, and standalone Search `turnXsearchY` allocation/open scoped by authenticated principal plus `SearchRequest.id`, including retry stability, concurrent allocation, cross-session failure, TTL/capacity cleanup, and app shutdown cleanup;
@@ -489,12 +497,13 @@ Whether these project-dependent models understand tool specifications, form corr
 
 Select a model by debugging target, don't just look at the Codex-facing alias:
 
-- When you need to observe the Codex/GPT native request, tool, reasoning, transport or stream shape, use `gpt-5.6-sol` as the reference, and use Rosetta trace to confirm that the upstream is indeed a GPT route; the alias with the same name forwarded to a third-party provider cannot be used as evidence of the original GPT request;
+- For the formal live matrix, use `gpt-5.6-terra` by default and permit one `gpt-5.6-sol` fallback only after a Terra model-behavior failure. GPT is not pinned to a Provider: any configured Provider is acceptable if the selected GPT model is reachable and responds. If the Provider is unreachable, stop and request a user decision;
 - When debugging the Responses→Chat bridge, reasoning and multi-round tool calls of third-party models, `deepseek-v4-flash` is used by default because the cost is lower;
-- For third-party multimodal live-agent paths, use `mimo-v2.5` by default and verify real image input/output in Gateway Logs;
+- After a `deepseek-v4-flash` model-behavior failure, permit one `kimi-k3` fallback and record both outcomes; do not continue retrying after the fallback fails;
+- For third-party multimodal live-agent paths, use `qwen3.7-plus` and verify real image input/output in Gateway Logs;
 - Actual testing of version upgrades should at least include scenarios related to this change in the above two categories;
 - If an item is only applicable to same-format Responses, specific hosted tools or model-specific capabilities, add the corresponding upstream;
-- If `deepseek-v4-flash` is temporarily unavailable, use a low-cost model with similar capabilities and support tool calls, and record the alternative model in the results, and cannot skip it without explanation;
+- If a required configured Provider is unavailable, stop the live matrix and request a user decision instead of silently substituting another Provider or model;
 - Actual tests must record model, provider/route, Codex CLI version, Codex source commit and Codex-Rosetta commit.
 
 #### A. Basic session and real request
@@ -529,7 +538,7 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 - Read the real file and use native `apply_patch` to complete the modification;
 - Let a patch fail, then confirm that the model can read the error, correct the patch and continue the round;
 - When function tool and custom tool coexist, model selection and Codex execution are correct;
-- Run `tests/live_agent/builtin_tools/01` through `06` with provider display name `OpenAI` and a model catalog exactly equivalent to `gpt-5.6-sol`; verify Code Mode `wait`, two Plan updates, model-hidden `apply_patch` with localized `Edit`/`Write` execution, `view_image`, the grouped Goal lifecycle, and real upstream visual recognition with a vision-capable model;
+- Run `tests/live_agent/builtin_tools/01` through `06` with provider display name `OpenAI`, `gpt-5.6-terra` as the default GPT cell, and `qwen3.7-plus` for multimodal recognition; verify Code Mode `wait`, two Plan updates, model-hidden `apply_patch` with localized `Edit`/`Write` execution, `view_image`, the grouped Goal lifecycle, and real upstream visual recognition;
 - Run `tests/live_agent/local_skills/01` through ordinary `codex exec` and verify filesystem catalog metadata plus explicit Skill-body injection without `skills.list`/`skills.read`; separately run `tests/live_agent/orchestrator_skills/01` through app-server with no local execution environment and a provisioned `codex_apps` MCP resource backend, then verify exact `skills.list → skills.read` opaque-handle reuse;
 - After `view_image` transport and deterministic visual recognition pass, run `tests/live_agent/image_generation/01` with a vision-capable model; seed the isolated Codex home from the authorized ChatGPT OAuth source while retaining the local-mode Gateway bearer Provider, verify that the current Codex auth path exposes `image_gen.imagegen`, prove both model and Images requests reach the isolated Gateway, confirm the endpoint saves an artifact, open that exact path through projected `view_image`, and have the outer evaluator confirm dog, grass/lawn, and running. If the tool is absent from the Codex source request, classify it as an exposure/auth-path failure before evaluating model capability;
 - Test `request_user_input` through an app-server JSON-RPC client that answers `ToolRequestUserInput`; `codex exec` explicitly rejects this request and cannot provide valid real-agent coverage;

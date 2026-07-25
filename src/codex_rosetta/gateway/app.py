@@ -18,7 +18,7 @@ from codex_rosetta._vendor.httpserver import (
 )
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.error_dump import dump_error
-from codex_rosetta.routing import ResolvedRoute
+from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from .admin.restart_notice import (
     consume_codex_restart_required,
@@ -40,6 +40,7 @@ from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
 from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
 from .headers import (
+    build_direct_responses_headers,
     build_upstream_extra_headers,
     generate_request_id,
     resolve_request_id,
@@ -689,8 +690,18 @@ async def _proxy_handler(
     store: ProviderMetadataStore = request.app.metadata_store
     codex_tool_store: CodexToolLocalizationStore = request.app.codex_tool_store
 
-    # Forward only explicitly supported client headers to upstream.
-    extra_headers = build_upstream_extra_headers(request, request_id)
+    # Direct Responses uses a denylist so future end-to-end Codex capability
+    # headers survive independently of body/tool adaptation. Conversion paths
+    # retain their explicit, minimal header set.
+    extra_headers = (
+        build_direct_responses_headers(
+            request.headers,
+            request_id,
+            preserve_wire=False,
+        )
+        if is_responses_passthrough(route)
+        else build_upstream_extra_headers(request, request_id)
+    )
 
     # --- Metrics instrumentation ---
     _mark_stream_active(request, is_stream=is_stream)

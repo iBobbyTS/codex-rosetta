@@ -12,7 +12,145 @@ historical alpha.23 rows must not be used as formal release evidence. Formal
 live reruns must record the exact binary, provider, model, route, task, marker,
 and outcome here.
 
-### Remaining-matrix rerun
+### Tool ownership migration checkpoint — 2026-07-24
+
+Catalog schema v6 and `ToolRuntimePlan` implementation is complete at the
+deterministic-test boundary. The catalog now owns 57 entries, including native
+`tool_search`, `send_line`, `tool_read`, and `invoke_deferred_tool`; file-tool
+definitions, conditional stdin guidance, `view_image` modality/detail policy,
+and `web.run` capability projection no longer have independent model-visible
+definitions in gateway/converter code. Focused migration coverage passed
+`81/81`, dedicated streaming/non-streaming native `tool_search` restoration
+passed `2/2`, and the full Gateway suite passed `1497/1497` with two existing
+SQLite ResourceWarnings.
+
+The post-migration rerun below is now the current CLI evidence. Earlier 0.145.0
+rows remain useful pre-refactor behavioral evidence, but they do not replace
+the rerun. Browser observation can only use the currently installed GUI
+`0.146.0-alpha.3.1`; it cannot be relabeled as exact `0.145.0` GUI evidence.
+
+### Post-migration CLI and agentabi rerun — 2026-07-24
+
+All cells used installed `codex-cli 0.145.0`, a temporary Codex Home and
+Gateway home, the authorized ChatGPT OAuth file, the copied Gateway config/key,
+local mode, an isolated non-8765 port, and Conda CPython 3.14.6. GPT cells used
+`gpt-5.6-terra` with one permitted `gpt-5.6-sol` fallback; third-party text
+cells used `deepseek-v4-flash` with one permitted `kimi-k3` fallback after a
+model-behavior failure; multimodal cells used `qwen3.7-plus`.
+
+| Scope | Post-migration runs | Result |
+| --- | --- | --- |
+| `agentabi` | `.agent-work/agentabi/202607241847` | 3/3 passed: Terra Responses→Responses streaming returned `42`; DeepSeek Responses→Chat streaming returned `46`; DeepSeek completed a multi-turn file write with exact `AGENTABI_TOOL_OK`. |
+| Command execution | `202607241852`-`202607241902` | Terra 4/4 passed, with task 04 retaining a timeout-boundary deviation after the exact marker. DeepSeek task 01 passed; tasks 02/03/04 reached the runtime result but violated the strict no-extra-command contract. Kimi passed fallbacks 02/03 and failed fallback 04 after another extra command. |
+| Built-in tools | `202607241903`-`202607241915` | Terra passed wait, plan, file edit, and Goal; its direct image cell failed to emit the returned image, while Sol fallback passed. DeepSeek passed wait, plan, and Goal; DeepSeek and Kimi failed file-tool selection by using prohibited shell/Python. Qwen visual recognition passed. Qwen's direct-image fallback was inapplicable because its provider rejects the canonical 4x4 fixture as smaller than 10 pixels. |
+| Deferred discovery | `202607241917`-`202607241930` | Terra 7/7 and DeepSeek 7/7 passed the core contract. DeepSeek retained formatting-only marker deviations on six cells. The converted surface was stable at 29 tools and included `exec`, `tool_search`, `tool_read`, and `invoke_deferred_tool`; discovered MCP tools were not inserted as new top-level tools. |
+| Namespace and local Skills | `202607241931`-`202607241934` | Terra and DeepSeek passed both suites, 4/4 cells. |
+| Collaboration | `202607241935`-`202607241947` | Terra 6/6 passed. DeepSeek passed 5/6; task 02 waited again after the child completion had already arrived and failed the parent marker. Kimi fallback task 02 passed. |
+| Network search | `202607241948`-`202607241954` | DeepSeek passed tasks 01/02/05. Terra passed tasks 02/05; task 01 received a valid Tavily result but returned the failure marker, and Sol fallback passed. Sidecar tasks 03/04 were not run because the copied config has no sidecar URL/token. |
+| Context compaction | `202607241955`, `202607241956`, `202607241958`, `202607242303`-`202607242305`, `202607242319`, `202607242320`, `202607242327`, `202607250101` | Terra attested manual compaction passed with `wire_passthrough=true`. DeepSeek protocol task 01 completed three Rosetta Remote V2 chains with three model-start deviations. DeepSeek exactly-once task 05 passed with one command start, one context-limit compaction, one installed follow-up, and one mapping. Post-migration model-switch tasks 03/04 both passed with one `comp_hash_changed` Rosetta compaction, one mapping, same-thread replay, and the exact direction-specific marker. After the Responses-direct header denylist fix, Terra task 01 on Pixel Plus completed native Remote V2 with one command, one trigger, one installed follow-up, same-thread resume, and no upstream error; its strict quality result remains `not_scored` because the 15,863-token baseline exceeded the suite's below-15,000 precondition. Earlier Pixel Plus/Pro 502 runs remain historical failures. DeepSeek completed one Rosetta V2 chain but violated the token/output-size precondition and diagnostically retained 8/11 facts; Kimi fallback did not compact and diagnostically retained 7/11 facts. |
+| Orchestrator Skills | `202607242323`, `202607242324`, `202607242326` | Terra completed the exact no-local-executor list/read/marker contract; the preserved runner's native typed-output detector produced a false negative, recovered independently from rollout, fixture, and trace evidence. DeepSeek completed exact list/read and observed the body marker but added prose before the required exact parent marker, so the strict cell failed. Kimi fallback passed the exact contract; its provider omitted usage records. |
+| Image generation | `202607241959` | Qwen called the exact projected `image_gen.imagegen` tool and prompt. The configured Images route returned `404 model_not_found` for `gpt-image-2`; no image artifact or follow-up `view_image` was possible. This is a deployment catalog/route blocker, not a missing tool projection or an API-key failure. |
+
+### Responses-direct header denylist deterministic checkpoint — 2026-07-25
+
+The direct Responses header contract now uses a fail-open end-to-end header
+set with a case-insensitive denylist for client credentials, hop-by-hop and
+framing fields, `Connection`-declared fields, and network-origin identity.
+Unknown headers such as `x-codex-beta-features` and future `x-codex-*`
+capabilities survive both streaming and non-streaming direct routes. Tool
+Profile body changes do not recompute that set. Rebuilt JSON drops the original
+encoding and opaque attestation; exact raw wire retains both. Provider auth is
+overlaid last with case-insensitive replacement. Responses→Chat/Anthropic/
+Google still use the previous explicit minimal header set.
+
+The focused deterministic command covering app routing, ingress/raw-wire,
+direct passthrough, transport, and compaction completed with `134 passed`:
+
+```text
+conda run -n llm-rosetta python -m pytest \
+  tests/gateway/test_app_headers.py \
+  tests/gateway/test_inbound_content_encoding.py \
+  tests/gateway/test_responses_passthrough.py \
+  tests/gateway/test_http_transport_limits.py \
+  tests/gateway/test_codex_compaction.py -q
+```
+
+The previously failing Terra CLI native-compaction cell was then rerun as
+`202607250101` with installed `codex-cli 0.145.0`, `gpt-5.6-terra`, and the
+copied-config `Pixel (Plus)` route. Both phases exited 0 on thread
+`019f9813-fc52-7113-9e76-4061cb1f22ab`. The run contained exactly one command,
+one `/v1/responses` `context_limit` trigger, one accepted native compaction, one
+installed follow-up `compaction`, and a same-thread resume with no command or
+second compaction. All four upstream request-log rows returned HTTP 200; no 502
+or other upstream error was recorded. The trigger used rebuilt JSON
+(`wire_passthrough=false`), which is the exact path that previously lost
+`x-codex-beta-features` under the 12-header allowlist. Combined with the
+controlled replay proving Pixel rejects the same CLI/native-compaction shape
+when `remote_compaction_v2` is absent, the successful live result is strong
+behavioral evidence that the CLI User-Agent and beta capability header now
+arrive together. It is not a packet-level upstream header capture.
+
+The strict summary-quality result is still `not_scored`, not a quality pass:
+the command emitted 128,805 characters and the installed compaction reduced
+the observed token count to 10,687, but the pre-compaction baseline was 15,863
+instead of strictly below 15,000. The resume answer therefore remains
+diagnostic only. Usage evidence is also bounded: request 1 reported
+`input=15863`, `cached=0`, `output=119`; the compaction request did not expose a
+provider usage record, so its adjacent delta and the immediately following
+marker request's delta cannot be calculated. The resume request reported
+`input=16346`, `cached=15616`, `output=449`; against the previous marker request
+(`input=16216`, `output=11`) its signed adjacent delta is
+`15616 - (16216 + 11) = -611`. Model, prompt-cache key, tool surface, and the
+installed compaction stayed stable; the 611-token difference is the uncached
+tail containing the phase-1 marker and new query, not evidence of a cache-key
+or Rosetta history break.
+
+Run artifacts:
+
+- run root: `tmp/agent_testing_workspace/202607250101`
+- rollout: `codex_home/sessions/2026/07/25/rollout-2026-07-25T01-01-14-019f9813-fc52-7113-9e76-4061cb1f22ab.jsonl`
+- trace: `/Volumes/RAMDisk/202607250101/rosetta-trace.jsonl`
+- evaluator: `artifacts/evaluation.json`
+
+### Attestation scope remains unknown — 2026-07-25
+
+The current Codex source proves that `x-oai-attestation` is requested just in
+time from an attestation-capable Desktop/app-server connection and returned to
+Codex Core as an opaque value. The public `AttestationContext` contains only
+`thread_id`; it does not expose the request body, a body hash, target URL, or
+header set. This is insufficient evidence to claim that the token is bound to
+the original body bytes or that an upstream must reject it after Rosetta
+reconstructs or semantically changes a request.
+
+Rosetta currently forwards the attestation only with an unchanged captured
+wire request and omits it after reconstruction. That remains the conservative
+provenance policy: Rosetta cannot inspect the token's scope or issue a
+replacement token for its modified request. The actual upstream effect of
+retaining the original token after byte-only reserialization or semantic
+mutation is **unknown and untested**. If a future request succeeds through
+exact GUI wire passthrough but fails through CLI, JSON rebuild, Tool Profile,
+alias, rehydration, or another mutation path, compare the complete body and
+credential-free headers and prioritize `x-oai-attestation` retention/removal
+as a diagnostic hypothesis. Do not classify such a difference as a Rosetta
+conversion defect, provider outage, or model failure until this boundary has
+been isolated with a controlled replay.
+
+No post-migration trace above shows Rosetta dropping or corrupting a tool call,
+session handle, image payload, deferred result, or compaction item. Recorded
+strict failures are model behavior, fixture/provider applicability, or external
+configuration. They remain failed cells and are not rewritten as passes merely
+because another model proved the same Rosetta path.
+
+The post-migration matrix is still incomplete: exact 0.145.0 GUI Browser
+evidence is impossible with the installed `0.146.0-alpha.3.1` GUI; network
+sidecar tasks 03/04 lack configuration; summary-quality has no scoreable
+post-migration cell because the repaired Terra native run exceeded the strict
+baseline-token threshold and the third-party cells missed protocol
+preconditions; live audio/profile cells were not rerun after the ownership
+refactor. The missing `gpt-image-2` Images route is a hard release blocker.
+Consequently the package remains `0.144.0.r0`.
+
+### Earlier formal matrix before the ownership refactor
 
 The 2026-07-23 continuation used installed `codex-cli 0.145.0`, current-checkout
 Gateway code, isolated local mode, ChatGPT OAuth, the configured Provider key,
@@ -114,6 +252,15 @@ viewport override/reset), and zero confirmed Rosetta defects in this run.
 | --- | --- | --- | --- | --- | --- | --- |
 | `20260724-1046` | `browser_use/01` | Codex GUI `0.146.0-alpha.3.1` / `deepseek-v4-pro` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f9504-4ada-72d1-ab6c-2ea0d0949347` | 23/23 rows / `success_with_limitations` | Rosetta correlated 49 completed streams with one byte-stable ordered 28-tool Chat surface. Deferred discovery returned a bounded versioned search result, paired exact read, and 33 structured `invoke_deferred_tool` Browser calls rebuilt as source custom `exec`; no direct Node Function or raw model-authored Browser wrapper appeared. Browser observations were 15 pass and 8 partial. The executor read the judge prompt early, retained as a process deviation because it did not supply Gateway/session evidence or alter the independently verified Rosetta wire result. Exact `0.145.0` GUI behavior is unverified because the installed GUI had already advanced. |
 | `20260724-1152` | `browser_use/01` | Codex GUI `0.146.0-alpha.3.1` / `gpt-5.6-sol` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f953d-b4c5-7823-b65e-7483b9d129d2` | 23/23 rows / `failure` (`17 pass / 3 partial / 3 fail`) | Independent judge found navigation, viewport, and drag postcondition failures plus prompt/download/stale-tab partials. Thirty-eight matched source requests retained raw `exec` with `namespace: null`; no `namespace:exec` or `execexec` was present. This is current-GUI evidence only; exact `0.145.0` GUI behavior is unverified because the GUI had already advanced to `0.146.0-alpha.3.1`. |
+| `202607242303` | `context_compaction/03` | `codex-cli 0.145.0` / `gpt-5.6-terra→deepseek-v4-flash` | `Pixel (Plus)→Deepseek (Official)` / `openai_responses→openai_chat` | `019f97a8-bc62-7fb1-8da7-c232d84697e1` | `0/0` / `RESUMED:GPT_TO_DEEPSEEK:SWITCH-NONCE-7Q4M` / `success` | Phase 1 emitted `FIRST:SWITCH-NONCE-7Q4M`; model change triggered exactly one Rosetta compaction with reason `comp_hash_changed`, one persisted mapping, and a same-thread DeepSeek replay. All three logical Gateway requests returned 200. Resume cache delta was `1920 - (16267 + 29) = -14376`; the expected discontinuity is explained by the deliberate model/provider/route switch plus compaction replacement, not an unexplained Rosetta prefix mutation. Run root: `tmp/agent_testing_workspace/202607242303`; trace: `/Volumes/RAMDisk/202607242303/rosetta-trace.jsonl`. |
+| `202607242304` | `context_compaction/04` | `codex-cli 0.145.0` / `deepseek-v4-flash→gpt-5.6-terra` | `Deepseek (Official)→Pixel (Plus)` / `openai_responses→openai_responses` | `019f97a9-3b5c-7122-b40e-83e86d5ba791` | `0/0` / `RESUMED:DEEPSEEK_TO_GPT:SWITCH-NONCE-7Q4M` / `success` | Phase 1 emitted `FIRST:SWITCH-NONCE-7Q4M`; model change triggered exactly one Rosetta compaction with reason `comp_hash_changed`, one persisted mapping, and a same-thread Terra replay. All three logical Gateway requests returned 200. Resume cache delta was `4096 - (18278 + 164) = -14346`; the expected discontinuity is explained by the deliberate model/provider/route switch plus compaction replacement, not an unexplained Rosetta prefix mutation. Run root: `tmp/agent_testing_workspace/202607242304`; trace: `/Volumes/RAMDisk/202607242304/rosetta-trace.jsonl`. |
+| `202607242305` | `context_compaction_summary_quality/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `Pixel (Plus)` / `openai_responses→openai_responses` | `019f97a9-e3cf-75b0-801e-ba3c6de1b7f5` | `1/0` / phase marker absent / `not_scored` | The command ran once, then all 15 Codex retry attempts for native remote compaction returned upstream 502 at `stream_header`; no compact item or mapping was installed. The later resume response is not summary evidence. The successful-request adjacent delta was `16128 - (16250 + 87) = -209`; all 15 failed compact requests lacked usage. Run root: `tmp/agent_testing_workspace/202607242305`; trace: `/Volumes/RAMDisk/202607242305/rosetta-trace.jsonl`. |
+| `202607242319` | `context_compaction_summary_quality/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `Pixel (Pro)` / `openai_responses→openai_responses` | `019f97b7-482f-75d3-b668-fa8503f63b4a` | `1/0` / phase marker absent / `not_scored` | The user-authorized Provider substitution reproduced the Plus result: all 15 native remote-compaction attempts returned upstream 502 at `stream_header`; no compact item or mapping was installed. The successful-request adjacent delta was `16128 - (16250 + 115) = -237`; the failed compact attempts supplied no usage. This is a Provider endpoint failure, not a summary-quality or Rosetta-conversion result. Run root: `tmp/agent_testing_workspace/202607242319`; trace: `/Volumes/RAMDisk/202607242319/rosetta-trace.jsonl`. |
+| `202607242320` | `context_compaction_summary_quality/02` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f97b8-284b-7262-94fc-333c9e80924b` | `0/0` / phase and resume markers observed / `not_scored` | One command start, one `context_limit` Rosetta compaction, one mapping, installed phase marker, and same-thread resume all succeeded. The cell is not scoreable because baseline count 18,392 exceeded 15,000 and retained command output was 40,248 rather than at least 100,000 characters. Diagnostic output preserved 8/11 facts, missing the immutable negation, `UTC only`, and the full predeploy ordering/exit constraint. The post-compaction request delta was `18176 - (18261 + 131) = -216`, explained by the expected compaction replacement; the internal summary and resume usage were unavailable in the stream trace. Run root: `tmp/agent_testing_workspace/202607242320`; trace: `/Volumes/RAMDisk/202607242320/rosetta-trace.jsonl`. |
+| `202607242327` | `context_compaction_summary_quality/02` fallback | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f97bd-e145-7e30-8703-87f75299e609` | `0/0` / phase and resume markers observed / `not_scored` | The command ran once and resume ran no command, but no context-limit compaction or mapping occurred; the Provider supplied no token usage, and retained command output was only 40,248 characters. Diagnostic output preserved 7/11 facts. This exhausts the permitted third-party summary fallback and does not replace the failed DeepSeek preconditions with a pass. Run root: `tmp/agent_testing_workspace/202607242327`; trace: `/Volumes/RAMDisk/202607242327/rosetta-trace.jsonl`. |
+| `202607242323` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `Pixel (Plus)` / `openai_responses→openai_responses` | `019f97ba-4468-74f0-b3e9-ec9d2871400a` | exact marker / `success with deviations` | With no local execution environment, one native Code Mode call used `skills.list` with orchestrator authority, selected the exact returned fixture package, used its returned `main_resource` in `skills.read`, checked `ORCHESTRATOR_SKILL_BODY_OK`, and emitted the exact marker. Fixture methods independently recorded one list and one read. The preserved runner's typed-output detector missed native Responses output, so bounded rollout/fixture/trace evidence recovered the result without a model rerun. Adjacent delta was `11008 - (11574 + 264) = -830`; model, route, cache key, and exact input prefix were stable, with only the expected reasoning/call/result suffix added. Run root: `tmp/agent_testing_workspace/202607242323`; trace: `/Volumes/RAMDisk/202607242323/rosetta-trace.jsonl`. |
+| `202607242324` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f97bb-f582-75d1-92f6-34c0bd97d73d` | marker embedded with extra prose / `failure` | DeepSeek called list once and read once with the exact returned handles and observed the body marker. It then prefixed the required parent marker with explanatory prose, violating the exact-output contract. Rosetta conversion and the resource backend succeeded. Adjacent deltas were `11904 - (11984 + 184) = -264` and `12288 - (12321 + 287) = -320`; all requests retained the same model, route, cache key, and exact prior input prefix, adding only expected reasoning/message/call/result suffixes. Run root: `tmp/agent_testing_workspace/202607242324`; trace: `/Volumes/RAMDisk/202607242324/rosetta-trace.jsonl`. |
+| `202607242326` | `orchestrator_skills/01` fallback | `codex-cli 0.145.0` / `kimi-k3` | `Opencode Go` / `openai_responses→openai_chat` | `019f97bc-fc6b-7780-a0ef-f328ca959953` | exact marker / `success with deviations` | The permitted fallback completed the exact list/read/returned-handle/body-marker/parent-marker sequence with no prohibited fallback call, proving the converted orchestrator path works. The route supplied no per-request usage for its three logical requests, so mandatory adjacent deltas could not be calculated and are retained as an evidence deviation. Run root: `tmp/agent_testing_workspace/202607242326`; trace: `/Volumes/RAMDisk/202607242326/rosetta-trace.jsonl`. |
 | `202607232335` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `deepseek-v4-flash` | `Deepseek (Official)` / `openai_responses→openai_chat` | `019f92a0-404c-7da0-a2d7-957ccc1496f7` | exact marker / `success with deviations` | The app-server had no local execution environment. The model called `skills.list` once, selected the exact returned `skill://orchestrator-skill-fixture/orchestrator-skill-fixture` package and `main_resource`, called `skills.read` once, observed `ORCHESTRATOR_SKILL_BODY_OK`, and made no prohibited fallback call. The live run passed; its temporary evaluator raised a post-run `TypeError`, so the preserved protocol, rollout, and Gateway trace were used to recover the evaluation without rerunning the model. |
 | `202607232346` | `orchestrator_skills/01` | `codex-cli 0.145.0` / `gpt-5.6-sol` | `TURNING` / `openai_responses→openai_responses` | `019f92a9-dfcb-7d61-956b-4248048f11d5` | exact marker / `success with deviations` | The same no-local-executor native sequence passed with exact returned handles, body marker, and no fallback calls. Seven transient upstream 503 attempts were recovered by the existing retry policy before the three logical requests completed, so this is not recorded as a clean pass. All logical requests retained one prompt-cache key and stable instructions/tools; the negative adjacent cache deltas reflect upstream block accounting rather than Rosetta prefix mutation. |
 | `202607231237` | `command_execution/01` | `codex-cli 0.145.0` / `gpt-5.6-terra` | `晚照 (Plus)` / `openai_responses→openai_responses` | `019f904b-6c40-7e41-a5a5-c8813019dd46` | `0` / `RESULT:ONE_SHOT_OK` / `success` | One native command start, no continuation; isolated local-mode Gateway trace completed both Responses streams. |

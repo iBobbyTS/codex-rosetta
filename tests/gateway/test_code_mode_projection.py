@@ -673,12 +673,13 @@ def test_exec_description_projects_precise_normal_function_schemas():
     assert "backslash" not in chars_description
     assert definitions["send_line"] == {
         "type": "function",
+        "strict": False,
         "function": {
             "name": "send_line",
             "description": (
                 "Send one complete line to an existing interactive command "
-                "session. Use this instead of write_stdin for line-oriented "
-                "input; the gateway appends exactly one newline."
+                "session. Use this instead of write_stdin when submitting "
+                "line-oriented input; the gateway appends exactly one newline."
             ),
             "parameters": {
                 "type": "object",
@@ -706,9 +707,9 @@ def test_exec_description_projects_precise_normal_function_schemas():
         "Description for exec_command.\n\nWhen an interactive command returns a "
         "session_id, reuse that exact session_id instead of starting the command "
         "again. Use write_stdin for polling, raw character input, or complex "
-        "multi-step interaction. Use send_line for simple single-line input; it "
-        "appends exactly one newline. Boolean parameters such as tty must be JSON "
-        "booleans true or false, not quoted strings."
+        "multi-step interaction. Boolean parameters such as tty must be JSON "
+        "booleans true or false, not quoted strings.\n\nUse send_line for simple "
+        "single-line input; it appends exactly one newline."
     )
     exec_description = definitions["exec_command"]["function"]["description"]
     assert "Example:" not in exec_description

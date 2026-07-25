@@ -228,19 +228,20 @@ def test_direct_responses_trace_records_upstream_http_error(tmp_path):
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert [record["stage"] for record in records] == [
         "original_request",
+        "tool_runtime_plan",
         "stream_start",
         "raw_passthrough_request",
         "upstream_error",
         "stream_complete",
     ]
-    assert records[3]["data"] == {
+    assert records[4]["data"] == {
         "status_code": 502,
         "error": '{"error":{"message":"compact request rejected"}}',
         "error_phase": "stream_header",
         "upstream_url": "https://api.example.test/v1",
     }
-    assert records[4]["data"]["stream_outcome"] == "error"
-    assert records[4]["data"]["chunk_count"] == 0
+    assert records[5]["data"]["stream_outcome"] == "error"
+    assert records[5]["data"]["chunk_count"] == 0
 
 
 def test_direct_responses_trace_captures_pre_adaptation_request(tmp_path):
@@ -285,7 +286,7 @@ def test_direct_responses_trace_captures_pre_adaptation_request(tmp_path):
         record for record in records if record["stage"] == "raw_passthrough_request"
     )
     assert original["data"]["tools"] == [{"type": "function", "name": "view_image"}]
-    assert "tools" not in adapted["data"]
+    assert adapted["data"]["tools"] == original["data"]["tools"]
 
 
 def test_direct_responses_trace_records_upstream_connection_error(tmp_path):
@@ -314,18 +315,19 @@ def test_direct_responses_trace_records_upstream_connection_error(tmp_path):
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert [record["stage"] for record in records] == [
         "original_request",
+        "tool_runtime_plan",
         "stream_start",
         "raw_passthrough_request",
         "upstream_connection_error",
         "stream_complete",
     ]
-    assert records[3]["data"] == {
+    assert records[4]["data"] == {
         "status_code": 502,
         "error": "upstream retries exhausted",
         "error_phase": "stream_header",
         "upstream_url": "https://api.example.test/v1",
     }
-    assert records[4]["data"]["stream_error"] == "upstream retries exhausted"
+    assert records[5]["data"]["stream_error"] == "upstream retries exhausted"
 
 
 def test_stream_trace_redacts_known_and_bearer_tokens(tmp_path):
@@ -771,8 +773,9 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert any("response.output_text.delta" in chunk for chunk in chunks)
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     stages = [record["stage"] for record in records]
-    assert stages[:6] == [
+    assert stages[:7] == [
         "original_request",
+        "tool_runtime_plan",
         "stream_start",
         "source_request",
         "target_request",
@@ -783,7 +786,7 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert "downstream_sse" in stages
     assert stages[-1] == "stream_complete"
     assert records[0]["data"] == body
-    assert records[3]["data"]["messages"] == [{"role": "user", "content": "hello"}]
+    assert records[4]["data"]["messages"] == [{"role": "user", "content": "hello"}]
 
 
 def test_deferred_response_trace_capacity_drops_the_entire_batch(

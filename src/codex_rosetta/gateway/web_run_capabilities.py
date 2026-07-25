@@ -6,51 +6,62 @@ import copy
 import re
 from typing import Any
 
+from .admin.tool_catalog import load_tool_catalog
+
 WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
 WEB_RUN_BASIC_SEARCH_CAPABILITY = "web_run_basic_search"
 WEB_RUN_SIDECAR_CAPABILITY = "web_run_sidecar"
 
-# ``None`` means the command has no nested object fields to prune. A field set
-# describes the only model-visible fields Rosetta accepts for each array item.
-WEB_RUN_BASE_COMMAND_FIELDS: dict[str, frozenset[str] | None] = {
-    "open": frozenset({"ref_id", "lineno"}),
-    "time": frozenset({"utc_offset"}),
-    "response_length": None,
-}
-WEB_RUN_SEARCH_COMMAND_FIELDS: dict[str, frozenset[str]] = {
-    "search_query": frozenset({"q", "domains"}),
-}
-WEB_RUN_SIDECAR_COMMAND_FIELDS: dict[str, frozenset[str]] = {
-    "click": frozenset({"ref_id", "id"}),
-    "find": frozenset({"ref_id", "pattern"}),
-    "screenshot": frozenset({"ref_id", "pageno"}),
-}
+
+def _web_run_projection() -> dict[str, Any]:
+    matches = [
+        item["capability_projection"]
+        for item in load_tool_catalog()["items"]
+        if "web_run" in item.get("runtime_adapters", [])
+    ]
+    if len(matches) != 1 or not isinstance(matches[0], dict):
+        raise ValueError("web_run adapter must own one capability_projection")
+    return matches[0]
+
+
+def _command_fields(section: str) -> dict[str, frozenset[str] | None]:
+    projection = _web_run_projection()[section]
+    commands = projection.get("commands", {})
+    if not isinstance(commands, dict):
+        raise ValueError(f"web_run capability section {section!r} is invalid")
+    result: dict[str, frozenset[str] | None] = {}
+    for command, fields in commands.items():
+        if (
+            not isinstance(command, str)
+            or not isinstance(fields, list)
+            or any(not isinstance(field, str) for field in fields)
+        ):
+            raise ValueError(f"web_run capability section {section!r} is invalid")
+        result[command] = frozenset(field for field in fields if isinstance(field, str))
+    top_level_fields = projection.get("top_level_fields", [])
+    if not isinstance(top_level_fields, list) or any(
+        not isinstance(field, str) for field in top_level_fields
+    ):
+        raise ValueError(f"web_run capability section {section!r} is invalid")
+    result.update({field: None for field in top_level_fields})
+    return result
+
+
+WEB_RUN_BASE_COMMAND_FIELDS = _command_fields("base")
+WEB_RUN_SEARCH_COMMAND_FIELDS = _command_fields(WEB_RUN_BASIC_SEARCH_CAPABILITY)
+WEB_RUN_SIDECAR_COMMAND_FIELDS = _command_fields(WEB_RUN_SIDECAR_CAPABILITY)
 WEB_RUN_SUPPORTED_COMMAND_FIELDS = {
     **WEB_RUN_BASE_COMMAND_FIELDS,
     **WEB_RUN_SEARCH_COMMAND_FIELDS,
 }
 WEB_RUN_SUPPORTED_COMMANDS = frozenset(WEB_RUN_SUPPORTED_COMMAND_FIELDS)
 WEB_RUN_KNOWN_COMMANDS = frozenset(
-    {
-        "search_query",
-        "image_query",
-        "open",
-        "click",
-        "find",
-        "screenshot",
-        "finance",
-        "weather",
-        "sports",
-        "time",
-        "response_length",
-    }
+    set(WEB_RUN_BASE_COMMAND_FIELDS)
+    | set(WEB_RUN_SEARCH_COMMAND_FIELDS)
+    | set(WEB_RUN_SIDECAR_COMMAND_FIELDS)
+    | set(_web_run_projection().get("unsupported_commands", []))
 )
 WEB_RUN_UNSUPPORTED_COMMANDS = WEB_RUN_KNOWN_COMMANDS - WEB_RUN_SUPPORTED_COMMANDS
-
-_SEARCH_RECENCY_CLAIM_RE = re.compile(
-    r"\s*\(and optionally with a domain or recency filter\)",
-    flags=re.IGNORECASE,
-)
 
 
 def project_modified_web_run_function(
@@ -148,12 +159,25 @@ def project_modified_web_run_description(
         for command in sorted(unsupported_commands)
         for marker in (f"`{command}`", f'"{command}"')
     )
+    rules = _web_run_projection().get("description_rules", {})
+    drop_markers = tuple(
+        str(marker).lower() for marker in rules.get("drop_lines_containing", [])
+    )
+    replacements = rules.get("replace_text", [])
     for line in description.splitlines():
         if any(marker in line for marker in unsupported_markers):
             continue
-        if "empty query" in line.lower():
+        if any(marker in line.lower() for marker in drop_markers):
             continue
-        retained.append(_SEARCH_RECENCY_CLAIM_RE.sub(" (optionally by domain)", line))
+        for replacement in replacements:
+            flags = re.IGNORECASE if replacement.get("case_insensitive") else 0
+            line = re.sub(
+                re.escape(replacement["from"]),
+                replacement["to"],
+                line,
+                flags=flags,
+            )
+        retained.append(line)
     return "\n".join(retained).strip()
 
 

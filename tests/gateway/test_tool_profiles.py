@@ -464,6 +464,7 @@ def test_internal_container_when_disabled_must_be_boolean(monkeypatch):
 @pytest.mark.parametrize("api_type", ["responses", "chat"])
 def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
     tools = _profile(**{"function.update_plan": "disabled"})
+    tools["hosted.tool_search"] = "disabled"
     raw = {
         "providers": {
             "test": {
@@ -646,6 +647,7 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
 @pytest.mark.parametrize("api_type", ["anthropic", "google"])
 def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type):
     tools = _profile(**{"function.update_plan": "disabled"})
+    tools["hosted.tool_search"] = "disabled"
     raw = {
         "providers": {
             "test": {
@@ -755,6 +757,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
 
 def test_tool_mapping_only_provider_applies_selected_group_profile():
     tools = _profile(**{"function.update_plan": "disabled"})
+    tools["hosted.tool_search"] = "passthrough"
     raw = {
         "providers": {
             "test": {
@@ -811,9 +814,11 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
         contract["readonly"]["web-run-injection"]["tools"]["namespace.web.run"]
         == "modified"
     )
-    assert (
-        contract["readonly"]["responses-tool-mapping"]["tools"] == contract["builtin"]
-    )
+    responses_mapping = contract["readonly"]["responses-tool-mapping"]["tools"]
+    assert responses_mapping == {
+        **contract["builtin"],
+        "hosted.tool_search": "passthrough",
+    }
 
 
 def test_passthrough_option_is_not_a_creatable_tool_profile() -> None:
@@ -1350,7 +1355,10 @@ def test_responses_to_chat_removes_native_tool_search_mapping():
 
 def test_responses_passthrough_keeps_native_tool_search_protocol():
     body = {"tools": [{"type": "tool_search", "parameters": {"type": "object"}}]}
-    route = _route(_profile(), target_provider="openai_responses")
+    route = _route(
+        _profile(**{"hosted.tool_search": "passthrough"}),
+        target_provider="openai_responses",
+    )
 
     assert _apply_tool_adaptation(body, route) is body
 

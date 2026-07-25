@@ -51,6 +51,7 @@
   type ProfilesResponse = {
     profiles?: Profile[];
     supported_states?: Record<string, string[]>;
+    state_api_types?: Record<string, Partial<Record<string, ProfileApiType[]>>>;
     references?: Record<string, string[]>;
   };
   type FilterId = 'all' | 'exec_expansion' | 'function' | 'namespace' | 'rosetta_injection';
@@ -233,7 +234,7 @@
   }
 
   function updateTool(item: ToolItem, state: string): void {
-    if (selected?.readonly) return;
+    if (selected?.readonly || !stateSupportsProfileApis(item, state)) return;
     toolDraft = { ...toolDraft, [item.id]: state };
     if (item.type === 'namespace' && state === 'disabled') {
       const next = { ...toolDraft };
@@ -251,6 +252,11 @@
 
   function effectiveDisabled(item: ToolItem): boolean {
     return Boolean(item.namespace_id && toolDraft[item.namespace_id] === 'disabled');
+  }
+
+  function stateSupportsProfileApis(item: ToolItem, state: string): boolean {
+    const supportedApiTypes = profilesData.state_api_types?.[item.id]?.[state];
+    return !supportedApiTypes || profileApiTypes.every((apiType) => supportedApiTypes.includes(apiType));
   }
 
   function toggleNamespace(item: ToolItem): void {
@@ -314,7 +320,7 @@
       onchange={(event) => updateTool(item, event.currentTarget.value)}
     >
       {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-        <option value={state}>{t(`tools.policy.${state}`)}</option>
+        <option value={state} disabled={!stateSupportsProfileApis(item, state)}>{t(`tools.policy.${state}`)}</option>
       {/each}
     </select>
   </div>
@@ -354,7 +360,7 @@
           onchange={(event) => updateTool(item, event.currentTarget.value)}
         >
           {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-            <option value={state}>{t(`tools.policy.${state}`)}</option>
+            <option value={state} disabled={!stateSupportsProfileApis(item, state)}>{t(`tools.policy.${state}`)}</option>
           {/each}
         </select>
       </div>

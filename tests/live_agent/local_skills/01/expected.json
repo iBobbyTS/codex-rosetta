@@ -3,7 +3,7 @@
   "timeout_seconds": 120,
   "success_marker": "RESULT:LOCAL_SKILL_OK",
   "default_models": [
-    "gpt-5.6-sol",
+    "gpt-5.6-terra",
     "deepseek-v4-flash"
   ],
   "provider_identity": "codex_rosetta",

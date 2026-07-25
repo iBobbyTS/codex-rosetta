@@ -42,9 +42,11 @@ Gateway, or starting Codex.
 The command prints the timestamped run root and writes a credential-free
 `artifacts/automation-result.json`. Success requires exactly one in-band
 trigger, `wire_passthrough=true`, no trigger-request upstream error, a later
-installed `compaction` input, one native `user_requested` request profile, the
-final marker, and a zero Codex exit status. Use `--model gpt-5.6-sol` to run the
-task's canonical model instead, or provide another configured GPT model. Use
+installed `compaction` input, one matching request profile, the expected
+Rosetta mapping cardinality, the required command-start cardinality, the final
+marker, and a zero Codex exit status. The canonical GPT model is
+`gpt-5.6-terra`; use `--model gpt-5.6-sol` only for the permitted fallback, or
+provide another explicitly selected configured GPT model. Use
 `--trigger context-limit` to run the
 original deterministic auto-threshold scenario. The runner never reuses or
 stops the user's main gateway.

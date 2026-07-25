@@ -684,6 +684,8 @@ def test_passthrough_raw_stream_drops_reconstructable_response_trace(
 
     assert emitted == b"".join(frames)
     assert [record["stage"] for record in records] == [
+        "original_request",
+        "tool_runtime_plan",
         "stream_start",
         "raw_passthrough_request",
         "stream_complete",
@@ -721,6 +723,8 @@ def test_passthrough_raw_stream_preserves_safe_response_trace(
 
     assert emitted == b"".join(frames)
     assert [record["stage"] for record in records] == [
+        "original_request",
+        "tool_runtime_plan",
         "stream_start",
         "raw_passthrough_request",
         "raw_passthrough_chunk",
@@ -922,7 +926,13 @@ def test_converted_stream_releases_safe_response_diagnostics_in_order(
     records = _trace_records(trace_path)
     stages = [record["stage"] for record in records]
 
-    assert stages[:3] == ["stream_start", "source_request", "target_request"]
+    assert stages[:5] == [
+        "original_request",
+        "tool_runtime_plan",
+        "stream_start",
+        "source_request",
+        "target_request",
+    ]
     assert stages.count("upstream_chunk") == 2
     assert stages.count("source_event") >= 2
     assert stages.count("downstream_sse") >= 2

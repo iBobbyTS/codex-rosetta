@@ -22,16 +22,19 @@ Codex version: 0.145.0
   preserves valid audio on Responses and Chat paths, and fail-open passes
   malformed or unsupported audio blocks. The packaged model and tool catalogs
   are bound to the formal source commit.
-- The full non-integration suite passes (`3756 passed, 4 skipped`), and
+- The full non-integration suite passes (`3779 passed, 4 skipped`), and
   `make check-codex-compat` passes
-  against the refreshed formal baseline. Formal live evidence now has fourteen
-  successful cells and two successes with deviations across command continuation
-  and builtin Code Mode tools. Failed Terra, DeepSeek, Kimi, and MiMo cells
-  remain recorded against their actual models. Kimi generated valid session
-  continuations on the same Responses→Chat bridge, supporting model behavior
-  failures rather than a Rosetta session-restoration defect. The remaining
-  formal live-agent matrix is pending, so 0.145.0 remains **not approved** and
-  the package version must not advance.
+  against the refreshed formal baseline. The post-migration agentabi matrix
+  passes 3/3, and the CLI live rerun covers command execution, built-in tools,
+  deferred discovery, namespace/local Skills, collaboration, network search,
+  compaction, and Images. Original-model failures and permitted fallback
+  outcomes remain recorded separately. No inspected post-migration trace shows
+  Rosetta dropping or corrupting model-visible tool data. Both post-migration
+  model-switch directions and orchestrator paths are now covered. Exact
+  0.145.0 GUI, sidecar search, a scoreable summary-quality cell, and live
+  audio/profile evidence remain unavailable; the Images route also lacks
+  `gpt-image-2`. Therefore 0.145.0 remains **not approved** and the package
+  version must not advance.
 
 ## Formal Live Progress And Remaining Gates
 
@@ -53,6 +56,9 @@ Completed formal live cells are retained in
 | `builtin_tools/04` | `gpt-5.6-terra`; `晚照 (Plus)` Responses→Responses | Passed one `view_image` with exact `detail: "original"`. |
 | `builtin_tools/05` | Terra direct and DeepSeek converted | Both passed ordered Goal lifecycle calls on one fresh thread. |
 | `builtin_tools/06` | `qwen3.7-plus`; `Opencode Go` Responses→Chat | Passed one projected `view_image` call with the schema-default detail and correctly recognized all four quadrants. |
+| `context_compaction/03`, `04` | Terra↔DeepSeek across Pixel Plus and Deepseek Official | Both post-migration model-switch directions passed with one `comp_hash_changed` Rosetta compaction, one mapping, same-thread replay, and exact marker. |
+| `context_compaction_summary_quality/01`, `02` | Terra on Pixel Plus/Pro; DeepSeek and Kimi converted | Execution completed but no cell is scoreable. Historical Pixel Plus/Pro runs returned native-compaction 502; after the direct-header fix, `202607250101` completed the Pixel Plus native chain and same-thread resume, but its 15,863-token baseline exceeded the strict below-15,000 precondition. DeepSeek completed a valid Rosetta V2 chain but missed token/output-size preconditions; Kimi did not compact. |
+| `orchestrator_skills/01` | Terra direct; DeepSeek and Kimi converted | Terra passed after recovering a native typed-output evaluator false negative. DeepSeek completed list/read but failed exact final formatting; Kimi fallback passed the exact contract. |
 | `browser_use/01` | `deepseek-v4-pro`; `Deepseek (Official)` Responses→Chat from Codex GUI `0.146.0-alpha.3.1` | Rosetta capability path succeeded with limitations: all 49 streams completed, the ordered 28-tool target surface stayed stable, and deferred Browser calls round-tripped through `tool_search`, `tool_read`, `invoke_deferred_tool`, and source custom `exec`. This is current-GUI Rosetta evidence, not exact `0.145.0` GUI evidence. |
 | `browser_use/01` | `gpt-5.6-sol`; `晚照 (Plus)` native Responses from Codex GUI `0.146.0-alpha.3.1` | The 23-row matrix completed but the independent judge classified it `failure` (`17 pass / 3 partial / 3 fail`). The matched wire evidence retained `exec` with `namespace: null` and showed no `namespace:exec`/`execexec`; the Browser failures therefore do not establish Rosetta namespace loss. This is current-GUI evidence, not exact `0.145.0` GUI evidence. |
 
@@ -88,42 +94,61 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 
 | Priority | Remaining formal gate | Minimum evidence to record |
 | --- | --- | --- |
-| 1 | Command continuation disposition | No command cell remains unrun. Direct Terra polling passed, direct Terra stdin cells failed, DeepSeek continuation cells failed their model-specific constraints, Kimi passed all three converted continuation shapes, and Sol fallback retained separate task-03/task-04 failures while proving task-04 same-session runtime behavior. Decide at release review whether the recorded model failures block approval; do not rerun completed one-shot or fallback cells. |
-| 1 | Code Mode and tool localization | `builtin_tools` is complete: wait, plan, Goal, direct image, Qwen localized-file selection, and Qwen visual recognition have live evidence. Terra and Qwen file workflows passed with deviations; DeepSeek/Kimi file selection and MiMo visual recognition remain model-behavior failures. Explicit text-only routes now suppress `view_image`, and image tests follow the visible detail schema. Next run `deferred_tool_search/01` through `07`; capture native/tool-localized calls and result replay. |
-| 1 | Tool history and collaboration | Completed for Terra and DeepSeek. DeepSeek `subagent_tools/02` failed its parent marker; the permitted Kimi fallback passed. |
-| 1 | Context and reasoning | Protocol, exactly-once, attested manual compact, and both switch directions ran successfully. Summary-quality cells remain model failures as recorded in `live-evidence.md`. |
-| 1 | Search and Images | DeepSeek search `01/02/05` passed; Terra only baseline `01` passed. Sidecar tasks `03/04` and Bing are configuration-blocked. Qwen image generation failed before making an Images request. |
+| 1 | Images route | Configure a reachable `gpt-image-2` route or an explicitly approved compatible mapping, then rerun the Qwen image cell through artifact generation and `view_image`. The current post-migration call reached the Images endpoint and returned `404 model_not_found`. |
+| 1 | Post-migration context coverage | Model-switch tasks 03/04 passed. The `202607250101` Terra rerun cleared the prior Pixel Plus native-compaction 502 after the direct-header fix: one trigger, one installed follow-up, and same-thread resume all completed. Summary quality is still not scoreable because its 15,863-token baseline exceeded the strict below-15,000 precondition; DeepSeek and Kimi also missed strict token/output or compaction preconditions. Adjust the suite precondition separately before making a quality claim. |
+| 1 | Sidecar search | Supply the existing test contract with an authenticated web-run sidecar URL/token, then run network tasks 03/04. Do not synthesize configuration in the test runner. |
 | 2 | Audio and model profiles | Real Responses and Chat `InputAudio`/`Audio` calls; third-party Chat and Responses profile cells that exercise Code Mode audio exposure. |
-| 2 | Provider identity and orchestrator surfaces | GPT relay C0/C1/C2/C3/C5 passed; C4 has a 0.145 harness trigger mismatch. `orchestrator_skills/01` completed through a no-local-executor app-server thread and deterministic `codex_apps` MCP resource backend: DeepSeek and Sol both passed with deviations, including Sol's seven recovered upstream 503 attempts. |
+| 2 | Provider identity | GPT relay C0/C1/C2/C3/C5 passed before the ownership refactor; C4 still has a 0.145 harness trigger mismatch. Record a post-migration relay sample if this surface is required for release approval. |
 | Version-bound manual | Browser | Rosetta's deferred Browser path passed with limitations in the 2026-07-24 GUI run. The GUI had already updated to `0.146.0-alpha.3.1`, so exact `0.145.0` GUI behavior cannot be tested in the current installation and remains explicitly unverified. Do not discard the current-GUI Rosetta evidence or relabel it as `0.145.0` client evidence. |
 
 ## Formal CP Classification
 
 | ID and compatibility point | Classification | Source/automation evidence | Formal live result |
 | --- | --- | --- | --- |
-| `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint/header extraction and full suite pass | Direct and converted command start/continuation surfaces executed; model-specific failures remain; broader surface pending |
-| `CP-02 — Responses transparent handling` | High-confidence unchanged | Transport contract unchanged; full suite pass | Direct Responses smoke completed |
-| `CP-03 — Codex Search and Images endpoints` | Possibly unchanged | No extracted formal change | Pending search/Images cells |
+| `CP-01 — Agent-facing API` | Changed | Responses→Responses now uses a direct-only denylist: unknown end-to-end headers pass, credentials/hop-by-hop/framing/network-origin fields are removed case-insensitively, and conversion routes retain their explicit minimal set. Focused app/ingress/transport/compaction suite passes 134 tests | `202607250101` cleared the prior Terra CLI native-compaction 502 on Pixel Plus: all four direct streaming requests returned 200 and same-thread resume completed |
+| `CP-02 — Responses transparent handling` | Changed | Direct headers are derived once from original ingress independently of Tool Profile/body changes; rebuilt JSON removes encoding/attestation, raw wire retains them, and Provider auth wins case-insensitively. Focused suite passes | The rebuilt-JSON native trigger completed with `wire_passthrough=false`, one installed follow-up, and no upstream error; this behaviorally confirms the missing-beta regression is fixed |
+| `CP-03 — Codex Search and Images endpoints` | Changed | `web.run` command/field/description projection is catalog-owned; obsolete `image_generation` suppression removed; `image_gen.imagegen` contract unchanged | Post-migration search passed for DeepSeek 3/3 and Terra 2/3 with Sol fallback for task 01. Qwen selected the exact image tool, but the configured Images route returned `404 model_not_found` for `gpt-image-2` |
 | `CP-04 — Request and window identity` | Possibly unchanged | Metadata keys unchanged | Pending multi-turn wire capture |
 | `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot plus Kimi polling/single-input/two-input continuation passed; DeepSeek continuation cells retain separate model failures; audio pending |
 | `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
 | `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
 | `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Terra/DeepSeek `exec` yield and top-level wait passed; direct image and Goal paths exercised; current GUI Browser custom-`exec` reconstruction passed; MiMo recognition failed |
-| `CP-09 — Code tool localization` | Changed | MCP audio projection plus text-only `view_image` filtering updated | Direct GPT native patch succeeded with a discovery-read deviation; Qwen selected all five localized file tools on Chat with extra verification reads; DeepSeek and Kimi retained prohibited shell/Python choices; current GUI Browser Node dispatch localized and restored without loss |
+| `CP-09 — Code tool localization` | Changed | Schema-v6 catalog now owns localized definitions, `send_line`, modality/detail policy, description variants, and adapter bindings; focused and full Gateway suites pass | Post-migration command and built-in cells exercised direct and converted adapters. Strict model failures remain separate; no trace showed session or argument corruption by Rosetta |
 | `CP-10 — Tool history consistency` | Possibly unchanged | Item names unchanged; full suite pass | Pending replay cell |
-| `CP-11 — Deferred tool discovery` | Possibly unchanged | Tool mapping unchanged | Formal CLI deferred suite passed 14/14; current GUI Browser path also passed bounded search, paired read, structured dispatch, and source custom-`exec` reconstruction. Exact `0.145.0` GUI remains unverified |
+| `CP-11 — Deferred tool discovery` | Changed | Added catalog-owned dependency graph and native `tool_search` Chat projection with non-streaming, streaming, history, conflict, malformed, and converter restoration tests | Post-migration CLI deferred suite passed 14/14 core cells. Converted requests retained one stable 29-tool surface and restored discovered calls through the paired search/read/invoke path |
 | `CP-12 — Codex tool usage tips` | Changed | Static guidance now includes `audio()` | Pending |
-| `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Local/namespace suites passed; DeepSeek and Sol both completed native orchestrator list/read with exact returned resource handles |
+| `CP-13 — Skill delivery surfaces` | Possibly unchanged | Fixture contracts pass | Local/namespace suites passed. Post-migration Terra completed the exact orchestrator contract; DeepSeek completed exact list/read but failed exact final formatting, while Kimi fallback passed the converted path |
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Twenty-eight valid formal command/builtin cells used Conda/local-mode dual auth; the new Qwen and Sol cells reached the configured isolated Gateway |
 | `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
 | `CP-17 — Stream lifecycle` | Changed | Consumer-visible identity failures now use a response-contract error distinct from credential collision | Direct and converted command streams completed across successful and model-failed cells; no converter stream loss observed |
 | `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Kimi polling and stdin continuations plus builtin wait/plan/Goal paths reached terminal answers; broader tool/terminal cells pending |
 | `CP-19 — Reasoning` | Changed | Reconstructed summary deltas now include Codex-required `summary_index`; saved-response replay and cross-module gate tests pass | DeepSeek reasoning/tool round completed; broader summary/audio capture pending |
-| `CP-20 — Context compaction resilience` | Possibly unchanged | Remote V2 contract unchanged | Pending protocol/once cells |
-| `CP-21 — GPT relay provider identity` | Possibly unchanged | No formal wire-shape diff; explicit provider/session/profile identity remains the owner boundary | GPT relay C0/C1/C2/C3/C5 passed. C4 did not reach the Gateway because the 0.145 harness sent ordinary `messages` instead of the required `compaction_trigger`; this is a harness contract mismatch, not a Rosetta failure. |
-| `CP-22 — Model-group tool profiles` | Changed | Audio projection plus route-modality filtering for `view_image` | Chat Default passed wait/plan/Goal, Qwen file localization and visual recognition; historical text-only/detail mismatches remain recorded against the old contract |
-| `CP-23 — Static tool catalog` | Changed | Formal asset synchronized to `rust-v0.145.0`; catalog, local-mode projection, and tool-name compatibility tests pass | Deferred discovery passed 14/14; built-in, namespace, local-skill, subagent, and orchestrator surfaces were exercised. Exact `0.145.0` GUI Browser behavior remains unverified because the installed GUI is `0.146.0-alpha.3.1`. |
+| `CP-20 — Context compaction resilience` | Changed | Remote V2 body contract is unchanged, but direct header transport now preserves `x-codex-beta-features` across rebuilt/tool-adapted CLI requests while retaining raw-wire attestation behavior. Focused compaction/header suite passes | Post-migration protocol, exactly-once, attested manual, both model-switch directions, and the fresh Terra native trigger/install/replay path passed. Summary quality remains `not_scored` only because baseline tokens exceeded the suite threshold |
+| `CP-21 — GPT relay provider identity` | Changed | Direct Responses now applies a denylist and overlays Provider auth last with case-insensitive replacement; unknown client capability headers cannot override Provider identity. Conversion routes remain explicit/minimal | GPT relay C0/C1/C2/C3/C5 passed. C4 remains a separate harness mismatch. The fresh Pixel Plus Terra run completed all four direct requests with Provider-owned auth and no 502. |
+| `CP-22 — Model-group tool profiles` | Changed | Added `state_api_types`, immutable schema-v6 compilation, and per-request `ToolRuntimePlan`; strict Responses Pass through bypass remains covered | Post-migration direct and converted CLI cells exercised the compiled profiles. Exact 0.145.0 GUI evidence remains unavailable |
+| `CP-23 — Static tool catalog` | Changed | Formal catalog upgraded from 53 conceptual rows to 57 schema-v6 owned entries, including native `tool_search` and three Rosetta injections; startup and ownership tests pass | Post-migration deferred 14/14, command/built-in, namespace, collaboration, search, and compaction cells exercised the catalog. Exact `0.145.0` GUI Browser behavior remains unverified because the installed GUI is `0.146.0-alpha.3.1` |
+
+## Tool ownership migration implementation evidence
+
+On 2026-07-24 the 0.145.0 adaptation moved model-visible tool ownership into
+Catalog schema v6 and introduced immutable per-request `ToolRuntimePlan`
+evaluation. `proxy.py`, Code Mode projection, localization, and `web.run`
+capability code now consume catalog adapter/delivery data instead of owning
+definitions or tool-name suppression. Native `tool_search` Passthrough can be
+projected onto Chat only from an actually present client-executed declaration
+and restored to `tool_search_call`/`tool_search_output`; malformed or orphaned
+history fails closed. The special Responses Pass through option still bypasses
+the plan completely.
+
+Focused contract/bridge/trace coverage passed `81/81`; dedicated streaming and
+non-streaming `tool_search` restoration tests passed `2/2`; the complete
+Gateway suite passed `1497/1497` with two pre-existing SQLite ResourceWarnings.
+The final non-integration suite passed `3779 passed, 4 skipped`; `make lint`,
+`make build`, `make check-codex-compat`, WebUI checks/build, and the focused
+post-migration runner contracts also passed. Post-migration agentabi passed
+3/3 and the live CLI evidence is recorded in `live-evidence.md`. Package
+version remains `0.144.0.r0` until the remaining mandatory live gates finish.
 
 The remainder of this file is the retained alpha.23 live inventory and is
 historical evidence for the predecessor review. Its identities and results do
@@ -289,9 +314,10 @@ but its GUI reports `0.146.0-alpha.3.1` and therefore does not retroactively
 prove alpha.23 or formal `0.145.0` GUI behavior. Orchestrator-skill cells were
 `runner_not_supported` because that runner did not create a no-local-executor
 app-server thread or supply the required `codex_apps` MCP resource backend.
-Formal `agentabi` was not run
-because no `agentabi` Conda environment or importable package exists; nothing
-was installed implicitly.
+In that historical alpha.23 matrix, formal `agentabi` was not run because no
+`agentabi` Conda environment or importable package existed. This limitation no
+longer applies to the formal post-migration run: an isolated Conda 3.14.6
+environment ran the 3/3 matrix recorded above.
 
 ### Compaction suites
 
@@ -426,11 +452,12 @@ failures in the tool changes above.
    before treating the remaining result as a Rosetta defect.
 4. Summary-quality fixtures need a valid below-15k baseline before they can be
    scored.
-5. Network sidecar/Bing and formal agentabi remain unavailable or unrunnable
-   under the supplied environment. Browser plus judge has since completed for
-   the Rosetta path on GUI `0.146.0-alpha.3.1`, and the formal orchestrator
-   Skill and CP-21 C0/C1/C2/C3/C5 gates have since completed in the 0.145.0
-   matrix; exact `0.145.0` GUI Browser behavior remains unverified.
+5. In the historical alpha.23 environment, network sidecar/Bing and agentabi
+   were unavailable. Formal 0.145.0 agentabi has since passed 3/3. Browser plus
+   judge has completed for the Rosetta path on GUI `0.146.0-alpha.3.1`, and the
+   formal orchestrator Skill and CP-21 C0/C1/C2/C3/C5 gates completed before
+   the ownership refactor; exact `0.145.0` GUI Browser behavior remains
+   unverified.
 6. After those gates pass, update the package to the approved alpha.23 `r0`
    version and rerun release validation. Until then, `0.144.0.r0` remains the
    only package claim.

@@ -18,6 +18,7 @@ from codex_rosetta.gateway.admin.routes.config import reload_config
 from codex_rosetta.gateway.headers import (
     MAX_REQUEST_ID_BYTES,
     build_codex_wire_headers,
+    build_direct_responses_headers,
     build_upstream_extra_headers,
     resolve_request_id,
 )
@@ -107,7 +108,65 @@ def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version
     }
 
 
-def test_build_codex_wire_headers_is_explicit_and_never_forwards_auth() -> None:
+def test_build_direct_responses_headers_uses_denylist_for_rebuilt_json() -> None:
+    headers = build_direct_responses_headers(
+        {
+            "Accept": "text/event-stream",
+            "Accept-Encoding": "gzip",
+            "AUTHORIZATION": "Bearer gateway-client-key",
+            "Proxy-Authorization": "Basic private",
+            "x-api-key": "private",
+            "api-key": "private",
+            "x-goog-api-key": "private",
+            "Cookie": "session=private",
+            "x-admin-token": "private",
+            "Connection": "keep-alive, X-Connection-Private",
+            "X-Connection-Private": "drop-me",
+            "Keep-Alive": "timeout=5",
+            "TE": "trailers",
+            "Trailer": "X-Checksum",
+            "Transfer-Encoding": "chunked",
+            "Upgrade": "websocket",
+            "Proxy-Connection": "keep-alive",
+            "Host": "gateway.example",
+            "Content-Length": "123",
+            "Content-Encoding": "zstd",
+            "Content-Type": "application/custom+json",
+            "Forwarded": "for=192.0.2.1",
+            "X-Forwarded-For": "192.0.2.1",
+            "Via": "1.1 gateway",
+            "CF-Connecting-IP": "192.0.2.1",
+            "True-Client-IP": "192.0.2.1",
+            "X-Real-IP": "192.0.2.1",
+            "Originator": "Codex CLI",
+            "Session-Id": "session-1",
+            "Thread-Id": "thread-1",
+            "x-codex-beta-features": "remote_compaction_v2",
+            "x-codex-window-id": "window-1",
+            "x-oai-attestation": "opaque-proof",
+            "X-Future-Codex-Capability": "preserve-me",
+        },
+        "req-123",
+        preserve_wire=False,
+    )
+
+    assert headers == {
+        "Accept": "text/event-stream",
+        "Originator": "Codex CLI",
+        "Session-Id": "session-1",
+        "Thread-Id": "thread-1",
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-codex-window-id": "window-1",
+        "X-Future-Codex-Capability": "preserve-me",
+        "Content-Type": "application/json",
+        "Accept-Encoding": "identity",
+        "x-request-id": "req-123",
+    }
+
+
+def test_build_codex_wire_headers_uses_same_denylist_and_preserves_wire_contract() -> (
+    None
+):
     headers = build_codex_wire_headers(
         {
             "accept": "text/event-stream",
@@ -126,7 +185,7 @@ def test_build_codex_wire_headers_is_explicit_and_never_forwards_auth() -> None:
             "x-codex-window-id": "window-1",
             "x-oai-attestation": "signed-wire-proof",
             "x-openai-internal-codex-responses-lite": "true",
-            "x-unrelated": "drop-me",
+            "x-unrelated": "preserve-me",
         }
     )
 
@@ -143,6 +202,7 @@ def test_build_codex_wire_headers_is_explicit_and_never_forwards_auth() -> None:
         "x-codex-window-id": "window-1",
         "x-oai-attestation": "signed-wire-proof",
         "x-openai-internal-codex-responses-lite": "true",
+        "x-unrelated": "preserve-me",
     }
 
 
@@ -502,7 +562,10 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
 
     request = MagicMock()
-    request.headers = {"user-agent": "codex-cli/1.2.3"}
+    request.headers = {
+        "user-agent": "codex-cli/1.2.3",
+        "x-future-codex-capability": "direct-only",
+    }
     request.json.return_value = {
         "model": "gpt-test",
         "messages": [{"role": "user", "content": "hello"}],
@@ -519,6 +582,64 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     assert response.status_code == 200
     assert captured_headers["User-Agent"] == "codex-cli/1.2.3"
     assert "x-request-id" in captured_headers
+    assert "x-future-codex-capability" not in captured_headers
+
+
+def test_proxy_handler_uses_denylist_only_for_direct_responses(monkeypatch):
+    captured_headers: dict[str, str] = {}
+
+    class _Config:
+        models = {"gpt-test": "test-provider"}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_responses",
+                    provider_name="test-provider",
+                ),
+                MagicMock(),
+            )
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        captured_headers.update(kwargs["extra_headers"])
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+
+    request = MagicMock()
+    request.headers = {
+        "Authorization": "Bearer gateway-client-key",
+        "Content-Encoding": "zstd",
+        "User-Agent": "codex_cli_rs/0.145.0",
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-future-codex-capability": "preserve-me",
+        "x-oai-attestation": "opaque-proof",
+    }
+    request.json.return_value = {
+        "model": "gpt-test",
+        "input": [{"role": "user", "content": "hello"}],
+    }
+    request.app.metadata_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.transport = MagicMock()
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
+
+    assert response.status_code == 200
+    assert captured_headers["User-Agent"] == "codex_cli_rs/0.145.0"
+    assert captured_headers["x-codex-beta-features"] == "remote_compaction_v2"
+    assert captured_headers["x-future-codex-capability"] == "preserve-me"
+    assert captured_headers["Content-Type"] == "application/json"
+    assert captured_headers["Accept-Encoding"] == "identity"
+    assert "x-request-id" in captured_headers
+    assert not any(name.lower() == "authorization" for name in captured_headers)
+    assert not any(name.lower() == "content-encoding" for name in captured_headers)
+    assert not any(name.lower() == "x-oai-attestation" for name in captured_headers)
 
 
 def test_proxy_stats_use_original_upstream_model_name(monkeypatch):

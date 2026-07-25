@@ -274,7 +274,7 @@ def test_catalog_has_unique_resolvable_ids_and_policies():
         assert policy["default"] in supported
 
 
-def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
+def test_catalog_contains_all_fixed_tools_and_includes_profile_owned_search():
     catalog, items, _policies, groups, namespaces = _catalog_maps()
 
     assert {items[item_id]["name"] for item_id in groups["exec_expansion"]} == (
@@ -282,7 +282,7 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
     )
     assert {items[item_id]["name"] for item_id in groups["function"]} == (
         (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS - {"test_sync_tool"})
-        | {"exec", "web_search"}
+        | {"exec", "web_search", "tool_search"}
     )
     assert items["function.test_sync_tool"]["ui_hidden"] is True
     assert all(
@@ -313,6 +313,9 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
         "Grep",
         "Edit",
         "Write",
+        "send_line",
+        "tool_read",
+        "invoke_deferred_tool",
     ]
     assert set(groups) == {
         "exec_expansion",
@@ -328,7 +331,7 @@ def test_catalog_contains_all_fixed_tools_and_excludes_dynamic_search():
     assert actual_namespace_children == EXPECTED_NAMESPACE_CHILDREN
 
     serialized = json.dumps(catalog)
-    assert "tool_search" not in serialized
+    assert '"hosted.tool_search"' in serialized
     assert '"codex_app"' not in serialized
     assert "mcp__codex_apps__github" not in serialized
     assert "github" not in serialized.lower()
@@ -366,7 +369,7 @@ def test_conditional_codex_placements_match_0_144_4_tool_assembly():
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 5
+    assert catalog["metadata"]["schema_version"] == 6
     assert catalog["metadata"]["catalog_version"] == "codex-0.145.0"
     assert catalog["metadata"]["codex_cli_version"] == "0.145.0"
     assert catalog["metadata"]["codex_source_commit"] == CODEX_0145_SOURCE_COMMIT
@@ -380,6 +383,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "namespace.multi_agent_v1": "disabled",
         "namespace.image_gen.imagegen": "modified",
         "hosted.web_search": "disabled",
+        "hosted.tool_search": "modified",
         "custom.apply_patch": "disabled",
         "custom.exec": "disabled",
         "function.test_sync_tool": "disabled",
@@ -407,6 +411,7 @@ def test_catalog_defaults_and_namespace_image_policy():
             "name": "工具映射（适用于第三方模型提供的Responses接口）",
             "api_types": ["responses"],
             "base": "builtin",
+            "tools": {"hosted.tool_search": "passthrough"},
         },
     ]
 
@@ -694,6 +699,9 @@ def test_catalog_defaults_and_namespace_image_policy():
         "Grep",
         "Edit",
         "Write",
+        "send_line",
+        "tool_read",
+        "invoke_deferred_tool",
     ]
 
 
@@ -711,7 +719,10 @@ def test_bundled_responses_profiles_preserve_or_map_only_intended_tools() -> Non
         for item_id, state in web_run.items()
         if state != passthrough[item_id]
     } == {"namespace.web.run": "modified"}
-    assert mapping == profiles["builtin"]["tools"]
+    assert mapping == {
+        **profiles["builtin"]["tools"],
+        "hosted.tool_search": "passthrough",
+    }
 
 
 def test_catalog_api_is_read_only_and_returns_bundled_resource():
@@ -756,6 +767,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     app = create_app(GatewayConfig(raw), str(config_path))
     tools = dict(tool_profile_contract()["builtin"])
     tools["function.update_plan"] = "disabled"
+    tools["hosted.tool_search"] = "disabled"
 
     response = asyncio.run(
         app._dispatch(_api_request(app, "GET", "/admin/api/tools/profiles"))

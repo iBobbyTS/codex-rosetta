@@ -41,7 +41,7 @@ handling rather than prose quality.
   scenarios covering every `collaboration` Function: spawn, wait, list,
   message, follow-up, and interrupt.
 - [`builtin_tools`](builtin_tools/README.md): OpenAI-identified Code Mode
-  scenarios using `gpt-5.6-sol` as the reference shape for top-level `wait`,
+  scenarios using `gpt-5.6-terra` as the default GPT cell for top-level `wait`,
   projected plan/file/image tools, the three-tool Goal lifecycle, and actual
   upstream visual recognition. It also records why `request_user_input` cannot
   be driven by the current non-interactive `codex exec` runner.
@@ -109,9 +109,11 @@ starting an invalid cell.
 
 ## Real-provider defaults
 
-Use `gpt-5.6-sol` as the default native GPT model and model-shape reference.
-Use `deepseek-v4-flash` for third-party non-multimodal tests and `mimo-v2.5`
-for third-party multimodal tests. For context-compaction protocol and
+Use `gpt-5.6-terra` as the default native GPT model and permit one
+`gpt-5.6-sol` fallback after a Terra model-behavior failure. Use
+`deepseek-v4-flash` for third-party non-multimodal tests, permit one `kimi-k3`
+fallback after a model-behavior failure, and use `qwen3.7-plus` for third-party
+multimodal tests. For context-compaction protocol and
 summary-quality provider cells, retain the configured GPT route without
 requiring a specific upstream provider name. A GPT provider is valid when the
 selected model is configured and produces a response. A normal non-multimodal
@@ -129,7 +131,7 @@ its generated catalog. Every eligible CLI suite uses the managed Provider ID
 Provider IDs or lowercase/alternate display names. A deliberate same-thread
 model-switch cell may select its target model explicitly because the switch
 itself is the protocol under test. Record any model substitution and verify the
-observed request/tool shape against the `gpt-5.6-sol` reference.
+observed request/tool shape against the selected GPT route.
 
 Every model and task matrix cell requires a separate
 timestamp run root. Never reuse the Codex home, copied Gateway configuration,

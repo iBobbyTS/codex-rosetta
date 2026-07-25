@@ -212,7 +212,7 @@ def main() -> None:
     parser.add_argument("--run-root", type=Path, required=True)
     parser.add_argument("--gateway-log-root", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--model", default="gpt-5.6-sol")
+    parser.add_argument("--model", default="gpt-5.6-terra")
     parser.add_argument("--task-id", choices=TASK_IDS, required=True)
     args = parser.parse_args()
 

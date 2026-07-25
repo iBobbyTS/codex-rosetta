@@ -40,8 +40,8 @@ Run task `01` once with each default text model:
 
 | Model | Expected route |
 |---|---|
-| `gpt-5.6-sol` | direct OpenAI Responses |
-| `deepseek-v4-flash` | Responses-to-Chat conversion |
+| `gpt-5.6-terra` (Sol fallback once) | direct OpenAI Responses through any reachable configured GPT Provider |
+| `deepseek-v4-flash` (Kimi fallback once) | Responses-to-Chat conversion |
 
 Confirm the actual upstream model and converted request through Gateway Logs.
 Follow [`EVALUATION.md`](EVALUATION.md) and write

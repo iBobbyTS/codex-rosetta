@@ -7,6 +7,8 @@ import json
 from functools import lru_cache
 from typing import Any
 
+from ..tool_catalog_contract import CompiledToolCatalog, compile_tool_catalog
+
 
 @lru_cache(maxsize=1)
 def load_tool_catalog() -> dict[str, Any]:
@@ -20,3 +22,9 @@ def load_tool_catalog() -> dict[str, Any]:
     if not isinstance(catalog, dict):
         raise ValueError("tool_catalog.json must contain a JSON object")
     return catalog
+
+
+@lru_cache(maxsize=1)
+def load_compiled_tool_catalog() -> CompiledToolCatalog:
+    """Return the validated immutable runtime contract for catalog schema v6."""
+    return compile_tool_catalog(load_tool_catalog())
