@@ -160,7 +160,7 @@ Write `artifacts/evaluation.json` with this shape:
   "task_id": "01 through 05",
   "target_scope": "basic_search | reference_open | browser_navigation | pdf | fixed_offset_time",
   "model": "Codex-facing model alias",
-  "model_shape_reference": "gpt-5.6-sol or null for an explicit task 01 comparison",
+  "model_shape_reference": "gpt-5.6-terra or null for an explicit task 01 comparison",
   "provider_identity": "codex_rosetta",
   "provider_display_name": "OpenAI",
   "upstream_model": "model proven by Gateway Logs",

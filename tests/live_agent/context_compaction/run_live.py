@@ -222,8 +222,8 @@ def _contains_item_type(value: Any, item_type: str) -> bool:
 
 def _trace_result(path: Path) -> dict[str, Any]:
     starts: dict[str, bool] = {}
-    trigger_ids: list[str] = []
-    followup_ids: list[str] = []
+    trigger_ids: set[str] = set()
+    followup_ids: set[str] = set()
     errors: dict[str, int] = {}
     models: set[str] = set()
     if not path.is_file():
@@ -246,11 +246,11 @@ def _trace_result(path: Path) -> dict[str, Any]:
         data = event.get("data")
         if stage == "stream_start" and isinstance(data, dict):
             starts[request_id] = data.get("wire_passthrough") is True
-        elif stage == "raw_passthrough_request":
+        elif stage in {"raw_passthrough_request", "source_request", "target_request"}:
             if _contains_item_type(data, "compaction_trigger"):
-                trigger_ids.append(request_id)
+                trigger_ids.add(request_id)
             elif _contains_item_type(data, "compaction"):
-                followup_ids.append(request_id)
+                followup_ids.add(request_id)
         elif stage == "upstream_error" and isinstance(data, dict):
             status = data.get("status_code")
             if isinstance(status, int):
@@ -259,7 +259,9 @@ def _trace_result(path: Path) -> dict[str, Any]:
         "trace_present": True,
         "models": sorted(models),
         "trigger_request_count": len(trigger_ids),
-        "trigger_wire_passthrough": [starts.get(item, False) for item in trigger_ids],
+        "trigger_wire_passthrough": [
+            starts.get(item, False) for item in sorted(trigger_ids)
+        ],
         "followup_compaction_input_observed": bool(followup_ids),
         "trigger_upstream_errors": [
             errors[item] for item in trigger_ids if item in errors
@@ -277,6 +279,52 @@ def _request_profiles(run_root: Path) -> list[dict[str, Any]]:
             "SELECT profile FROM request_log WHERE profile LIKE '%compaction_mode%'"
         ).fetchall()
     return [json.loads(profile) for (profile,) in rows]
+
+
+def _compaction_mapping_count(run_root: Path) -> int:
+    databases = list((run_root / "gateway").rglob("gateway.db"))
+    if len(databases) != 1:
+        return 0
+    with sqlite3.connect(databases[0]) as connection:
+        row = connection.execute(
+            "SELECT COUNT(*) FROM codex_compaction_mappings"
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _command_start_count(run_root: Path) -> int:
+    path = run_root / "artifacts" / "codex.jsonl"
+    if not path.is_file():
+        return 0
+    item_ids: set[str] = set()
+    anonymous_starts = 0
+    for line in path.open(encoding="utf-8"):
+        event = json.loads(line)
+        if event.get("type") != "item.started":
+            continue
+        item = event.get("item")
+        if not isinstance(item, dict) or item.get("type") != "command_execution":
+            continue
+        item_id = item.get("id")
+        if isinstance(item_id, str) and item_id:
+            item_ids.add(item_id)
+        else:
+            anonymous_starts += 1
+    return len(item_ids) + anonymous_starts
+
+
+def _count_matches_expected(
+    observed: int,
+    expected: dict[str, Any],
+    *,
+    exact_key: str,
+    minimum_key: str,
+) -> bool:
+    exact = expected.get(exact_key)
+    if isinstance(exact, int):
+        return observed == exact
+    minimum = expected.get(minimum_key)
+    return not isinstance(minimum, int) or observed >= minimum
 
 
 def _run_codex(run_root: Path, timeout_seconds: int) -> tuple[int, str | None]:
@@ -624,23 +672,57 @@ def main() -> int:
     final_text = final_path.read_text(encoding="utf-8") if final_path.is_file() else ""
     trace = _trace_result(gateway_log_root / "rosetta-trace.jsonl")
     profiles = _request_profiles(run_root)
-    native_profiles = [
+    expected_mode = str(expected["expected_mode"])
+    expected_reason = (
+        "user_requested"
+        if args.trigger == "manual"
+        else str(expected["expected_reason"])
+    )
+    matching_profiles = [
         profile
         for profile in profiles
-        if profile.get("compaction_mode") == "native"
-        and profile.get("compaction_reason")
-        == ("user_requested" if args.trigger == "manual" else "context_limit")
+        if profile.get("compaction_mode") == expected_mode
+        and profile.get("compaction_reason") == expected_reason
     ]
-    success = (
+    mapping_count = _compaction_mapping_count(run_root)
+    command_start_count = _command_start_count(run_root)
+    profile_count_matches = _count_matches_expected(
+        len(matching_profiles),
+        expected,
+        exact_key="expected_compaction_count",
+        minimum_key="required_complete_protocol_chains_min",
+    )
+    mapping_count_matches = _count_matches_expected(
+        mapping_count,
+        expected,
+        exact_key="expected_rosetta_mapping_rows",
+        minimum_key="expected_rosetta_mapping_rows_min",
+    )
+    command_count_matches = args.trigger == "manual" or _count_matches_expected(
+        command_start_count,
+        expected,
+        exact_key="expected_command_starts",
+        minimum_key="expected_command_starts_min",
+    )
+    common_success = (
         codex_exit == 0
         and expected["success_marker"] in final_text
-        and trace["trigger_request_count"] == 1
-        and trace["trigger_wire_passthrough"] == [True]
         and not trace["trigger_upstream_errors"]
         and trace["followup_compaction_input_observed"]
-        and len(native_profiles) == 1
-        and native_profiles[0].get("wire_passthrough") is True
+        and profile_count_matches
+        and mapping_count_matches
+        and command_count_matches
     )
+    if expected_mode == "native":
+        success = (
+            common_success
+            and trace["trigger_request_count"] == 1
+            and trace["trigger_wire_passthrough"] == [True]
+            and len(matching_profiles) == 1
+            and matching_profiles[0].get("wire_passthrough") is True
+        )
+    else:
+        success = common_success and trace["trigger_request_count"] >= 1
     provider_unavailable = any(
         status in {401, 403, 404, 408, 429, 500, 502, 503, 504}
         for status in trace["upstream_error_statuses"]
@@ -658,7 +740,7 @@ def main() -> int:
         classification = "provider_unavailable_requires_user_decision"
     elif trace["trigger_upstream_errors"]:
         classification = "remote_compaction_error_reproduced"
-    elif trace["trigger_request_count"] == 0:
+    elif not matching_profiles and trace["trigger_request_count"] == 0:
         classification = "not_triggered"
     else:
         classification = "infrastructure_failure"
@@ -680,10 +762,16 @@ def main() -> int:
         "success_marker_observed": expected["success_marker"] in final_text,
         "runner_error": runner_error,
         **trace,
-        "native_compaction_profile_count": len(native_profiles),
-        "native_profile_wire_passthrough": [
-            profile.get("wire_passthrough") is True for profile in native_profiles
+        "expected_compaction_mode": expected_mode,
+        "matching_compaction_profile_count": len(matching_profiles),
+        "matching_profile_wire_passthrough": [
+            profile.get("wire_passthrough") is True for profile in matching_profiles
         ],
+        "rosetta_compaction_mapping_count": mapping_count,
+        "command_start_count": command_start_count,
+        "profile_count_matches": profile_count_matches,
+        "mapping_count_matches": mapping_count_matches,
+        "command_count_matches": command_count_matches,
     }
     _write_json(run_root / "artifacts" / "automation-result.json", result)
     print(run_root)

@@ -54,8 +54,8 @@ Run every model/task combination:
 
 | Model | Gateway model group | Expected route |
 |---|---|---|
-| `gpt-5.6-sol` (default GPT) | `GPT中转站` | direct OpenAI Responses |
-| `deepseek-v4-flash` (default third-party text) | `DeepSeek` | Responses-to-Chat conversion |
+| `gpt-5.6-terra` (default GPT; Sol fallback once) | any reachable configured GPT Provider | direct OpenAI Responses |
+| `deepseek-v4-flash` (default third-party text; Kimi fallback once) | configured third-party Provider | Responses-to-Chat conversion |
 
 Every model/task cell requires its own timestamp run root, Codex home,
 copied Gateway configuration, port, and Gateway Logs trace. Confirm the actual

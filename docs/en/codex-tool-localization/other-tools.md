@@ -101,12 +101,12 @@ For Responses-to-Responses routes, namespace tools stay in their native Response
 
 Plugin, deferred, MCP-resource, context-budget, permission, and Agent Job tools are assembled conditionally by Codex. In normal tool mode they are top-level Functions; in Code Mode Only, every item below except `new_context` is nested in `exec` when its condition is satisfied.
 
-This table is a user-facing behavior reference for the reviewed 0.144.x
-baseline, not an upgrade record. Alpha.23 source findings and version adoption
+This table is a user-facing behavior reference for the reviewed 0.145.0
+baseline, not an upgrade record. Formal-release source findings and version adoption
 use the [developer compatibility checklist](../../dev/version-compatibility/upgrade-checklist.md)
-and the [current alpha.23 report](../../dev/version-compatibility/reports/upgrade-review.md).
+and the [current formal-release report](../../dev/version-compatibility/reports/upgrade-review.md).
 
-| Tools | Reviewed 0.144.x exposure condition |
+| Tools | Reviewed 0.145.0 exposure condition |
 |---|---|
 | `wait_for_environment` | The under-development `deferred_executor` Feature is enabled. |
 | `request_permissions` | An execution environment exists and the under-development `request_permissions_tool` Feature is enabled. |
@@ -140,11 +140,34 @@ The Tools page has four categories:
 - **Exec Expansion**: ordinary Chat Functions projected from tools nested in Codex `exec`. Codex flattens namespaced runtime identities into `namespace__function` properties such as `clock__sleep`, `web__run`, and `image_gen__imagegen`; the catalog lists those Functions directly and does not invent parent Namespace cards.
 - **Function**: direct Functions and hosted tools managed with the same card shape.
 - **Namespace**: fixed tools directly exposed by Codex as Responses Namespaces: `collaboration` and legacy `multi_agent_v1`. Installed plugin, MCP, app, and connector Namespaces are runtime-dynamic and are not part of this static catalog.
-- **Rosetta Injection**: the injected `Read`, `Glob`, `Grep`, `Edit`, and `Write` tools.
+- **Rosetta Injection**: catalog-owned injected tools: `Read`, `Glob`, `Grep`, `Edit`, `Write`, `send_line`, `tool_read`, and `invoke_deferred_tool`.
+
+The catalog currently contains 57 items and is compiled at Gateway startup.
+Unknown schema fields, adapter IDs, dependencies, state/API combinations,
+duplicate identities, and dependency cycles fail closed. The runtime compiles a
+`ToolRuntimePlan` from the selected Profile, target protocol, model modalities,
+runtime capabilities, and the actual top-level/Lite/`exec` declarations. The
+Gateway applies that plan; it does not maintain separate model-visible tool
+definitions in converters or proxy branches.
+
+`tool_search` is a Function-page item with protocol-specific states. Modified
+is Chat-only and injects the Rosetta search definition only when the live
+`exec` declaration contains deferred/`ALL_TOOLS` guidance. Passthrough keeps a
+native Responses declaration unchanged; on Chat, it projects only a native
+declaration that is actually present and reversibly restores
+`tool_search_call`/`tool_search_output`. Disabled removes it. A same-named
+direct Function wins, and missing or malformed native declarations are never
+synthesized.
 
 Namespace states are shown as Expanded, Passthrough (ineffective for Chat API), and Disabled. Disabling a Namespace forces and locks all of its children to Disabled.
 
 Function state **Pass through** is displayed as a direct pass-through choice. For Exec Expansion entries it still performs the representation-only projection and reverse translation described above; it does not add a card description or mutate the model-facing tool description.
+
+Each state can also declare the Provider protocols for which it is valid. The
+Tools page disables states that cannot apply to every selected `api_types`
+value, and the backend rejects the same invalid combination. The special
+Responses **Pass through** model-group option remains outside Tool Profiles and
+bypasses the runtime plan entirely, including modality filtering.
 
 For conditionally assembled Codex tools, the detail panel separately shows their normal-mode placement, Code Mode Only placement, development status, and source-side availability conditions. These labels explain Codex's assembly rules; they are not a claim that the Gateway can predict the exact tool set of a future request. The live `exec` declaration remains authoritative.
 

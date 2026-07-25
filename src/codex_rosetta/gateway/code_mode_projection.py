@@ -10,11 +10,14 @@ from typing import Any
 from .tool_profiles import (
     apply_profile_tool_mutations,
     apply_view_image_detail_profile,
+    catalog_runtime_adapters,
     route_supports_image_input,
     route_tool_state,
+    tool_catalog_lookups,
     tool_profile_contract,
     view_image_detail_values,
 )
+from .tool_runtime_plan import render_catalog_definition
 from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
     project_modified_web_run_function,
@@ -38,6 +41,8 @@ class ExecToolProjection:
     authorized_names: tuple[str, ...] = ()
     include_dispatch_guidance: bool = False
     dispatch_blocked_names: tuple[str, ...] = ()
+    native_item_type: str | None = None
+    execution: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,24 +103,11 @@ ALL_TOOLS_SEARCH_RESULT_PROTOCOL = "codex_rosetta.all_tools_search.v2"
 ALL_TOOLS_READ_RESULT_PROTOCOL = "codex_rosetta.all_tools_read.v1"
 ALL_TOOLS_SEARCH_MAX_RESULT_CHARS = 24_000
 ALL_TOOLS_SEARCH_SUMMARY_CHARS = 240
-ALL_TOOLS_SEARCH_PROJECTION = ExecToolProjection(
-    item_id="synthetic.all_tools_search",
-    chat_name=ALL_TOOLS_SEARCH_CHAT_NAME,
-    nested_name="",
-    input_mode="all_tools_search",
-)
-ALL_TOOLS_READ_PROJECTION = ExecToolProjection(
-    item_id="synthetic.all_tools_read",
-    chat_name=ALL_TOOLS_READ_CHAT_NAME,
-    nested_name="",
-    input_mode="all_tools_read",
-)
 NODE_REPL_TOOL_NAMES = (
     "mcp__node_repl__js",
     "mcp__node_repl__js_reset",
     "mcp__node_repl__js_add_node_module_dir",
 )
-DEFERRED_EXCLUDED_TOOL_NAMES = frozenset({"view_image"})
 _NODE_REPL_EXEC_PROJECTIONS = {
     name: ExecToolProjection(
         item_id=f"deferred.{name}",
@@ -125,21 +117,30 @@ _NODE_REPL_EXEC_PROJECTIONS = {
     )
     for name in NODE_REPL_TOOL_NAMES
 }
-DEFERRED_TOOL_DISPATCH_PROJECTION = ExecToolProjection(
-    item_id="synthetic.deferred_tool_dispatch",
-    chat_name=DEFERRED_TOOL_DISPATCH_CHAT_NAME,
-    nested_name="",
-    input_mode="deferred_dispatch",
-)
-SEND_LINE_PROJECTION = ExecToolProjection(
-    item_id="synthetic.send_line",
-    chat_name=SEND_LINE_CHAT_NAME,
-    nested_name="write_stdin",
-    input_mode="send_line",
-)
 _MAX_DISCOVERED_TOOL_DESCRIPTION_CHARS = 65_536
 _MAX_TOOL_RESULT_TEXT_CHARS = 262_144
 _MAX_DISCOVERY_HISTORY_CALLS = 64
+
+
+def _catalog_item_id_for_adapter(adapter_id: str) -> str:
+    matches = [
+        item_id
+        for item_id in tool_catalog_lookups()["items"]
+        if adapter_id in catalog_runtime_adapters(item_id)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"runtime adapter {adapter_id!r} must own exactly one catalog item"
+        )
+    return matches[0]
+
+
+def _deferred_excluded_tool_names() -> frozenset[str]:
+    return frozenset(
+        item["name"]
+        for item in tool_catalog_lookups()["items"].values()
+        if item.get("delivery", {}).get("eager_only") is True
+    )
 
 
 def _tokenize_typescript(source: str) -> list[_Token]:
@@ -354,7 +355,8 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
     """Return model-visible and internal Profile-owned exec projections."""
     projections: dict[str, ExecToolProjection] = {}
     for item_id, definition in tool_profile_contract()["exec_projections"].items():
-        if item_id == "function.view_image" and not route_supports_image_input(route):
+        is_view_image = "view_image" in catalog_runtime_adapters(item_id)
+        if is_view_image and not route_supports_image_input(route):
             continue
         state = route_tool_state(route, item_id)
         model_visible = state in {"passthrough", "modified"}
@@ -370,19 +372,39 @@ def exec_tool_projections_for_route(route: Any) -> dict[str, ExecToolProjection]
             item_id=item_id,
             model_visible=model_visible,
             allowed_detail_values=(
-                view_image_detail_values(route)
-                if item_id == "function.view_image"
-                else None
+                view_image_detail_values(route) if is_view_image else None
             ),
             **projection_definition,
         )
         projections[projection.chat_name] = projection
-    projections[ALL_TOOLS_SEARCH_CHAT_NAME] = ALL_TOOLS_SEARCH_PROJECTION
-    projections[ALL_TOOLS_READ_CHAT_NAME] = ALL_TOOLS_READ_PROJECTION
-    projections[DEFERRED_TOOL_DISPATCH_CHAT_NAME] = DEFERRED_TOOL_DISPATCH_PROJECTION
-    if "write_stdin" in projections:
-        projections[SEND_LINE_CHAT_NAME] = SEND_LINE_PROJECTION
+    effective_items = {
+        item_id
+        for item_id in tool_catalog_lookups()["items"]
+        if _route_catalog_item_enabled(route, item_id)
+    }
+    for item_id, item in tool_catalog_lookups()["items"].items():
+        delivery = item.get("delivery", {})
+        declaration = delivery.get("exec_projection")
+        if not isinstance(declaration, dict) or item_id not in effective_items:
+            continue
+        dependencies = tool_profile_contract()["catalog"].dependencies.get(item_id, ())
+        if not set(dependencies) <= effective_items:
+            continue
+        projection = ExecToolProjection(item_id=item_id, **declaration)
+        projections[projection.chat_name] = projection
     return projections
+
+
+def _route_catalog_item_enabled(route: Any, item_id: str) -> bool:
+    """Evaluate the state-only portion of one catalog item's availability."""
+    item = tool_catalog_lookups()["items"][item_id]
+    default = "injected" if item["type"] == "custom_injection" else "passthrough"
+    state = route_tool_state(route, item_id, default)
+    if item["type"] == "custom_injection":
+        return state == "injected"
+    if item.get("delivery", {}).get("modified_requires_deferred_exec_guidance"):
+        return state == "modified"
+    return state != "disabled"
 
 
 def project_exec_tool_definitions(
@@ -437,7 +459,7 @@ def plan_exec_tool_definitions(
             if profile_route is not None:
                 parsed = dict(parsed)
                 if (
-                    projection.item_id == WEB_RUN_PROFILE_ITEM_ID
+                    "web_run" in catalog_runtime_adapters(projection.item_id)
                     and route_tool_state(profile_route, projection.item_id)
                     == "modified"
                 ):
@@ -455,7 +477,7 @@ def plan_exec_tool_definitions(
                 parsed["function"] = apply_profile_tool_mutations(
                     parsed["function"], projection.item_id, profile_route
                 )
-                if projection.item_id == "function.view_image":
+                if "view_image" in catalog_runtime_adapters(projection.item_id):
                     parsed["function"] = apply_view_image_detail_profile(
                         parsed["function"], profile_route
                     )
@@ -471,26 +493,7 @@ def plan_exec_tool_definitions(
 
 def send_line_definition() -> dict[str, Any]:
     """Build the explicit line-input facade for interactive sessions."""
-    return {
-        "type": "function",
-        "function": {
-            "name": SEND_LINE_CHAT_NAME,
-            "description": (
-                "Send one complete line to an existing interactive command "
-                "session. Use this instead of write_stdin for line-oriented "
-                "input; the gateway appends exactly one newline."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "session_id": {"type": "integer"},
-                    "line": {"type": "string"},
-                },
-                "required": ["session_id", "line"],
-                "additionalProperties": False,
-            },
-        },
-    }
+    return render_catalog_definition(_catalog_item_id_for_adapter("send_line"))
 
 
 def _add_send_line_definition(
@@ -614,133 +617,33 @@ def all_tools_search_definition(
     *, include_tool_read_guidance: bool = True
 ) -> dict[str, Any]:
     """Build the Chat function used to search Codex's live ALL_TOOLS catalog."""
-    return {
-        "type": "function",
-        "function": {
-            "name": ALL_TOOLS_SEARCH_CHAT_NAME,
-            "description": _all_tools_search_description(include_tool_read_guidance),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 500,
-                        "description": (
-                            "Capability, provider, tool name, or declaration text "
-                            "to find. Regex patterns are limited to 200 characters."
-                        ),
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50,
-                        "default": 8,
-                        "description": "Maximum number of matching tools to return.",
-                    },
-                    "search_mode": {
-                        "type": "string",
-                        "enum": ["natural_language", "regex"],
-                        "default": "natural_language",
-                        "description": (
-                            "Natural-language token ranking or case-insensitive "
-                            "JavaScript regular-expression matching."
-                        ),
-                    },
-                },
-                "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
-
-def _all_tools_search_description(include_tool_read_guidance: bool) -> str:
-    base = (
-        "Search deferred tools in Codex's live ALL_TOOLS runtime catalog. "
-        "Use natural_language for capability searches and regex for exact name or "
-        "declaration patterns. Results contain exact names and bounded summaries, "
-        "not complete declarations, and never become independent Chat functions. "
+    item_id = _catalog_item_id_for_adapter("deferred_tool_search")
+    effective = (
+        frozenset({_catalog_item_id_for_adapter("deferred_tool_read")})
+        if include_tool_read_guidance
+        else frozenset()
     )
-    if include_tool_read_guidance:
-        return (
-            base + "Call tool_read with an exact returned name before invoking a "
-            "match. Search results alone do not authorize invoke_deferred_tool."
-        )
-    return (
-        base + "Use raw exec and ALL_TOOLS to read the exact declaration before "
-        "invoking a match."
-    )
+    return render_catalog_definition(item_id, effective_items=effective)
 
 
 def all_tools_read_definition(
     *, include_dispatch_guidance: bool = True
 ) -> dict[str, Any]:
     """Build the Chat function used to read one exact ALL_TOOLS declaration."""
-    invocation_guidance = (
-        "Declarations carrying invoke_deferred_tool instructions must be invoked "
-        "with that dispatcher. Invoke all other declarations through raw exec as "
-        "tools.<name>(...)."
+    item_id = _catalog_item_id_for_adapter("deferred_tool_read")
+    effective = (
+        frozenset({_catalog_item_id_for_adapter("deferred_tool_invoke")})
         if include_dispatch_guidance
-        else "Invoke declarations through raw exec as tools.<name>(...)."
+        else frozenset()
     )
-    return {
-        "type": "function",
-        "function": {
-            "name": ALL_TOOLS_READ_CHAT_NAME,
-            "description": (
-                "Read the complete declaration for one deferred tool by exact name "
-                "from Codex's live ALL_TOOLS runtime catalog. Search results are only "
-                f"summaries; read a declaration before invoking it. {invocation_guidance}"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 512,
-                        "description": "Exact tool name returned by tool_search.",
-                    }
-                },
-                "required": ["name"],
-                "additionalProperties": False,
-            },
-        },
-    }
+    return render_catalog_definition(item_id, effective_items=effective)
 
 
 def deferred_tool_dispatch_definition() -> dict[str, Any]:
     """Build the fixed history-authorized MCP dispatcher definition."""
-    return {
-        "type": "function",
-        "function": {
-            "name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
-            "description": (
-                "Invoke an MCP deferred tool whose complete declaration was "
-                "returned by a paired tool_read call in this conversation."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "name": {
-                        "type": "string",
-                        "pattern": "^mcp__",
-                        "maxLength": 512,
-                    },
-                    "arguments": {
-                        "type": "object",
-                        "description": (
-                            "Arguments matching the tool declaration returned by "
-                            "tool_read."
-                        ),
-                    },
-                },
-                "required": ["name", "arguments"],
-                "additionalProperties": False,
-            },
-        },
-    }
+    return render_catalog_definition(
+        _catalog_item_id_for_adapter("deferred_tool_invoke")
+    )
 
 
 def _deferred_tool_definitions(
@@ -807,7 +710,7 @@ const maxSummaryChars = {ALL_TOOLS_SEARCH_SUMMARY_CHARS};
 const catalog = Array.isArray(ALL_TOOLS) ? ALL_TOOLS : [];
 const normalize = (value) => String(value ?? "").normalize("NFKC").toLowerCase();
 const queryText = normalize(query);
-const deferredExcludedNames = new Set({_javascript_json_literal(sorted(DEFERRED_EXCLUDED_TOOL_NAMES))});
+const deferredExcludedNames = new Set({_javascript_json_literal(sorted(_deferred_excluded_tool_names()))});
 let ranked;
 if (searchMode === "regex") {{
   let pattern;
@@ -930,7 +833,7 @@ if (entries.length !== 1) {{
   exit();
 }}
 const entry = entries[0];
-if ({_javascript_json_literal(sorted(DEFERRED_EXCLUDED_TOOL_NAMES))}.includes(name)) {{
+if ({_javascript_json_literal(sorted(_deferred_excluded_tool_names()))}.includes(name)) {{
   text({{
     protocol: resultProtocol,
     name,
@@ -1046,7 +949,7 @@ def discovered_deferred_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
         if (
             name.startswith("mcp__")
             and len(name) <= 512
-            and name not in DEFERRED_EXCLUDED_TOOL_NAMES
+            and name not in _deferred_excluded_tool_names()
         )
     )
     candidates = node_repl_exec_projections()

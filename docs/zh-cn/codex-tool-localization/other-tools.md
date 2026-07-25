@@ -97,11 +97,11 @@ multi_agent_v1-spawn_agent
 
 插件、延迟、MCP 资源、上下文预算、权限和 Agent Job 工具都由 Codex 按条件装配。在普通工具模式中它们是顶层 Function；在 Code Mode Only 中，除 `new_context` 外，下面满足条件的工具都会嵌套到 `exec`。
 
-下表是面向用户的已审查 0.144.x 基线行为参考，不是版本升级记录。alpha.23 的源码发现和版本采用以
+下表是面向用户的已审查 0.145.0 基线行为参考，不是版本升级记录。正式版的源码发现和版本采用以
 [开发者兼容性 checklist（英文）](../../dev/version-compatibility/upgrade-checklist.md)及
-[当前 alpha.23 报告（英文）](../../dev/version-compatibility/reports/upgrade-review.md)为准。
+[当前正式版报告（英文）](../../dev/version-compatibility/reports/upgrade-review.md)为准。
 
-| 工具 | 已审查 0.144.x 暴露条件 |
+| 工具 | 已审查 0.145.0 暴露条件 |
 |---|---|
 | `wait_for_environment` | 启用仍在开发的 `deferred_executor` Feature。 |
 | `request_permissions` | 存在执行环境，并启用仍在开发的 `request_permissions_tool` Feature。 |
@@ -135,11 +135,27 @@ Rosetta 会为这些名称登记只做形态转换的 exec 投影，但 schema �
 - **exec 展开**：从 Codex `exec` 嵌套工具投影出的普通 Chat Function。Codex 会把带 Namespace 的运行时身份扁平化成 `namespace__function` 属性，例如 `clock__sleep`、`web__run` 和 `image_gen__imagegen`；目录直接列出这些 Function，不再虚构父 Namespace 卡片。
 - **Function**：直接 Function 和使用相同卡片形态管理的 Hosted 工具。
 - **Namespace**：Codex 直接暴露为 Responses Namespace 的固定工具，即 `collaboration` 和旧版 `multi_agent_v1`。已安装的 plugin、MCP、app 和 connector Namespace 是运行时动态内容，不属于这个静态目录。
-- **Rosetta 注入**：注入的 `Read`、`Glob`、`Grep`、`Edit` 和 `Write`。
+- **Rosetta 注入**：由 catalog 管理的注入工具：`Read`、`Glob`、`Grep`、`Edit`、`Write`、`send_line`、`tool_read` 和 `invoke_deferred_tool`。
+
+catalog 当前包含 57 项，并在 Gateway 启动时编译。未知 schema 字段、adapter
+ID、依赖、状态/API 组合、重复身份或循环依赖都会 fail closed。运行时根据所选
+Profile、目标协议、模型 modality、运行时 capability，以及请求实际携带的顶层、
+Lite 和 `exec` 工具声明编译 `ToolRuntimePlan`。Gateway 只执行该计划；Converter
+和 proxy 分支不再维护另一份模型可见工具定义。
+
+`tool_search` 是 Function 页面中的协议相关三态项。“修改”仅适用于 Chat，且只有
+实时 `exec` 声明包含 deferred/`ALL_TOOLS` 指引时才注入 Rosetta 搜索定义；“直通”
+在 Responses 中保持原生声明，在 Chat 中也只投影实际存在的原生声明，并可逆恢复
+`tool_search_call`/`tool_search_output`；“禁用”会移除它。同名直接 Function 优先，
+缺失或 malformed 的原生声明绝不会被合成。
 
 Namespace 的状态显示为展开、透传（Chat API 无效）和禁用。禁用 Namespace 会强制其所有子项为禁用并锁定选择器。
 
 Function 的 Passthrough 状态在中文界面显示为**直通**。对 exec 展开条目，它仍会完成上述只改变表示形态的投影与反向翻译，但不会显示额外卡片说明，也不会修改传给模型的工具 description。
+
+每个状态还可以声明自己适用的 Provider 协议。工具页面会禁用无法同时适用于当前
+所有 `api_types` 的状态，后端也会拒绝同样的无效组合。Responses 模型组的特殊
+**透传**选项仍不属于 Tool Profile，并会完全绕过 RuntimePlan，包括 modality 裁剪。
 
 对于 Codex 按条件装配的工具，详情面板会分别显示普通模式位置、Code Mode Only 位置、开发状态和源码侧可用条件。这些标签解释 Codex 的装配规则，不表示 Gateway 能提前预测下一次请求的精确工具集合；实际 `exec` 声明仍是唯一依据。
 

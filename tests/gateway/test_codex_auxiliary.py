@@ -71,6 +71,12 @@ def _make_config(
     ):
         base_profile = tool_profile_contract()["readonly"]["builtin"]
         tools = dict(base_profile["tools"])
+        tools["hosted.tool_search"] = {
+            "chat": "modified",
+            "responses": "passthrough",
+            "anthropic": "disabled",
+            "google": "disabled",
+        }[api_type]
         inputs = {
             item_id: dict(values) for item_id, values in base_profile["inputs"].items()
         }

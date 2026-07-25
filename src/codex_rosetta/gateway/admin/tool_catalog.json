@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "schema_version": 5,
+    "schema_version": 6,
     "catalog_version": "codex-0.145.0",
     "codex_cli_version": "0.145.0",
     "codex_source_commit": "25af12f7e61572b0bc18ddb1008be543b91519b0",
@@ -20,7 +20,8 @@
       "function.test_sync_tool": "disabled",
       "function.exec_command": "modified",
       "function.view_image": "modified",
-      "function.write_stdin": "modified"
+      "function.write_stdin": "modified",
+      "hosted.tool_search": "modified"
     },
     "inputs": {
       "function.request_user_input": {
@@ -36,10 +37,10 @@
         "supported_details": "auto,low,high"
       },
     "function.write_stdin": {
-      "chars_guidance": "For line-oriented input, use send_line instead of write_stdin."
+      "chars_guidance": ""
     },
     "function.exec_command": {
-      "interactive_guidance": "When an interactive command returns a session_id, reuse that exact session_id instead of starting the command again. Use write_stdin for polling, raw character input, or complex multi-step interaction. Use send_line for simple single-line input; it appends exactly one newline. Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
+      "interactive_guidance": "When an interactive command returns a session_id, reuse that exact session_id instead of starting the command again. Use write_stdin for polling, raw character input, or complex multi-step interaction. Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
     },
       "custom.exec": {
         "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...), image(...), or audio(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
@@ -78,7 +79,10 @@
       "id": "responses-tool-mapping",
       "name": "工具映射（适用于第三方模型提供的Responses接口）",
       "api_types": ["responses"],
-      "base": "builtin"
+      "base": "builtin",
+      "tools": {
+        "hosted.tool_search": "passthrough"
+      }
     }
   ],
   "policies": [
@@ -206,10 +210,15 @@
       "name": "exec_command",
       "type": "function",
       "policy_id": "command_session_passthrough",
+      "delivery": {"localized_native_source": true},
       "exec_projection": {
         "chat_name": "exec_command",
         "nested_name": "exec_command"
       },
+      "history_aliases": ["Bash"],
+      "description_variants": [
+        {"when": {"dependency_effective": "injection.rosetta.send_line"}, "append": "Use send_line for simple single-line input; it appends exactly one newline."}
+      ],
       "profile_inputs": [
         {
           "id": "interactive_guidance",
@@ -234,6 +243,10 @@
       "name": "write_stdin",
       "type": "function",
       "policy_id": "command_session_passthrough",
+      "delivery": {"localized_native_source": true},
+      "description_variants": [
+        {"when": {"dependency_effective": "injection.rosetta.send_line"}, "target_parameter": "chars", "append": "For line-oriented input, use send_line instead of write_stdin."}
+      ],
       "exec_projection": {
         "chat_name": "write_stdin",
         "nested_name": "write_stdin"
@@ -263,6 +276,7 @@
       "name": "shell_command",
       "type": "function",
       "policy_id": "legacy_shell_disabled",
+      "delivery": {"localized_native_source": true},
       "description_i18n": "tools.description.shell_command_replaced"
     },
     {
@@ -420,6 +434,16 @@
       "name": "view_image",
       "type": "function",
       "policy_id": "exec_projection",
+      "runtime_adapters": ["view_image"],
+      "availability": {
+        "any_of": [
+          {"model_modality": ["image", "unknown"]}
+        ]
+      },
+      "delivery": {
+        "eager_only": true,
+        "detail_input": "supported_details"
+      },
       "profile_inputs": [
         {
           "id": "supported_details",
@@ -616,6 +640,7 @@
       "name": "apply_patch",
       "type": "custom",
       "policy_id": "native_apply_patch",
+      "delivery": {"localized_native_source": true},
       "description_i18n": "tools.description.apply_patch_internal",
       "description_visible_when": [
         "disabled",
@@ -638,6 +663,10 @@
       "name": "exec",
       "type": "custom",
       "policy_id": "internal_exec_container",
+      "delivery": {
+        "deferred_guidance_marker": "Some deferred nested tools may be omitted from this description.",
+        "description_projection_adapters": ["web_run"]
+      },
       "internal_container_when_disabled": true,
       "description_i18n": "tools.description.exec_disabled",
       "description_visible_when": [
@@ -719,6 +748,59 @@
       "aliases": [
         "web_search_preview"
       ]
+    },
+    {
+      "id": "hosted.tool_search",
+      "name": "tool_search",
+      "type": "hosted",
+      "policy_id": "command_session_passthrough",
+      "description_i18n": "tools.description.tool_search",
+      "runtime_adapters": ["tool_search_chat_bridge", "deferred_tool_search"],
+      "state_api_types": {
+        "disabled": ["chat", "responses", "anthropic", "google"],
+        "passthrough": ["chat", "responses"],
+        "modified": ["chat"]
+      },
+      "availability": {
+        "any_of": [
+          {"source_tool_exists": "tool_search"},
+          {"deferred_exec_guidance_exists": true}
+        ]
+      },
+      "delivery": {
+        "modified_requires_deferred_exec_guidance": true,
+        "modified_removes_source": true,
+        "passthrough_chat_projects_live_definition": true,
+        "direct_function_wins": true,
+        "exec_projection": {"chat_name": "tool_search", "nested_name": "", "input_mode": "all_tools_search"},
+        "passthrough_projection": {"chat_name": "tool_search", "nested_name": "", "input_mode": "responses_client_tool", "native_item_type": "tool_search_call", "execution": "client"}
+      },
+      "description_variants": [
+        {
+          "when": {"dependency_effective": "injection.rosetta.tool_read"},
+          "replace_text": {
+            "from": "Use raw exec and ALL_TOOLS to read the exact declaration before invoking a match.",
+            "to": "Call tool_read with an exact returned name before invoking a match. Search results alone do not authorize invoke_deferred_tool."
+          }
+        }
+      ],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "tool_search",
+          "description": "Search deferred tools in Codex's live ALL_TOOLS runtime catalog. Use natural_language for capability searches and regex for exact name or declaration patterns. Results contain exact names and bounded summaries, not complete declarations, and never become independent Chat functions. Use raw exec and ALL_TOOLS to read the exact declaration before invoking a match.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Capability, provider, tool name, or declaration text to find. Regex patterns are limited to 200 characters."},
+              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8, "description": "Maximum number of matching tools to return."},
+              "search_mode": {"type": "string", "enum": ["natural_language", "regex"], "default": "natural_language", "description": "Natural-language token ranking or case-insensitive JavaScript regular-expression matching."}
+            },
+            "required": ["query"],
+            "additionalProperties": false
+          }
+        }
+      }
     },
     {
       "id": "namespace.multi_agent_v1",
@@ -968,6 +1050,35 @@
       "name": "web__run",
       "type": "function",
       "policy_id": "web_run_mapping",
+      "runtime_adapters": ["web_run"],
+      "capability_projection": {
+        "base": {
+          "commands": {
+            "open": ["ref_id", "lineno"],
+            "time": ["utc_offset"]
+          },
+          "top_level_fields": ["response_length"]
+        },
+        "web_run_basic_search": {
+          "commands": {
+            "search_query": ["q", "domains"]
+          }
+        },
+        "web_run_sidecar": {
+          "commands": {
+            "click": ["ref_id", "id"],
+            "find": ["ref_id", "pattern"],
+            "screenshot": ["ref_id", "pageno"]
+          }
+        },
+        "unsupported_commands": ["image_query", "finance", "weather", "sports"],
+        "description_rules": {
+          "drop_lines_containing": ["empty query"],
+          "replace_text": [
+            {"from": " (and optionally with a domain or recency filter)", "to": " (optionally by domain)", "case_insensitive": true}
+          ]
+        }
+      },
       "state_descriptions_i18n": {
         "passthrough": "tools.description.web_run_passthrough",
         "modified": "tools.description.web_run_modified"
@@ -1040,27 +1151,141 @@
     {
       "id": "injection.claude_code.read",
       "name": "Read",
-      "type": "custom_injection"
+      "type": "custom_injection",
+      "runtime_adapters": ["localized_file_tool"],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "Read",
+          "description": "Read a UTF-8 text file. Use offset and limit for large files.",
+          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["file_path"], "additionalProperties": false}
+        },
+        "strict": false
+      }
     },
     {
       "id": "injection.claude_code.edit",
       "name": "Edit",
-      "type": "custom_injection"
+      "type": "custom_injection",
+      "runtime_adapters": ["localized_file_tool"],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "Edit",
+          "description": "Edit an existing file. For file changes, you must use Edit rather than Shell or Python. Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
+          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["file_path", "old_string", "new_string"], "additionalProperties": false}
+        },
+        "strict": false
+      }
     },
     {
       "id": "injection.claude_code.write",
       "name": "Write",
-      "type": "custom_injection"
+      "type": "custom_injection",
+      "runtime_adapters": ["localized_file_tool"],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "Write",
+          "description": "Create or overwrite a file. For file creation or replacement, you must use Write rather than Shell or Python. The content must be complete UTF-8 text.",
+          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"], "additionalProperties": false}
+        },
+        "strict": false
+      }
     },
     {
       "id": "injection.claude_code.glob",
       "name": "Glob",
-      "type": "custom_injection"
+      "type": "custom_injection",
+      "runtime_adapters": ["localized_file_tool"],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "Glob",
+          "description": "Find files by glob pattern.",
+          "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"], "additionalProperties": false}
+        },
+        "strict": false
+      }
     },
     {
       "id": "injection.claude_code.grep",
       "name": "Grep",
-      "type": "custom_injection"
+      "type": "custom_injection",
+      "runtime_adapters": ["localized_file_tool"],
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "Grep",
+          "description": "Search file contents with ripgrep.",
+          "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"}, "type": {"type": "string"}, "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]}, "case_insensitive": {"type": "boolean"}, "line_numbers": {"type": "boolean"}, "before_context": {"type": "integer"}, "after_context": {"type": "integer"}, "context": {"type": "integer"}, "head_limit": {"type": "integer"}, "offset": {"type": "integer"}, "multiline": {"type": "boolean"}}, "required": ["pattern"], "additionalProperties": false}
+        },
+        "strict": false
+      }
+    },
+    {
+      "id": "injection.rosetta.send_line",
+      "name": "send_line",
+      "type": "custom_injection",
+      "description_i18n": "tools.description.send_line",
+      "runtime_adapters": ["send_line"],
+      "availability": {"dependency_effective": "function.write_stdin"},
+      "delivery": {"exec_projection": {"chat_name": "send_line", "nested_name": "write_stdin", "input_mode": "send_line"}},
+      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "send_line",
+          "description": "Send one complete line to an existing interactive command session. Use this instead of write_stdin when submitting line-oriented input; the gateway appends exactly one newline.",
+          "parameters": {"type": "object", "properties": {"session_id": {"type": "integer"}, "line": {"type": "string"}}, "required": ["session_id", "line"], "additionalProperties": false}
+        },
+        "strict": false
+      }
+    },
+    {
+      "id": "injection.rosetta.tool_read",
+      "name": "tool_read",
+      "type": "custom_injection",
+      "description_i18n": "tools.description.tool_read",
+      "runtime_adapters": ["deferred_tool_read"],
+      "availability": {"all_of": [{"dependency_effective": "hosted.tool_search"}, {"deferred_exec_guidance_exists": true}]},
+      "delivery": {"exec_projection": {"chat_name": "tool_read", "nested_name": "", "input_mode": "all_tools_read"}},
+      "description_variants": [
+        {
+          "when": {"dependency_effective": "injection.rosetta.invoke_deferred_tool"},
+          "replace_text": {
+            "from": "Invoke declarations through raw exec as tools.<name>(...).",
+            "to": "Declarations carrying invoke_deferred_tool instructions must be invoked with that dispatcher. Invoke all other declarations through raw exec as tools.<name>(...)."
+          }
+        }
+      ],
+      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "tool_read",
+          "description": "Read the complete declaration for one deferred tool by exact name from Codex's live ALL_TOOLS runtime catalog. Search results are only summaries; read a declaration before invoking it. Invoke declarations through raw exec as tools.<name>(...).",
+          "parameters": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Exact tool name returned by tool_search."}}, "required": ["name"], "additionalProperties": false}
+        }
+      }
+    },
+    {
+      "id": "injection.rosetta.invoke_deferred_tool",
+      "name": "invoke_deferred_tool",
+      "type": "custom_injection",
+      "description_i18n": "tools.description.invoke_deferred_tool",
+      "runtime_adapters": ["deferred_tool_invoke"],
+      "availability": {"dependency_effective": "injection.rosetta.tool_read"},
+      "delivery": {"exec_projection": {"chat_name": "invoke_deferred_tool", "nested_name": "", "input_mode": "deferred_dispatch"}},
+      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "catalog_definition": {
+        "type": "function",
+        "function": {
+          "name": "invoke_deferred_tool",
+          "description": "Invoke an MCP deferred tool whose complete declaration was returned by a paired tool_read call in this conversation.",
+          "parameters": {"type": "object", "properties": {"name": {"type": "string", "pattern": "^mcp__", "maxLength": 512}, "arguments": {"type": "object", "description": "Arguments matching the tool declaration returned by tool_read."}}, "required": ["name", "arguments"], "additionalProperties": false}
+        }
+      }
     }
   ],
   "placements": {
@@ -1105,6 +1330,7 @@
           "function.wait",
           "function.request_user_input",
           "hosted.web_search",
+          "hosted.tool_search",
           "function.shell_command",
           "function.new_context"
         ]
@@ -1123,7 +1349,10 @@
           "injection.claude_code.glob",
           "injection.claude_code.grep",
           "injection.claude_code.edit",
-          "injection.claude_code.write"
+          "injection.claude_code.write",
+          "injection.rosetta.send_line",
+          "injection.rosetta.tool_read",
+          "injection.rosetta.invoke_deferred_tool"
         ]
       }
     ],
@@ -1157,7 +1386,10 @@
       "injection.claude_code.glob",
       "injection.claude_code.grep",
       "injection.claude_code.edit",
-      "injection.claude_code.write"
+      "injection.claude_code.write",
+      "injection.rosetta.send_line",
+      "injection.rosetta.tool_read",
+      "injection.rosetta.invoke_deferred_tool"
     ]
   }
 }

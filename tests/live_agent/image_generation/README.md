@@ -80,7 +80,7 @@ failure.
 ## Required Codex configuration
 
 Use local-mode Provider ID `codex_rosetta` whose display name is exactly
-`OpenAI`, the bundled `Chat Default` Tool Profile, and `mimo-v2.5` as the
+`OpenAI`, the bundled `Chat Default` Tool Profile, and `qwen3.7-plus` as the
 default multimodal third-party model. Retain the local-mode catalog. Gateway
 Logs must prove the actual
 upstream model, working image-input path, and the separate OpenAI-compatible

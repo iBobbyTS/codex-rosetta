@@ -40,8 +40,10 @@ This is a full-inventory, source-first adaptation, not a clean reproducible
 release revision or a compatibility approval. It validates the code-derived
 ledger against Codex 0.142.0, 0.144.6, 0.145.0-alpha.23, and 0.145.0,
 updates the Rosetta runtime owners and packaged assets, and runs the available
-automated gates. Formal-version live cells remain pending, so the package
-version remains unchanged. The Codex CLI release version, Codex source
+automated gates. The post-migration CLI and agentabi matrices are partially
+complete; Images routing, sidecar search, exact-version GUI, compaction
+switch/summary, orchestrator, and live audio/profile gates remain blocked or
+unrun, so the package version remains unchanged. The Codex CLI release version, Codex source
 commit, Codex-Rosetta source version, and Codex-Rosetta commit remain
 independent identifiers. See the [0.145.0 upgrade report](reports/upgrade-review.md)
 for the source findings and the [range-coverage-review report](reports/range-coverage-review.md)
@@ -57,7 +59,7 @@ the current formal source and status are recorded separately above.
 | Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 23 points |
 | Ledger integrity | Compatibility overview and test matrix contain the same 23 names exactly once; the previously unmatched Skill and Bing rows and deferred-tool naming were reconciled |
 | `0.142.0` … `0.145.0` source coverage | The prior range map and alpha.23 review were extended to the exact formal release; every CP-01…CP-23 point remains classified in the formal report |
-| Runtime adaptation and real Codex/API | Deterministic adaptation is implemented and targeted tests pass. Formal-version live-agent cells have not yet been rerun against the new source binary, so 0.145.0 is not approved |
+| Runtime adaptation and real Codex/API | Catalog schema v6 and the 57-item `ToolRuntimePlan` ownership migration are implemented; focused/full tests, build, compatibility check, WebUI, agentabi 3/3, and the recorded post-migration CLI cells pass their stated gates. Remaining blockers are listed in the upgrade report, so 0.145.0 is not approved |
 
 ## Files
 

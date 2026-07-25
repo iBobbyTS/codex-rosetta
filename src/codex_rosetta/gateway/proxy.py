@@ -92,10 +92,16 @@ from .tool_adaptation import (
 )
 from .tool_profiles import (
     apply_profile_tool_mutations,
+    catalog_runtime_adapters,
     is_internal_container_when_disabled,
-    route_supports_image_input,
     route_tool_state,
     tool_catalog_lookups,
+)
+from .tool_runtime_plan import build_tool_runtime_plan
+from .tool_search_bridge import (
+    project_tool_search_request,
+    tool_search_bridge_active,
+    tool_search_bridge_projection,
 )
 from .transport import (
     ProviderInfo,
@@ -110,7 +116,6 @@ from .transport.credential_redaction import (
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
-    WEB_RUN_PROFILE_ITEM_ID,
     project_modified_web_run_function,
     web_run_model_availability,
 )
@@ -599,19 +604,15 @@ def _apply_tool_adaptation(
     body: dict[str, Any], route: ResolvedRoute
 ) -> dict[str, Any]:
     """Apply the selected profile before passthrough or conversion."""
+    plan = build_tool_runtime_plan(body, route)
+    if plan.bypass:
+        return body
     adapted = body
-    if not route_supports_image_input(route):
-        adapted = _remove_tool_definition(adapted, "view_image")
-    if route.target_provider == "openai_chat":
-        adapted = _remove_tool_definition(adapted, "tool_search")
+    for name in plan.remove_names:
+        adapted = _remove_tool_definition(adapted, name)
+    adapted = project_tool_search_request(adapted, plan, route)
     if getattr(route, "tool_profile", None):
         return _apply_tool_profile_to_request(adapted, route)
-    if route.target_provider == "openai_chat":
-        return _remove_tool_definition(
-            adapted,
-            "image_generation",
-            aliases=frozenset({"image_gen", "imagegen", "image_gen__imagegen"}),
-        )
     return adapted
 
 
@@ -684,23 +685,53 @@ def _filter_profile_tool(
         if adapted is None and isinstance(name, str):
             removed.add(name)
         return adapted, removed
-    adapted = apply_profile_tool_mutations(tool, item_id, route)
-    if (
-        item_id == "custom.exec"
-        and route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) == "modified"
-        and isinstance(adapted, dict)
+    adapted = _apply_profile_description_projection(
+        apply_profile_tool_mutations(tool, item_id, route), item_id, route
+    )
+    return _apply_profile_runtime_adapter(adapted, item_id, state, name, route)
+
+
+def _apply_profile_description_projection(
+    adapted: Any, item_id: str, route: ResolvedRoute
+) -> Any:
+    """Apply catalog-requested description projection adapters."""
+    item = tool_catalog_lookups()["items"][item_id]
+    projection_adapters = item.get("delivery", {}).get(
+        "description_projection_adapters", ()
+    )
+    if not isinstance(adapted, dict) or "web_run" not in projection_adapters:
+        return adapted
+    web_run_items = [
+        candidate_id
+        for candidate_id in tool_catalog_lookups()["items"]
+        if "web_run" in catalog_runtime_adapters(candidate_id)
+    ]
+    description = adapted.get("description")
+    if not isinstance(description, str) or not any(
+        route_tool_state(route, candidate_id) == "modified"
+        for candidate_id in web_run_items
     ):
-        description = adapted.get("description")
-        if isinstance(description, str):
-            projected_description = project_modified_exec_web_run_description(
-                description,
-                route,
-            )
-            if projected_description != description:
-                adapted = dict(adapted)
-                adapted["description"] = projected_description
+        return adapted
+    projected_description = project_modified_exec_web_run_description(
+        description, route
+    )
+    if projected_description == description:
+        return adapted
+    projected = dict(adapted)
+    projected["description"] = projected_description
+    return projected
+
+
+def _apply_profile_runtime_adapter(
+    adapted: Any,
+    item_id: str,
+    state: str,
+    name: Any,
+    route: ResolvedRoute,
+) -> tuple[Any | None, set[str]]:
+    """Apply the runtime adapter declared by one effective catalog item."""
     if (
-        item_id == WEB_RUN_PROFILE_ITEM_ID
+        "web_run" in catalog_runtime_adapters(item_id)
         and state == "modified"
         and isinstance(adapted, dict)
     ):
@@ -805,10 +836,11 @@ def _apply_converted_request_tool_adaptation(
     persistent_mappings: list[LocalizedToolMapping] | None = None,
     used_mapping_call_ids: set[str] | None = None,
     capabilities: NativeToolCapabilities | None = None,
+    native_tool_search_bridge: bool = False,
 ) -> dict[str, Any]:
     """Apply tool adaptation after source request has been converted."""
-    if should_localize_code_tools(route):
-        return localize_code_editing_chat_request(
+    if should_localize_code_tools(route) or native_tool_search_bridge:
+        adapted = localize_code_editing_chat_request(
             body,
             store=codex_tool_store,
             mappings=persistent_mappings,
@@ -822,6 +854,12 @@ def _apply_converted_request_tool_adaptation(
                 route, "custom.exec"
             ),
         )
+        if native_tool_search_bridge:
+            projection = tool_search_bridge_projection()
+            projections = dict(adapted.get(EXEC_PROJECTIONS_KEY, {}))
+            projections[projection.chat_name] = projection
+            adapted[EXEC_PROJECTIONS_KEY] = projections
+        return adapted
     return body
 
 
@@ -834,16 +872,23 @@ def _source_tool_capabilities_after_profile(
     capabilities = NativeToolCapabilities.from_chat_tools(
         _flatten_responses_tools(adapted_body)
     )
-    if route_tool_state(route, "custom.apply_patch") != "disabled":
+    if capabilities.has_custom_apply_patch:
         return capabilities
     original = NativeToolCapabilities.from_chat_tools(
         _flatten_responses_tools(original_body)
     )
-    if not original.has_custom_apply_patch:
+    apply_patch_item = tool_catalog_lookups()["items"]["custom.apply_patch"]
+    apply_patch_projection = apply_patch_item.get("exec_projection", {})
+    if not (
+        original.has_custom_apply_patch
+        and isinstance(apply_patch_projection, dict)
+        and apply_patch_projection.get("internal_when_disabled") is True
+    ):
         return capabilities
     return NativeToolCapabilities(
         has_exec_command=capabilities.has_exec_command,
         has_shell_command=capabilities.has_shell_command,
+        has_write_stdin=capabilities.has_write_stdin,
         has_custom_apply_patch=True,
         has_custom_exec=capabilities.has_custom_exec,
     )
@@ -994,7 +1039,7 @@ def _translate_and_persist_localized_response_tools(
     read_cache: ReadOutputCache | None = None,
     exec_projections: dict[str, ExecToolProjection] | None = None,
 ) -> None:
-    if not should_localize_code_tools(route):
+    if not should_localize_code_tools(route) and not exec_projections:
         return
     ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
@@ -1527,6 +1572,8 @@ async def handle_non_streaming(
         return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
+    runtime_plan = build_tool_runtime_plan(original_body, route)
+    native_tool_search_bridge = tool_search_bridge_active(runtime_plan, route)
     body = _apply_tool_adaptation(body, route)
     source_tool_capabilities = _source_tool_capabilities_after_profile(
         original_body, body, route
@@ -1631,7 +1678,7 @@ async def handle_non_streaming(
         )
     except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
         return _conversion_failure_response(route.source_provider, exc), profile
-    if should_localize_code_tools(route):
+    if should_localize_code_tools(route) or native_tool_search_bridge:
         persistent_mappings = _load_persistent_tool_mappings(
             persistence,
             state_scope=scope,
@@ -1643,6 +1690,7 @@ async def handle_non_streaming(
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
         capabilities=source_tool_capabilities,
+        native_tool_search_bridge=native_tool_search_bridge,
     )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
@@ -2481,6 +2529,10 @@ async def _handle_direct_responses_streaming(
         if original_request_body is not None:
             trace.log_full("original_request", original_request_body)
         trace.log(
+            "tool_runtime_plan",
+            build_tool_runtime_plan(body, route).trace_summary(),
+        )
+        trace.log(
             "stream_start",
             {
                 "model": model,
@@ -2725,6 +2777,8 @@ async def handle_streaming(  # noqa: C901
         return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
+    runtime_plan = build_tool_runtime_plan(original_body, route)
+    native_tool_search_bridge = tool_search_bridge_active(runtime_plan, route)
     preserve_native_wire = (
         profile.get("compaction_mode") == "native"
         and inbound_wire_request is not None
@@ -2796,7 +2850,7 @@ async def handle_streaming(  # noqa: C901
         )
     except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
         return _conversion_failure_response(route.source_provider, exc), profile
-    if should_localize_code_tools(route):
+    if should_localize_code_tools(route) or native_tool_search_bridge:
         persistent_mappings = _load_persistent_tool_mappings(
             persistence,
             state_scope=scope,
@@ -2808,6 +2862,7 @@ async def handle_streaming(  # noqa: C901
         persistent_mappings=persistent_mappings,
         used_mapping_call_ids=used_mapping_call_ids,
         capabilities=source_tool_capabilities,
+        native_tool_search_bridge=native_tool_search_bridge,
     )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
@@ -2918,13 +2973,14 @@ async def handle_streaming(  # noqa: C901
 
     if trace is not None:
         trace.log_full("original_request", original_request_body)
+        trace.log("tool_runtime_plan", runtime_plan.trace_summary())
 
     def _on_ir_event(ir_event: dict[str, Any]) -> None:
         store.cache_from_stream_event(ir_event)
         if trace is not None:
             trace.log("ir_event", ir_event)
 
-    if should_localize_code_tools(route):
+    if should_localize_code_tools(route) or exec_projections:
         ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
         def _persist_stream_mapping(mapping: LocalizedToolMapping) -> None:

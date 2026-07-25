@@ -431,6 +431,28 @@ class TestOpenAIResponsesToolOps:
             "action": {"type": "search", "query": "Codex web search"},
         }
 
+    def test_ir_tool_call_to_p_restores_client_tool_search_call(self):
+        """Projected Chat calls return to the native client-tool protocol."""
+        ir_tc = ToolCallPart(
+            type="tool_call",
+            tool_call_id="search_1",
+            tool_name="tool_search",
+            tool_input={"query": "calendar", "limit": 3},
+            provider_metadata={
+                "responses_client_tool": {
+                    "item_type": "tool_search_call",
+                    "execution": "client",
+                }
+            },
+        )
+
+        assert OpenAIResponsesToolOps.ir_tool_call_to_p(ir_tc) == {
+            "type": "tool_search_call",
+            "call_id": "search_1",
+            "execution": "client",
+            "arguments": {"query": "calendar", "limit": 3},
+        }
+
     def test_ir_tool_call_to_p_mcp(self):
         """Test IR ToolCallPart with mcp tool_type → mcp_call item."""
         ir_tc = ToolCallPart(

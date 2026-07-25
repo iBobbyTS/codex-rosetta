@@ -463,6 +463,54 @@ class OpenAIResponsesToolOps(BaseToolOps):
     # ==================== Tool Call ====================
 
     @staticmethod
+    def _responses_client_tool_call_to_p(
+        tool_call_id: str,
+        tool_input: Any,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Restore one catalog-authorized client-executed Responses call."""
+        client_tool = metadata.get("responses_client_tool")
+        if client_tool is None:
+            return None
+        if not isinstance(client_tool, dict):
+            raise ValueError("invalid Responses client-tool adapter metadata")
+        item_type = client_tool.get("item_type")
+        execution = client_tool.get("execution")
+        if (
+            not isinstance(item_type, str)
+            or not item_type
+            or execution != "client"
+            or not isinstance(tool_input, dict)
+        ):
+            raise ValueError("invalid Responses client-tool adapter metadata")
+        return {
+            "type": item_type,
+            "call_id": tool_call_id,
+            "execution": execution,
+            "arguments": tool_input,
+        }
+
+    @staticmethod
+    def _mcp_tool_call_to_p(
+        tool_call_id: str,
+        tool_name: str,
+        tool_type: str,
+        arguments: str,
+        ir_tool_call: ToolCallPart,
+    ) -> dict[str, Any] | None:
+        """Return an MCP call for either native MCP identity form."""
+        if not (tool_type == "mcp" or (tool_name and tool_name.startswith("mcp://"))):
+            return None
+        return {
+            "type": "mcp_call",
+            "id": tool_call_id,
+            "name": tool_name,
+            "arguments": arguments,
+            "server_label": ir_tool_call.get("server_name", "default"),
+            "status": "calling",
+        }
+
+    @staticmethod
     def ir_tool_call_to_p(ir_tool_call: ToolCallPart, **kwargs: Any) -> dict:
         """IR ToolCallPart → OpenAI Responses tool call item.
 
@@ -483,30 +531,21 @@ class OpenAIResponsesToolOps(BaseToolOps):
         arguments = (
             json.dumps(tool_input) if isinstance(tool_input, dict) else str(tool_input)
         )
+        metadata = ir_tool_call.get("provider_metadata") or {}
+        client_tool_call = OpenAIResponsesToolOps._responses_client_tool_call_to_p(
+            tool_call_id, tool_input, metadata
+        )
+        if client_tool_call is not None:
+            return client_tool_call
 
-        # Detect MCP call
-        if tool_name and tool_name.startswith("mcp://"):
-            return {
-                "type": "mcp_call",
-                "id": tool_call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "server_label": ir_tool_call.get("server_name", "default"),
-                "status": "calling",
-            }
-        elif tool_type == "mcp":
-            return {
-                "type": "mcp_call",
-                "id": tool_call_id,
-                "name": tool_name,
-                "arguments": arguments,
-                "server_label": ir_tool_call.get("server_name", "default"),
-                "status": "calling",
-            }
-        elif tool_type == "function":
+        mcp_call = OpenAIResponsesToolOps._mcp_tool_call_to_p(
+            tool_call_id, tool_name, tool_type, arguments, ir_tool_call
+        )
+        if mcp_call is not None:
+            return mcp_call
+        if tool_type == "function":
             # Recover Responses API item ID from provider_metadata if available;
             # the API requires 'id' to start with 'fc_' prefix.
-            metadata = ir_tool_call.get("provider_metadata") or {}
             native_item = OpenAIResponsesToolOps._native_responses_tool_call_to_p(
                 tool_call_id,
                 tool_input,

@@ -22,7 +22,6 @@ from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
     LOCALIZATION_CAPABILITIES_KEY,
-    LOCALIZED_CODE_TOOL_NAMES,
     READ_OUTPUT_CACHE_KEY,
     LocalizedToolMapping,
     LocalizedToolCallStreamTransformer,
@@ -36,9 +35,21 @@ from codex_rosetta.gateway.tool_adaptation import (
     translate_localized_tool_call_part,
     validate_tool_call_cache_ttl_hours,
 )
+from codex_rosetta.gateway.tool_profiles import (
+    catalog_runtime_adapters,
+    tool_catalog_lookups,
+)
+from codex_rosetta.gateway.tool_search_bridge import tool_search_bridge_projection
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
 from codex_rosetta.routing import ResolvedRoute
+
+
+LOCALIZED_CODE_TOOL_NAMES = frozenset(
+    item["name"]
+    for item_id, item in tool_catalog_lookups()["items"].items()
+    if "localized_file_tool" in catalog_runtime_adapters(item_id)
+)
 
 
 def _route() -> ResolvedRoute:
@@ -585,6 +596,73 @@ def test_stream_transformer_buffers_localized_call_until_finish():
     ]
     assert events[0]["tool_name"] == "exec_command"
     assert json.loads(events[1]["arguments_delta"]) == {"cmd": "printf ok"}
+
+
+def test_tool_search_call_translation_restores_responses_client_metadata():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_search",
+            "tool_name": "tool_search",
+            "tool_input": {"query": "calendar tools"},
+        },
+        exec_projections={"tool_search": tool_search_bridge_projection()},
+    )
+
+    assert translated is not None
+    assert translated.part == {
+        "type": "tool_call",
+        "tool_call_id": "call_search",
+        "tool_name": "tool_search",
+        "tool_input": {"query": "calendar tools"},
+        "tool_type": "function",
+        "provider_metadata": {
+            "responses_client_tool": {
+                "item_type": "tool_search_call",
+                "execution": "client",
+            }
+        },
+    }
+
+
+def test_stream_transformer_restores_tool_search_client_tool_metadata():
+    transformer = LocalizedToolCallStreamTransformer(
+        exec_projections={"tool_search": tool_search_bridge_projection()}
+    )
+
+    assert (
+        transformer.transform(
+            {
+                "type": "tool_call_start",
+                "tool_call_id": "call_search",
+                "tool_name": "tool_search",
+                "tool_call_index": 0,
+            }
+        )
+        == []
+    )
+    assert (
+        transformer.transform(
+            {
+                "type": "tool_call_delta",
+                "tool_call_id": "call_search",
+                "arguments_delta": '{"query":"calendar tools"}',
+            }
+        )
+        == []
+    )
+
+    events = transformer.transform(
+        {"type": "finish", "finish_reason": {"reason": "tool_calls"}}
+    )
+
+    assert events[0]["provider_metadata"] == {
+        "responses_client_tool": {
+            "item_type": "tool_search_call",
+            "execution": "client",
+        }
+    }
+    assert json.loads(events[1]["arguments_delta"]) == {"query": "calendar tools"}
 
 
 def test_gateway_non_streaming_localizes_request_and_returns_native_tool_call():

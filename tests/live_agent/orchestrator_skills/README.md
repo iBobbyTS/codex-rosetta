@@ -40,6 +40,8 @@ the tested model or Rosetta. App-server alone is insufficient unless the
 - `01`: call `skills.list` with orchestrator authority, select the fixture,
   then call `skills.read` with the exact returned package and main resource.
 
-Use `gpt-5.6-sol` and `deepseek-v4-flash` as the default text cells. Follow
+Use `gpt-5.6-terra` and `deepseek-v4-flash` as the default text cells. Permit
+one `gpt-5.6-sol` or `kimi-k3` fallback after the corresponding default model
+fails for model behavior. Follow
 [`EVALUATION.md`](EVALUATION.md) and write
 `artifacts/evaluation.json`.

@@ -93,6 +93,11 @@ async def get_tool_profiles(request: Any) -> Response:
                 item_id: list(states)
                 for item_id, states in tool_profile_contract()["supported"].items()
             },
+            "state_api_types": {
+                item["id"]: item["state_api_types"]
+                for item in load_tool_catalog()["items"]
+                if "state_api_types" in item
+            },
             "references": _tool_profile_references(data),
         }
     )

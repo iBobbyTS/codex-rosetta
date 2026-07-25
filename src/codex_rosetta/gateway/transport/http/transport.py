@@ -22,6 +22,7 @@ from codex_rosetta._vendor.httpclient import (
 )
 from codex_rosetta._vendor.sse import AsyncEventSource, SSELimitError
 from codex_rosetta.auto_detect import ProviderType
+from codex_rosetta.gateway.headers import overlay_headers_case_insensitive
 
 from .._base import (
     UpstreamConnectionError,
@@ -303,13 +304,11 @@ def _prepare_upstream(
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     """Return ``(url, headers, body)`` ready for the upstream HTTP call."""
     url = provider_info.upstream_url(model, stream=stream)
-    headers = {
-        "Content-Type": "application/json",
-        **provider_info.auth_headers(),
-    }
+    headers = {"Content-Type": "application/json"}
     if extra_headers:
-        headers.update(extra_headers)
+        overlay_headers_case_insensitive(headers, extra_headers)
     _force_identity_encoding(headers)
+    overlay_headers_case_insensitive(headers, provider_info.auth_headers())
 
     body = dict(provider_request)
 
@@ -567,10 +566,10 @@ class HttpTransport:
             request_payload = {"json": req_body}
         else:
             if wire_headers:
-                headers.update(wire_headers)
+                overlay_headers_case_insensitive(headers, wire_headers)
             # Provider configuration always owns upstream authentication.
-            headers.update(provider_info.auth_headers())
             _force_identity_encoding(headers)
+            overlay_headers_case_insensitive(headers, provider_info.auth_headers())
             request_payload = {"data": wire_body}
         client = self._pool.get(
             provider_info.proxy_url,
@@ -628,13 +627,11 @@ class HttpTransport:
 
         Used for non-conversion endpoints (model listing, reranking, etc.).
         """
-        headers = {
-            "Content-Type": "application/json",
-            **provider_info.auth_headers(),
-        }
+        headers = {"Content-Type": "application/json"}
         if extra_headers:
-            headers.update(extra_headers)
+            overlay_headers_case_insensitive(headers, extra_headers)
         _force_identity_encoding(headers)
+        overlay_headers_case_insensitive(headers, provider_info.auth_headers())
 
         client = self._pool.get(
             provider_info.proxy_url,

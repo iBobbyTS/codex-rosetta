@@ -1,7 +1,7 @@
 {
   "id": "01",
   "timeout_seconds": 120,
-  "default_model": "gpt-5.6-sol",
+  "default_model": "gpt-5.6-terra",
   "gateway_provider": null,
   "codex_model_provider": "codex_rosetta",
   "expected_request_kind": "remote_v2_in_band",

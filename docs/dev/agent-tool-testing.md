@@ -80,10 +80,10 @@ Deterministic summary quality is one small two-provider scenario under
 Its GPT and DeepSeek cells use byte-identical `TASK.md`, `scenario.py`, and
 `QUERY.md` files. Phase 1 hides the eventual question, then the same thread and
 model resumes with `QUERY.md` only after compaction. The test executor scores
-only the fixed post-compaction values. GPT is routed to `Pixel (K12)` in the
-copied test config, using `gpt-5.6-sol` as the default GPT cell, while DeepSeek
-remains `deepseek-v4-flash` on its sole
-provider.
+only the fixed post-compaction values. The GPT cell uses `gpt-5.6-terra` through
+any configured reachable GPT Provider, with one `gpt-5.6-sol` fallback allowed
+after a model-behavior failure. DeepSeek remains `deepseek-v4-flash` on its
+configured provider, with one `kimi-k3` fallback under the same rule.
 
 The Clock/Memory Namespace suite is
 [`tests/live_agent/namespace_tools`](../../tests/live_agent/namespace_tools/README.md).
@@ -154,7 +154,7 @@ Provider ID `codex_rosetta` with display name exactly `OpenAI`.
 The built-in Code Mode suite is
 [`tests/live_agent/builtin_tools`](../../tests/live_agent/builtin_tools/README.md).
 It fixes the local-mode Provider ID to `codex_rosetta` and display name to
-`OpenAI`, uses `gpt-5.6-sol` as the reference model shape, then exercises a yielded
+`OpenAI`, uses `gpt-5.6-terra` as the default GPT cell, then exercises a yielded
 `exec` cell through top-level `wait`, two projected `update_plan` calls, one
 protocol-neutral file workflow whose Chat run records natural selection of
 `Glob`, `Grep`, `Read`, `Edit`, and `Write` while its direct GPT run records
@@ -188,9 +188,10 @@ through the isolated Gateway. Use `runner_auth_not_supported` rather than
 attributing a missing declaration to the model. The suite does not measure
 artistic quality.
 
-Across these live suites, the defaults are `gpt-5.6-sol` for native GPT and
-shape reference, `deepseek-v4-flash` for third-party text/tool tests, and
-`mimo-v2.5` for third-party multimodal tests. The isolated `config.toml` owns
+Across these live suites, the defaults are `gpt-5.6-terra` for native GPT,
+`deepseek-v4-flash` for third-party text/tool tests, and `qwen3.7-plus` for
+third-party multimodal tests. Terra and DeepSeek model-behavior failures permit
+one `gpt-5.6-sol` and `kimi-k3` fallback respectively. The isolated `config.toml` owns
 the selected default. Prefer gateway local mode, retain its generated catalog,
 and use only Provider ID `codex_rosetta` with display name exactly `OpenAI`.
 Ordinary runs do not pass `codex exec -m`; only a deliberate model-switch

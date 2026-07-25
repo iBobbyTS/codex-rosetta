@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 
 from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
+from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamStream
 from codex_rosetta.gateway.web_search import (
     WEB_SEARCH_PROFILE_ITEM_ID,
@@ -63,11 +64,14 @@ class _FakeTavilyClient:
 
 
 def _route(*, search_token: str = "tvly-test") -> ResolvedRoute:
+    tool_profile = dict(tool_profile_contract()["builtin"])
+    tool_profile["hosted.web_search"] = "modified"
     return ResolvedRoute(
         source_provider="openai_responses",
         target_provider="openai_chat",
         provider_name="test-provider",
         upstream_model="deepseek-v4-flash",
+        tool_profile=tool_profile,
         tool_profile_inputs={
             "hosted.web_search": {
                 "provider": "tavily",

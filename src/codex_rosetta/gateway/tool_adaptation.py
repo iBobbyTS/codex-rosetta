@@ -36,23 +36,47 @@ from .code_mode_projection import (
 )
 from .state_scope import GatewayStateScope
 from .tool_profiles import route_tool_state, tool_catalog_lookups, tool_profile_contract
+from .tool_profiles import catalog_runtime_adapters, catalog_tool_definition
 
 
 DEFAULT_TOOL_CALL_CACHE_TTL_HOURS = 24.0
 MAX_TOOL_CALL_CACHE_TTL_HOURS = 720.0
 DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS = True
 DEFAULT_ENABLE_PHASE_DETECTION = True
-LOCALIZED_CODE_TOOL_NAMES = frozenset({"Read", "Edit", "Write", "Glob", "Grep"})
-RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES = LOCALIZED_CODE_TOOL_NAMES | {
-    "Bash",
-    "send_line",
-}
-NATIVE_CODE_TOOL_NAMES = frozenset(
-    {"apply_patch", "exec_command", "write_stdin", "shell_command"}
-)
 LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
 READ_OUTPUT_CACHE_KEY = "_codex_read_output_cache"
 EXEC_PROJECTIONS_KEY = "_codex_exec_tool_projections"
+
+
+def _catalog_names_by_adapter(adapter_id: str) -> frozenset[str]:
+    """Return model-facing names owned by one validated runtime adapter."""
+    lookup = tool_catalog_lookups()
+    return frozenset(
+        item["name"]
+        for item_id, item in lookup["items"].items()
+        if adapter_id in catalog_runtime_adapters(item_id)
+    )
+
+
+def _localized_code_tool_names() -> frozenset[str]:
+    return _catalog_names_by_adapter("localized_file_tool")
+
+
+def _recognized_localized_code_tool_names() -> frozenset[str]:
+    catalog = tool_profile_contract()["catalog"]
+    return (
+        _localized_code_tool_names()
+        | _catalog_names_by_adapter("send_line")
+        | frozenset(catalog.history_aliases)
+    )
+
+
+def _native_code_tool_names() -> frozenset[str]:
+    return frozenset(
+        item["name"]
+        for item in tool_catalog_lookups()["items"].values()
+        if item.get("delivery", {}).get("localized_native_source") is True
+    )
 
 
 @dataclass(frozen=True)
@@ -72,7 +96,10 @@ class LocalizedToolMapping:
 
     def codex_tool_call(self) -> dict[str, Any]:
         """Return the Codex-native Chat tool call shape for persistence."""
-        return _chat_tool_call(self.call_id, self.native_name, self.native_input)
+        call = _chat_tool_call(self.call_id, self.native_name, self.native_input)
+        if self.native_type != "function":
+            call["_codex_rosetta_native_type"] = self.native_type
+        return call
 
 
 @dataclass(frozen=True)
@@ -328,7 +355,7 @@ def should_localize_code_tools(route: Any) -> bool:
 def localized_native_tool_names(route: Any) -> frozenset[str]:
     """Return native code tools selected for Chat localization."""
     if not getattr(route, "tool_profile", None):
-        return NATIVE_CODE_TOOL_NAMES
+        return _native_code_tool_names()
     lookup = tool_catalog_lookups()["by_type_name"]
     exec_projection_ids = set(tool_profile_contract()["exec_projections"])
     return frozenset(
@@ -347,12 +374,13 @@ def localized_native_tool_names(route: Any) -> frozenset[str]:
 def injected_local_tool_names(route: Any) -> frozenset[str]:
     """Return Rosetta-localized tools enabled by the selected profile."""
     if not getattr(route, "tool_profile", None):
-        return LOCALIZED_CODE_TOOL_NAMES
+        return _localized_code_tool_names()
     lookup = tool_catalog_lookups()
     return frozenset(
         item["name"]
         for item_id, item in lookup["items"].items()
         if item["type"] == "custom_injection"
+        and "localized_file_tool" in catalog_runtime_adapters(item_id)
         and route_tool_state(route, item_id, "injected") == "injected"
     )
 
@@ -388,30 +416,31 @@ def localize_code_editing_chat_request(
     mappings: list[LocalizedToolMapping] | None = None,
     used_call_ids: set[str] | None = None,
     capabilities: NativeToolCapabilities | None = None,
-    native_tool_names: frozenset[str] = NATIVE_CODE_TOOL_NAMES,
-    injected_tool_names: frozenset[str] = LOCALIZED_CODE_TOOL_NAMES,
+    native_tool_names: frozenset[str] | None = None,
+    injected_tool_names: frozenset[str] | None = None,
     exec_projections: dict[str, ExecToolProjection] | None = None,
     profile_route: Any | None = None,
     hide_exec_container: bool = False,
 ) -> dict[str, Any]:
     """Replace Codex-native edit tools with Claude-Code-like Chat tools."""
+    if native_tool_names is None:
+        native_tool_names = _native_code_tool_names()
+    if injected_tool_names is None:
+        injected_tool_names = _localized_code_tool_names()
     adapted = dict(body)
     tools = adapted.get("tools")
     removed_native = False
     native_capabilities = capabilities or NativeToolCapabilities.from_chat_tools(tools)
     read_cache = ReadOutputCache()
     messages = adapted.get("messages")
-    if isinstance(messages, list) and (store is not None or mappings):
-        localized_messages: list[Any] = []
-        for message in messages:
-            localized = _localize_history_message(
-                message,
-                store,
-                mappings,
-                used_call_ids=used_call_ids,
-            )
-            _update_read_output_cache_from_message(localized, read_cache)
-            localized_messages.append(localized)
+    localized_messages = _localized_history_messages(
+        messages,
+        store=store,
+        mappings=mappings,
+        used_call_ids=used_call_ids,
+        read_cache=read_cache,
+    )
+    if localized_messages is not None:
         adapted["messages"] = localized_messages
         adapted[READ_OUTPUT_CACHE_KEY] = read_cache
         messages = localized_messages
@@ -450,12 +479,28 @@ def localize_code_editing_chat_request(
         )
         localized_tools = [
             tool
-            for tool in _localized_chat_tool_definitions()
+            for tool in _catalog_injection_definitions()
             if (
                 _chat_tool_name(tool) in injected_tool_names
                 or (
                     _chat_tool_name(tool) == "send_line"
                     and native_capabilities.has_write_stdin
+                    and (
+                        profile_route is None
+                        or (
+                            route_tool_state(
+                                profile_route,
+                                "injection.rosetta.send_line",
+                                "injected",
+                            )
+                            == "injected"
+                            and route_tool_state(
+                                profile_route,
+                                "function.write_stdin",
+                            )
+                            != "disabled"
+                        )
+                    )
                 )
             )
             and _chat_tool_name(tool) not in existing_names
@@ -491,7 +536,7 @@ def localize_code_editing_chat_request(
             or injected_tool_names
             or active_projections
             or removed_projected_containers
-            or LOCALIZED_CODE_TOOL_NAMES.intersection(existing_names)
+            or _localized_code_tool_names().intersection(existing_names)
         ):
             adapted["tools"] = (
                 model_tools
@@ -510,6 +555,30 @@ def localize_code_editing_chat_request(
                 adapted[EXEC_PROJECTIONS_KEY] = active_projections
 
     return adapted
+
+
+def _localized_history_messages(
+    messages: Any,
+    *,
+    store: CodexToolLocalizationStore | None,
+    mappings: list[LocalizedToolMapping] | None,
+    used_call_ids: set[str] | None,
+    read_cache: ReadOutputCache,
+) -> list[Any] | None:
+    """Restore model-facing history and collect read/edit context."""
+    if not isinstance(messages, list) or (store is None and not mappings):
+        return None
+    localized_messages: list[Any] = []
+    for message in messages:
+        localized = _localize_history_message(
+            message,
+            store,
+            mappings,
+            used_call_ids=used_call_ids,
+        )
+        _update_read_output_cache_from_message(localized, read_cache)
+        localized_messages.append(localized)
+    return localized_messages
 
 
 def _configure_deferred_tool_projections(
@@ -769,7 +838,7 @@ def translate_localized_tool_call_part(
     localized_name = part.get("tool_name", "")
     projection = (exec_projections or {}).get(localized_name)
     if (
-        localized_name not in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES
+        localized_name not in _recognized_localized_code_tool_names()
         and projection is None
     ):
         return None
@@ -792,26 +861,15 @@ def translate_localized_tool_call_part(
         )
 
     try:
-        if projection is not None:
-            native_name = "exec"
-            native_input = {"input": build_exec_script(projection, localized_input)}
-            native_type = "custom"
-        else:
-            if localized_name == "send_line":
-                native_name, native_input, native_type = _localized_send_line_to_native(
-                    localized_input
-                )
-            else:
-                native_name, native_input, native_type = _localized_call_to_native(
-                    localized_name,
-                    localized_input,
-                    capabilities=capabilities or NativeToolCapabilities(),
-                    read_cache=read_cache,
-                    use_apply_patch=use_apply_patch,
-                    apply_patch_exec_projection=(exec_projections or {}).get(
-                        "apply_patch"
-                    ),
-                )
+        native_name, native_input, native_type = _translate_localized_call(
+            localized_name,
+            localized_input,
+            projection=projection,
+            capabilities=capabilities,
+            read_cache=read_cache,
+            use_apply_patch=use_apply_patch,
+            exec_projections=exec_projections,
+        )
     except ValueError as exc:
         if projection is not None:
             return _exec_error_translation(
@@ -819,17 +877,26 @@ def translate_localized_tool_call_part(
             )
         return _error_translation(call_id, localized_name, localized_input, str(exc))
 
+    provider_metadata = dict(part.get("provider_metadata") or {})
+    if native_type == "responses_client_tool":
+        assert projection is not None
+        provider_metadata["responses_client_tool"] = {
+            "item_type": projection.native_item_type,
+            "execution": projection.execution,
+        }
     native_part = {
         "type": "tool_call",
         "tool_call_id": call_id,
         "tool_name": native_name,
         "tool_input": native_input,
-        "tool_type": native_type,
+        "tool_type": "function"
+        if native_type == "responses_client_tool"
+        else native_type,
     }
     if "tool_call_index" in part:
         native_part["tool_call_index"] = part["tool_call_index"]
-    if "provider_metadata" in part:
-        native_part["provider_metadata"] = part["provider_metadata"]
+    if provider_metadata:
+        native_part["provider_metadata"] = provider_metadata
 
     return TranslatedToolCall(
         part=native_part,
@@ -841,6 +908,39 @@ def translate_localized_tool_call_part(
             native_input=native_input,
             native_type=native_type,
         ),
+    )
+
+
+def _translate_localized_call(
+    localized_name: str,
+    localized_input: dict[str, Any],
+    *,
+    projection: ExecToolProjection | None,
+    capabilities: NativeToolCapabilities | None,
+    read_cache: ReadOutputCache | None,
+    use_apply_patch: bool,
+    exec_projections: dict[str, ExecToolProjection] | None,
+) -> tuple[str, Any, str]:
+    """Dispatch one validated localized call to its execution adapter."""
+    if projection is not None and projection.input_mode == "responses_client_tool":
+        if not projection.native_item_type or projection.execution != "client":
+            raise ValueError("native client tool projection is incomplete")
+        return localized_name, localized_input, "responses_client_tool"
+    if projection is not None:
+        return (
+            "exec",
+            {"input": build_exec_script(projection, localized_input)},
+            "custom",
+        )
+    if localized_name == "send_line":
+        return _localized_send_line_to_native(localized_input)
+    return _localized_call_to_native(
+        localized_name,
+        localized_input,
+        capabilities=capabilities or NativeToolCapabilities(),
+        read_cache=read_cache,
+        use_apply_patch=use_apply_patch,
+        apply_patch_exec_projection=(exec_projections or {}).get("apply_patch"),
     )
 
 
@@ -870,7 +970,7 @@ class LocalizedToolCallStreamTransformer:
         event_type = event.get("type")
 
         if event_type == "tool_call_start" and (
-            event.get("tool_name") in RECOGNIZED_LOCALIZED_CODE_TOOL_NAMES
+            event.get("tool_name") in _recognized_localized_code_tool_names()
             or event.get("tool_name") in self._exec_projections
         ):
             call_id = event.get("tool_call_id", "")
@@ -1369,118 +1469,19 @@ def _localized_apply_patch_to_exec(
     )
 
 
-def _localized_chat_tool_definitions() -> list[dict[str, Any]]:
-    return [
-        _function_tool(
-            "Read",
-            "Read a UTF-8 text file. Use offset and limit for large files.",
-            {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"},
-                    "offset": {"type": "integer"},
-                    "limit": {"type": "integer"},
-                },
-                "required": ["file_path"],
-                "additionalProperties": False,
-            },
-        ),
-        _function_tool(
-            "Edit",
-            "Edit an existing file. For file changes, you must use Edit rather than Shell or Python. Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
-            {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"},
-                    "old_string": {"type": "string"},
-                    "new_string": {"type": "string"},
-                    "replace_all": {"type": "boolean"},
-                },
-                "required": ["file_path", "old_string", "new_string"],
-                "additionalProperties": False,
-            },
-        ),
-        _function_tool(
-            "Write",
-            "Create or overwrite a file. For file creation or replacement, you must use Write rather than Shell or Python. The content must be complete UTF-8 text.",
-            {
-                "type": "object",
-                "properties": {
-                    "file_path": {"type": "string"},
-                    "content": {"type": "string"},
-                },
-                "required": ["file_path", "content"],
-                "additionalProperties": False,
-            },
-        ),
-        _function_tool(
-            "send_line",
-            "Send one complete line to an existing interactive command session. Use this instead of write_stdin when submitting line-oriented input; the gateway appends exactly one newline.",
-            {
-                "type": "object",
-                "properties": {
-                    "session_id": {"type": "integer"},
-                    "line": {"type": "string"},
-                },
-                "required": ["session_id", "line"],
-                "additionalProperties": False,
-            },
-        ),
-        _function_tool(
-            "Glob",
-            "Find files by glob pattern.",
-            {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "path": {"type": "string"},
-                },
-                "required": ["pattern"],
-                "additionalProperties": False,
-            },
-        ),
-        _function_tool(
-            "Grep",
-            "Search file contents with ripgrep.",
-            {
-                "type": "object",
-                "properties": {
-                    "pattern": {"type": "string"},
-                    "path": {"type": "string"},
-                    "glob": {"type": "string"},
-                    "type": {"type": "string"},
-                    "output_mode": {
-                        "type": "string",
-                        "enum": ["content", "files_with_matches", "count"],
-                    },
-                    "case_insensitive": {"type": "boolean"},
-                    "line_numbers": {"type": "boolean"},
-                    "before_context": {"type": "integer"},
-                    "after_context": {"type": "integer"},
-                    "context": {"type": "integer"},
-                    "head_limit": {"type": "integer"},
-                    "offset": {"type": "integer"},
-                    "multiline": {"type": "boolean"},
-                },
-                "required": ["pattern"],
-                "additionalProperties": False,
-            },
-        ),
-    ]
-
-
-def _function_tool(
-    name: str, description: str, parameters: dict[str, Any]
-) -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": name,
-            "description": description,
-            "parameters": parameters,
-        },
-        "strict": False,
-    }
+def _catalog_injection_definitions() -> list[dict[str, Any]]:
+    """Return independent localized definitions owned by the catalog."""
+    definitions: list[dict[str, Any]] = []
+    for item_id in tool_catalog_lookups()["items"]:
+        if not set(catalog_runtime_adapters(item_id)).intersection(
+            {"localized_file_tool", "send_line"}
+        ):
+            continue
+        definition = catalog_tool_definition(item_id)
+        if definition is None:
+            raise ValueError(f"catalog adapter item {item_id!r} needs a definition")
+        definitions.append(definition)
+    return definitions
 
 
 def _localize_history_message(
@@ -1718,13 +1719,19 @@ def localized_mapping_from_tool_calls(
         return None
     if not isinstance(localized_input, dict):
         return None
+    stored_native_type = codex_tool_call.get("_codex_rosetta_native_type")
+    native_type = (
+        stored_native_type
+        if isinstance(stored_native_type, str)
+        else ("custom" if native_name in {"apply_patch", "exec"} else "function")
+    )
     return LocalizedToolMapping(
         call_id=call_id,
         localized_name=localized_name,
         localized_input=localized_input,
         native_name=native_name,
         native_input=native_input,
-        native_type="custom" if native_name in {"apply_patch", "exec"} else "function",
+        native_type=native_type,
     )
 
 

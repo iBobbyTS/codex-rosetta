@@ -330,6 +330,31 @@ def test_nonstream_success_reads_incrementally_and_forces_identity(
     assert "accept-encoding" not in headers
 
 
+def test_nonstream_provider_auth_replaces_case_insensitive_client_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(200, [b'{"ok":true}'])
+    transport, client = _transport(monkeypatch, response)
+
+    asyncio.run(
+        transport.send_request(
+            _provider(),
+            "openai_responses",
+            {"model": "test"},
+            "test",
+            extra_headers={
+                "authorization": "Bearer untrusted-client-key",
+                "X-Future-Codex-Capability": "preserve-me",
+            },
+        )
+    )
+
+    headers = client.calls[0]["headers"]
+    assert headers["Authorization"] == "Bearer provider-key"
+    assert "authorization" not in headers
+    assert headers["X-Future-Codex-Capability"] == "preserve-me"
+
+
 def test_streaming_wire_body_preserves_bytes_and_provider_owns_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -345,9 +370,10 @@ def test_streaming_wire_body_preserves_bytes_and_provider_owns_auth(
             extra_headers={"x-request-id": "req-1"},
             wire_body=b"exact-zstd-frame",
             wire_headers={
-                "Authorization": "Bearer untrusted-client-key",
+                "authorization": "Bearer untrusted-client-key",
                 "Content-Encoding": "zstd",
                 "x-oai-attestation": "signed-wire-proof",
+                "X-Future-Codex-Capability": "preserve-me",
             },
         )
     )
@@ -356,8 +382,10 @@ def test_streaming_wire_body_preserves_bytes_and_provider_owns_auth(
     assert call["data"] == b"exact-zstd-frame"
     assert "json" not in call
     assert call["headers"]["Authorization"] == "Bearer provider-key"
+    assert "authorization" not in call["headers"]
     assert call["headers"]["Content-Encoding"] == "zstd"
     assert call["headers"]["x-oai-attestation"] == "signed-wire-proof"
+    assert call["headers"]["X-Future-Codex-Capability"] == "preserve-me"
     assert call["headers"]["Accept-Encoding"] == "identity"
 
 

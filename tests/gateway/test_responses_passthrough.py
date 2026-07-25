@@ -750,6 +750,14 @@ def test_attested_request_falls_back_to_json_after_profile_mutation() -> None:
         body=b"attested-but-now-stale",
         headers={"x-oai-attestation": "signed-wire-proof"},
     ).with_parsed_body(body)
+    direct_headers = {
+        "Accept-Encoding": "identity",
+        "Content-Type": "application/json",
+        "User-Agent": "codex_cli_rs/0.145.0",
+        "x-codex-beta-features": "remote_compaction_v2",
+        "x-future-codex-capability": "preserve-me",
+        "x-request-id": "req-profile-mutation",
+    }
 
     asyncio.run(
         handle_streaming(
@@ -757,13 +765,14 @@ def test_attested_request_falls_back_to_json_after_profile_mutation() -> None:
             _provider_info(),
             body,
             transport=transport,
+            extra_headers=direct_headers,
             inbound_wire_request=wire,
         )
     )
 
     call = transport.send_streaming.await_args
     assert call is not None
-    assert call.kwargs == {"extra_headers": None}
+    assert call.kwargs == {"extra_headers": direct_headers}
     assert call.args[2] == {
         "model": "gpt-test",
         "input": [{"type": "message", "role": "user", "content": "hello"}],

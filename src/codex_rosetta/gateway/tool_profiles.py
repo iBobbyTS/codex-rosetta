@@ -7,15 +7,13 @@ from functools import lru_cache
 from typing import Any, cast
 
 from .admin.tool_catalog import load_tool_catalog
+from .tool_catalog_contract import compile_tool_catalog
 
 BUILTIN_TOOL_PROFILE = "builtin"
 TOOL_PROFILE_PASSTHROUGH_OPTION = "passthrough"
 TOOL_PROFILE_API_TYPES = ("chat", "responses", "anthropic", "google")
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
 MAX_TOOL_PROFILE_INPUT_LENGTH = 16_384
-VIEW_IMAGE_PROFILE_ITEM_ID = "function.view_image"
-VIEW_IMAGE_DETAILS_INPUT_ID = "supported_details"
-DEFAULT_VIEW_IMAGE_DETAILS = ("auto", "low", "high")
 
 
 def _normalize_visible_when(
@@ -767,11 +765,13 @@ def _build_preset_profile(
             }
             for item_id, item_inputs in input_definitions.items()
         }
+    tools = _disable_namespace_children(tools, namespace_children)
+    _validate_profile_state_api_types(catalog, tools, api_types, field=preset["id"])
     return {
         "id": preset["id"],
         "name": preset["name"],
         "api_types": api_types,
-        "tools": _disable_namespace_children(tools, namespace_children),
+        "tools": tools,
         "inputs": inputs,
     }
 
@@ -780,6 +780,7 @@ def _build_preset_profile(
 def tool_profile_contract() -> dict[str, Any]:
     """Return supported states and the immutable bundled profiles."""
     catalog = load_tool_catalog()
+    compiled_catalog = compile_tool_catalog(catalog)
     policies = {policy["id"]: policy for policy in catalog["policies"]}
     supported, builtin = _catalog_base_tool_states(catalog, policies)
 
@@ -796,6 +797,12 @@ def tool_profile_contract() -> dict[str, Any]:
         builtin_overrides,
         supported,
         namespace_children,
+    )
+    _validate_profile_state_api_types(
+        catalog,
+        builtin,
+        builtin_profile["api_types"],
+        field="builtin_profile",
     )
 
     input_definitions = _profile_input_contract(catalog, supported)
@@ -844,6 +851,7 @@ def tool_profile_contract() -> dict[str, Any]:
         "internal_containers_when_disabled": internal_containers_when_disabled,
         "namespace_children": namespace_children,
         "readonly": {profile["id"]: profile for profile in profiles},
+        "catalog": compiled_catalog,
     }
 
 
@@ -937,18 +945,45 @@ def normalize_tool_profile_documents(
                 f"{sorted(unsupported_fields)}"
             )
         field = f"config: tool_profiles.{name}"
+        api_types = normalize_tool_profile_api_types(
+            raw_profile.get("api_types"), field=field
+        )
+        tools = normalize_tool_profile_tools(raw_profile.get("tools"), field=field)
+        _validate_profile_state_api_types(
+            load_tool_catalog(), tools, api_types, field=field
+        )
         profiles[name] = {
-            "api_types": normalize_tool_profile_api_types(
-                raw_profile.get("api_types"), field=field
-            ),
-            "tools": normalize_tool_profile_tools(
-                raw_profile.get("tools"), field=field
-            ),
+            "api_types": api_types,
+            "tools": tools,
             "inputs": normalize_tool_profile_inputs(
                 raw_profile.get("inputs"), field=field
             ),
         }
     return profiles
+
+
+def _validate_profile_state_api_types(
+    catalog: dict[str, Any],
+    tools: dict[str, str],
+    api_types: list[str],
+    *,
+    field: str,
+) -> None:
+    """Reject catalog states that are not available to every Profile API type."""
+    for item in catalog["items"]:
+        state_api_types = item.get("state_api_types")
+        if not isinstance(state_api_types, dict):
+            continue
+        state = tools[item["id"]]
+        allowed = state_api_types.get(state)
+        if allowed is None:
+            continue
+        unsupported = sorted(set(api_types) - set(allowed))
+        if unsupported:
+            raise ValueError(
+                f"{field}.tools.{item['id']} state {state!r} is not available for "
+                f"api_types {unsupported}"
+            )
 
 
 def normalize_tool_profiles(value: Any) -> dict[str, dict[str, str]]:
@@ -1127,12 +1162,83 @@ def route_tool_state(route: Any, item_id: str, default: str = "passthrough") -> 
     return profile.get(item_id, default)
 
 
+def catalog_tool_definition(item_id: str) -> dict[str, Any] | None:
+    """Return an independent model-visible definition declared by the catalog."""
+    tool_profile_contract()
+    item = tool_catalog_lookups()["items"].get(item_id)
+    if item is None:
+        raise ValueError(f"unknown catalog item {item_id!r}")
+    definition = item.get("catalog_definition")
+    return copy.deepcopy(definition) if definition is not None else None
+
+
+def catalog_runtime_adapters(item_id: str) -> tuple[str, ...]:
+    """Return validated runtime adapter IDs declared for one catalog item."""
+    tool_profile_contract()
+    item = tool_catalog_lookups()["items"].get(item_id)
+    if item is None:
+        raise ValueError(f"unknown catalog item {item_id!r}")
+    return tuple(item.get("runtime_adapters", ()))
+
+
 def is_internal_container_when_disabled(route: Any, item_id: str) -> bool:
     """Return whether a Disabled tool must survive until conversion finishes."""
     return (
         route_tool_state(route, item_id) == "disabled"
         and item_id in tool_profile_contract()["internal_containers_when_disabled"]
     )
+
+
+def _append_tool_mutation(
+    adapted: dict[str, Any], mutation: dict[str, Any], append: str
+) -> bool:
+    """Apply one configured Profile mutation."""
+    if mutation["target"] == "description":
+        description = _append_profile_description(adapted.get("description"), append)
+        if description == adapted.get("description"):
+            return False
+        adapted["description"] = description
+        return True
+    parameters = adapted.get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    parameter = (
+        properties.get(mutation["parameter"]) if isinstance(properties, dict) else None
+    )
+    if not isinstance(parameter, dict):
+        return False
+    description = _append_profile_description(parameter.get("description"), append)
+    if description == parameter.get("description"):
+        return False
+    parameter["description"] = description
+    return True
+
+
+def _append_description_variant(
+    adapted: dict[str, Any], variant: dict[str, Any]
+) -> bool:
+    """Apply one effective catalog description fragment."""
+    append = variant.get("append")
+    if not isinstance(append, str) or not append.strip():
+        return False
+    target_parameter = variant.get("target_parameter")
+    if target_parameter is None:
+        description = _append_profile_description(adapted.get("description"), append)
+        if description == adapted.get("description"):
+            return False
+        adapted["description"] = description
+        return True
+    parameters = adapted.get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    parameter = (
+        properties.get(target_parameter) if isinstance(properties, dict) else None
+    )
+    if not isinstance(parameter, dict):
+        return False
+    description = _append_profile_description(parameter.get("description"), append)
+    if description == parameter.get("description"):
+        return False
+    parameter["description"] = description
+    return True
 
 
 def apply_profile_tool_mutations(
@@ -1147,70 +1253,102 @@ def apply_profile_tool_mutations(
     }:
         return tool
     mutations = tool_profile_contract()["profile_mutations"].get(item_id, ())
+    item = tool_catalog_lookups()["items"][item_id]
+    variants = item.get("description_variants", ())
     values = getattr(route, "tool_profile_inputs", {}).get(item_id, {})
-    if not mutations or not isinstance(values, dict):
+    if not mutations and not variants:
         return tool
+    if not isinstance(values, dict):
+        values = {}
     adapted = copy.deepcopy(tool)
     changed = False
     for mutation in mutations:
         value = values.get(mutation["input_id"])
         if not isinstance(value, str) or not (append := value.strip()):
             continue
-        if mutation["target"] == "description":
-            description = _append_profile_description(
-                adapted.get("description"), append
-            )
-            if description != adapted.get("description"):
-                adapted["description"] = description
-                changed = True
+        changed = _append_tool_mutation(adapted, mutation, append) or changed
+    for variant in variants:
+        if not _route_condition_matches(route, variant["when"]):
             continue
-        parameters = adapted.get("parameters")
-        if not isinstance(parameters, dict):
-            continue
-        properties = parameters.get("properties")
-        if not isinstance(properties, dict):
-            continue
-        parameter = properties.get(mutation["parameter"])
-        if not isinstance(parameter, dict):
-            continue
-        description = _append_profile_description(parameter.get("description"), append)
-        if description != parameter.get("description"):
-            parameter["description"] = description
-            changed = True
+        changed = _append_description_variant(adapted, variant) or changed
     return adapted if changed else tool
+
+
+def _route_condition_matches(route: Any, condition: dict[str, Any]) -> bool:
+    """Evaluate the catalog's bounded condition language against one route."""
+    operator, operand = next(iter(condition.items()))
+    if operator == "all_of":
+        return all(_route_condition_matches(route, child) for child in operand)
+    if operator == "any_of":
+        return any(_route_condition_matches(route, child) for child in operand)
+    values = {operand} if isinstance(operand, str) else set(operand or ())
+    if operator == "dependency_effective":
+        for dependency in values:
+            item = tool_catalog_lookups()["items"][dependency]
+            default = (
+                "injected" if item["type"] == "custom_injection" else "passthrough"
+            )
+            state = route_tool_state(route, dependency, default)
+            if state == "disabled" or (
+                item["type"] == "custom_injection" and state != "injected"
+            ):
+                return False
+        return True
+    if operator == "target_api":
+        provider = getattr(route, "target_provider", "")
+        target_api = {
+            "openai_chat": "chat",
+            "openai_responses": "responses",
+            "google_genai": "google",
+        }.get(provider, provider)
+        return target_api in values
+    if operator == "model_modality":
+        modalities = getattr(route, "input_modalities", None) or ["unknown"]
+        return bool(values.intersection(modalities))
+    if operator == "runtime_capability":
+        return values <= set(getattr(route, "tool_runtime_capabilities", ()))
+    return False
 
 
 def view_image_detail_values(route: Any) -> tuple[str, ...] | None:
     """Return the selected view-image detail values for a Modified Profile."""
-    if route_tool_state(route, VIEW_IMAGE_PROFILE_ITEM_ID) != "modified":
+    item_id = _catalog_item_id_for_adapter("view_image")
+    item = tool_catalog_lookups()["items"][item_id]
+    input_id = item.get("delivery", {}).get("detail_input")
+    if not isinstance(input_id, str):
+        raise ValueError("view_image adapter requires a catalog detail_input")
+    if route_tool_state(route, item_id) != "modified":
         return None
-    values = getattr(route, "tool_profile_inputs", {}).get(
-        VIEW_IMAGE_PROFILE_ITEM_ID, {}
-    )
-    selected = (
-        values.get(VIEW_IMAGE_DETAILS_INPUT_ID) if isinstance(values, dict) else None
-    )
+    values = getattr(route, "tool_profile_inputs", {}).get(item_id, {})
+    selected = values.get(input_id) if isinstance(values, dict) else None
+    definition = tool_profile_contract()["input_definitions"][item_id][input_id]
     if not isinstance(selected, str):
-        return DEFAULT_VIEW_IMAGE_DETAILS
-    options = tool_profile_contract()["input_definitions"][VIEW_IMAGE_PROFILE_ITEM_ID][
-        VIEW_IMAGE_DETAILS_INPUT_ID
-    ]["options"]
+        selected = definition["default"]
+    options = definition["options"]
     return _normalize_checkbox_group_value(
         selected,
         options,
-        item_id=VIEW_IMAGE_PROFILE_ITEM_ID,
-        input_id=VIEW_IMAGE_DETAILS_INPUT_ID,
+        item_id=item_id,
+        input_id=input_id,
     )
 
 
 def route_supports_image_input(route: Any) -> bool:
-    """Return whether a route may expose tools that produce image input.
+    """Return catalog-declared availability for the image-input adapter."""
+    item_id = _catalog_item_id_for_adapter("view_image")
+    availability = tool_catalog_lookups()["items"][item_id].get("availability")
+    return availability is None or _route_condition_matches(route, availability)
 
-    Unknown model capabilities remain fail-open for custom models. A route is
-    filtered only when its resolved model preset explicitly omits ``image``.
-    """
-    input_modalities = getattr(route, "input_modalities", None)
-    return input_modalities is None or "image" in input_modalities
+
+def _catalog_item_id_for_adapter(adapter_id: str) -> str:
+    matches = [
+        item_id
+        for item_id in tool_catalog_lookups()["items"]
+        if adapter_id in catalog_runtime_adapters(item_id)
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"runtime adapter {adapter_id!r} must own one catalog item")
+    return matches[0]
 
 
 def apply_view_image_detail_profile(tool: Any, route: Any) -> Any:
