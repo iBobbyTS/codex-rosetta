@@ -20,7 +20,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from .redaction import SecretRedactor
 from .retention import (
@@ -428,6 +428,18 @@ class PersistenceManager:
     def redact_sensitive(self, value: Any) -> Any:
         """Return a redacted copy suitable for persistence."""
         return self._redactor.redact(value)
+
+    def redact_protocol_fields(self, value: Any) -> Any:
+        """Redact only explicitly named auth/token fields for model responses."""
+        return self._redactor.redact_protocol_fields(value)
+
+    def redact_protocol_text(self, value: str | None) -> str | None:
+        """Redact explicit auth/token assignments in model response error text."""
+        return self._redactor.redact_protocol_text(value)
+
+    def redact_protocol_diagnostic(self, value: Any) -> Any:
+        """Redact protocol fields and explicit assignments in error-text slots."""
+        return self._redactor.redact_protocol_diagnostic(value)
 
     @property
     def success_max(self) -> int:
@@ -928,7 +940,12 @@ class PersistenceManager:
         "profile",
     ]
 
-    def insert_log_entries(self, entries: list[dict[str, Any]]) -> None:
+    def insert_log_entries(
+        self,
+        entries: list[dict[str, Any]],
+        *,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
+    ) -> None:
         """Insert request log entries, pruning oldest if over capacity."""
         if not entries:
             return
@@ -946,7 +963,12 @@ class PersistenceManager:
                 "profile",
             ):
                 if field in redacted:
-                    redacted[field] = self.redact_sensitive(redacted[field])
+                    redacted[field] = (
+                        self.redact_protocol_diagnostic(redacted[field])
+                        if response_redaction == "protocol_fields"
+                        and field in {"error_detail", "profile"}
+                        else self.redact_sensitive(redacted[field])
+                    )
             redacted_entries.append(redacted)
         self._conn.executemany(
             "INSERT OR IGNORE INTO request_log "
@@ -1652,6 +1674,7 @@ class PersistenceManager:
         response_text: str | None,
         upstream_url: str | None,
         converted_body_hash: str | None = None,
+        response_redaction: str = "exact",
     ) -> None:
         """Insert an error dump record and prune if over capacity."""
         metadata = self.redact_sensitive(
@@ -1661,9 +1684,13 @@ class PersistenceManager:
                 "target_provider": target_provider,
                 "provider_name": provider_name,
                 "error_phase": error_phase,
-                "response_text": response_text,
                 "upstream_url": upstream_url,
             }
+        )
+        stored_response_text = (
+            response_text
+            if response_redaction == "protocol_fields"
+            else self.redact_sensitive(response_text)
         )
         self._conn.execute(
             "INSERT OR IGNORE INTO error_dumps "
@@ -1682,7 +1709,7 @@ class PersistenceManager:
                 status_code,
                 metadata["error_phase"],
                 body_hash,
-                metadata["response_text"],
+                stored_response_text,
                 metadata["upstream_url"],
                 converted_body_hash,
             ),
@@ -1909,7 +1936,11 @@ class PersistenceManager:
             raise
 
     def update_entry_profile(
-        self, entry_id: str, profile_update: dict[str, Any]
+        self,
+        entry_id: str,
+        profile_update: dict[str, Any],
+        *,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Merge additional profile data into an existing log entry.
 
@@ -1932,8 +1963,13 @@ class PersistenceManager:
                 existing = json.loads(row[0])
             except json.JSONDecodeError, TypeError:
                 pass
-        existing = self.redact_sensitive(existing)
-        redacted_update = self.redact_sensitive(profile_update)
+        redact = (
+            self.redact_protocol_diagnostic
+            if response_redaction == "protocol_fields"
+            else self.redact_sensitive
+        )
+        existing = redact(existing)
+        redacted_update = redact(profile_update)
         existing.update(redacted_update)
         self._conn.execute(
             "UPDATE request_log SET profile = ? WHERE id = ?",
@@ -1949,6 +1985,7 @@ class PersistenceManager:
         duration_ms: float,
         error_detail: str | None,
         profile_update: dict[str, Any] | None = None,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Finalize status, duration, error, and profile for a streaming entry."""
         row = self._conn.execute(
@@ -1963,10 +2000,15 @@ class PersistenceManager:
                 profile = json.loads(row[0])
             except json.JSONDecodeError, TypeError:
                 pass
+        redact = (
+            self.redact_protocol_diagnostic
+            if response_redaction == "protocol_fields"
+            else self.redact_sensitive
+        )
         if profile_update:
-            profile.update(self.redact_sensitive(profile_update))
-        profile = self.redact_sensitive(profile)
-        redacted_error = self.redact_sensitive(error_detail)
+            profile.update(redact(profile_update))
+        profile = redact(profile)
+        redacted_error = redact(error_detail)
         self._conn.execute(
             "UPDATE request_log SET status_code = ?, duration_ms = ?, "
             "error_detail = ?, profile = ? WHERE id = ?",

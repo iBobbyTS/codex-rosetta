@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
 import stat
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -819,6 +818,41 @@ def test_deferred_response_trace_capacity_drops_the_entire_batch(
     ]
 
 
+def test_terminal_response_trace_uses_protocol_diagnostic_redaction(
+    tmp_path: Path,
+) -> None:
+    trace_path = tmp_path / "terminal-redaction.jsonl"
+    state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path)),
+        token_values={"provider-token"},
+    )
+    trace = state.create_logger(
+        request_id="req-terminal",
+        request_log_id="log-terminal",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    trace.log(
+        "stream_complete",
+        {
+            "stream_error": "authorization=secret; provider-token",
+            "content": "provider-token",
+            "token": "nested-secret",
+        },
+        response_redaction="protocol_fields",
+    )
+
+    record = json.loads(trace_path.read_text())
+    assert record["data"] == {
+        "stream_error": "authorization=[REDACTED]; provider-token",
+        "content": "provider-token",
+        "token": "[REDACTED]",
+    }
+
+
 @pytest.mark.parametrize("safe", [False, True])
 def test_deferred_response_trace_explicitly_discards_or_releases(
     tmp_path: Path,
@@ -846,42 +880,10 @@ def test_deferred_response_trace_explicitly_discards_or_releases(
     assert [record["stage"] for record in records] == ["upstream_chunk"]
 
 
-def test_deferred_response_trace_discards_and_resets_after_safety_check_failure(
-    tmp_path: Path,
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    trace_path = tmp_path / "safety-check-failure.jsonl"
-    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
-    trace = state.create_logger(
-        request_id="req-safety-check",
-        request_log_id="log-safety-check",
-        model="test-model",
-        source_provider="openai_responses",
-        target_provider="openai_chat",
-        provider_name="test-provider",
-    )
-    assert trace is not None
-    trace.defer_response_diagnostics()
-    trace.log("upstream_chunk", {"content": "unproven response"})
-
-    def fail_check(values: tuple[object, ...]) -> bool:
-        del values
-        raise RuntimeError("policy failure")
-
-    with caplog.at_level(logging.WARNING, logger="codex-rosetta-gateway"):
-        trace.finish_response_diagnostics(safe=True, safety_check=fail_check)
-    trace.log("stream_complete", {"stream_outcome": "completed"})
-
-    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [record["stage"] for record in records] == ["stream_complete"]
-    assert "safety-check failure" in caplog.text
-    assert "policy failure" not in caplog.text
-
-
-def test_deferred_response_trace_uses_global_diagnostic_token_inventory(
+def test_deferred_response_trace_uses_protocol_fields_not_global_token_inventory(
     tmp_path: Path,
 ) -> None:
-    trace_path = tmp_path / "global-diagnostic-collision.jsonl"
+    trace_path = tmp_path / "protocol-field-redaction.jsonl"
     state = StreamTraceState(
         StreamTraceConfig(enabled=True, path=str(trace_path)),
         token_values={"GLOBAL-ALPHA-BETA"},
@@ -896,8 +898,17 @@ def test_deferred_response_trace_uses_global_diagnostic_token_inventory(
     )
     assert trace is not None
     trace.defer_response_diagnostics()
-    trace.log("upstream_chunk", {"content": "GLOBAL-ALPHA-"})
+    trace.log(
+        "upstream_chunk",
+        {
+            "content": "GLOBAL-ALPHA-",
+            "metadata": {"authorization": "GLOBAL-ALPHA-BETA"},
+        },
+    )
     trace.log("upstream_chunk", {"content": "BETA"})
-    trace.finish_response_diagnostics(safe=True, safety_check=lambda values: True)
+    trace.finish_response_diagnostics(safe=True)
 
-    assert not trace_path.exists()
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert records[0]["data"]["content"] == "GLOBAL-ALPHA-"
+    assert records[0]["data"]["metadata"]["authorization"] == "[REDACTED]"
+    assert records[1]["data"]["content"] == "BETA"

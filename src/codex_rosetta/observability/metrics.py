@@ -14,6 +14,7 @@ import time
 from collections import deque
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Literal
 
 from .redaction import SecretRedactor
 
@@ -258,6 +259,7 @@ class MetricsCollector:
         is_stream: bool,
         provider_name: str | None = None,
         error_detail: str | None = None,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Record a completed proxy request."""
         self.total_requests += 1
@@ -283,7 +285,13 @@ class MetricsCollector:
         # Per-provider stats (use provider_name if available, fall back to target)
         pname = provider_name or target
         redacted_error = (
-            self._redactor.redact(error_detail) if error_detail is not None else None
+            (
+                self._redactor.redact_protocol_text(error_detail)
+                if response_redaction == "protocol_fields"
+                else self._redactor.redact(error_detail)
+            )
+            if error_detail is not None
+            else None
         )
         self._get_provider_stats(pname).record(
             duration_ms, is_error=is_error, error_detail=redacted_error

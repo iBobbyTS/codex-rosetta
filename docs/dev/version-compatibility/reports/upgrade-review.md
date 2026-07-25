@@ -1,5 +1,5 @@
 # Codex 0.145.0 Upgrade Review
-Date: 2026-07-23
+Date: 2026-07-25
 Codex version: 0.145.0
 
 ## Formal-release status
@@ -22,7 +22,7 @@ Codex version: 0.145.0
   preserves valid audio on Responses and Chat paths, and fail-open passes
   malformed or unsupported audio blocks. The packaged model and tool catalogs
   are bound to the formal source commit.
-- The full non-integration suite passes (`3779 passed, 4 skipped`), and
+- The full non-integration suite passes (`3754 passed, 4 skipped`), and
   `make check-codex-compat` passes
   against the refreshed formal baseline. The post-migration agentabi matrix
   passes 3/3, and the CLI live rerun covers command execution, built-in tools,
@@ -105,11 +105,11 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 
 | ID and compatibility point | Classification | Source/automation evidence | Formal live result |
 | --- | --- | --- | --- |
-| `CP-01 — Agent-facing API` | Changed | Responses→Responses now uses a direct-only denylist: unknown end-to-end headers pass, credentials/hop-by-hop/framing/network-origin fields are removed case-insensitively, and conversion routes retain their explicit minimal set. Focused app/ingress/transport/compaction suite passes 134 tests | `202607250101` cleared the prior Terra CLI native-compaction 502 on Pixel Plus: all four direct streaming requests returned 200 and same-thread resume completed |
-| `CP-02 — Responses transparent handling` | Changed | Direct headers are derived once from original ingress independently of Tool Profile/body changes; rebuilt JSON removes encoding/attestation, raw wire retains them, and Provider auth wins case-insensitively. Focused suite passes | The rebuilt-JSON native trigger completed with `wire_passthrough=false`, one installed follow-up, and no upstream error; this behaviorally confirms the missing-beta regression is fixed |
+| `CP-01 — Agent-facing API` | Changed | Codex 0.145.0 auth is confirmed at inbound `Authorization` only. Direct Responses removes that header, preserves other unknown end-to-end headers subject to transport/network filters, and overlays Provider auth last; conversion routes retain their explicit minimal set | The earlier `202607250101` run remains valid evidence for direct-header/native-compaction behavior; no new real call was authorized for the model-response policy change |
+| `CP-02 — Responses transparent handling` | Changed | Generic configured-token scanning and `ProviderCredentialOutputGate` were removed from model documents and streams. Current Responses/Chat/Anthropic/Google response-auth field inventory is empty; ordinary response token strings pass unchanged. Model diagnostics use protocol-field-only redaction; auxiliary clients retain exact protection | The affected deterministic cone passed `344`; the full suite passed `3754 passed, 4 skipped`; no new live external run was performed |
 | `CP-03 — Codex Search and Images endpoints` | Changed | `web.run` command/field/description projection is catalog-owned; obsolete `image_generation` suppression removed; `image_gen.imagegen` contract unchanged | Post-migration search passed for DeepSeek 3/3 and Terra 2/3 with Sol fallback for task 01. Qwen selected the exact image tool, but the configured Images route returned `404 model_not_found` for `gpt-image-2` |
 | `CP-04 — Request and window identity` | Possibly unchanged | Metadata keys unchanged | Pending multi-turn wire capture |
-| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge plus reasoning-summary `summary_index` reconstruction and cross-gate tests added | DeepSeek one-shot plus Kimi polling/single-input/two-input continuation passed; DeepSeek continuation cells retain separate model failures; audio pending |
+| `CP-05 — Responses→Chat bridge` | Changed | `InputAudio` bridge and reasoning-summary `summary_index` reconstruction remain; obsolete cross-gate credential assertions were replaced by ordinary-text passthrough coverage across Chat/Anthropic/Google | Prior live bridge evidence remains unchanged; audio is pending |
 | `CP-06 — Responses Lite / additional_tools` | Possibly unchanged | Field set unchanged | Pending Lite/deferred cell |
 | `CP-07 — Codex model catalog` | Changed | Formal asset synchronized; catalog tests pass | Local-mode smoke passed |
 | `CP-08 — custom/freeform tool` | Changed | Code Mode audio/description change; projection tests pass | Terra/DeepSeek `exec` yield and top-level wait passed; direct image and Goal paths exercised; current GUI Browser custom-`exec` reconstruction passed; MiMo recognition failed |
@@ -121,11 +121,11 @@ shared Conda 3.14.6 standard-GIL, local-mode, dual-auth runtime contract.
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | Contract tests pass | Twenty-eight valid formal command/builtin cells used Conda/local-mode dual auth; the new Qwen and Sol cells reached the configured isolated Gateway |
 | `CP-15 — Web search bridge` | Possibly unchanged | Search fields unchanged | Pending sidecar matrix |
 | `CP-16 — Self-hosted Bing search` | Possibly unchanged | No relevant formal diff | Pending sidecar gate |
-| `CP-17 — Stream lifecycle` | Changed | Consumer-visible identity failures now use a response-contract error distinct from credential collision | Direct and converted command streams completed across successful and model-failed cells; no converter stream loss observed |
+| `CP-17 — Stream lifecycle` | Changed | Model stream lifecycle no longer owns credential fragment/identity state. Deferred trace capacity remains diagnostic-only: a dropped trace batch cannot terminate the stream | Deterministic raw SSE with more than 4096 deltas reaches `response.completed`; no new live run was authorized |
 | `CP-18 — Message phase` | Possibly unchanged | Phase variants unchanged | Kimi polling and stdin continuations plus builtin wait/plan/Goal paths reached terminal answers; broader tool/terminal cells pending |
 | `CP-19 — Reasoning` | Changed | Reconstructed summary deltas now include Codex-required `summary_index`; saved-response replay and cross-module gate tests pass | DeepSeek reasoning/tool round completed; broader summary/audio capture pending |
 | `CP-20 — Context compaction resilience` | Changed | Remote V2 body contract is unchanged, but direct header transport now preserves `x-codex-beta-features` across rebuilt/tool-adapted CLI requests while retaining raw-wire attestation behavior. Focused compaction/header suite passes | Post-migration protocol, exactly-once, attested manual, both model-switch directions, and the fresh Terra native trigger/install/replay path passed. Summary quality remains `not_scored` only because baseline tokens exceeded the suite threshold |
-| `CP-21 — GPT relay provider identity` | Changed | Direct Responses now applies a denylist and overlays Provider auth last with case-insensitive replacement; unknown client capability headers cannot override Provider identity. Conversion routes remain explicit/minimal | GPT relay C0/C1/C2/C3/C5 passed. C4 remains a separate harness mismatch. The fresh Pixel Plus Terra run completed all four direct requests with Provider-owned auth and no 502. |
+| `CP-21 — GPT relay provider identity` | Changed | Direct Responses removes inbound `Authorization` only and overlays Provider auth last with case-insensitive replacement. Other credential-shaped end-to-end headers are outside the confirmed Codex auth location; conversion routes remain explicit/minimal | GPT relay C0/C1/C2/C3/C5 and the Pixel Plus Terra run remain prior evidence. C4 remains a separate harness mismatch |
 | `CP-22 — Model-group tool profiles` | Changed | Added `state_api_types`, immutable schema-v6 compilation, and per-request `ToolRuntimePlan`; strict Responses Pass through bypass remains covered | Post-migration direct and converted CLI cells exercised the compiled profiles. Exact 0.145.0 GUI evidence remains unavailable |
 | `CP-23 — Static tool catalog` | Changed | Formal catalog upgraded from 53 conceptual rows to 57 schema-v6 owned entries, including native `tool_search` and three Rosetta injections; startup and ownership tests pass | Post-migration deferred 14/14, command/built-in, namespace, collaboration, search, and compaction cells exercised the catalog. Exact `0.145.0` GUI Browser behavior remains unverified because the installed GUI is `0.146.0-alpha.3.1` |
 
@@ -144,7 +144,7 @@ the plan completely.
 Focused contract/bridge/trace coverage passed `81/81`; dedicated streaming and
 non-streaming `tool_search` restoration tests passed `2/2`; the complete
 Gateway suite passed `1497/1497` with two pre-existing SQLite ResourceWarnings.
-The final non-integration suite passed `3779 passed, 4 skipped`; `make lint`,
+The final non-integration suite passed `3754 passed, 4 skipped`; `make lint`,
 `make build`, `make check-codex-compat`, WebUI checks/build, and the focused
 post-migration runner contracts also passed. Post-migration agentabi passed
 3/3 and the live CLI evidence is recorded in `live-evidence.md`. Package

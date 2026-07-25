@@ -19,7 +19,7 @@ import uuid
 import zlib
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from .persistence import PersistenceManager
@@ -34,6 +34,7 @@ _BASE64_IMAGE_RE = re.compile(
 
 # Bodies larger than this are skipped entirely (only metadata is stored).
 MAX_BODY_BYTES = 10 * 1024 * 1024  # 10 MB
+ResponseRedactionPolicy = Literal["exact", "protocol_fields"]
 
 
 # ------------------------------------------------------------------
@@ -134,6 +135,7 @@ def dump_error(
     error_phase: str | None = None,
     upstream_url: str | None = None,
     request_log_id: str | None = None,
+    response_redaction: ResponseRedactionPolicy = "exact",
 ) -> str | None:
     """Offload images, hash, compress, and store an error dump.
 
@@ -156,6 +158,8 @@ def dump_error(
             ``"stream_chunk"``, ``"conversion"``.
         upstream_url: The upstream URL that was called.
         request_log_id: FK to the request log entry, if available.
+        response_redaction: Exact configured-token redaction or protocol-field-only
+            redaction for model response diagnostics.
 
     Returns:
         The dump ID on success, or ``None`` on failure / no-op.
@@ -177,6 +181,7 @@ def dump_error(
             error_phase=error_phase,
             upstream_url=upstream_url,
             request_log_id=request_log_id,
+            response_redaction=response_redaction,
         )
     except Exception:
         logger.debug("Failed to dump error", exc_info=True)
@@ -197,6 +202,7 @@ def _dump_error_impl(
     error_phase: str | None,
     upstream_url: str | None,
     request_log_id: str | None,
+    response_redaction: ResponseRedactionPolicy,
 ) -> str | None:
     """Inner implementation — may raise."""
     dump_id = uuid.uuid4().hex
@@ -232,7 +238,21 @@ def _dump_error_impl(
                 converted_body_hash, compressed_conv, orig_conv
             )
 
-    response_text = persistence.redact_sensitive(response_text)
+    if response_text is not None and response_redaction == "protocol_fields":
+        try:
+            parsed_response = json.loads(response_text)
+        except json.JSONDecodeError, TypeError, ValueError:
+            response_text = persistence.redact_protocol_text(response_text)
+        else:
+            redacted_response = persistence.redact_protocol_fields(parsed_response)
+            if redacted_response != parsed_response:
+                response_text = json.dumps(
+                    redacted_response,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+    else:
+        response_text = persistence.redact_sensitive(response_text)
 
     # --- Truncate response_text if excessively large ---
     if response_text and len(response_text) > 64 * 1024:
@@ -253,6 +273,7 @@ def _dump_error_impl(
         response_text=response_text,
         upstream_url=upstream_url,
         converted_body_hash=converted_body_hash,
+        response_redaction=response_redaction,
     )
 
     logger.debug(

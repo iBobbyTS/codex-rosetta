@@ -326,6 +326,53 @@ class TestDumpError:
         )
         persistence.close()
 
+    def test_model_response_dump_redacts_only_protocol_fields(self, tmp_path) -> None:
+        persistence = PersistenceManager(
+            str(tmp_path), token_values={"provider-secret"}
+        )
+        dump_id = dump_error(
+            persistence,
+            request_body={"api_key": "request-secret"},
+            response_text=(
+                '{"message":"provider-secret","authorization":"provider-secret"}'
+            ),
+            status_code=500,
+            error_phase="upstream",
+            response_redaction="protocol_fields",
+        )
+
+        assert isinstance(dump_id, str)
+        entry = persistence.get_error_dump(dump_id)
+        assert entry is not None
+        assert '"message":"provider-secret"' in entry["response_text"]
+        assert '"authorization":"[REDACTED]"' in entry["response_text"]
+        compressed_body = persistence.get_dump_body(entry["body_hash"])
+        assert compressed_body is not None
+        body = decompress_body(compressed_body)
+        assert body["api_key"] == "[REDACTED]"
+        persistence.close()
+
+    def test_model_response_text_redacts_only_explicit_assignment(
+        self, tmp_path
+    ) -> None:
+        persistence = PersistenceManager(
+            str(tmp_path), token_values={"provider-secret"}
+        )
+        dump_id = dump_error(
+            persistence,
+            request_body=None,
+            response_text="authorization=remove; provider-secret",
+            status_code=500,
+            error_phase="upstream",
+            response_redaction="protocol_fields",
+        )
+
+        assert isinstance(dump_id, str)
+        entry = persistence.get_error_dump(dump_id)
+        assert entry is not None
+        assert entry["response_text"] == ("authorization=[REDACTED]; provider-secret")
+        persistence.close()
+
 
 # ------------------------------------------------------------------
 # PersistenceManager error dump methods

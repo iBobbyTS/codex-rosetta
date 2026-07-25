@@ -14,6 +14,11 @@ MAX_ORDERED_DIAGNOSTIC_CHARS = 1_048_576
 MAX_ORDERED_DIAGNOSTIC_WORK = 8_388_608
 
 _BEARER_RE = re.compile(r"(?i)(\bBearer\s+)[A-Za-z0-9._~+/=-]+")
+_TOKEN_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b(?:authorization|api[ _-]?key|[a-z0-9_-]*token)\b\s*[:=]\s*)"
+    r"(?:(['\"])(.*?)\2|([^,;\r\n]+))"
+)
+_DIAGNOSTIC_TEXT_KEYS = {"errordetail", "responsetext", "streamerror"}
 
 
 @dataclass(frozen=True)
@@ -238,6 +243,28 @@ class SecretRedactor:
         """Redact configured values without applying diagnostic field heuristics."""
         return self._redact_exact(deepcopy(value))
 
+    def redact_protocol_fields(self, value: Any) -> Any:
+        """Redact only values owned by explicitly named auth/token fields."""
+        return self._redact_protocol_fields(deepcopy(value))
+
+    def redact_protocol_text(self, value: str | None) -> str | None:
+        """Redact explicit auth/token assignments in non-JSON error text."""
+        if value is None:
+            return None
+
+        def _replace(match: re.Match[str]) -> str:
+            quote = match.group(2) or ""
+            return f"{match.group(1)}{quote}{REDACTED}{quote}"
+
+        return _TOKEN_ASSIGNMENT_RE.sub(_replace, value)
+
+    def redact_protocol_diagnostic(self, value: Any) -> Any:
+        """Redact protocol fields plus explicit assignments in error-text slots."""
+        return self._redact_protocol_diagnostic(
+            deepcopy(value),
+            diagnostic_text=isinstance(value, str),
+        )
+
     def redact_wire_bytes(self, value: bytes) -> bytes:
         """Redact configured values from wire bytes without decoding other bytes."""
         stream = self.streaming_redactor()
@@ -371,6 +398,83 @@ class SecretRedactor:
             return [self._redact_exact(item) for item in value]
         if isinstance(value, tuple):
             return tuple(self._redact_exact(item) for item in value)
+        return value
+
+    def _redact_protocol_fields(
+        self,
+        value: Any,
+        *,
+        token_field: bool = False,
+    ) -> Any:
+        if token_field:
+            return REDACTED
+        if isinstance(value, dict):
+            return {
+                key: self._redact_protocol_fields(
+                    item,
+                    token_field=_is_token_key(key),
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, JsonObjectMembers):
+            return JsonObjectMembers(
+                tuple(
+                    (
+                        key,
+                        self._redact_protocol_fields(
+                            item,
+                            token_field=_is_token_key(key),
+                        ),
+                    )
+                    for key, item in value.members
+                )
+            )
+        if isinstance(value, list):
+            return [self._redact_protocol_fields(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._redact_protocol_fields(item) for item in value)
+        return value
+
+    def _redact_protocol_diagnostic(
+        self,
+        value: Any,
+        *,
+        token_field: bool = False,
+        diagnostic_text: bool = False,
+    ) -> Any:
+        if token_field:
+            return REDACTED
+        if isinstance(value, str):
+            return self.redact_protocol_text(value) if diagnostic_text else value
+        if isinstance(value, dict):
+            return {
+                key: self._redact_protocol_diagnostic(
+                    item,
+                    token_field=_is_token_key(key),
+                    diagnostic_text=_normalized_key(key) in _DIAGNOSTIC_TEXT_KEYS,
+                )
+                for key, item in value.items()
+            }
+        if isinstance(value, JsonObjectMembers):
+            return JsonObjectMembers(
+                tuple(
+                    (
+                        key,
+                        self._redact_protocol_diagnostic(
+                            item,
+                            token_field=_is_token_key(key),
+                            diagnostic_text=(
+                                _normalized_key(key) in _DIAGNOSTIC_TEXT_KEYS
+                            ),
+                        ),
+                    )
+                    for key, item in value.members
+                )
+            )
+        if isinstance(value, list):
+            return [self._redact_protocol_diagnostic(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(self._redact_protocol_diagnostic(item) for item in value)
         return value
 
 

@@ -51,17 +51,26 @@ model-behavior failure; multimodal cells used `qwen3.7-plus`.
 | Orchestrator Skills | `202607242323`, `202607242324`, `202607242326` | Terra completed the exact no-local-executor list/read/marker contract; the preserved runner's native typed-output detector produced a false negative, recovered independently from rollout, fixture, and trace evidence. DeepSeek completed exact list/read and observed the body marker but added prose before the required exact parent marker, so the strict cell failed. Kimi fallback passed the exact contract; its provider omitted usage records. |
 | Image generation | `202607241959` | Qwen called the exact projected `image_gen.imagegen` tool and prompt. The configured Images route returned `404 model_not_found` for `gpt-image-2`; no image artifact or follow-up `view_image` was possible. This is a deployment catalog/route blocker, not a missing tool projection or an API-key failure. |
 
-### Responses-direct header denylist deterministic checkpoint — 2026-07-25
+### Responses-direct header checkpoint — 2026-07-25
 
-The direct Responses header contract now uses a fail-open end-to-end header
-set with a case-insensitive denylist for client credentials, hop-by-hop and
-framing fields, `Connection`-declared fields, and network-origin identity.
+The direct Responses header contract now removes the Codex inbound
+`Authorization` header case-insensitively, plus hop-by-hop/framing,
+`Connection`-declared, and network-origin identity fields. Other unknown
+end-to-end headers pass through on the direct route because Codex 0.145.0 source
+locates Gateway authentication only in `Authorization`.
 Unknown headers such as `x-codex-beta-features` and future `x-codex-*`
 capabilities survive both streaming and non-streaming direct routes. Tool
 Profile body changes do not recompute that set. Rebuilt JSON drops the original
 encoding and opaque attestation; exact raw wire retains both. Provider auth is
 overlaid last with case-insensitive replacement. Responses→Chat/Anthropic/
 Google still use the previous explicit minimal header set.
+
+The `202607250101` live run below predates the later narrowing from the broader
+credential-header denylist to `Authorization` only. It remains valid evidence
+for Provider-auth precedence, native compaction, and capability-header
+preservation, but it is not claimed as live evidence for the newly preserved
+credential-shaped headers or model-response reflection policy. Those changes
+have deterministic coverage only; no new real provider call was authorized.
 
 The focused deterministic command covering app routing, ingress/raw-wire,
 direct passthrough, transport, and compaction completed with `134 passed`:

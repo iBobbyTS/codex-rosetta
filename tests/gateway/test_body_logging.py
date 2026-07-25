@@ -359,7 +359,10 @@ def test_all_proxy_body_categories_use_the_same_state_and_distinct_labels(
     log_ir_request({"value": "configured-token"}, state=state)
     log_converted_request({"value": "configured-token"}, state=state)
     log_response(
-        {"value": "configured-token"},
+        {
+            "value": "configured-token",
+            "metadata": {"authorization": "configured-token"},
+        },
         label="UPSTREAM RESPONSE",
         state=state,
     )
@@ -370,7 +373,9 @@ def test_all_proxy_body_categories_use_the_same_state_and_distinct_labels(
         "CONVERTED REQUEST",
         "UPSTREAM RESPONSE",
     ]
-    assert all("configured-token" not in call[2] for call in calls)
+    assert all("configured-token" not in call[2] for call in calls[:3])
+    assert '"value":"configured-token"' in calls[3][2]
+    assert '"authorization":"[REDACTED]"' in calls[3][2]
 
 
 def _config(token: str, *, log_bodies: bool) -> GatewayConfig:

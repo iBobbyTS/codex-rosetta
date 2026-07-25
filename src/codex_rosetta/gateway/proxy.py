@@ -106,13 +106,7 @@ from .tool_search_bridge import (
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
-    UpstreamCredentialCollisionError,
-    UpstreamResponseContractError,
     UpstreamTransport,
-)
-from .transport.credential_redaction import (
-    CredentialRedactingTransport,
-    ProviderCredentialOutputGate,
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
@@ -129,8 +123,6 @@ from .web_search import (
     strip_responses_web_search_tools,
     web_search_trace_summary,
 )
-
-_UNSAFE_STREAM_ERROR = "Upstream stream failed; unsafe error details blocked"
 
 logger = get_logger()
 
@@ -219,28 +211,6 @@ def error_response_for_source(
         body = {"error": {"message": message}}
 
     return JSONResponse(body, status_code=status_code)
-
-
-def _stream_safety_error_event(
-    source_provider: ProviderType,
-    message: str,
-) -> str:
-    """Return a source-compatible SSE event for a blocked safety error."""
-    if source_provider in ("openai_responses", "open_responses"):
-        body = {
-            "type": "error",
-            "error": {"type": "server_error", "code": None, "message": message},
-        }
-    elif source_provider == "anthropic":
-        body = {
-            "type": "error",
-            "error": {"type": "api_error", "message": message},
-        }
-    elif source_provider == "google":
-        body = {"error": {"code": 502, "message": message, "status": "INTERNAL"}}
-    else:
-        body = {"error": {"message": message, "type": "server_error", "code": None}}
-    return SSE_FORMATTERS.get(source_provider, SSE_FORMATTERS["openai_chat"])(body)
 
 
 def _conversion_failure_response(
@@ -1483,32 +1453,6 @@ def _resolve_state_stores(
     )
 
 
-def _inspect_and_log_final_source_document(
-    provider_info: ProviderInfo,
-    source_provider: ProviderType,
-    source_response: dict[str, Any],
-    upstream_response: dict[str, Any],
-    body_log_state: BodyLogState | None,
-) -> None:
-    """Inspect final output and persist only consumer-safe diagnostics."""
-    gate = ProviderCredentialOutputGate(provider_info, source_provider)
-    try:
-        gate.inspect_document(source_response)
-        if body_log_state is not None and body_log_state.enabled:
-            diagnostic_values = (body_log_state.render(upstream_response),)
-            if not gate.diagnostics_are_safe(
-                diagnostic_values
-            ) or not body_log_state.diagnostics_are_safe(diagnostic_values):
-                return
-            log_response(
-                upstream_response,
-                label="UPSTREAM RESPONSE",
-                state=body_log_state,
-            )
-    finally:
-        gate.finish()
-
-
 async def handle_non_streaming(
     route: ResolvedRoute,
     provider_info: ProviderInfo,
@@ -1534,7 +1478,6 @@ async def handle_non_streaming(
         per-phase timing data merged from the conversion pipeline and
         gateway-level measurements (upstream latency).
     """
-    transport = CredentialRedactingTransport.wrap(transport)
     model = body.get("model", "")
     scope, store, tool_store = _resolve_state_stores(
         route=route,
@@ -1606,6 +1549,7 @@ async def handle_non_streaming(
                 resp.error_text,
                 endpoint=str(route.target_provider),
                 state=upstream_error_log_state,
+                response_redaction="protocol_fields",
             )
             dump_error(
                 error_dump_persistence,
@@ -1619,6 +1563,7 @@ async def handle_non_streaming(
                 status_code=resp.status_code,
                 error_phase="upstream",
                 upstream_url=str(provider_info.base_url),
+                response_redaction="protocol_fields",
             )
             return (
                 Response(
@@ -1630,10 +1575,10 @@ async def handle_non_streaming(
             )
 
         if resp.body is not None:
-            _log_active_provider_response_diagnostics(
-                provider_info,
+            log_response(
                 resp.body,
-                body_log_state,
+                label="UPSTREAM RESPONSE",
+                state=body_log_state,
             )
         return (
             Response(
@@ -1735,6 +1680,7 @@ async def handle_non_streaming(
             resp.error_text,
             endpoint=str(route.target_provider),
             state=upstream_error_log_state,
+            response_redaction="protocol_fields",
         )
         dump_error(
             error_dump_persistence,
@@ -1748,6 +1694,7 @@ async def handle_non_streaming(
             status_code=resp.status_code,
             error_phase="upstream",
             upstream_url=str(provider_info.base_url),
+            response_redaction="protocol_fields",
         )
         return (
             Response(
@@ -1782,17 +1729,11 @@ async def handle_non_streaming(
         profile.update(pipeline.profile)
         return error_response_for_source(route.source_provider, 502, str(exc)), profile
 
-    try:
-        _inspect_and_log_final_source_document(
-            provider_info,
-            route.source_provider,
-            source_response,
-            resp.body,
-            body_log_state,
-        )
-    except (UpstreamCredentialCollisionError, UpstreamResponseContractError) as exc:
-        profile.update(pipeline.profile)
-        return error_response_for_source(route.source_provider, 502, str(exc)), profile
+    log_response(
+        resp.body,
+        label="UPSTREAM RESPONSE",
+        state=body_log_state,
+    )
 
     # Merge response-phase timings from pipeline
     profile.update(pipeline.profile)
@@ -1810,7 +1751,6 @@ async def _stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
-    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events from an already-opened upstream stream.
 
@@ -1823,7 +1763,7 @@ async def _stream_event_generator(
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
-    terminal_exception: Exception | None = None
+    terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -1845,7 +1785,6 @@ async def _stream_event_generator(
                         format_sse=format_sse,
                         trace=trace,
                         chunk_count=chunk_count,
-                        credential_output_gate=credential_output_gate,
                     ):
                         yield sse_event
 
@@ -1858,7 +1797,6 @@ async def _stream_event_generator(
                     format_sse=format_sse,
                     trace=trace,
                     chunk_count=chunk_count,
-                    credential_output_gate=credential_output_gate,
                 ):
                     yield sse_event
 
@@ -1868,7 +1806,6 @@ async def _stream_event_generator(
                 format_sse=format_sse,
                 trace=trace,
                 chunk_count=chunk_count,
-                credential_output_gate=credential_output_gate,
             ):
                 yield sse_event
 
@@ -1886,20 +1823,11 @@ async def _stream_event_generator(
         )
         terminal_state.complete()
     except BaseException as exc:
-        recovery = _stream_terminal_recovery(
-            exc,
-            source_provider,
-            terminal_state,
-            credential_output_gate,
-        )
-        if isinstance(recovery, Exception):
-            terminal_exception = recovery
-        else:
-            yield recovery
+        terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_exception = exc
     finally:
         _finalize_response_stream(
             trace=trace,
-            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
             t0=t0,
@@ -1929,13 +1857,12 @@ async def _web_search_stream_event_generator(  # noqa: C901
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
     max_rounds: int = 5,
-    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[str]:
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
-    terminal_exception: Exception | None = None
+    terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
     controller = WebSearchStreamController()
@@ -1977,7 +1904,6 @@ async def _web_search_stream_event_generator(  # noqa: C901
                             format_sse=format_sse,
                             trace=trace,
                             chunk_count=chunk_count,
-                            credential_output_gate=credential_output_gate,
                         ):
                             yield sse_event
 
@@ -1992,7 +1918,6 @@ async def _web_search_stream_event_generator(  # noqa: C901
                         format_sse=format_sse,
                         trace=trace,
                         chunk_count=chunk_count,
-                        credential_output_gate=credential_output_gate,
                     ):
                         yield sse_event
 
@@ -2028,7 +1953,6 @@ async def _web_search_stream_event_generator(  # noqa: C901
                     format_sse=format_sse,
                     trace=trace,
                     chunk_count=chunk_count,
-                    credential_output_gate=credential_output_gate,
                 ):
                     yield sse_event
 
@@ -2054,7 +1978,6 @@ async def _web_search_stream_event_generator(  # noqa: C901
                 format_sse=format_sse,
                 trace=trace,
                 chunk_count=chunk_count,
-                credential_output_gate=credential_output_gate,
             ):
                 yield sse_event
 
@@ -2072,20 +1995,11 @@ async def _web_search_stream_event_generator(  # noqa: C901
         )
         terminal_state.complete()
     except BaseException as exc:
-        recovery = _stream_terminal_recovery(
-            exc,
-            source_provider,
-            terminal_state,
-            credential_output_gate,
-        )
-        if isinstance(recovery, Exception):
-            terminal_exception = recovery
-        else:
-            yield recovery
+        terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_exception = exc
     finally:
         _finalize_response_stream(
             trace=trace,
-            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
             t0=t0,
@@ -2106,7 +2020,6 @@ def _format_web_search_source_event_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
-    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
     events = controller.process_source_event(source_event, round_index=round_index)
     return _format_buffered_events_sse(
@@ -2120,7 +2033,6 @@ def _format_web_search_source_event_sse(
         format_sse=format_sse,
         trace=trace,
         chunk_count=chunk_count,
-        credential_output_gate=credential_output_gate,
     )
 
 
@@ -2150,36 +2062,6 @@ def _capture_stream_ttfb(
     return round((time.perf_counter() - stream_opened_at) * 1000, 2)
 
 
-def _finish_credential_output_gate(
-    credential_output_gate: ProviderCredentialOutputGate | None,
-) -> None:
-    if credential_output_gate is not None:
-        credential_output_gate.finish()
-
-
-def _log_active_provider_response_diagnostics(
-    provider_info: ProviderInfo,
-    upstream_response: dict[str, Any],
-    body_log_state: BodyLogState | None,
-) -> None:
-    """Persist one direct response only when both diagnostic domains are safe."""
-    if body_log_state is None or not body_log_state.enabled:
-        return
-    gate = ProviderCredentialOutputGate(provider_info, None)
-    try:
-        values = (body_log_state.render(upstream_response),)
-        if gate.diagnostics_are_safe(values) and body_log_state.diagnostics_are_safe(
-            values
-        ):
-            log_response(
-                upstream_response,
-                label="UPSTREAM RESPONSE",
-                state=body_log_state,
-            )
-    finally:
-        gate.finish()
-
-
 def _format_source_event_sse(
     source_event: dict[str, Any],
     *,
@@ -2187,7 +2069,6 @@ def _format_source_event_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
-    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
     buffered_events = (
         event_buffer.process(source_event)
@@ -2199,7 +2080,6 @@ def _format_source_event_sse(
         format_sse=format_sse,
         trace=trace,
         chunk_count=chunk_count,
-        credential_output_gate=credential_output_gate,
     )
 
 
@@ -2209,12 +2089,9 @@ def _format_buffered_events_sse(
     format_sse: Any,
     trace: StreamTraceLogger | None,
     chunk_count: int,
-    credential_output_gate: ProviderCredentialOutputGate | None,
 ) -> list[str]:
     sse_events: list[str] = []
     for event in events:
-        if credential_output_gate is not None:
-            credential_output_gate.inspect_stream_event(event)
         if trace is not None:
             trace.log("source_event", event, chunk_index=chunk_count)
         sse_event = format_sse(event)
@@ -2242,7 +2119,6 @@ def _converted_stream_response_generator(
     target_provider: ProviderType,
     target_body: dict[str, Any],
     extra_headers: dict[str, str] | None,
-    credential_output_gate: ProviderCredentialOutputGate,
 ) -> AsyncIterator[str]:
     if web_search_runtime is None:
         return _stream_event_generator(
@@ -2255,7 +2131,6 @@ def _converted_stream_response_generator(
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
-            credential_output_gate=credential_output_gate,
         )
     return _web_search_stream_event_generator(
         source_provider=source_provider,
@@ -2273,7 +2148,6 @@ def _converted_stream_response_generator(
         entry_id=entry_id,
         request_log=request_log,
         trace=trace,
-        credential_output_gate=credential_output_gate,
     )
 
 
@@ -2325,7 +2199,11 @@ def _finalize_stream_profile(
         if stream_error is not None:
             stream_profile["stream_error"] = stream_error[:500]
         try:
-            request_log.update_profile(entry_id, stream_profile)
+            request_log.update_profile(
+                entry_id,
+                stream_profile,
+                response_redaction="protocol_fields",
+            )
         except Exception:
             logger.debug("Failed to write stream profile for %s", entry_id)
     if trace is not None:
@@ -2339,13 +2217,13 @@ def _finalize_stream_profile(
                 "ttfb_ms": ttfb_ms,
                 "passthrough": passthrough,
             },
+            response_redaction="protocol_fields",
         )
 
 
 def _finalize_response_stream(
     *,
     trace: StreamTraceLogger | None,
-    credential_output_gate: ProviderCredentialOutputGate | None,
     entry_id: str | None,
     request_log: Any | None,
     t0: float,
@@ -2354,30 +2232,22 @@ def _finalize_response_stream(
     ttfb_ms: float | None,
     passthrough: bool = False,
 ) -> None:
-    """Finalize deferred diagnostics, credential state, and stream telemetry."""
-    try:
-        if trace is not None:
-            trace.finish_response_diagnostics(
-                safe=terminal_state.outcome == "completed",
-                safety_check=credential_output_gate.diagnostics_are_safe
-                if credential_output_gate is not None
-                else None,
-            )
-    finally:
-        try:
-            _finish_credential_output_gate(credential_output_gate)
-        finally:
-            _finalize_stream_profile(
-                entry_id=entry_id,
-                request_log=request_log,
-                trace=trace,
-                t0=t0,
-                chunk_count=chunk_count,
-                terminal_outcome=terminal_state.outcome,
-                stream_error=terminal_state.error,
-                ttfb_ms=ttfb_ms,
-                passthrough=passthrough,
-            )
+    """Finalize deferred model-response diagnostics and stream telemetry."""
+    if trace is not None:
+        trace.finish_response_diagnostics(
+            safe=terminal_state.outcome == "completed",
+        )
+    _finalize_stream_profile(
+        entry_id=entry_id,
+        request_log=request_log,
+        trace=trace,
+        t0=t0,
+        chunk_count=chunk_count,
+        terminal_outcome=terminal_state.outcome,
+        stream_error=terminal_state.error,
+        ttfb_ms=ttfb_ms,
+        passthrough=passthrough,
+    )
 
 
 def _stream_terminal_failure(exc: BaseException) -> tuple[str, str]:
@@ -2402,28 +2272,6 @@ class _StreamTerminalState:
         self.error = None
 
 
-def _stream_terminal_recovery(
-    exc: BaseException,
-    source_provider: ProviderType,
-    terminal_state: _StreamTerminalState,
-    credential_output_gate: ProviderCredentialOutputGate | None,
-) -> str | Exception:
-    """Recover blocked safety errors; preserve every other failure."""
-    terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
-    if isinstance(
-        exc,
-        (UpstreamCredentialCollisionError, UpstreamResponseContractError),
-    ):
-        return _stream_safety_error_event(source_provider, str(exc))
-    if (
-        credential_output_gate is not None
-        and not credential_output_gate.diagnostics_are_safe((terminal_state.error,))
-    ):
-        terminal_state.error = _UNSAFE_STREAM_ERROR
-        return UpstreamCredentialCollisionError(_UNSAFE_STREAM_ERROR)
-    raise exc
-
-
 async def _raw_stream_event_generator(
     *,
     stream: Any,
@@ -2432,13 +2280,12 @@ async def _raw_stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
-    credential_output_gate: ProviderCredentialOutputGate | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
     t0 = time.monotonic()
     terminal_state = _StreamTerminalState()
-    terminal_exception: Exception | None = None
+    terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
 
@@ -2465,19 +2312,10 @@ async def _raw_stream_event_generator(
         )
         terminal_state.complete()
     except BaseException as exc:
-        recovery = _stream_terminal_recovery(
-            exc,
-            source_provider,
-            terminal_state,
-            credential_output_gate,
-        )
-        if isinstance(recovery, Exception):
-            terminal_exception = recovery
-        else:
-            yield recovery.encode("utf-8")
+        terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_exception = exc
     finally:
         _finalize_response_stream(
-            credential_output_gate=credential_output_gate,
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
@@ -2611,6 +2449,7 @@ async def _handle_direct_responses_streaming(
             error_phase="stream_header",
             upstream_url=str(provider_info.base_url),
             request_log_id=entry_id,
+            response_redaction="protocol_fields",
         )
         return (
             error_response_for_source(
@@ -2652,6 +2491,7 @@ async def _handle_direct_responses_streaming(
             endpoint=str(route.target_provider),
             is_streaming=True,
             state=upstream_error_log_state,
+            response_redaction="protocol_fields",
         )
         dump_error(
             persistence,
@@ -2666,6 +2506,7 @@ async def _handle_direct_responses_streaming(
             error_phase="stream_header",
             upstream_url=str(provider_info.base_url),
             request_log_id=entry_id,
+            response_redaction="protocol_fields",
         )
         return (
             Response(
@@ -2678,15 +2519,6 @@ async def _handle_direct_responses_streaming(
             profile,
         )
 
-    credential_output_gate = ProviderCredentialOutputGate(
-        provider_info,
-        route.source_provider,
-        global_diagnostic_safety_check=(
-            upstream_error_log_state.diagnostics_are_safe
-            if upstream_error_log_state is not None
-            else None
-        ),
-    )
     if trace is not None:
         trace.defer_response_diagnostics()
 
@@ -2699,7 +2531,6 @@ async def _handle_direct_responses_streaming(
                 entry_id=entry_id,
                 request_log=request_log,
                 trace=trace,
-                credential_output_gate=credential_output_gate,
             ),
             content_type="text/event-stream",
         ),
@@ -2742,7 +2573,6 @@ async def handle_streaming(  # noqa: C901
         after the stream completes.
     """
     original_request_body = copy.deepcopy(body)
-    transport = CredentialRedactingTransport.wrap(transport)
     model = body.get("model", "")
     scope, store, tool_store = _resolve_state_stores(
         route=route,
@@ -2907,6 +2737,7 @@ async def handle_streaming(  # noqa: C901
             error_phase="stream_header",
             upstream_url=str(provider_info.base_url),
             request_log_id=entry_id,
+            response_redaction="protocol_fields",
         )
         return (
             error_response_for_source(
@@ -2935,6 +2766,7 @@ async def handle_streaming(  # noqa: C901
             endpoint=str(route.target_provider),
             is_streaming=True,
             state=upstream_error_log_state,
+            response_redaction="protocol_fields",
         )
         dump_error(
             persistence,
@@ -2949,6 +2781,7 @@ async def handle_streaming(  # noqa: C901
             error_phase="stream_header",
             upstream_url=str(provider_info.base_url),
             request_log_id=entry_id,
+            response_redaction="protocol_fields",
         )
         return (
             Response(
@@ -3022,16 +2855,6 @@ async def handle_streaming(  # noqa: C901
         and codex_window_id
         else None
     )
-    credential_output_gate = ProviderCredentialOutputGate(
-        provider_info,
-        route.source_provider,
-        global_diagnostic_safety_check=(
-            upstream_error_log_state.diagnostics_are_safe
-            if upstream_error_log_state is not None
-            else None
-        ),
-    )
-
     if trace is not None:
         trace.log(
             "stream_start",
@@ -3069,7 +2892,6 @@ async def handle_streaming(  # noqa: C901
                 target_provider=route.target_provider,
                 target_body=target_body,
                 extra_headers=extra_headers,
-                credential_output_gate=credential_output_gate,
             ),
             content_type="text/event-stream",
         ),

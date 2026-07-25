@@ -1393,6 +1393,37 @@ class TestPersistenceManagerSizes:
         assert "ordinary-proxy-password" in persisted
         pm.close()
 
+    def test_model_response_request_log_uses_protocol_diagnostic_redaction(
+        self, tmp_path
+    ):
+        pm = PersistenceManager(str(tmp_path), token_values={"provider-token"})
+        entry = _make_entry_dict(error_detail="authorization=secret; provider-token")
+        entry["profile"] = {
+            "stream_error": "api_key: secret; provider-token",
+            "content": "provider-token",
+            "token": "nested-secret",
+        }
+
+        pm.insert_log_entries([entry], response_redaction="protocol_fields")
+        pm.update_entry_profile(
+            entry["id"],
+            {
+                "stream_error": "authorization=updated; provider-token",
+                "content": "provider-token",
+            },
+            response_redaction="protocol_fields",
+        )
+
+        result = pm.get_log_entry(entry["id"])
+        assert result is not None
+        assert result["error_detail"] == ("authorization=[REDACTED]; provider-token")
+        assert result["profile"] == {
+            "stream_error": "authorization=[REDACTED]; provider-token",
+            "content": "provider-token",
+            "token": "[REDACTED]",
+        }
+        pm.close()
+
     def test_none_fields_omitted(self, tmp_path):
         pm = PersistenceManager(str(tmp_path))
         pm.insert_log_entries([_make_entry_dict()])

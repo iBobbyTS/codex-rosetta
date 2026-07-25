@@ -309,15 +309,15 @@ even when the contract output reports only source-commit drift.
 
 #### B. Fixture and unit/component testing
 
-Responses→Responses direct transport uses a case-insensitive denylist rather
-than a version-frozen allowlist. Unknown end-to-end headers, including future
-`x-codex-*` capability headers, pass through on that route only. Every routine
-and full Codex version review must enumerate the target Codex request headers
-from both source and a real captured request, then review whether a new header
-belongs in one of these denied classes:
+Responses→Responses direct transport uses a location-based header contract.
+Unknown end-to-end headers, including future `x-codex-*` capability headers,
+pass through on that route only. For Codex 0.145.0, source inspection and wire
+capture identify `Authorization` as the only Gateway credential location. Every
+routine and full Codex version review must enumerate the target Codex request
+headers and body authentication fields from source plus a real capture, then
+review whether the contract changed:
 
-1. client credentials: `Authorization`, `Proxy-Authorization`, `x-api-key`,
-   `api-key`, `x-goog-api-key`, `Cookie`, and `x-admin-token`;
+1. Codex authentication: remove inbound `Authorization` only;
 2. hop-by-hop or request framing: `Host`, `Content-Length`,
    `Transfer-Encoding`, `Connection`, `Keep-Alive`, `TE`, `Trailer`, `Upgrade`,
    and `Proxy-Connection`, plus every comma-separated field name declared by
@@ -347,8 +347,10 @@ captured target-version header set and the resulting denylist decision; a
 passing old fixture or the absence of a new header from Rosetta source is not
 sufficient evidence. Provider configuration must continue to own upstream
 authentication and is overlaid last with case-insensitive replacement, so an
-inbound case variant cannot create a second credential or override the Provider
-key. The Gateway-owned `x-request-id` is excluded from exact attested-wire
+inbound `Authorization` case variant cannot create a second credential or
+override the Provider key. Other credential-shaped end-to-end headers are not
+classified as Codex authentication and remain on the direct route. The
+Gateway-owned `x-request-id` is excluded from exact attested-wire
 forwarding even though it remains valid rebuilt-request correlation metadata;
 injecting a header absent from the captured
 client wire invalidates the transparency contract. The ingress contract test must run the decoder
@@ -358,8 +360,8 @@ server's worker thread.
 
 The following behavior can be automatically verified using the fixed Codex request/SSE fixture:
 
-- The single Admin Responses protocol always uses direct Responses transport for every Provider; Provider selection changes only the default Tool Profile. Unknown non-tool fields, allowed end-to-end request headers, and credential-free response JSON/SSE bytes remain unchanged below the transport safety envelope. Any return containing a configured Provider credential fails closed before semantic conversion or persistence; raw passthrough releases only complete credential-free SSE events and emits a source-compatible terminal error from a valid event boundary on collision. Unchanged attested streaming requests retain their original compressed body, encoding, attestation, and denylist-filtered client headers; any request mutation rebuilds JSON and conservatively omits the original encoding and attestation while preserving other allowed direct headers such as `x-codex-beta-features`. This omission is a Rosetta provenance policy, not proof that the opaque token is body-bound: the public Codex provider context exposes only `thread_id`, and the upstream effect of retaining the token after reconstruction remains unknown. When exact-wire and rebuilt requests differ in status, compaction mode, routing, or retry behavior, compare body bytes and the complete credential-free header set with attestation retention/removal as an early diagnostic. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction must use the previous model with Rosetta's prompt and a seven-day plaintext mapping;
-- the Responses-direct denylist across rebuilt and exact raw-wire modes; unchanged unknown capability headers across Tool Profile enabled/disabled bodies; conversion-route isolation; Provider-owned Authorization with case-insensitive final precedence on every upstream request; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
+- The single Admin Responses protocol always uses direct Responses transport for every Provider. Unknown non-tool fields and allowed end-to-end request headers remain unchanged below the transport safety envelope. Inbound `Authorization` is removed and Provider auth is overlaid last. Current OpenAI Responses, OpenAI Chat, Anthropic Messages, and Google GenAI response contracts have an empty authentication-field inventory, so model response JSON/errors/SSE are not scanned for configured credential strings. More than 4096 ordinary response fragments must complete normally. Unchanged attested streaming requests retain their original compressed body, encoding, attestation, and filtered client headers; any request mutation rebuilds JSON and conservatively omits the original encoding and attestation. Native `context_limit`/`user_requested` compaction evaluates exact raw-wire eligibility before Tool Profile and web-search adaptation, while model-switch compaction uses the previous model with Rosetta's prompt and a seven-day plaintext mapping;
+- the Responses-direct `Authorization` removal across rebuilt and exact raw-wire modes; preservation of other unknown end-to-end headers; unchanged capability headers across Tool Profile enabled/disabled bodies; conversion-route isolation; Provider-owned Authorization with case-insensitive final precedence; `x-codex-window-id` extraction; exact/+1 model, window, and request-ID budgets; visible-ASCII/control rejection and missing request-ID generation; rejection before body/log/trace/persistence/state/upstream use; correlation/state-key separation; private no-window scope and terminal cleanup;
 - Responses request → IR/adapter → Chat/Anthropic/Google upstream request; canonical `computer_call` remains structurally lossless through the non-streaming Responses IR round trip, while Chat/Anthropic/Google targets and streaming bridge conversion reject it explicitly instead of inventing a function call or silently dropping it. `computer_call_output` remains an open contract item after the 20260721-1148 omission audit: until the owner chooses explicit rejection or complete native output/screenshot support, do not claim lossless computer-call history;
 - Responses Namespace children expand to canonical regex-safe `namespace-function` names; streaming and non-streaming return paths restore hyphenated names, unique `namespace_function` and `namespace.function` compatible names, and unique bare children, while ordinary Function conflicts, shared child names, and alias collisions remain flat and fail closed;
 - Responses→Chat converts `agent_message` into model-visible user content, including its inter-agent `encrypted_content` payload, without exposing encrypted content from ordinary message or reasoning items;
@@ -390,21 +392,14 @@ The following behavior can be automatically verified using the fixed Codex reque
   huge peer-declared HTTP chunks, oversized no-newline SSE lines, accumulated
   no-delimiter events, converted/raw/web-search client cancellation, upstream
   4xx/5xx and retry boundaries; verify that below-limit raw Responses SSE is
-  byte-identical when credential-free; verify active Provider credential
-  collisions at every chunk position fail closed without emitting a partial
-  risk event; verify semantically equivalent Unicode, surrogate, and solidus
-  JSON escapes are also blocked while safe raw bytes remain identical; verify
-  duplicate JSON members, every converter-decoded embedded JSON-string field
-  (`function_call.arguments`, `mcp_call.arguments`, `custom_tool_call.input`,
-  `shell_call.arguments`, and `code_interpreter_call.arguments`), and multiple
-  Responses/Chat argument or custom-input delta events cannot be
-  consumed or reconstructed into the active credential after individually safe
-  units are released; verify call/item/index identity changes follow the actual
-  converter consumers, the 1 MiB/4096-fragment/4096-identity bounds fail closed,
-  invalid or unrelated strings are not recursively parsed, and overflow closes
-  the upstream; verify a credential configured only for
-  another Provider remains outside the active return gate while global
-  diagnostics still redact it;
+  byte-identical even when ordinary text equals a configured Provider token;
+  verify direct and converted streams with more than 4096 ordinary deltas reach
+  their normal completed event; verify the 1 MiB/4096-record trace capacity may
+  drop only the deferred diagnostic batch and never closes the upstream or
+  changes client output; verify response logs, trace records, and error dumps
+  retain ordinary configured-token strings while redacting explicitly named
+  authentication/token fields; keep auxiliary-client exact collision and
+  redaction tests unchanged;
 - Inbound request-body default, fixed tiers, Admin persistence/hot reload,
   rollback, unlimited mapping, and a real Codex image-history request above the
   former 50 MB ceiling;

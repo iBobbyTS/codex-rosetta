@@ -137,11 +137,11 @@
       },
       {
         "name": "_stream_event_generator",
-        "complexity": 37
+        "complexity": 34
       },
       {
         "name": "_web_search_stream_event_generator",
-        "complexity": 82
+        "complexity": 79
       }
     ]
   },

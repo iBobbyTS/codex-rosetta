@@ -74,6 +74,25 @@ class TestMetricsCollector:
         health = m.provider_health_snapshot()
         assert health["test-provider"]["status"] == "critical"
 
+    def test_model_error_metrics_use_protocol_text_redaction(self):
+        m = MetricsCollector()
+        m.update_token_values({"provider-token"})
+        m.record_request(
+            model="model",
+            source="openai_responses",
+            target="openai_responses",
+            status_code=500,
+            duration_ms=1.0,
+            is_stream=False,
+            provider_name="provider",
+            error_detail="authorization=secret; provider-token",
+            response_redaction="protocol_fields",
+        )
+
+        assert m.provider_health_snapshot()["provider"]["last_error"] == (
+            "authorization=[REDACTED]; provider-token"
+        )
+
     def test_errors_last_hour_uses_independent_3600_second_window(self):
         with patch("codex_rosetta.observability.metrics.time.monotonic") as clock:
             clock.return_value = 1000.0
