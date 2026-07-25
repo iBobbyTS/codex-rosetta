@@ -32,6 +32,18 @@ AUD-023/AUD-025. Search, Images, web-run, model discovery, and other
 credential-bearing auxiliary clients retain the previous exact protection.
 Historical run reports remain immutable evidence for their earlier baseline.
 
+On 2026-07-25 that auxiliary streaming protection was narrowed internally from
+fragment-counted accumulation to consumer-specific rolling matching. Ordinary
+decoded fields and raw wire bytes retain only the overlap needed to detect an
+exact credential across boundaries. Only unfinished documented embedded-JSON
+arguments retain complete content, under the existing 1 MiB aggregate and
+identity bounds; top-level closure triggers immediate duplicate-preserving JSON
+inspection and buffer release. Safe complete SSE events are released
+immediately, and total fragment count is no longer a capacity condition. The
+current Search and Images production routes remain non-streaming, so this
+follow-up is supported by deterministic transport tests only; no real call or
+deployment occurred.
+
 ### Logic/control issues I can repair directly
 
 | ID | Conclusion | Direct repair boundary |
@@ -485,7 +497,7 @@ real call, deployment, or commit occurred.
 | --- | --- | --- | --- | --- | --- | --- |
 | GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | live runners now share a fail-closed exact-marker gate; deterministic suite excludes real calls | keep the shared gate mandatory for every new runner | Approved live runs remain explicit and out of audit evidence | Project owner | Enforced |
 | GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings and compaction mappings now have scope, TTL and transactional row/byte limits | require quota contract tests for each new durable store | Limits are local/LAN policy values and may need owner tuning | Gateway persistence owner | Enforced |
-| GP-003 | Every credential-bearing auxiliary client must register the credentials actually sent on the wire and block untrusted return collisions; model-generation authentication is enforced only at confirmed protocol locations | Tavily and auxiliary Provider clients retain AUD-014/AUD-015/AUD-016/AUD-017 protection. AUD-028 removes generic model-output scanning, narrows Codex request auth to inbound `Authorization`, and records an empty current response-auth path inventory | keep auxiliary exact protection executable; diff Codex auth locations and upstream response schemas on every compatibility update; add only exact declared response field paths | arbitrary model-content parsing creates false positives, unbounded state, and valid-session interruption; model enforcement must remain location-based | Gateway transport/security owner with compatibility and observability owners | Enforced for auxiliary clients / Risk Accepted for ordinary model reflection under AUD-028 |
+| GP-003 | Every credential-bearing auxiliary client must register the credentials actually sent on the wire and block untrusted return collisions; model-generation authentication is enforced only at confirmed protocol locations | Tavily and auxiliary Provider clients retain AUD-014/AUD-015/AUD-016/AUD-017 protection. Auxiliary ordinary streams use bounded rolling overlap and only unfinished embedded JSON is fully retained; total fragment count is not a safety bound. AUD-028 removes generic model-output scanning, narrows Codex request auth to inbound `Authorization`, and records an empty current response-auth path inventory | keep auxiliary exact protection executable; diff Codex auth locations and upstream response schemas on every compatibility update; add only exact declared response field paths | arbitrary model-content parsing creates false positives, unbounded state, and valid-session interruption; model enforcement must remain location-based | Gateway transport/security owner with compatibility and observability owners | Enforced for auxiliary clients / Risk Accepted for ordinary model reflection under AUD-028 |
 
 ## Candidate Disposition
 

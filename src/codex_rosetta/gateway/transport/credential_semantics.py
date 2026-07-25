@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from codex_rosetta.auto_detect import ProviderType
@@ -14,6 +14,7 @@ from codex_rosetta.observability.redaction import (
     JsonObjectMembers,
     SecretCollisionError,
     SecretRedactor,
+    StreamingSecretDetector,
 )
 
 _RESPONSES_TYPES = {"openai_responses", "open_responses"}
@@ -76,7 +77,73 @@ def _items(value: Any, name: str) -> tuple[Any, ...]:
 class _ArgumentBuffer:
     text: str = ""
     byte_count: int = 0
-    fragment_count: int = 0
+    started: bool = False
+    in_string: bool = False
+    escaped: bool = False
+    stack: list[str] = field(default_factory=list)
+    scalar: bool = False
+    complete: bool = False
+
+    def feed(self, fragment: str) -> bool:
+        """Track whether one top-level JSON value closes in this fragment."""
+        completed_now = False
+        for character in fragment:
+            if self.complete:
+                continue
+            if not self.started:
+                self._start(character)
+                continue
+            if self.scalar:
+                if character.isspace():
+                    self.complete = True
+                    completed_now = True
+                continue
+            if self.in_string:
+                completed_now |= self._feed_string(character)
+                continue
+            completed_now |= self._feed_structure(character)
+        return completed_now
+
+    def _start(self, character: str) -> None:
+        if character.isspace():
+            return
+        self.started = True
+        if character == '"':
+            self.in_string = True
+        elif character in "{[":
+            self.stack.append(character)
+        else:
+            self.scalar = True
+
+    def _feed_string(self, character: str) -> bool:
+        if self.escaped:
+            self.escaped = False
+        elif character == "\\":
+            self.escaped = True
+        elif character == '"':
+            self.in_string = False
+            if not self.stack:
+                self.complete = True
+                return True
+        return False
+
+    def _feed_structure(self, character: str) -> bool:
+        if character == '"':
+            self.in_string = True
+            return False
+        if character in "{[":
+            self.stack.append(character)
+            return False
+        if character not in "}]":
+            return False
+        expected = "{" if character == "}" else "["
+        if not self.stack or self.stack[-1] != expected:
+            return False
+        self.stack.pop()
+        if self.stack:
+            return False
+        self.complete = True
+        return True
 
 
 class ProviderResponseContractError(ValueError):
@@ -84,10 +151,10 @@ class ProviderResponseContractError(ValueError):
 
 
 class ProviderCredentialSemanticGate:
-    """Inspect only provider fields whose consumers decode embedded JSON.
+    """Inspect provider fields using bounded consumer-specific stream state.
 
-    Argument fragments are retained per call with hard live-state bounds. Unknown
-    strings are never parsed as JSON.
+    Ordinary text uses rolling overlap windows. Only documented embedded JSON
+    arguments retain complete values while their top-level value is unfinished.
     """
 
     def __init__(
@@ -96,15 +163,18 @@ class ProviderCredentialSemanticGate:
         target_provider: ProviderType | None,
         *,
         max_argument_bytes: int = 1_048_576,
-        max_argument_fragments: int = 4096,
         max_argument_identities: int = 4096,
+        max_text_windows: int = 4096,
     ) -> None:
         self._redactor = redactor
         self._target_provider = target_provider
         self._max_argument_bytes = max_argument_bytes
-        self._max_argument_fragments = max_argument_fragments
         self._max_argument_identities = max_argument_identities
+        self._max_text_windows = max_text_windows
         self._buffers: dict[tuple[Any, ...], _ArgumentBuffer] = {}
+        self._argument_detectors: dict[tuple[Any, ...], StreamingSecretDetector] = {}
+        self._completed_arguments: set[tuple[Any, ...]] = set()
+        self._text_windows: dict[tuple[Any, ...], StreamingSecretDetector] = {}
         self._responses_item_to_call: dict[str, str] = {}
         self._responses_mcp_item_to_index: dict[str, int] = {}
         self._responses_mcp_index_to_item: dict[int, str] = {}
@@ -114,8 +184,8 @@ class ProviderCredentialSemanticGate:
         self._chat_index_to_call: dict[int, str] = {}
         self._chat_call_to_index: dict[str, int] = {}
         self._chat_call_ids: set[str] = set()
+        self._chat_choice_call_ids: dict[int, set[str]] = {}
         self._live_bytes = 0
-        self._live_fragments = 0
 
     def inspect_document(self, value: Any) -> None:
         """Inspect one complete response using the provider consumer semantics."""
@@ -178,45 +248,97 @@ class ProviderCredentialSemanticGate:
                                 self._inspect_argument(arguments)
 
     def _append(self, key: tuple[Any, ...], fragment: str) -> None:
+        if key in self._completed_arguments:
+            if fragment.strip():
+                self._clear_all()
+                raise ProviderResponseContractError(
+                    "semantic argument data followed a complete JSON value"
+                )
+            return
         encoded_len = len(fragment.encode("utf-8"))
-        buffer = self._buffers.setdefault(key, _ArgumentBuffer())
-        if (
-            self._live_bytes + encoded_len > self._max_argument_bytes
-            or self._live_fragments + 1 > self._max_argument_fragments
-        ):
+        buffer = self._buffers.get(key)
+        if buffer is None:
+            if (
+                len(self._buffers) + len(self._completed_arguments)
+                >= self._max_argument_identities
+            ):
+                self._clear_all()
+                raise ProviderResponseContractError(
+                    "semantic argument identity inspection capacity exceeded"
+                )
+            buffer = _ArgumentBuffer()
+            self._buffers[key] = buffer
+            self._argument_detectors[key] = self._redactor.streaming_wire_detector()
+        if self._live_bytes + encoded_len > self._max_argument_bytes:
             self._clear_all()
             raise ProviderResponseContractError(
-                "semantic fragment inspection capacity exceeded"
+                "semantic argument inspection capacity exceeded"
             )
-        buffer.text += fragment
-        buffer.byte_count += encoded_len
-        buffer.fragment_count += 1
-        self._live_bytes += encoded_len
-        self._live_fragments += 1
-        # JSON arguments are parsed only once a fragment can complete the
-        # schema value; raw token bytes are checked on every append.
-        stripped = buffer.text.strip()
-        if self._redactor.contains_wire_bytes(buffer.text.encode("utf-8")) or (
-            stripped.startswith("{")
-            and stripped.endswith("}")
-            and self._redactor.contains_json_semantic(stripped)
-        ):
+        detector = self._argument_detectors[key]
+        if detector.feed(fragment.encode("utf-8")):
             self._clear_all()
             raise SecretCollisionError
+        buffer.text += fragment
+        buffer.byte_count += encoded_len
+        self._live_bytes += encoded_len
+        if buffer.feed(fragment):
+            try:
+                self._inspect_argument(buffer.text)
+            except SecretCollisionError:
+                self._clear_all()
+                raise
+            self._clear(key)
+            self._completed_arguments.add(key)
 
     def _clear(self, key: tuple[Any, ...]) -> None:
         buffer = self._buffers.pop(key, None)
         if buffer is not None:
             self._live_bytes -= buffer.byte_count
-            self._live_fragments -= buffer.fragment_count
+        argument_detector = self._argument_detectors.pop(key, None)
+        if argument_detector is not None:
+            argument_detector.finish()
+        text_window = self._text_windows.pop(key, None)
+        if text_window is not None:
+            text_window.finish()
 
     def _append_text(self, key: tuple[Any, ...], fragment: Any) -> None:
         if not isinstance(fragment, str) or not fragment:
             return
-        self._append(key, fragment)
+        detector = self._text_windows.get(key)
+        if detector is None:
+            if len(self._text_windows) >= self._max_text_windows:
+                self._clear_all()
+                raise ProviderResponseContractError(
+                    "semantic text-window inspection capacity exceeded"
+                )
+            detector = self._redactor.streaming_value_detector()
+            self._text_windows[key] = detector
+        if detector.feed(fragment.encode("utf-8")):
+            self._clear_all()
+            raise SecretCollisionError
+
+    def _finish_argument(self, key: tuple[Any, ...], *values: Any) -> None:
+        try:
+            for value in values:
+                self._inspect_argument(value)
+            buffer = self._buffers.get(key)
+            if buffer is not None:
+                self._inspect_argument(buffer.text)
+        except SecretCollisionError:
+            self._clear_all()
+            raise
+        self._clear(key)
+        self._completed_arguments.discard(key)
 
     def _clear_all(self) -> None:
+        for detector in self._argument_detectors.values():
+            detector.finish()
+        for detector in self._text_windows.values():
+            detector.finish()
         self._buffers.clear()
+        self._argument_detectors.clear()
+        self._completed_arguments.clear()
+        self._text_windows.clear()
         self._responses_item_to_call.clear()
         self._responses_mcp_item_to_index.clear()
         self._responses_mcp_index_to_item.clear()
@@ -226,11 +348,11 @@ class ProviderCredentialSemanticGate:
         self._chat_index_to_call.clear()
         self._chat_call_to_index.clear()
         self._chat_call_ids.clear()
+        self._chat_choice_call_ids.clear()
         self._live_bytes = 0
-        self._live_fragments = 0
 
     def finish(self) -> None:
-        """Release all bounded identity and fragment state at stream end."""
+        """Release all bounded identity, window, and argument state."""
         self._clear_all()
 
     def _identity_count(self) -> int:
@@ -303,7 +425,7 @@ class ProviderCredentialSemanticGate:
 
     def _clear_responses_mcp(self, identity: tuple[str, int]) -> None:
         item_id, output_index = identity
-        self._clear(self._responses_mcp_key(identity))
+        self._finish_argument(self._responses_mcp_key(identity))
         if self._responses_mcp_item_to_index.get(item_id) == output_index:
             del self._responses_mcp_item_to_index[item_id]
         if self._responses_mcp_index_to_item.get(output_index) == item_id:
@@ -349,7 +471,7 @@ class ProviderCredentialSemanticGate:
     def _clear_responses_call(self, call_id: str | None) -> None:
         if call_id is None:
             return
-        self._clear(self._responses_key(call_id))
+        self._finish_argument(self._responses_key(call_id))
         for item_id, mapped_call_id in tuple(self._responses_item_to_call.items()):
             if mapped_call_id == call_id:
                 del self._responses_item_to_call[item_id]
@@ -579,7 +701,7 @@ class ProviderCredentialSemanticGate:
         if event_type == ResponsesEventType.RESPONSE_COMPLETED:
             self.inspect_document(event)
 
-    def _chat_call_id(self, tool_call: Any) -> str | None:
+    def _chat_call_id(self, tool_call: Any, choice_index: int) -> str:
         call_id = _only(tool_call, "id")
         tool_index = _only(tool_call, "index")
         has_index = (
@@ -592,6 +714,7 @@ class ProviderCredentialSemanticGate:
             if call_id not in self._chat_call_ids:
                 self._reserve_identity()
                 self._chat_call_ids.add(call_id)
+            self._chat_choice_call_ids.setdefault(choice_index, set()).add(call_id)
             if has_index:
                 mapped_call_id = self._chat_index_to_call.get(tool_index)
                 if mapped_call_id is not None and mapped_call_id != call_id:
@@ -611,38 +734,70 @@ class ProviderCredentialSemanticGate:
         if has_index:
             mapped_call_id = self._chat_index_to_call.get(tool_index)
             if mapped_call_id is not None:
+                self._chat_choice_call_ids.setdefault(choice_index, set()).add(
+                    mapped_call_id
+                )
                 return mapped_call_id
         self._clear_all()
         raise ProviderResponseContractError("missing Chat tool-call identity")
 
+    def _clear_chat_choice(self, choice_index: int) -> None:
+        for field_name in ("content", "reasoning_content", "refusal"):
+            self._clear(("chat", field_name, ("choice_index", choice_index)))
+        for call_id in self._chat_choice_call_ids.pop(choice_index, set()):
+            self._finish_argument(("chat", "call_id", call_id))
+            self._chat_call_ids.discard(call_id)
+            tool_index = self._chat_call_to_index.pop(call_id, None)
+            if (
+                tool_index is not None
+                and self._chat_index_to_call.get(tool_index) == call_id
+            ):
+                del self._chat_index_to_call[tool_index]
+
+    @staticmethod
+    def _chat_choice_index(choice: Any) -> int:
+        value = _only(choice, "index")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        return 0
+
+    def _inspect_chat_delta(self, delta: Any, choice_index: int) -> None:
+        for field_name in ("content", "reasoning_content", "refusal"):
+            values = _values(delta, field_name)
+            if values and isinstance(values[-1], str):
+                self._append_text(
+                    ("chat", field_name, ("choice_index", choice_index)),
+                    values[-1],
+                )
+        for tool_call in _items(delta, "tool_calls"):
+            call_id = self._chat_call_id(tool_call, choice_index)
+            for function in _values(tool_call, "function"):
+                arguments = _values(function, "arguments")
+                if arguments and isinstance(arguments[-1], str):
+                    self._append(("chat", "call_id", call_id), arguments[-1])
+
     def _inspect_chat_event(self, event: Any) -> None:
         for choice in _items(event, "choices"):
-            choice_index = _only(choice, "index")
+            choice_index = self._chat_choice_index(choice)
             for delta in _values(choice, "delta"):
-                for field_name in ("content", "reasoning_content", "refusal"):
-                    values = _values(delta, field_name)
-                    if values and isinstance(values[-1], str):
-                        self._append_text(
-                            (
-                                "chat",
-                                field_name,
-                                ("choice_index", choice_index or 0),
-                            ),
-                            values[-1],
-                        )
-                for tool_call in _items(delta, "tool_calls"):
-                    call_id = self._chat_call_id(tool_call)
-                    for function in _values(tool_call, "function"):
-                        arguments = _values(function, "arguments")
-                        if (
-                            arguments
-                            and isinstance(arguments[-1], str)
-                            and call_id is not None
-                        ):
-                            self._append(("chat", "call_id", call_id), arguments[-1])
+                self._inspect_chat_delta(delta, choice_index)
+            if _only(choice, "finish_reason") is not None:
+                self._clear_chat_choice(choice_index)
 
     def _inspect_anthropic_event(self, event: Any) -> None:
-        if _only(event, "type") != "content_block_delta":
+        event_type = _only(event, "type")
+        block_index = _only(event, "index") or 0
+        if event_type == "content_block_stop":
+            self._finish_argument(
+                ("anthropic", "partial_json", ("block_index", block_index))
+            )
+            for field_name in ("text", "thinking", "signature"):
+                self._clear(("anthropic", field_name, ("block_index", block_index)))
+            return
+        if event_type == "message_stop":
+            self._clear_all()
+            return
+        if event_type != "content_block_delta":
             return
         delta = _only(event, "delta")
         delta_type = _only(delta, "type")
@@ -660,9 +815,12 @@ class ProviderCredentialSemanticGate:
             key = (
                 "anthropic",
                 field_name,
-                ("block_index", _only(event, "index") or 0),
+                ("block_index", block_index),
             )
-            self._append_text(key, values[-1])
+            if delta_type == "input_json_delta":
+                self._append(key, values[-1])
+            else:
+                self._append_text(key, values[-1])
 
     def _inspect_google_event(self, event: Any) -> None:
         for candidate in _items(event, "candidates"):
@@ -682,3 +840,15 @@ class ProviderCredentialSemanticGate:
                     ),
                     values[-1],
                 )
+            if _only(candidate, "finishReason") is not None:
+                for key in tuple(self._text_windows):
+                    if (
+                        len(key) >= 3
+                        and key[0] == "google"
+                        and (
+                            "choice_index",
+                            choice_index,
+                        )
+                        in key
+                    ):
+                        self._clear(key)

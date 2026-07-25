@@ -274,6 +274,13 @@ Responses 直通路由，Rosetta 会大小写不敏感地删除该入站头，�
 文本。Search、Images、web-run、模型发现及其他携带 credential 的辅助客户端继续保留
 现有 exact credential-return protection。
 
+这些辅助客户端当前在生产路由中使用非流式 passthrough。其内部流式 guard 对普通解码
+字段和原始 SSE wire bytes 只按消费者身份保留有限重叠尾部。工具参数 JSON 仅在顶层值
+尚未闭合时完整暂存；闭合后立即执行保留重复成员的 JSON 检查并释放缓存。这里没有总
+fragment 数量上限：只有未完成的结构化参数继续受 1 MiB 聚合上限和身份上限约束，滚动
+文本窗口另有身份上限。每个完整且安全的 SSE event 会立即释放。这些控制不用于模型生成
+路由。
+
 ## 诊断数据保留
 
 错误诊断可能包含 prompt、源码和工具 payload。Request、converted body、配置与辅助
