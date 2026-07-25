@@ -330,37 +330,61 @@ or ordinary/body logs. Same-protocol Responses streaming remains a
 byte-preserving passthrough; it enforces the wire-size limits above without
 parsing provider event JSON.
 
+## Model authentication boundary
+
+Codex 0.145.0 sends the Gateway credential only in the HTTP `Authorization`
+request header. On direct Responses routes, Rosetta removes that inbound header
+case-insensitively and then overlays the selected Provider authentication last.
+Other unknown end-to-end headers pass through on direct routes unless they are
+hop-by-hop, framing, or client network-identity fields. Converted routes retain
+their explicit minimal header set.
+
+The supported OpenAI Responses, OpenAI Chat, Anthropic Messages, and Google
+GenAI response protocols currently define no API-authentication fields. Rosetta
+also does not forward upstream HTTP response headers. Model response JSON,
+errors, and SSE bytes are therefore not scanned for configured credential
+strings and remain unchanged. If a future protocol declares an authentication
+field in a response body, that exact field path must be registered and tested;
+ordinary model text must not be scanned. Search, Images, web-run, model
+discovery, and other credential-bearing auxiliary clients retain their exact
+credential-return protection.
+
 ## Diagnostic data retention
 
-Error diagnostics may contain prompts, source code, and tool payloads. Rosetta
-redacts configured Gateway/provider API tokens, Bearer/Authorization tokens,
-explicit token/API-key fields, and values that match a configured API token.
-It deliberately preserves all other request, converted-body, response, prompt,
-password, secret, client-secret, proxy-password, and personal data. Restrict
+Error diagnostics may contain prompts, source code, and tool payloads. Request,
+converted-body, configuration, and auxiliary-client diagnostics redact
+configured Gateway/provider API tokens, Bearer/Authorization tokens, explicit
+token/API-key fields, and exact configured-token values. Model-response
+diagnostics redact only explicit authentication/token fields; ordinary response
+strings, including strings equal to a configured token, are retained. Restrict
 access to the data directory accordingly.
 
-Live upstream-error log lines use the same current app/config token set even
-when request-body logging is disabled. Error text is token-redacted first,
-control characters and line separators are escaped onto one line, and the
-final value is capped at 4,096 characters. This logging boundary preserves
-prompts, personal data, ordinary `password`, `secret`, and `client_secret`
-values; it is not a general-purpose privacy scrubber.
+Live upstream-error log lines escape control characters and line separators
+onto one line and cap the final value at 4,096 characters. For model responses,
+parsed JSON redacts only explicit authentication/token fields, while non-JSON
+text redacts explicit assignments such as `Authorization: ...` or
+`api_key=...`; ordinary configured-token strings remain. Auxiliary-client
+errors continue to use exact configured-token redaction. This is not a
+general-purpose privacy scrubber.
 
 Request/response body logging is a separate opt-in controlled by
 `debug.log_bodies` or `CODEX_ROSETTA_LOG_BODIES`. It uses the dedicated
 `codex-rosetta-gateway.body` logger at DEBUG: enabling it does not enable other
 Gateway DEBUG noise. Each app keeps its own live body-log policy and token set,
-including after Admin config reloads. Original, intermediate, converted, and
-upstream bodies are recursively token-redacted before JSON serialization, then
-escaped onto one line and capped at 20,000 characters. Serialization failures
-emit only a constant placeholder; they never fall back to the raw object or
-exception text.
+including after Admin config reloads. Original, intermediate, and converted
+request bodies use exact configured-token redaction. Upstream model response
+bodies redact only explicit authentication/token fields. Records are then
+JSON-serialized, escaped onto one line, and capped at 20,000 characters.
+Serialization failures emit only a constant placeholder; they never fall back
+to the raw object or exception text.
 
 Body logs preserve prompts, source code, personal data, and ordinary
 `password`, `secret`, `client_secret`, and proxy-password values. Treat them as
 sensitive diagnostics and restrict console/file log access. Configured exact
-Gateway/provider tokens, Bearer/Authorization values, explicit token/API-key
-fields, and those fields inside JSON-encoded function arguments are redacted.
+Gateway/provider tokens remain visible in ordinary model response strings,
+while explicit response authentication/token fields are redacted. Request
+bodies retain the stronger exact-value, Bearer/Authorization, and explicit-field
+redaction policy.
 
 When `server.stream_trace.enabled` is enabled, the stream trace writes an
 `original_request` record before compaction, Tool Profile filtering, or protocol
@@ -368,7 +392,10 @@ conversion. The record is recursively token-redacted but is intentionally not
 limited by `stream_trace.max_string_chars`. Disable stream tracing after the
 investigation and restrict the trace file because prompts, source code, and
 personal data remain present. It captures the request body received by the
-proxy handler, not authentication headers.
+proxy handler, not authentication headers. Deferred model-response trace
+records use protocol-field-only redaction. If the bounded deferred trace
+capacity is exceeded, the response trace batch is dropped without interrupting
+or changing the model stream.
 
 Request-log success and error caps are validated during both startup and Admin
 hot reload. `server.request_log.success_max`, `error_max`, legacy

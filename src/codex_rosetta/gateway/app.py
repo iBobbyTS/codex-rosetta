@@ -128,7 +128,7 @@ def _record_request_log_entry(
         )
         if entry_id_override:
             entry = _dc_replace(entry, id=entry_id_override)
-        request_log.add(entry)
+        request_log.add(entry, response_redaction="protocol_fields")
         return entry.id
     except Exception as exc:
         logger.warning("Failed to record request log entry: %s", exc)
@@ -174,6 +174,7 @@ def _record_telemetry(
                 is_stream=is_stream,
                 provider_name=provider_name,
                 error_detail=error_detail,
+                response_redaction="protocol_fields",
             )
         except Exception as exc:
             logger.warning("Failed to record request metrics: %s", exc)
@@ -219,6 +220,7 @@ def _finalize_stream_telemetry(
                 is_stream=True,
                 provider_name=provider_name,
                 error_detail=error_detail,
+                response_redaction="protocol_fields",
             )
         except Exception as exc:
             logger.warning("Failed to finalize stream metrics: %s", exc)
@@ -237,6 +239,7 @@ def _finalize_stream_telemetry(
                 duration_ms=duration_ms,
                 error_detail=error_detail,
                 profile_update=profile_update,
+                response_redaction="protocol_fields",
             )
         except Exception as exc:
             logger.warning("Failed to finalize stream request log: %s", exc)
@@ -815,6 +818,7 @@ async def _proxy_handler(
             provider_name=route.provider_name,
             status_code=500,
             error_phase="conversion",
+            response_redaction="protocol_fields",
         )
         resp = error_response_for_source(
             source_provider, 500, f"Internal server error: {exc}"

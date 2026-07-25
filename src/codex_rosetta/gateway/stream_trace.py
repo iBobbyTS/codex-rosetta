@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.redaction import SecretRedactor
@@ -173,7 +173,6 @@ class StreamTraceLogger:
         self._disabled = False
         self._defer_response = False
         self._pending_response_lines: list[str] = []
-        self._pending_response_values: list[Any] = []
         self._pending_response_bytes = 0
         self._pending_response_dropped = False
 
@@ -183,7 +182,6 @@ class StreamTraceLogger:
             raise RuntimeError("Stream response diagnostics are already deferred")
         self._defer_response = True
         self._pending_response_lines.clear()
-        self._pending_response_values.clear()
         self._pending_response_bytes = 0
         self._pending_response_dropped = False
 
@@ -191,35 +189,16 @@ class StreamTraceLogger:
         self,
         *,
         safe: bool,
-        safety_check: Callable[[tuple[Any, ...]], bool] | None = None,
     ) -> None:
-        """Release one safe response batch or discard all unproven records."""
+        """Release a completed response batch or discard incomplete diagnostics."""
         if not self._defer_response:
             return
         lines = self._pending_response_lines
-        pending_values = tuple(self._pending_response_values)
-        should_release = False
-        try:
-            should_release = safe and not self._pending_response_dropped
-            if should_release:
-                should_release = not self._redactor.contains_ordered_fragments(
-                    pending_values
-                )
-            if should_release and safety_check is not None:
-                try:
-                    should_release = safety_check(pending_values)
-                except Exception:
-                    should_release = False
-                    logger.warning(
-                        "Dropping deferred stream response diagnostics after "
-                        "safety-check failure"
-                    )
-        finally:
-            self._defer_response = False
-            self._pending_response_lines = []
-            self._pending_response_values = []
-            self._pending_response_bytes = 0
-            self._pending_response_dropped = False
+        should_release = safe and not self._pending_response_dropped
+        self._defer_response = False
+        self._pending_response_lines = []
+        self._pending_response_bytes = 0
+        self._pending_response_dropped = False
         if should_release and lines:
             self._append_lines(lines)
 
@@ -229,13 +208,19 @@ class StreamTraceLogger:
         data: Any,
         *,
         chunk_index: int | None = None,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Append one trace record to the JSONL file."""
         if self._disabled:
             return
 
+        use_protocol_fields = (
+            self._defer_response or response_redaction == "protocol_fields"
+        )
         redacted_data = _truncate(
-            self._redactor.redact(data),
+            self._redactor.redact_protocol_diagnostic(data)
+            if use_protocol_fields
+            else self._redactor.redact(data),
             self.max_string_chars,
         )
         record = {
@@ -261,7 +246,6 @@ class StreamTraceLogger:
                 > MAX_PENDING_RESPONSE_BYTES
             ):
                 self._pending_response_lines.clear()
-                self._pending_response_values.clear()
                 self._pending_response_bytes = 0
                 self._pending_response_dropped = True
                 logger.warning(
@@ -269,7 +253,6 @@ class StreamTraceLogger:
                 )
                 return
             self._pending_response_lines.append(line)
-            self._pending_response_values.append(redacted_data)
             self._pending_response_bytes += line_bytes
             return
         self._append_lines([line])

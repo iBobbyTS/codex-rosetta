@@ -13,7 +13,9 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from .redaction import SecretRedactor
 
 if TYPE_CHECKING:
     from codex_rosetta.observability.persistence import PersistenceManager
@@ -109,15 +111,33 @@ class RequestLog:
         max_entries: int = 500,
     ) -> None:
         self._persistence = persistence
+        self._redactor = SecretRedactor()
         # Fallback in-memory storage (only used when persistence is None)
         self._entries: deque[RequestLogEntry] = deque(maxlen=max_entries)
         self._pending: list[RequestLogEntry] = []
 
-    def add(self, entry: RequestLogEntry) -> None:
+    def add(
+        self,
+        entry: RequestLogEntry,
+        *,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
+    ) -> None:
         """Record a proxy request."""
         if self._persistence is not None:
-            self._persistence.insert_log_entries([entry.to_dict()])
+            self._persistence.insert_log_entries(
+                [entry.to_dict()], response_redaction=response_redaction
+            )
         else:
+            redact = (
+                self._redactor.redact_protocol_diagnostic
+                if response_redaction == "protocol_fields"
+                else self._redactor.redact
+            )
+            entry = replace(
+                entry,
+                error_detail=redact(entry.error_detail),
+                profile=redact(entry.profile),
+            )
             self._entries.append(entry)
             self._pending.append(entry)
 
@@ -215,7 +235,13 @@ class RequestLog:
         self._pending.clear()
         return entries
 
-    def update_profile(self, entry_id: str, profile_update: dict[str, Any]) -> None:
+    def update_profile(
+        self,
+        entry_id: str,
+        profile_update: dict[str, Any],
+        *,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
+    ) -> None:
         """Merge additional profile data into an existing entry.
 
         Used by the streaming path to write back stream metrics
@@ -227,8 +253,18 @@ class RequestLog:
                 ``{"stream_ttfb_ms": 120.5, "stream_complete": True}``).
         """
         if self._persistence is not None:
-            self._persistence.update_entry_profile(entry_id, profile_update)
+            self._persistence.update_entry_profile(
+                entry_id,
+                profile_update,
+                response_redaction=response_redaction,
+            )
         else:
+            redact = (
+                self._redactor.redact_protocol_diagnostic
+                if response_redaction == "protocol_fields"
+                else self._redactor.redact
+            )
+            profile_update = redact(profile_update)
             # In-memory: find and rebuild the frozen entry
             for i, entry in enumerate(self._entries):
                 if entry.id == entry_id:
@@ -244,6 +280,7 @@ class RequestLog:
         duration_ms: float,
         error_detail: str | None,
         profile_update: dict[str, Any] | None = None,
+        response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Finalize the outcome of an existing streaming request entry."""
         if self._persistence is not None:
@@ -253,18 +290,24 @@ class RequestLog:
                 duration_ms=duration_ms,
                 error_detail=error_detail,
                 profile_update=profile_update,
+                response_redaction=response_redaction,
             )
             return
 
         def _updated(entry: RequestLogEntry) -> RequestLogEntry:
+            redact = (
+                self._redactor.redact_protocol_diagnostic
+                if response_redaction == "protocol_fields"
+                else self._redactor.redact
+            )
             profile = dict(entry.profile or {})
             if profile_update:
-                profile.update(profile_update)
+                profile.update(redact(profile_update))
             return replace(
                 entry,
                 status_code=status_code,
                 duration_ms=round(duration_ms, 2),
-                error_detail=error_detail,
+                error_detail=redact(error_detail),
                 profile=profile or None,
             )
 

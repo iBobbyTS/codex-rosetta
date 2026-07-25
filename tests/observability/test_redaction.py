@@ -307,3 +307,21 @@ def test_contains_ordered_fragments_fails_closed_when_work_budget_is_exceeded(
     monkeypatch.setattr(redaction, "MAX_ORDERED_DIAGNOSTIC_WORK", 1)
 
     assert SecretRedactor({"credential"}).contains_ordered_fragments(("ordinary",))
+
+
+def test_protocol_diagnostic_preserves_plain_token_and_redacts_known_locations() -> (
+    None
+):
+    redactor = SecretRedactor({"provider-token"})
+
+    assert redactor.redact_protocol_diagnostic(
+        {
+            "content": "provider-token",
+            "authorization": "Bearer provider-token",
+            "stream_error": "authorization=provider-token; provider-token",
+        }
+    ) == {
+        "content": "provider-token",
+        "authorization": "[REDACTED]",
+        "stream_error": "authorization=[REDACTED]; provider-token",
+    }

@@ -108,7 +108,7 @@ def test_build_upstream_extra_headers_preserves_user_agent_and_responses_version
     }
 
 
-def test_build_direct_responses_headers_uses_denylist_for_rebuilt_json() -> None:
+def test_build_direct_responses_headers_removes_only_codex_authorization() -> None:
     headers = build_direct_responses_headers(
         {
             "Accept": "text/event-stream",
@@ -152,6 +152,12 @@ def test_build_direct_responses_headers_uses_denylist_for_rebuilt_json() -> None
 
     assert headers == {
         "Accept": "text/event-stream",
+        "Proxy-Authorization": "Basic private",
+        "x-api-key": "private",
+        "api-key": "private",
+        "x-goog-api-key": "private",
+        "Cookie": "session=private",
+        "x-admin-token": "private",
         "Originator": "Codex CLI",
         "Session-Id": "session-1",
         "Thread-Id": "thread-1",
@@ -164,7 +170,7 @@ def test_build_direct_responses_headers_uses_denylist_for_rebuilt_json() -> None
     }
 
 
-def test_build_codex_wire_headers_uses_same_denylist_and_preserves_wire_contract() -> (
+def test_build_codex_wire_headers_removes_authorization_and_preserves_wire_contract() -> (
     None
 ):
     headers = build_codex_wire_headers(
@@ -193,6 +199,7 @@ def test_build_codex_wire_headers_uses_same_denylist_and_preserves_wire_contract
         "Accept": "text/event-stream",
         "Content-Encoding": "zstd",
         "Content-Type": "application/json",
+        "cookie": "session=private",
         "Originator": "Codex Desktop",
         "Session-Id": "session-1",
         "Thread-Id": "thread-1",

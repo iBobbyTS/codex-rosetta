@@ -1,7 +1,7 @@
 # Persistent Audit Findings and Debt
 
-Last updated: 2026-07-22
-Repository head: working tree after `0f26285`; AUD-025 independently closed at deterministic evidence depth
+Last updated: 2026-07-25
+Repository head: current working tree; model credential-reflection policy narrowed by owner decision
 Profile: `docs/audit-profile.md` (Approved)
 
 ## Conclusion ownership
@@ -14,13 +14,23 @@ re-audit `docs/audit/runs/20260721-2035/` closed its native Responses
 counterexamples at `51f3b2d`. The supplementary omission audit
 `docs/audit/runs/20260721-2137/` reopened the same finding because Chat,
 Anthropic, and Google stream identities could still be collapsed by the
-cross-format Responses bridge after the gate. The current repair extends the
+cross-format Responses bridge after the gate. The 2026-07-22 repair extended the
 final source-consumer boundary to non-streaming documents, defers response
 diagnostics until the stream is proven safe, and sanitizes unsafe terminal
 exceptions before internal or outer telemetry can persist them. An independent
 delta review reproduced the original counterexamples as blocked and verified
 active-provider and inactive-provider/global diagnostic cases across memory and
 SQLite sinks. No real provider/API call or deployment was authorized.
+
+On 2026-07-25 the owner explicitly replaced that broad model-output invariant.
+For model-generation routes, Codex authentication is recognized only at the
+inbound HTTP `Authorization` header, current upstream response-auth field paths
+are empty, and ordinary response/error/SSE content is no longer scanned for
+configured credentials. This accepts arbitrary model-content reflection risk
+and supersedes the model-path closure claims of AUD-015/AUD-017/AUD-022/
+AUD-023/AUD-025. Search, Images, web-run, model discovery, and other
+credential-bearing auxiliary clients retain the previous exact protection.
+Historical run reports remain immutable evidence for their earlier baseline.
 
 ### Logic/control issues I can repair directly
 
@@ -35,14 +45,14 @@ SQLite sinks. No real provider/API call or deployment was authorized.
 | AUD-010 | SQLite index validation omitted uniqueness/origin/partial attributes | Validate the complete required index shape before startup. |
 | AUD-012 | Redirect policy was not enforced at every HTTP boundary | Deny provider redirects by default, isolate explicit provider opt-in, and force non-provider auxiliary requests to deny redirects. |
 | AUD-014 | Tavily responses or exceptions could reflect the configured API key | Remove the configured key from success, error, and transport-exception data before model/client/diagnostic exposure. |
-| AUD-015 | Provider and web-run sidecar return paths can reflect configured credentials | Enforce configured-token redaction at every credential-bearing outbound return boundary while preserving non-secret response/error semantics. |
-| AUD-016 | Rotated provider wire keys are absent from the exact-value redaction inventory | Parse provider credentials once and register every actual trimmed wire key, plus the raw configured value where useful, for all runtime redactors. |
+| AUD-015 | Provider and web-run sidecar return paths can reflect configured credentials | Preserve exact configured-token protection for credential-bearing auxiliary clients; model-generation content is superseded by the accepted protocol-location policy in AUD-028. |
+| AUD-016 | Rotated provider wire keys are absent from the exact-value redaction inventory | Parse provider credentials once and register every actual trimmed wire key, plus the raw configured value where useful, for request, auxiliary, and other exact-mode runtime redactors. |
 | AUD-018 | Admin model discovery trusts syntactically valid upstream JSON without validating its schema | Validate the root object, collection fields, members, and model identifiers before normalization; return a stable non-sensitive Admin error for every mismatch. |
 | AUD-019 | Closed at current HEAD: the shared embedded-JSON inventory, whitespace handling, and Chat identity contract cover the registered consumers | Reopen on a new converter second-parse consumer, JSON parser boundary, or Chat identity change. |
 | AUD-021 | Closed at current HEAD: canonical `computer_call` round-trips and `computer_call_output` is explicitly rejected under the recorded scope | Reopen only if native computer-output or broader computer-control support is authorized. |
-| AUD-022 | Responses stream argument semantic gate can skip a completed JSON value with leading whitespace | Normalize JSON whitespace before semantic inspection and add raw/parsed SSE regressions; no business decision is required. |
-| AUD-023 | Chat stream tool identity uses arrival order instead of the wire `index` | Use a stable index-to-call mapping and fail closed on conflicts; no business decision is required. |
-| AUD-025 | **Closed at current working tree:** final source-consumer checking covers converted documents and streams; response diagnostics are held until safe completion plus active-provider and global configured-token aggregation, and unsafe terminal exception details are replaced before every telemetry sink | Reopen on a provider/source consumer, converter, diagnostic sink, buffer/controller ordering, lifecycle, or credential-gate change. |
+| AUD-022 | **Superseded for model routes:** the argument semantic gate is no longer applied to model output; auxiliary semantic parsing remains covered by its transport tests | Reopen only if an auxiliary protocol adopts streamed argument consumers. |
+| AUD-023 | **Superseded for model routes:** Chat model output no longer enters credential identity tracking | Reopen only if the model response-auth field inventory becomes non-empty and requires identity-aware exact paths. |
+| AUD-025 | **Superseded by AUD-028:** the final source-consumer credential gate was intentionally removed from model documents and streams | Historical closure evidence remains valid for the prior baseline; current model reflection risk is accepted. |
 | AUD-026 | Responses completion handling stopped scanning after the first tool-loop item | Scan and reject every completed output item before computing the finish event. |
 | AUD-027 | Non-streaming Responses tool-call output retained `finish_reason=stop` | Infer `tool_calls` from normalized IR tool-call content, matching the existing streaming contract. |
 
@@ -54,9 +64,10 @@ SQLite sinks. No real provider/API call or deployment was authorized.
 | AUD-004 | Whether to adopt stronger artifact-integrity controls such as digest pinning, SBOM, provenance, and signing before a public release or stronger security claim | Manual release and the current pre-release risk acceptance are explicit product policy; stronger guarantees require an owner decision. |
 | AUD-009 | **Recorded:** only exact backend-supported `api_type` values count as present; every other value is inferred from exact preset URL support order, custom defaults to Responses, and no write-back occurs | Protocol selection changes routing behavior, so its fallback order requires owner authority. |
 | AUD-011 | **Recorded:** arbitrary HTTP(S) custom URLs may receive upstream API keys within local/LAN scope; redirects default off but may be explicitly enabled per provider | The egress/key-disclosure boundary and opt-in redirect expansion require owner authority; policy enforcement remains a repairable transport control. |
-| AUD-017 | **Recorded:** configured credentials have no minimum-length requirement; Rosetta still requires a configured Gateway API key and has no unauthenticated mode; ambiguous return collisions must fail closed rather than leak credentials or silently emit corrupted SSE/JSON | Identical bytes cannot always be classified as reflection versus legitimate content, so the owner selected controlled failure while retaining both the no-leak and protocol-integrity requirements. |
-| AUD-020 | **Recorded:** every untrusted return boundary protects only credentials configured for the active outbound provider or auxiliary client; global diagnostics continue to use `GatewayConfig.token_values` | The owner selected the narrower local/LAN product boundary and explicitly accepted cross-provider/client configured-secret reflection outside the active return gate. |
+| AUD-017 | **Superseded for model routes / retained for auxiliary clients:** configured credentials have no minimum-length requirement and Rosetta still requires a Gateway API key; auxiliary return collisions fail closed, while ordinary model content follows AUD-028 and passes unchanged | Identical model bytes cannot be classified as reflection versus legitimate content without arbitrary scanning, so the owner selected protocol-location enforcement for model traffic. |
+| AUD-020 | **Recorded:** auxiliary return boundaries protect only credentials configured for the active outbound client; request/auxiliary exact diagnostics use `GatewayConfig.token_values`, while model response diagnostics follow AUD-028 | The owner selected the narrower local/LAN product boundary and later separated model content from auxiliary return protection. |
 | AUD-024 | **Recorded:** explicitly reject `computer_call_output` with a controlled unsupported-item error; do not expand generic computer-control support | Full support expands the computer-control protocol surface; explicit rejection keeps the current Responses-only, non-streaming scope. |
+| AUD-028 | **Recorded / Risk Accepted:** ordinary model JSON, errors, and SSE may reflect configured Provider credentials because current protocol contracts define no response authentication fields and arbitrary content scanning is out of scope | Distinguishing legitimate model text from reflection requires inspecting arbitrary content and caused valid sessions to terminate at the fragment bound; the owner selected protocol-location enforcement instead. |
 
 The remaining `No Action`, deterministic-only, and excluded-runtime statements
 are evidence status or explicit scope limits, not additional remediation
@@ -67,16 +78,17 @@ claims.
 
 | ID | Severity | Decision class | Status | Root cause | Affected scenarios/areas | Owner/decision | Due/revisit trigger |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| AUD-028 | Must Fix | Decision Recorded | Risk Accepted | Broad model-output credential scanning conflated arbitrary content with authentication data and coupled valid stream length to `max_argument_fragments`; the owner narrowed enforcement to confirmed request/response protocol locations | PROVIDER-01/STREAM-01/SCN-03/SCN-04; direct and converted model responses and response diagnostics | Project owner decision recorded 2026-07-25 | Reopen if Codex changes its authentication location, an upstream response protocol declares auth fields, or deployment/threat-model scope changes |
 | AUD-019 | Must Fix | Agent-Fixable | Closed | Shared Responses consumer inventory now normalizes completed JSON whitespace and resolves Chat tool identities by explicit wire index | PROVIDER-01/TOOL-01/SCN-03/SCN-04/SCN-05/CTRL-03 | Gateway transport/security owner | Reopen on a new embedded-JSON consumer, stream identity, or parser boundary |
 | AUD-021 | Must Fix | Decision Recorded | Closed | Canonical `computer_call` remains supported for Responses non-streaming; `computer_call_output` is now rejected explicitly under the recorded scope decision | TOOL-01/SCN-03/SCN-05/IF-05 | Project owner decision recorded: explicit rejection; no generic computer-control expansion | Reopen only if complete computer-output support is authorized |
-| AUD-022 | Must Fix | Agent-Fixable | Closed | The bounded argument gate strips both leading and trailing JSON whitespace before semantic credential inspection | PROVIDER-01/SCN-03/SCN-04/CTRL-03; raw and parsed SSE | Gateway transport/security owner | Reopen if embedded JSON inventory, parser, or stream framing changes |
-| AUD-023 | Must Fix | Agent-Fixable | Closed | Chat tool fragments use bounded index-to-call mappings, detect remaps/conflicts, and fail closed on missing identity | PROVIDER-01/SCN-03/SCN-04/CTRL-03; Chat SSE | Gateway transport/security owner | Reopen on Chat wire-schema, identity, or state-bound changes |
+| AUD-022 | Must Fix | Agent-Fixable | Superseded | The repaired argument gate remains historical/auxiliary code but is no longer a model-response boundary | Historical model gate and auxiliary semantic parser | Superseded by owner decision AUD-028 | Reopen only for an auxiliary streamed-argument consumer |
+| AUD-023 | Must Fix | Agent-Fixable | Superseded | The repaired Chat identity map remains historical evidence but model output no longer enters credential identity tracking | Historical Chat model gate | Superseded by owner decision AUD-028 | Reopen if an exact protocol auth field requires Chat identity tracking |
 | AUD-024 | Must Fix | Decision Recorded | Closed | `computer_call_output` is rejected with a stable `NotImplementedError` before unknown-item handling can drop it | TOOL-01/SCN-03/SCN-05/IF-05; computer-use history | Project owner decision recorded: explicit rejection; Responses-only non-streaming scope retained | Reopen if native result support is authorized |
-| AUD-025 | Must Fix | Agent-Fixable | Closed | Converted returns retain the target-provider gate, add a final source-consumer gate for documents and streams, defer response trace records until safe completion, and sanitize unsafe terminal exceptions before trace, RequestLog, Metrics, or SQLite persistence | PROVIDER-01/STREAM-01/SCN-03/SCN-04/CTRL-03; converted Chat/Anthropic/Google returns and diagnostics | Gateway transport/security owner with converter and observability owners; independently verified | Reopen on provider/source consumer, converter, diagnostics, buffer/controller ordering, lifecycle, outer instrumentation, or credential-gate change |
+| AUD-025 | Must Fix | Agent-Fixable | Superseded | Its final source-consumer gate was intentionally removed from model paths after it interrupted valid long streams; deferred trace capacity remains diagnostic-only | Historical converted model returns and diagnostics | Superseded by owner decision AUD-028 | Historical closure remains immutable; current policy is tracked by AUD-028 |
 | AUD-026 | Must Fix | Agent-Fixable | Closed | Responses completion events scan all output items and reject unsupported `computer_call` even when a prior function/tool item selected `tool_calls` | TOOL-01/SCN-03/SCN-05/IF-05; Responses stream dispatch | Gateway converter owner | Reopen if unsupported-item policy or completion dispatch changes |
 | AUD-027 | Must Fix | Agent-Fixable | Closed | Non-streaming Responses infers `tool_calls` from normalized IR tool-call content when status alone would map to `stop` | PROVIDER-01/TOOL-01/SCN-03/SCN-05; non-stream pipeline | Gateway converter owner | Reopen if finish-reason precedence or tool-loop mapping changes |
-| AUD-020 | Must Fix | Decision Recorded | Closed | Active-provider/client credential inventory is the authoritative return-gate domain; global configured-token inventory remains diagnostic-only | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; provider and auxiliary return-domain ownership | Project owner decision recorded in profile | Reopen if deployment boundary or credential-domain ownership changes |
-| AUD-017 | Must Fix | Agent-Fixable | Closed | Credential-bearing return boundaries now preserve credential-free values byte-for-byte and fail closed on exact collisions; raw passthrough releases only complete safe SSE events and terminates from a valid event boundary | PROVIDER-01/SIDE-01/SCN-03/SCN-04/CTRL-03; provider, sidecar, search, SSE, and JSON return boundaries | Owner decision recorded; Gateway transport/security owner | Reopen if credential syntax, return clients, parsing, or stream framing changes |
+| AUD-020 | Must Fix | Decision Recorded | Closed | Active auxiliary-client credential inventory remains authoritative for auxiliary return gates; model content uses the separate protocol-location decision in AUD-028 | SIDE-01/SCN-03/CTRL-03; auxiliary return-domain ownership | Project owner decision recorded | Reopen if auxiliary credential-domain ownership changes |
+| AUD-017 | Must Fix | Decision Recorded | Superseded for model paths | Auxiliary credential-bearing returns still preserve non-colliding values and fail closed on exact collisions; model output instead follows AUD-028 | SIDE-01 plus historical model return boundaries | Owner decision AUD-028; Gateway auxiliary transport owner | Reopen if auxiliary credential syntax/parsing changes or the model risk is reconsidered |
 | AUD-018 | Should Plan | Agent-Fixable | Closed | Admin model discovery validates the provider-specific root, collection, member, and identifier schema before normalization and returns a stable controlled error on mismatch | AUTH-02/SCN-08/SCN-09; Admin provider/model operation | Gateway/Admin owner | Reopen if model-list schema, shim ID ownership, or Admin error handling changes |
 | AUD-002 | Must Fix | Agent-Fixable | Closed | Transactional compaction replacement row/byte/replacement-size quotas now bound supported local/LAN persistence | SCN-06, SCN-07; persistence/observability | Project owner / Gateway persistence owner | Reopen if limits or storage path change |
 | AUD-001 | Should Plan | Agent-Fixable | Closed | Rosetta-version config/state/API migration and legacy compatibility paths were rejected or removed under the prelaunch no-migration boundary | SCN-08, SCN-06, DATA-03; config/local mode/admin/persistence/core API | Project owner / core and gateway owners | Reopen if a migration path is added |
@@ -88,21 +100,22 @@ claims.
 | AUD-010 | Should Plan | Agent-Fixable | Closed | SQLite validator checks columns, constraints, primary keys, required index columns, uniqueness, origin, and partial flag | DATA-01/DATA-03; persistence startup/write path | Persistence owner | Reopen on schema/table/index change without updated contract |
 | AUD-012 | Must Fix | Agent-Fixable | Closed | Provider redirects are denied by default and isolated by policy; auxiliary HTTP requests force no-follow; provider opt-in is explicit | PROVIDER-01/SCN-09; transport boundary | Gateway transport owner | Reopen if redirect behavior or HTTP client changes |
 | AUD-014 | Must Fix | Agent-Fixable | Closed | Tavily credential collisions are blocked before success/error data exposure; detached transport exceptions remain exactly redacted and cause-free | SIDE-01/CTRL-03; search/diagnostic boundary | Gateway search owner | Reopen if Tavily client or redaction boundary changes |
-| AUD-015 | Must Fix | Agent-Fixable | Closed | Provider, sidecar, Admin model-discovery, parsed-object, raw-byte, stream, and exception return boundaries prevent credentials of the active provider/client from reaching downstream consumers; AUD-017 defines collision-safe semantics and AUD-020 defines the inventory domain | PROVIDER-01/SIDE-01/SCN-03/CTRL-03; downstream, model, trace, and diagnostic boundaries | Gateway transport and search owners | Reopen on any credential-bearing client, return path, dict-key handling, stream framing, exception propagation, or credential-domain change |
-| AUD-016 | Must Fix | Agent-Fixable | Closed | `ProviderInfo` exposes the canonical `KeyRing` rotation sequence and `GatewayConfig` registers both the raw CSV and every selectable trimmed key with all runtime redactors | PROVIDER-01/DATA-01/CTRL-03; logs, traces, metrics, persistence, and response redaction | Gateway config, transport, and observability owners | Reopen on credential syntax, parsing, selection, startup/hot-reload propagation, or redactor-consumer changes |
+| AUD-015 | Must Fix | Agent-Fixable | Superseded for model paths | Sidecar, Search, Images, Admin model discovery, and other auxiliary return boundaries retain active-client credential protection; model documents/streams follow AUD-028 | SIDE-01/CTRL-03 plus historical model boundary | Gateway auxiliary transport and search owners | Reopen on any auxiliary credential-bearing client or if model risk acceptance changes |
+| AUD-016 | Must Fix | Agent-Fixable | Closed | `ProviderInfo` exposes the canonical `KeyRing` rotation sequence and `GatewayConfig` registers both the raw CSV and every selectable trimmed key with request, auxiliary, and other exact-mode runtime redactors | PROVIDER-01/DATA-01/CTRL-03; request/auxiliary logs, traces, metrics, persistence, and exact-mode redaction | Gateway config, transport, and observability owners | Reopen on credential syntax, parsing, selection, startup/hot-reload propagation, or redactor-consumer changes |
 | AUD-009 | Should Plan | Decision Recorded | Closed | Only exact backend-supported `api_type` strings are present; all other values infer in memory using `responses`, `chat`, `anthropic`, `google` order; custom defaults to Responses; warning emitted | PROVIDER-01; config/Admin | Project owner decision recorded in profile | Reopen if support list, fallback order, or persistence semantics change |
 | AUD-011 | Should Plan | Decision Recorded | Risk Accepted | Direct arbitrary HTTP(S) custom egress and key delivery are accepted within local/LAN scope; provider redirect expansion requires explicit opt-in | PROVIDER-01/SCN-09; transport boundary | Project owner | Reopen if deployment boundary, direct-egress policy, or redirect policy changes |
 
-## Current Repair Review Disposition
+## Historical AUD-025 Repair Review Disposition
 
-These review-local IDs describe the current `AUD-025` repair and do not replace
-the persistent finding ID. All three are closed at deterministic evidence depth:
+These review-local IDs describe the earlier `AUD-025` repair and do not replace
+the persistent finding ID or the later owner decision in `AUD-028`. All three
+were closed at deterministic evidence depth for that historical baseline:
 
 | Review ID | Status | Independent closure evidence |
 | --- | --- | --- |
 | REV-001 | Closed | Real Chat, Anthropic, and Google conversion pipelines reconstruct the frozen split canaries, and the final source-consumer document gate blocks them before BodyLog or client serialization. |
 | REV-002 | Closed | Final stream events are gated before trace/SSE; deferred diagnostics and terminal errors additionally apply active-provider plus global configured-token ordered-fragment checks. Active and inactive/global sibling cases remain absent from Trace, RequestLog, Metrics, and memory/SQLite persistence, while ordinary errors retain their detail. |
-| REV-003 | Closed | `FINDINGS.md`, `COVERAGE.md`, `SYSTEM-MAP.md`, this baseline README, and the Codex compatibility ledgers now agree that `AUD-025` is `Closed` / `Fresh (deterministic)`. |
+| REV-003 | Closed | The then-current audit and compatibility ledgers agreed that `AUD-025` was `Closed` / `Fresh (deterministic)` before AUD-028 superseded the model-path invariant. |
 
 `docs/audit/runs/20260721-2137/` and
 `docs/audit/runs/20260721-2248/` are immutable historical snapshots. Their
@@ -258,7 +271,8 @@ AUD-021 without invalidating the already-proven call-item behavior.
 
 - Option A considered: every untrusted return gate uses the complete atomic runtime configured-token inventory and fails closed on any collision. This can make an unrelated short/common configured token block otherwise legitimate output.
 - Option B selected: protect only credentials configured for the active outbound provider/client. This avoids cross-route false blocking and explicitly accepts cross-provider or cross-client configured-secret reflection.
-- Decision: protect only credentials configured for the active outbound provider or auxiliary client. Do not seed return gates from unrelated providers. Global observability/diagnostic redactors continue to use the complete configured-token inventory.
+- Decision at that baseline: protect only credentials configured for the active outbound provider or auxiliary client. Do not seed return gates from unrelated providers. Global observability/diagnostic redactors used the complete configured-token inventory.
+- Amendment on 2026-07-25: model-generation output no longer uses a configured-token return gate or exact-value response diagnostic scan; request and auxiliary exact diagnostics retain the complete configured-token inventory under AUD-028.
 - Authority/date: Project owner / 2026-07-20.
 - Accepted residual risk: a provider/client may return a credential configured only for another provider/client; this is outside the supported return-gate guarantee under the local/LAN-only profile.
 
@@ -471,7 +485,7 @@ real call, deployment, or commit occurred.
 | --- | --- | --- | --- | --- | --- | --- |
 | GP-001 | Real provider/Codex calls require explicit human approval and are never part of audit/default deterministic checks | live runners now share a fail-closed exact-marker gate; deterministic suite excludes real calls | keep the shared gate mandatory for every new runner | Approved live runs remain explicit and out of audit evidence | Project owner | Enforced |
 | GP-002 | Every durable agent/gateway state store needs an explicit owner scope and aggregate byte/row/TTL bound | tool mappings and compaction mappings now have scope, TTL and transactional row/byte limits | require quota contract tests for each new durable store | Limits are local/LAN policy values and may need owner tuning | Gateway persistence owner | Enforced |
-| GP-003 | Every credential-bearing outbound client must register the credentials actually sent on the wire and block untrusted return collisions without silently corrupting the supported wire/application protocol | Tavily required AUD-014; provider/sidecar siblings required AUD-015; CSV key rotation required AUD-016; AUD-017 established collision-safe fail-closed semantics; AUD-019 shares an executable Responses consumer inventory; AUD-025 now reaches final document/stream consumer semantics, defers unproven response diagnostics, and sanitizes unsafe terminal details before outer telemetry | keep the schema-aware inventory, bounded accumulators, bounded diagnostic hold lifecycle, and terminal-sink checks executable against every current converter parser and final consumer across success/error/stream/exception paths | arbitrary recursive parsing would create false positives and unbounded state; enforcement must remain schema-aware and bounded | Gateway transport/security owner with converter and observability owners | Enforced / AUD-025 independently closed deterministically |
+| GP-003 | Every credential-bearing auxiliary client must register the credentials actually sent on the wire and block untrusted return collisions; model-generation authentication is enforced only at confirmed protocol locations | Tavily and auxiliary Provider clients retain AUD-014/AUD-015/AUD-016/AUD-017 protection. AUD-028 removes generic model-output scanning, narrows Codex request auth to inbound `Authorization`, and records an empty current response-auth path inventory | keep auxiliary exact protection executable; diff Codex auth locations and upstream response schemas on every compatibility update; add only exact declared response field paths | arbitrary model-content parsing creates false positives, unbounded state, and valid-session interruption; model enforcement must remain location-based | Gateway transport/security owner with compatibility and observability owners | Enforced for auxiliary clients / Risk Accepted for ordinary model reflection under AUD-028 |
 
 ## Candidate Disposition
 

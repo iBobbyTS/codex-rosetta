@@ -260,37 +260,55 @@ malformed event 正文绝不会进入 client-visible error 或普通/body logs�
 streaming 继续执行 byte-preserving passthrough；它只应用上述 wire-size limit，不解析
 Provider event JSON。
 
+## 模型认证边界
+
+Codex 0.145.0 只在 HTTP `Authorization` 请求头中发送 Gateway credential。对于
+Responses 直通路由，Rosetta 会大小写不敏感地删除该入站头，再最后覆盖所选 Provider
+的认证头。其他未知 end-to-end header 在直通路由默认保留，除非属于 hop-by-hop、分帧
+或客户端网络身份字段；转换路由继续使用显式最小 header 集。
+
+当前支持的 OpenAI Responses、OpenAI Chat、Anthropic Messages 与 Google GenAI
+响应协议都没有定义 API 认证字段，Rosetta 也不会转发上游 HTTP response header。因此
+模型响应 JSON、错误正文和 SSE 字节不会按已配置 credential 字符串扫描，并保持原样。
+若未来协议明确新增响应认证字段，必须登记并测试该字段的精确路径；不得扫描普通模型
+文本。Search、Images、web-run、模型发现及其他携带 credential 的辅助客户端继续保留
+现有 exact credential-return protection。
+
 ## 诊断数据保留
 
-错误诊断可能包含 prompt、源码和工具 payload。Rosetta 只脱敏已配置的 Gateway/
-Provider API token、Bearer/Authorization token、明确的 token/API key 字段，以及与已配置
-API token 值匹配的内容。其他 request、converted body、response、prompt、password、
-secret、client secret、proxy password 和个人数据都会保留，因此应严格限制对数据目录的
-访问权限。
+错误诊断可能包含 prompt、源码和工具 payload。Request、converted body、配置与辅助
+客户端诊断会脱敏已配置的 Gateway/Provider API token、Bearer/Authorization token、
+明确的 token/API key 字段及 exact configured-token value。模型响应诊断只脱敏明确的
+认证/token 字段；普通响应字符串即使等于已配置 token 也会保留。因此应严格限制对数据
+目录的访问权限。
 
-实时 upstream error log 即使在关闭 request-body logging 时，也会使用当前 app/config
-的 token 集合。错误文本会先做 token-only 脱敏，再把控制字符和换行分隔符转义到单行，
-最终值最多保留 4,096 个字符。该边界会保留 prompt、个人数据以及普通 `password`、
-`secret` 和 `client_secret` 值；它不是通用隐私清洗器。
+实时 upstream error log 会把控制字符和换行分隔符转义到单行，最终最多保留 4,096 个
+字符。模型响应若为 JSON，只脱敏明确的认证/token 字段；非 JSON 文本只脱敏
+`Authorization: ...`、`api_key=...` 等显式赋值，普通 configured-token 字符串会保留。
+辅助客户端错误继续执行 exact configured-token 脱敏。该边界不是通用隐私清洗器。
 
 Request/response body logging 是独立的 opt-in，由 `debug.log_bodies` 或
 `CODEX_ROSETTA_LOG_BODIES` 控制。它使用专用的 DEBUG logger
 `codex-rosetta-gateway.body`：启用 body logging 不会同时打开其他 Gateway DEBUG 噪音。
-每个 app 独立持有实时 body-log policy 和 token 集合，Admin config hot reload 后也保持这
-一隔离。Original、intermediate、converted 与 upstream body 会先对完整结构递归执行
-token-only 脱敏，再做 JSON 序列化，随后转义为单行并限制为 20,000 characters。若序列
-化失败，只记录固定占位文本，绝不会 fallback 到原始对象或 exception text。
+每个 app 独立持有实时 body-log policy 和 token 集合，Admin config hot reload 后也保持
+这一隔离。Original、intermediate 与 converted request body 执行 exact configured-token
+脱敏；upstream 模型响应 body 只脱敏明确的认证/token 字段。随后记录会做 JSON 序列化、
+转义为单行并限制为 20,000 characters。若序列化失败，只记录固定占位文本，绝不会
+fallback 到原始对象或 exception text。
 
 Body log 会保留 prompt、源码、个人数据，以及普通 `password`、`secret`、
 `client_secret` 和 proxy-password 值，因此必须严格限制 console/file log 的访问权限。
-已配置的 Gateway/Provider token exact value、Bearer/Authorization 值、明确的 token/API
-key 字段，以及 JSON encoded function arguments 内的这些字段都会被脱敏。
+普通模型响应字符串中的 Gateway/Provider token exact value 会保留，但明确的响应认证/
+token 字段会被脱敏。请求 body 继续使用更强的 exact value、Bearer/Authorization 和明确
+字段脱敏策略。
 
 启用 `server.stream_trace.enabled` 后，stream trace 会在
 compaction、Tool Profile 过滤和协议转换之前写入一条 `original_request` 记录。该记录
 仍会递归执行 token 脱敏，但有意不受 `stream_trace.max_string_chars` 限制；排查完成后应
 关闭 stream tracing，并严格限制 trace 文件访问权限，因为 prompt、源码和个人数据仍会保留。它
-捕获的是 proxy handler 收到的请求体，不包含认证 header。
+捕获的是 proxy handler 收到的请求体，不包含认证 header。延迟保存的模型响应 trace
+record 只执行协议字段脱敏；超过有界 trace 容量时只丢弃该响应 trace batch，不得中断或
+改变模型 stream。
 
 Request log 的 success/error 上限会在启动和 Admin 热更新时使用同一规则验证。
 `server.request_log.success_max`、`error_max`、旧版 `max_entries`，以及环境变量

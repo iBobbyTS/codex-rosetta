@@ -30,17 +30,7 @@ _CANONICAL_HEADER_NAMES = {
     "x-request-id": "x-request-id",
 }
 
-_DIRECT_RESPONSES_CREDENTIAL_HEADERS = frozenset(
-    {
-        "api-key",
-        "authorization",
-        "cookie",
-        "proxy-authorization",
-        "x-admin-token",
-        "x-api-key",
-        "x-goog-api-key",
-    }
-)
+_DIRECT_RESPONSES_AUTH_HEADERS = frozenset({"authorization"})
 _DIRECT_RESPONSES_HOP_BY_HOP_HEADERS = frozenset(
     {
         "connection",
@@ -132,9 +122,10 @@ def build_direct_responses_headers(
 ) -> dict[str, str]:
     """Sanitize client headers for a direct Responses upstream request.
 
-    Unknown end-to-end headers pass through by default. Credentials,
-    hop-by-hop framing, and client network identity are removed. Rebuilt JSON
-    additionally drops the original content encoding and opaque attestation.
+    Unknown end-to-end headers pass through by default. The Codex client
+    Authorization header, hop-by-hop framing, and client network identity are
+    removed. Rebuilt JSON additionally drops the original content encoding
+    and opaque attestation.
     """
 
     normalized: dict[str, tuple[str, str]] = {}
@@ -159,7 +150,7 @@ def build_direct_responses_headers(
 
     result: dict[str, str] = {}
     for normalized_name, (output_name, value) in normalized.items():
-        if normalized_name in _DIRECT_RESPONSES_CREDENTIAL_HEADERS:
+        if normalized_name in _DIRECT_RESPONSES_AUTH_HEADERS:
             continue
         if normalized_name in _DIRECT_RESPONSES_HOP_BY_HOP_HEADERS:
             continue

@@ -106,6 +106,41 @@ class TestPersistenceManager:
             "stream_complete": False,
         }
 
+    def test_in_memory_model_response_log_redacts_protocol_locations(self) -> None:
+        log = RequestLog()
+        entry = RequestLogEntry.create(
+            model="model",
+            source_provider="openai_responses",
+            target_provider="openai_responses",
+            is_stream=True,
+            status_code=200,
+            duration_ms=1.0,
+            error_detail="authorization=secret; ordinary-token",
+            profile={
+                "content": "ordinary-token",
+                "authorization": "secret",
+            },
+        )
+
+        log.add(entry, response_redaction="protocol_fields")
+        log.update_result(
+            entry.id,
+            status_code=502,
+            duration_ms=2.0,
+            error_detail="api_key=secret; ordinary-token",
+            profile_update={"stream_error": "token=secret; ordinary-token"},
+            response_redaction="protocol_fields",
+        )
+
+        updated = log.get_entry(entry.id)
+        assert updated is not None
+        assert updated["error_detail"] == "api_key=[REDACTED]; ordinary-token"
+        assert updated["profile"] == {
+            "content": "ordinary-token",
+            "authorization": "[REDACTED]",
+            "stream_error": "token=[REDACTED]; ordinary-token",
+        }
+
 
 class TestPersistenceRetention:
     def test_prune_success(self, tmp_path):

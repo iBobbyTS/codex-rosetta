@@ -61,6 +61,26 @@ def test_upstream_error_json_redacts_only_token_fields() -> None:
     assert safe.count("[REDACTED]") == 2
 
 
+def test_model_response_error_keeps_ordinary_token_and_redacts_protocol_fields() -> (
+    None
+):
+    state = UpstreamErrorLogState({"configured-token"})
+
+    safe_json = state.sanitize(
+        '{"message":"configured-token","authorization":"configured-token"}',
+        response_redaction="protocol_fields",
+    )
+    safe_text = state.sanitize(
+        "ordinary configured-token api_key=remove",
+        response_redaction="protocol_fields",
+    )
+
+    assert '"message":"configured-token"' in safe_json
+    assert '"authorization":"[REDACTED]"' in safe_json
+    assert "ordinary configured-token" in safe_text
+    assert "remove" not in safe_text
+
+
 def test_upstream_error_cap_is_exact_even_when_shorter_than_suffix() -> None:
     assert UpstreamErrorLogState(max_chars=5).sanitize("x" * 20) == "...[t"
 

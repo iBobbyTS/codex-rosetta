@@ -9,13 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
-from codex_rosetta.observability.redaction import REDACTED, SecretRedactor
+from codex_rosetta.observability.redaction import SecretRedactor
 
 
 # ---------------------------------------------------------------------------
@@ -225,20 +224,7 @@ _body_logger.propagate = True
 
 UPSTREAM_ERROR_MAX_CHARS = 4096
 BODY_LOG_MAX_CHARS = 20_000
-_TOKEN_ASSIGNMENT_RE = re.compile(
-    r"(?i)(\b(?:authorization|api[ _-]?key|[a-z0-9_-]*token)\b\s*[:=]\s*)"
-    r"(?:(['\"])(.*?)\2|([^,;\r\n]+))"
-)
-
-
-def _redact_token_assignments(value: str) -> str:
-    """Redact explicit auth/token assignments without hiding other secrets."""
-
-    def _replace(match: re.Match[str]) -> str:
-        quote = match.group(2) or ""
-        return f"{match.group(1)}{quote}{REDACTED}{quote}"
-
-    return _TOKEN_ASSIGNMENT_RE.sub(_replace, value)
+ResponseRedactionPolicy = Literal["exact", "protocol_fields"]
 
 
 def _single_line(value: str) -> str:
@@ -281,17 +267,29 @@ class UpstreamErrorLogState:
         """Swap in a prepared token redactor."""
         self._redactor = redactor
 
-    def sanitize(self, error_text: Any) -> str:
+    def sanitize(
+        self,
+        error_text: Any,
+        *,
+        response_redaction: ResponseRedactionPolicy = "exact",
+    ) -> str:
         """Return redacted, single-line text bounded by ``max_chars``."""
         text = error_text if isinstance(error_text, str) else str(error_text)
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError, TypeError, ValueError:
-            safe = self._redactor.redact(text)
-            safe = _redact_token_assignments(safe)
+            safe = (
+                self._redactor.redact(text) if response_redaction == "exact" else text
+            )
+            safe = self._redactor.redact_protocol_text(safe) or ""
         else:
+            redacted = (
+                self._redactor.redact(parsed)
+                if response_redaction == "exact"
+                else self._redactor.redact_protocol_fields(parsed)
+            )
             safe = json.dumps(
-                self._redactor.redact(parsed),
+                redacted,
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
@@ -302,10 +300,6 @@ class UpstreamErrorLogState:
         if self.max_chars <= len(suffix):
             return suffix[: self.max_chars]
         return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
-
-    def diagnostics_are_safe(self, values: Iterable[Any]) -> bool:
-        """Check ordered fields against the global diagnostic token inventory."""
-        return not self._redactor.contains_ordered_fragments(values)
 
 
 @dataclass(frozen=True)
@@ -352,10 +346,19 @@ class BodyLogState:
         self.enabled = prepared.enabled
         self._redactor = prepared.redactor
 
-    def render(self, value: Any) -> str:
+    def render(
+        self,
+        value: Any,
+        *,
+        response_redaction: ResponseRedactionPolicy = "exact",
+    ) -> str:
         """Redact, serialize, single-line, and bound one body without raw fallback."""
         try:
-            redacted = self._redactor.redact(value)
+            redacted = (
+                self._redactor.redact(value)
+                if response_redaction == "exact"
+                else self._redactor.redact_protocol_fields(value)
+            )
         except Exception:
             return "[body redaction failed]"
         try:
@@ -374,15 +377,21 @@ class BodyLogState:
             return suffix[: self.max_chars]
         return f"{safe[: self.max_chars - len(suffix)]}{suffix}"
 
-    def diagnostics_are_safe(self, values: Iterable[Any]) -> bool:
-        """Check ordered fields against the global diagnostic token inventory."""
-        return not self._redactor.contains_ordered_fragments(values)
-
-    def log(self, label: str, value: Any) -> None:
+    def log(
+        self,
+        label: str,
+        value: Any,
+        *,
+        response_redaction: ResponseRedactionPolicy = "exact",
+    ) -> None:
         """Emit one single-line body record only when this app opted in."""
         if not self.enabled:
             return
-        _body_logger.debug("[%s] %s", label, self.render(value))
+        _body_logger.debug(
+            "[%s] %s",
+            label,
+            self.render(value, response_redaction=response_redaction),
+        )
 
 
 _default_upstream_error_state = UpstreamErrorLogState()
@@ -556,9 +565,9 @@ def log_response(
     *,
     state: BodyLogState | None = None,
 ) -> None:
-    """Log one opt-in token-safe response body."""
+    """Log one model response using protocol-field-only redaction."""
     if state is not None:
-        state.log(label, data)
+        state.log(label, data, response_redaction="protocol_fields")
 
 
 def log_stream_summary(
@@ -583,10 +592,14 @@ def log_upstream_error(
     endpoint: str = "unknown",
     is_streaming: bool = False,
     state: UpstreamErrorLogState | None = None,
+    response_redaction: ResponseRedactionPolicy = "exact",
 ) -> None:
     """Log an upstream API error in a structured format."""
     request_type = "streaming" if is_streaming else "non-streaming"
-    safe_error = (state or _default_upstream_error_state).sanitize(error_text)
+    safe_error = (state or _default_upstream_error_state).sanitize(
+        error_text,
+        response_redaction=response_redaction,
+    )
     _logger.error(
         "[UPSTREAM ERROR] endpoint=%s, type=%s, status=%d, error=%s",
         endpoint,
