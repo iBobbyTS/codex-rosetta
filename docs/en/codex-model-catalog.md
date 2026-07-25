@@ -259,6 +259,9 @@ fields are edited. A provider may expose a second, separate
 `{Provider} Extra Configuration` dialog rather than splitting the model-information
 dialog. Admin shows its button only when the selected Provider and the row's
 exact upstream-first/exposed-fallback model match an extra-configuration preset.
+In the model-information editor, the restore-preset button is disabled while
+the draft equals the matched preset; each differing visible field receives a
+yellow border and any draft difference enables restoration.
 
 Configuration stores only a normalized recursive diff from the matched bundled
 preset. On load, Rosetta deep-copies that preset, recursively overlays

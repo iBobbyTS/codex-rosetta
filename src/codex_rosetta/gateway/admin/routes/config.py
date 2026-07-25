@@ -22,7 +22,11 @@ from ...config import (
     resolve_provider_api_type,
 )
 from ...local_mode import config_toml_has_model_catalog
-from ...model_presets import full_model_presets
+from ...model_presets import (
+    detect_model_preset,
+    full_model_presets,
+    model_presets_for_admin,
+)
 from ...model_profiles import (
     canonical_model_overrides,
     resolve_model_profile,
@@ -256,7 +260,12 @@ def _resolved_admin_model_entry(
         entry["validation_error"] = str(exc)
         return entry
 
-    entry["model_info"] = profile.catalog_model()
+    model_info = profile.catalog_model()
+    if "identity" not in model_info:
+        editable_preset = detect_model_preset(model_name, profile.upstream_model)
+        if editable_preset is not None:
+            model_info["identity"] = editable_preset["identity"]
+    entry["model_info"] = model_info
     entry["preset_slug"] = profile.preset_slug
     model_diff, runtime_diff = canonical_model_overrides(profile)
     entry["has_overrides"] = bool(model_diff or runtime_diff)
@@ -514,6 +523,7 @@ async def get_config(request: Any) -> Response:
     tool_profile_input_overrides = normalize_tool_profile_input_overrides(
         raw.get("tool_profile_input_overrides")
     )
+    editable_presets = {preset["slug"]: preset for preset in model_presets_for_admin()}
 
     config: GatewayConfig = request.app.gateway_config
     server = _mask_server_config(raw.get("server", {}))
@@ -545,7 +555,13 @@ async def get_config(request: Any) -> Response:
                 "id": TOOL_PROFILE_PASSTHROUGH_OPTION,
                 "api_types": ["responses"],
             },
-            "model_presets": list(full_model_presets().values()),
+            "model_presets": [
+                dict(
+                    model,
+                    identity=editable_presets[slug]["identity"],
+                )
+                for slug, model in full_model_presets().items()
+            ],
             "provider_catalog": provider_catalog_for_admin(),
             "codex": config.codex,
             "server": server,
