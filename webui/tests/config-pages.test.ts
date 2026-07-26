@@ -318,6 +318,83 @@ describe('ModelsPage', () => {
     }));
   });
 
+  it('returns the main model row to auto-detected after matching the preset again', async () => {
+    const preset = { slug: 'gpt-demo', display_name: 'GPT Demo', description: 'Preset description', identity: 'demo', priority: 2, context_window: 64000, input_modalities: ['text'], supported_reasoning_levels: ['low', 'high'], base_instructions: 'hidden system prompt' };
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    const displayName = screen.getByLabelText('Display Name');
+    await fireEvent.input(displayName, { target: { value: 'Changed' } });
+    await fireEvent.input(displayName, { target: { value: 'GPT Demo' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+
+    expect(screen.getByText('Auto-detected: GPT Demo')).toBeInTheDocument();
+    expect(screen.queryByText('Auto-detected: GPT Demo (modified)')).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
+      provider: 'upstream', type: 'llm', models: { 'gpt-demo': {} },
+    }));
+  });
+
+  it('restores an initially unmodified provider-model row after a model info round trip', async () => {
+    const preset = { slug: 'qwen3.7-plus', display_name: 'Qwen', description: 'Preset description', identity: 'qwen', priority: 2, context_window: 64000, input_modalities: ['text'], supported_reasoning_levels: ['low', 'high'] };
+    apiMock.get.mockResolvedValue({
+      providers: { opencode: { provider: 'opencode_go', api_type: 'chat' } },
+      provider_catalog: { providers: { opencode_go: { label_key: 'provider.opencodeGo', runtime_capability_fields: ['temperature', 'top_p'], runtime_capabilities_by_model: { 'qwen3.7-plus': { temperature: 0.55, top_p: 1 } } } } },
+      model_groups: { Main: { provider: 'opencode', models: { 'qwen3.7-plus': { model_info: preset, has_overrides: false } } } },
+      tool_profile_presets: [], model_presets: [preset],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.getByText('Auto-detected: Qwen')).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    await fireEvent.input(screen.getByLabelText('Display Name'), { target: { value: 'Changed' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    expect(screen.getByText('Auto-detected: Qwen (modified)')).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Restore Qwen preset' }));
+    expect(screen.getByText('Auto-detected: Qwen')).toBeInTheDocument();
+    expect(screen.queryByText('Auto-detected: Qwen (modified)')).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
+      provider: 'opencode', type: 'llm', models: { 'qwen3.7-plus': {} },
+    }));
+  });
+
+  it('restores GLM after reasoning levels are toggled across separate edits', async () => {
+    const preset = { slug: 'glm-5.2', display_name: 'GLM 5.2', description: 'Flagship model by Z.ai', identity: 'GLM 5.2 by z.ai', priority: 20, context_window: 1000000, input_modalities: ['text'], supported_reasoning_levels: ['high', 'max'] };
+    apiMock.get.mockResolvedValue({
+      providers: { opencode: { provider: 'opencode_go', api_type: 'chat' } },
+      provider_catalog: { providers: { opencode_go: { label_key: 'provider.opencodeGo', runtime_capability_fields: [], runtime_capabilities_by_model: {} } } },
+      model_groups: { Main: { provider: 'opencode', models: { 'glm-5.2': { model_info: preset, has_overrides: false } } } },
+      tool_profile_presets: [], model_presets: [preset],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'high' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    expect(screen.getByText('Auto-detected: GLM 5.2 (modified)')).toBeInTheDocument();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    await fireEvent.click(screen.getByRole('checkbox', { name: 'high' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    expect(screen.getByText('Auto-detected: GLM 5.2')).toBeInTheDocument();
+    expect(screen.queryByText('Auto-detected: GLM 5.2 (modified)')).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
+      provider: 'opencode', type: 'llm', models: { 'glm-5.2': {} },
+    }));
+  });
+
   it('shows OpenCode extra configuration only for a bound provider-model pair', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
