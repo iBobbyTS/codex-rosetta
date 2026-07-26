@@ -8,6 +8,7 @@ from codex_rosetta.gateway.provider_profiles import (
     get_provider_catalog_entry,
     provider_catalog_for_admin,
     resolve_provider_profile,
+    resolve_soft_interrupt,
 )
 from codex_rosetta.pipeline import ConversionPipeline
 
@@ -28,6 +29,20 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
         "qwen3.7-plus"
     ] == {"temperature": 0.55, "top_p": 1.0}
     assert providers["openai"]["runtime_capabilities_by_model"] == {}
+    assert providers["deepseek"]["soft_interrupt_default"] is True
+    assert providers["openai"]["soft_interrupt_default"] is False
+
+
+def test_soft_interrupt_defaults_are_protocol_scoped_and_overridable() -> None:
+    assert resolve_soft_interrupt("deepseek", "chat") is True
+    assert resolve_soft_interrupt("deepseek", "chat", False) is False
+    assert resolve_soft_interrupt("custom", "chat") is False
+    assert resolve_soft_interrupt("deepseek", "anthropic") is False
+
+    with pytest.raises(ValueError, match="supported only.*chat"):
+        resolve_soft_interrupt("deepseek", "anthropic", True)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        resolve_soft_interrupt("deepseek", "chat", "true")
 
 
 def test_unadapted_combination_uses_only_selected_standard() -> None:

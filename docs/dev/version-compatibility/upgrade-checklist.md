@@ -220,8 +220,8 @@ src/codex_rosetta/types/openai/responses/
 ### Compatibility point classification and repair plan one by one
 
 Before classification, verify that the stable registry, compatibility overview,
-and test matrix contain the same current point set (23 points at the
-`2026-07-18` baseline). A missing, duplicated, or renamed row is a
+and test matrix contain the same current point set (24 points after the
+post-baseline soft-interrupt addition; 23 at the `2026-07-18` baseline). A missing, duplicated, or renamed row is a
 documentation defect and must be fixed before the release decision; when a new
 point is added, update all three structures in the same task.
 

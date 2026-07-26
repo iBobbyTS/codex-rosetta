@@ -25,6 +25,8 @@ API_TYPE_TO_PROVIDER_TYPE: Mapping[str, ProviderType] = MappingProxyType(
     )
 )
 
+_MISSING = object()
+
 
 def _freeze(value: Any) -> Any:
     """Recursively freeze bundled JSON data."""
@@ -118,6 +120,13 @@ def _validate_runtime_capabilities_by_model(
     return result
 
 
+def _soft_interrupt_default(provider_id: str, entry: dict[str, Any]) -> bool:
+    value = entry.get("soft_interrupt_default", False)
+    if not isinstance(value, bool):
+        raise ValueError(f"provider {provider_id!r} has invalid soft interrupt default")
+    return value
+
+
 @lru_cache(maxsize=1)
 def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
     raw = (
@@ -141,6 +150,7 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
         known = entry.get("known_supported_api_types")
         variants = entry.get("variants")
         runtime_capabilities = entry.get("runtime_capabilities", {})
+        soft_interrupt_default = _soft_interrupt_default(provider_id, entry)
         runtime_capability_fields = _validate_runtime_capability_fields(
             provider_id, entry.get("runtime_capability_fields", [])
         )
@@ -166,6 +176,7 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
                 f"provider {provider_id!r} has invalid runtime capabilities"
             )
         entry["runtime_capabilities"] = runtime_capabilities
+        entry["soft_interrupt_default"] = soft_interrupt_default
         entry["runtime_capability_fields"] = runtime_capability_fields
         entry["runtime_capabilities_by_model"] = runtime_capabilities_by_model
         normalized[provider_id] = _freeze(entry)
@@ -192,6 +203,31 @@ def get_provider_catalog_entry(provider_id: str) -> Mapping[str, Any] | None:
     """Return immutable metadata for a provider main identity."""
 
     return _catalog()[1].get(provider_id)
+
+
+def resolve_soft_interrupt(
+    provider_id: str,
+    api_type: str,
+    value: Any = _MISSING,
+) -> bool:
+    """Resolve one Provider's protocol-scoped soft-interrupt setting."""
+
+    entry = get_provider_catalog_entry(provider_id)
+    if entry is None:
+        raise ValueError(
+            f"config: unknown provider main identity {provider_id!r}; "
+            "use provider: 'custom' for an unadapted endpoint"
+        )
+    if value is _MISSING and api_type != "chat":
+        return False
+    resolved = entry["soft_interrupt_default"] if value is _MISSING else value
+    if not isinstance(resolved, bool):
+        raise ValueError("config: provider soft_interrupt must be a boolean")
+    if resolved and api_type != "chat":
+        raise ValueError(
+            "config: provider soft_interrupt is supported only for api_type 'chat'"
+        )
+    return resolved if api_type == "chat" else False
 
 
 def resolve_provider_profile(provider_id: str, api_type: str) -> ProviderProfile:

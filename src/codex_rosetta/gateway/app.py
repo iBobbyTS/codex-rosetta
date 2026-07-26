@@ -77,6 +77,7 @@ from .proxy import (
     validate_model_id,
 )
 from .state_scope import GatewayStateScope
+from .soft_interrupt import SoftInterruptCoordinator, SoftInterruptPreparation
 from .tool_adaptation import CodexToolLocalizationStore
 from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
@@ -407,6 +408,11 @@ def _instrument_stream_response(
     on_finish: Callable[[], None] | None = None,
 ) -> None:
     """Attach request logging and terminal telemetry to an open stream."""
+    source_generator = response._generator
+    add_drain_callback = getattr(source_generator, "add_drain_callback", None)
+    if on_finish is not None and callable(add_drain_callback):
+        add_drain_callback(on_finish)
+        on_finish = None
     _record_request_log_entry(
         request,
         model=model,
@@ -451,7 +457,7 @@ def _instrument_stream_response(
                 on_finish()
 
     response._generator = _InstrumentedStream(
-        response._generator,
+        source_generator,
         source_provider=source_provider,
         success_status=response.status_code,
         finalize=_finalize_stream,
@@ -570,6 +576,29 @@ def _proxy_request_id_or_error(
         return response
 
 
+def _proxy_body_or_error(
+    request: Any,
+    source_provider: ProviderType,
+    request_id: str,
+) -> tuple[Any, dict[str, Any]] | Response:
+    """Parse and bind one proxy body or return a source-shaped ingress error."""
+
+    inbound_wire_request = take_inbound_wire_request()
+    try:
+        body = request.json()
+    except Exception:
+        response = error_response_for_source(source_provider, 400, "Invalid JSON body")
+        response.headers["x-request-id"] = request_id
+        return response
+    if not isinstance(body, dict):
+        response = error_response_for_source(
+            source_provider, 400, "JSON body must be an object"
+        )
+        response.headers["x-request-id"] = request_id
+        return response
+    return bind_inbound_wire_request(inbound_wire_request, body)
+
+
 def _apply_route_model_alias(
     body: dict[str, Any], model: str, upstream_model: str | None
 ) -> tuple[str, str]:
@@ -579,6 +608,39 @@ def _apply_route_model_alias(
         body["model"] = upstream_model
         return f"{model} (upstream={upstream_model})", upstream_model
     return model, model
+
+
+async def _prepare_soft_interrupt_request(
+    app: Any,
+    *,
+    enabled: bool,
+    is_stream: bool,
+    source_provider: ProviderType,
+    route: ResolvedRoute,
+    principal_id: str,
+    model: str,
+    body: dict[str, Any],
+) -> SoftInterruptPreparation | None:
+    """Prepare one eligible Responses-to-Chat request for soft interruption."""
+
+    if not (
+        enabled is True
+        and is_stream
+        and source_provider in ("openai_responses", "open_responses")
+        and route.target_provider == "openai_chat"
+    ):
+        return None
+    coordinator: SoftInterruptCoordinator | None = getattr(
+        app, "soft_interrupt_coordinator", None
+    )
+    if coordinator is None:
+        return None
+    return await coordinator.prepare_request(
+        principal_id=principal_id,
+        provider_name=route.provider_name,
+        model=model,
+        body=body,
+    )
 
 
 async def _resolve_request_tool_runtime_capabilities(
@@ -649,20 +711,10 @@ async def _proxy_handler(
     if isinstance(request_id, Response):
         return request_id
 
-    inbound_wire_request = take_inbound_wire_request()
-    try:
-        body: dict[str, Any] = request.json()
-    except Exception:
-        resp = error_response_for_source(source_provider, 400, "Invalid JSON body")
-        resp.headers["x-request-id"] = request_id
-        return resp
-    if not isinstance(body, dict):
-        resp = error_response_for_source(
-            source_provider, 400, "JSON body must be an object"
-        )
-        resp.headers["x-request-id"] = request_id
-        return resp
-    inbound_wire_request, body = bind_inbound_wire_request(inbound_wire_request, body)
+    parsed_body = _proxy_body_or_error(request, source_provider, request_id)
+    if isinstance(parsed_body, Response):
+        return parsed_body
+    inbound_wire_request, body = parsed_body
 
     # Determine model
     try:
@@ -730,6 +782,18 @@ async def _proxy_handler(
         model=model,
         window_id=codex_window_id,
     )
+    soft_interrupt_preparation = await _prepare_soft_interrupt_request(
+        request.app,
+        enabled=provider_info.soft_interrupt,
+        is_stream=is_stream,
+        source_provider=source_provider,
+        route=route,
+        principal_id=principal_id,
+        model=str(body.get("model", model)),
+        body=body,
+    )
+    if soft_interrupt_preparation is not None:
+        body = soft_interrupt_preparation.body
 
     record_request_stat(stats_model)
     logger.info(
@@ -798,6 +862,11 @@ async def _proxy_handler(
                 body_log_state=getattr(request.app, "body_log_state", None),
                 image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
                 inbound_wire_request=inbound_wire_request,
+                soft_interrupt_coordinator=getattr(
+                    request.app, "soft_interrupt_coordinator", None
+                ),
+                soft_interrupt_preparation=soft_interrupt_preparation,
+                principal_id=principal_id,
             )
         else:
             pre_entry_id = None
@@ -1078,6 +1147,7 @@ async def _periodic_tool_call_mapping_cleanup(app: App) -> None:
             now = datetime.now(timezone.utc).isoformat()
             persistence.cleanup_expired_tool_call_mappings(now)
             persistence.cleanup_expired_codex_compaction_mappings(now)
+            persistence.cleanup_expired_soft_interrupt_handoffs(now)
         except Exception as exc:
             logger.warning("Failed to clean up tool-call mapping cache: %s", exc)
 
@@ -1239,6 +1309,9 @@ def create_app(
     app.body_log_state = body_log_state  # type: ignore
 
     setup_admin(app, config, config_path)
+    app.soft_interrupt_coordinator = SoftInterruptCoordinator(  # type: ignore
+        getattr(app, "persistence", None)
+    )
 
     return app
 
@@ -1266,6 +1339,9 @@ async def run_gateway(
         admin_runtime_state = getattr(app, "admin_runtime_state", None)
         if admin_runtime_state is not None:
             await admin_runtime_state.aclose()
+        soft_interrupt_coordinator = getattr(app, "soft_interrupt_coordinator", None)
+        if soft_interrupt_coordinator is not None:
+            await soft_interrupt_coordinator.close()
         _flush_now(app)
         await close_resources(
             transport=app.transport,  # type: ignore

@@ -10,8 +10,13 @@ from unittest.mock import MagicMock
 
 from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
+from codex_rosetta.gateway.soft_interrupt import (
+    SoftInterruptCoordinator,
+    SoftInterruptStream,
+)
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamStream
+from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.gateway.web_search import (
     WEB_SEARCH_PROFILE_ITEM_ID,
     WebSearchSettings,
@@ -61,6 +66,20 @@ class _FakeTavilyClient:
                 }
             ],
         }
+
+
+class _GatedChatStream(_ChatStream):
+    def __init__(
+        self, chunks: list[dict[str, Any]], continue_event: asyncio.Event
+    ) -> None:
+        super().__init__(chunks)
+        self._continue_event = continue_event
+
+    async def __aiter__(self) -> AsyncIterator[dict[str, Any]]:
+        yield self._chunks[0]
+        await self._continue_event.wait()
+        for chunk in self._chunks[1:]:
+            yield chunk
 
 
 def _route(*, search_token: str = "tvly-test") -> ResolvedRoute:
@@ -267,6 +286,88 @@ def test_responses_chat_web_search_executes_tavily_and_continues_chat_stream():
     assert output[1]["content"][0]["text"] == (
         "The search result says native UX is available."
     )
+
+
+def test_soft_interrupt_does_not_start_web_search_or_another_upstream_round(
+    tmp_path,
+):
+    async def scenario() -> None:
+        pm = PersistenceManager(str(tmp_path))
+        coordinator = SoftInterruptCoordinator(pm)
+        continue_event = asyncio.Event()
+        stream = _GatedChatStream([_tool_call_chunk(), _finish_chunk()], continue_event)
+        captured_bodies: list[dict[str, Any]] = []
+
+        async def send_streaming(
+            provider_info, target_provider, body, model, *, extra_headers=None
+        ):
+            captured_bodies.append(body)
+            return stream
+
+        transport = MagicMock()
+        transport.send_streaming.side_effect = send_streaming
+        fake_tavily = _FakeTavilyClient()
+        metadata = json.dumps(
+            {
+                "request_kind": "turn",
+                "session_id": "session-a",
+                "thread_id": "thread-a",
+                "turn_id": "turn-a",
+                "window_id": "window-a",
+            },
+            separators=(",", ":"),
+        )
+        body = {
+            "model": "deepseek-v4-flash",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Search for Codex web search UX.",
+                }
+            ],
+            "stream": True,
+            "prompt_cache_key": "cache-a",
+            "client_metadata": {"x-codex-turn-metadata": metadata},
+            "tools": [
+                {
+                    "type": "web_search",
+                    "external_web_access": True,
+                    "search_context_size": "high",
+                }
+            ],
+        }
+        preparation = await coordinator.prepare_request(
+            principal_id="client-a",
+            provider_name="test-provider",
+            model="deepseek-v4-flash",
+            body=body,
+        )
+        response, _ = await handle_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            web_search_client=fake_tavily,
+            persistence=pm,
+            soft_interrupt_coordinator=coordinator,
+            soft_interrupt_preparation=preparation,
+            principal_id="client-a",
+        )
+        assert isinstance(response, StreamingResponse)
+        generator = response._generator
+        assert isinstance(generator, SoftInterruptStream)
+        await anext(generator)
+        await generator.aclose()
+        continue_event.set()
+        await generator.detach_and_wait()
+
+        assert len(captured_bodies) == 1
+        assert fake_tavily.calls == []
+        await coordinator.close()
+        pm.close()
+
+    asyncio.run(scenario())
 
 
 def test_responses_chat_without_tavily_key_does_not_expose_web_search_tool():

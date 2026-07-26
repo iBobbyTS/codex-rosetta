@@ -106,6 +106,19 @@ Base URL 以 `/v1` 结尾时，上游收到 `/v1/alpha/search`；不带版本路
 
 当 Chat 响应返回时，Rosetta 将其转换回 Responses 兼容的输出，以便 Codex 继续驱动 agent 循环。
 
+Chat Provider 还可以启用**软打断**。DeepSeek 默认开启，其他 Chat Provider 默认
+关闭；Responses、Anthropic 和 Google 协议不适用。Codex 用 ESC 强制打断一轮时，
+Rosetta 会停止向该 Agent Loop 交付内容，但继续排空已经打开的上游 stream，直到正常
+完成。客户端脱离后，Rosetta 不会执行尚未开始的本地 Web Search，也不会再启动一轮
+上游 agent loop 请求。
+
+Codex 未收到的完整输出项最多暂存 24 小时，并且只会补入同一已鉴权 principal、同一
+Codex thread 的下一次兼容强制打断请求。Provider、上游模型、`prompt_cache_key`、
+请求形状、源输入前缀和转换后的 Chat message 前缀都必须精确匹配。Steer、正常结束、
+不同 thread 或 fork，以及任一不匹配都不会回放隐藏输出。对于 Codex 从未执行的已回放
+工具调用，Rosetta 会补入 `Client cancelled, did not execute` 结果。成功交给下一请求
+后，该交接记录只消费一次。
+
 网关还会在请求和响应阶段之间保留选定的运行时状态：
 
 - Responses 命名空间工具映射存储在转换上下文中。
