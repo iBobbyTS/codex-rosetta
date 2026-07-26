@@ -1010,6 +1010,7 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
         "base_url": "https://api.deepseek.com",
         "api_key": "sk-new",
         "allow_redirects": True,
+        "soft_interrupt": False,
     }
 
     response = _run(put_provider(request))
@@ -1022,11 +1023,40 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
         "provider": "deepseek",
         "api_type": "chat",
         "allow_redirects": True,
+        "soft_interrupt": False,
     }
     assert "type" not in saved["providers"]["DeepSeek"]
     assert app.gateway_config.provider_types["DeepSeek"] == "openai_chat"
     assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
     assert app.gateway_config.providers["DeepSeek"].allow_redirects is True
+    assert app.gateway_config.providers["DeepSeek"].soft_interrupt is False
+
+
+def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = _config_data()
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    initial_config = GatewayConfig(original)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "DeepSeek"})
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "anthropic",
+        "base_url": "https://api.deepseek.com/anthropic",
+        "api_key": "sk-new",
+        "soft_interrupt": True,
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert "supported only for api_type 'chat'" in response.body.decode("utf-8")
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
 
 
 def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):

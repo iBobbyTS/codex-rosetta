@@ -15,6 +15,20 @@ compaction 仍原样交给上游。模型切换压缩（包括 `comp_hash_change
 另一个 Provider 的加密 compaction payload。从 Responses 转换到其他协议的路由也继续
 使用 Rosetta coordinator。
 
+## 软打断留存
+
+Chat Provider 启用软打断后，Rosetta 可能把 Codex 未显示的模型输出以明文保存到
+`gateway.db` 的 `soft_interrupt_handoffs` 表。每个已鉴权 principal 与精确 Codex
+thread 最多一条。记录使用绝对 24 小时 TTL，并在启动、读取、写入和周期清理时删除
+过期项。限额为单条 8 MiB、每个 principal 64 MiB、全局 512 MiB。超限不会取消上游
+排空，但不会写入可回放记录。
+
+记录包含输出项和缓存连续性指纹，不加密也不脱敏。请保留现有数据目录与数据库的仅
+owner 权限，保护备份，并把 `gateway.db` 视为可能包含 prompt、reasoning、助手文本和
+工具调用。逻辑 TTL 不保证从备份、raw trace、文件系统快照或 SQLite 已释放页中抹除
+历史字节。交接状态按已鉴权 principal 加 `thread_id` 隔离；`session_id`、window ID
+和 fork 来源只用于诊断。fork 永远不会继承或消费父任务的隐藏输出。
+
 Codex-Rosetta 默认关闭未授权访问：每份网关配置都必须包含非空的 Admin 密码，
 并至少包含一个网关访问密钥。默认监听地址为 `127.0.0.1`，API 凭证显示功能默认关闭。
 

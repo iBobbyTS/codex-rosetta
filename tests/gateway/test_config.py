@@ -1027,6 +1027,41 @@ class TestModelGroups:
 
         assert cfg.providers["test"].allow_redirects is False
 
+    def test_deepseek_chat_soft_interrupt_defaults_enabled(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["provider"] = "deepseek"
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.providers["test"].soft_interrupt is True
+
+    def test_deepseek_chat_soft_interrupt_can_be_disabled(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"].update(
+            {"provider": "deepseek", "soft_interrupt": False}
+        )
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.providers["test"].soft_interrupt is False
+
+    @pytest.mark.parametrize("value", [1, "true", None, []])
+    def test_provider_soft_interrupt_requires_boolean(self, value):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["soft_interrupt"] = value
+
+        with pytest.raises(ValueError, match="soft_interrupt must be a boolean"):
+            GatewayConfig(raw)
+
+    def test_provider_soft_interrupt_rejects_non_chat_protocol(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"].update(
+            {"api_type": "responses", "soft_interrupt": True}
+        )
+
+        with pytest.raises(ValueError, match="supported only.*chat"):
+            GatewayConfig(raw)
+
 
 def test_cli_add_model_group_then_grouped_model(tmp_path):
     config_path = tmp_path / "config.jsonc"

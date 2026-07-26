@@ -566,6 +566,9 @@ def _build_provider_entry(
     if allow_redirects is not False:
         entry["allow_redirects"] = allow_redirects
 
+    if "soft_interrupt" in body:
+        entry["soft_interrupt"] = body["soft_interrupt"]
+
     if resolve_name in existing_providers:
         existing_enabled = existing_providers[resolve_name].get("enabled")
         if existing_enabled is not None:

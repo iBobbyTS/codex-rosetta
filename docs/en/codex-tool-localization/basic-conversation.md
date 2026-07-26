@@ -130,6 +130,23 @@ For Chat-only providers, Codex-Rosetta converts the incoming Responses request i
 
 When the Chat response returns, Rosetta converts it back into Responses-compatible output so Codex can keep driving the agent loop.
 
+Chat Providers can also enable **Soft interrupt**. DeepSeek enables it by
+default; other Chat Providers default to disabled, and the option does not
+apply to Responses, Anthropic, or Google protocols. When Codex force-interrupts
+a turn with ESC, Rosetta stops delivery to that Agent Loop but drains the
+already-open upstream stream to a normal completion. It does not execute a
+pending local Web Search or start another upstream agent-loop round after the
+client detaches.
+
+Completed output items that Codex did not receive are held for at most 24 hours
+and restored only into the next compatible hard-interrupt request owned by the
+same authenticated principal and exact Codex thread. Provider, upstream model,
+`prompt_cache_key`, request shape, source input prefix, and converted Chat
+message prefix must all match exactly. Steer, ordinary completion, a different
+thread or fork, and any mismatch do not replay hidden output. Replayed tool
+calls that Codex never executed receive `Client cancelled, did not execute` as
+their result. A successful replay consumes the handoff once.
+
 The gateway also preserves selected runtime state across the request and response phases:
 
 - Responses namespace tool mappings are stored in the conversion context.

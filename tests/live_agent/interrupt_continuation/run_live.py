@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
+import http.server
 import json
 import os
+import secrets
 import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +30,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(SUITE.parent))
 
 from codex_rosetta.gateway.live_gate import require_live_call_approval  # noqa: E402
+from codex_rosetta.gateway.config import _strip_jsonc_comments  # noqa: E402
 
 from tests.live_agent.context_compaction.run_live import (  # noqa: E402
     _AppServerClient,
@@ -331,6 +336,13 @@ _SURFACE_MARKERS = (
     "plugin.json",
 )
 
+_TURN_ABORTED_MARKER = (
+    "<turn_aborted>\n"
+    "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. "
+    "If any tools/commands were aborted, they may have partially executed.\n"
+    "</turn_aborted>"
+)
+
 
 def _text_from_message(message: dict[str, Any]) -> str:
     content = message.get("content")
@@ -401,6 +413,12 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
         for marker in _SURFACE_MARKERS
         if any(marker in item["text"] for item in system_messages)
     )
+    expected_turn_aborted_count = sum(
+        item["text"].strip() == _TURN_ABORTED_MARKER for item in system_messages
+    )
+    normalized_system_messages = [
+        item for item in system_messages if item["text"].strip() != _TURN_ABORTED_MARKER
+    ]
     tools = data.get("tools")
     if not isinstance(tools, list) and isinstance(input_items, list):
         additional = [
@@ -412,10 +430,14 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
     tool_names = _tool_names(tools)
     return {
         "context_fingerprint": _canonical_hash(
-            [{"role": item["role"], "text": item["text"]} for item in system_messages]
+            [
+                {"role": item["role"], "text": item["text"]}
+                for item in normalized_system_messages
+            ]
         ),
         "system_developer_count": len(system_messages),
         "system_developer_lengths": [len(item["text"]) for item in system_messages],
+        "expected_turn_aborted_count": expected_turn_aborted_count,
         "dynamic_marker_hits": marker_hits,
         "tool_count": len(tool_names),
         "tool_names": tool_names,
@@ -562,13 +584,107 @@ def _profiles(run_root: Path) -> list[dict[str, Any]]:
     return profiles
 
 
+class _DeepSeekUserIdProxy(http.server.ThreadingHTTPServer):
+    """Test-only HTTPS forwarder that injects one isolated DeepSeek user id."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, server_address: tuple[str, int], user_id: str):
+        super().__init__(server_address, _DeepSeekUserIdHandler)
+        self.user_id = user_id
+        self.request_count = 0
+        self._request_count_lock = threading.Lock()
+
+    def count_request(self) -> None:
+        with self._request_count_lock:
+            self.request_count += 1
+
+
+def _inject_deepseek_user_id(body: bytes, user_id: str) -> bytes:
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON body must be an object")
+    payload["user_id"] = user_id
+    return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+class _DeepSeekUserIdHandler(http.server.BaseHTTPRequestHandler):
+    """Forward Chat Completions requests while adding the run's user_id."""
+
+    server: _DeepSeekUserIdProxy
+
+    def do_POST(self) -> None:  # noqa: N802
+        length_header = self.headers.get("Content-Length")
+        if length_header is None:
+            self.send_error(http.HTTPStatus.LENGTH_REQUIRED)
+            return
+        try:
+            body = _inject_deepseek_user_id(
+                self.rfile.read(int(length_header)), self.server.user_id
+            )
+        except TypeError, ValueError:
+            self.send_error(http.HTTPStatus.BAD_REQUEST, "invalid JSON")
+            return
+        headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.lower() in {"authorization", "content-type", "accept"}
+        }
+        headers["Content-Length"] = str(len(body))
+        connection = http.client.HTTPSConnection("api.deepseek.com", timeout=600)
+        try:
+            connection.request("POST", self.path, body=body, headers=headers)
+            response = connection.getresponse()
+            self.send_response(response.status)
+            for name, value in response.getheaders():
+                if name.lower() not in {"connection", "transfer-encoding"}:
+                    self.send_header(name, value)
+            self.end_headers()
+            while chunk := response.read(64 * 1024):
+                try:
+                    self.wfile.write(chunk)
+                    self.wfile.flush()
+                except BrokenPipeError, ConnectionResetError:
+                    break
+            self.server.count_request()
+        finally:
+            connection.close()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        del format, args
+
+
+def _start_deepseek_user_id_proxy(
+    user_id: str,
+) -> tuple[_DeepSeekUserIdProxy, threading.Thread]:
+    proxy = _DeepSeekUserIdProxy(("127.0.0.1", 0), user_id)
+    thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    thread.start()
+    return proxy, thread
+
+
+def _set_provider_base_url(path: Path, provider_name: str, base_url: str) -> None:
+    config = json.loads(_strip_jsonc_comments(path.read_text(encoding="utf-8")))
+    providers = config.get("providers")
+    provider = providers.get(provider_name) if isinstance(providers, dict) else None
+    if not isinstance(provider, dict):
+        raise RuntimeError(f"provider {provider_name!r} is missing from test config")
+    provider["base_url"] = base_url.rstrip("/")
+    _write_json(path, config)
+
+
 def main() -> int:
     require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=("steer", "interrupt"), required=True)
     parser.add_argument("--model", default=MODEL)
     args = parser.parse_args()
-    run_id = datetime.now().astimezone().strftime("%Y%m%d%H%M")
+    run_id = (
+        datetime.now().astimezone().strftime("%Y%m%d%H%M%S")
+        + "-"
+        + secrets.token_hex(3)
+    )
     run_root = ROOT / "tmp" / "agent_testing_workspace" / run_id
     gateway_log_root = Path("/Volumes/RAMDisk") / run_id
     if run_root.exists() or gateway_log_root.exists():
@@ -602,6 +718,15 @@ def main() -> int:
         auto_compact_token_limit=100_000,
         expected_gateway_provider="Deepseek (Official)",
     )
+    deepseek_user_id = "rosetta-test-" + secrets.token_hex(16)
+    deepseek_proxy, deepseek_proxy_thread = _start_deepseek_user_id_proxy(
+        deepseek_user_id
+    )
+    _set_provider_base_url(
+        gateway_path,
+        "Deepseek (Official)",
+        f"http://127.0.0.1:{deepseek_proxy.server_address[1]}",
+    )
     _disable_dynamic_surfaces(run_root)
     _validate_auth(run_root, port=port, client_key=client_key)
     _write_json(
@@ -612,6 +737,9 @@ def main() -> int:
             "provider_identity": "codex_rosetta",
             "provider_display_name": "OpenAI",
             "gateway_providers": providers,
+            "deepseek_user_id": deepseek_user_id,
+            "deepseek_user_id_scope": "one fresh value per test invocation; reused within the invocation",
+            "deepseek_proxy_port": deepseek_proxy.server_address[1],
             "trace_path": str(gateway_log_root / "rosetta-trace.jsonl"),
         },
     )
@@ -658,6 +786,9 @@ def main() -> int:
             gateway.wait(timeout=5)
         stdout.close()
         stderr.close()
+        deepseek_proxy.shutdown()
+        deepseek_proxy.server_close()
+        deepseek_proxy_thread.join(timeout=5)
     result.update(
         {
             "mode": args.mode,
@@ -668,6 +799,7 @@ def main() -> int:
             "request_surfaces": trace_surfaces(
                 gateway_log_root / "rosetta-trace.jsonl"
             ),
+            "deepseek_user_id_requests": deepseek_proxy.request_count,
         }
     )
     surface_check = _validate_trace_surfaces(result["request_surfaces"])

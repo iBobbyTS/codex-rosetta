@@ -32,7 +32,7 @@ from ...model_profiles import (
     editable_model_info,
     resolve_model_profile,
 )
-from ...provider_profiles import provider_catalog_for_admin
+from ...provider_profiles import provider_catalog_for_admin, resolve_soft_interrupt
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     TOOL_PROFILE_PASSTHROUGH_OPTION,
@@ -507,6 +507,18 @@ async def get_config(request: Any) -> Response:
             runtime_cfg = dict(cfg)
             runtime_cfg["api_type"] = api_type
             masked["api_type"] = api_type
+            provider_id = cfg.get("provider")
+            if isinstance(provider_id, str):
+                try:
+                    masked["soft_interrupt"] = resolve_soft_interrupt(
+                        provider_id,
+                        api_type,
+                        *([cfg["soft_interrupt"]] if "soft_interrupt" in cfg else []),
+                    )
+                except ValueError as exc:
+                    error = str(exc)
+                    provider_errors[name] = error
+                    masked["validation_error"] = error
             masked["default_tool_profile"] = default_tool_profile_for_provider(
                 runtime_cfg
             )

@@ -6,11 +6,11 @@
   import { t } from '../../shared/i18n.svelte';
   import { providerLogo, providerLogoNeedsDarkInversion } from '../lib/provider-logos';
 
-  type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; api_key?: string; validation_error?: string };
+  type Provider = { provider?: string; base_url?: string; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; soft_interrupt?: boolean; api_key?: string; validation_error?: string };
   type ModelRoute = string | { provider?: string };
   type ModelGroup = { provider?: string; models?: Record<string, unknown> };
   type Variant = { endpoints: Record<string,string> };
-  type Vendor = { id:string; label_key:string; logo_shim?:string; recommended_api_type:string; adapted_api_types:Record<string,string>; known_supported_api_types:string[]; variants:Record<string,Variant> };
+  type Vendor = { id:string; label_key:string; logo_shim?:string; soft_interrupt_default?:boolean; recommended_api_type:string; adapted_api_types:Record<string,string>; known_supported_api_types:string[]; variants:Record<string,Variant> };
   type ProviderCatalog = { api_types:string[]; providers:Record<string,Omit<Vendor,'id'>> };
   type Config = { providers?: Record<string, Provider>; models?: Record<string, ModelRoute>; model_groups?: Record<string, ModelGroup>; known_api_types?: string[]; provider_catalog?:ProviderCatalog; credential_visible?: boolean };
 
@@ -18,7 +18,7 @@
   let loading = $state(true); let busy = $state(false); let error = $state(''); let notice = $state('');
   let search = $state(''); let view = $state(localStorage.getItem('provider-view') === 'list' ? 'list' : 'grid');
   let modalOpen = $state(false); let deleteOpen = $state(false); let editingName = $state('');
-  let name = $state(''); let url = $state(''); let proxy = $state(''); let apiType = $state(''); let allowRedirects = $state(false);
+  let name = $state(''); let url = $state(''); let proxy = $state(''); let apiType = $state(''); let allowRedirects = $state(false); let softInterrupt = $state(false);
   let vendorId = $state('custom'); let variantId = $state('custom'); let keyValues = $state(['']); let keyVisible = $state(false); let multiKey = $state(false);
   let pendingDelete = $state(''); let deleteInput = $state('');
 
@@ -54,19 +54,19 @@
     if (!allowedTypes().includes(apiType)) apiType = selectedVendor.recommended_api_type;
     url = variantId === 'custom' ? '' : protocols[apiType] ?? '';
   }
-  function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=Object.keys(vendor.variants)[0]??'custom';apiType=vendor.recommended_api_type;applySelection(); }
+  function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=Object.keys(vendor.variants)[0]??'custom';apiType=vendor.recommended_api_type;softInterrupt=vendor.soft_interrupt_default===true;applySelection(); }
   function chooseVariant(value: string): void { variantId = value; applySelection(); }
   function chooseProtocol(value: string): void { apiType = value; url = variantId==='custom'?'':variant().endpoints[value] ?? ''; }
   function deriveSelection(): void { const found=Object.entries(selectedVendor.variants).find(([,item])=>item===variantForUrl(selectedVendor,url));variantId=found?.[0]??'custom'; }
   function protocolGroups():{label:string;items:string[]}[]{const adapted=Object.keys(selectedVendor.adapted_api_types);const known=selectedVendor.known_supported_api_types.filter((item)=>!adapted.includes(item));const other=allowedTypes().filter((item)=>!adapted.includes(item)&&!known.includes(item));return[{label:'',items:adapted},{label:t('provider.rosettaUnadapted'),items:known},{label:t('provider.maybeUnsupported',{provider:t(selectedVendor.label_key)}),items:other}].filter((group)=>group.items.length);}
   function clearForm(): void {
-    editingName=''; name=''; url=''; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; vendorId='custom'; variantId='custom'; keyValues=['']; keyVisible=false; multiKey=false; error='';
+    editingName=''; name=''; url=''; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; softInterrupt=false; vendorId='custom'; variantId='custom'; keyValues=['']; keyVisible=false; multiKey=false; error='';
   }
   function openNew(): void { clearForm(); modalOpen=true; }
   async function openEdit(providerName: string, provider: Provider, clone = false): Promise<void> {
     editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; url=provider.base_url ?? ''; proxy=provider.proxy ?? '';
     apiType = allowedTypes().includes(provider.api_type ?? '') ? provider.api_type ?? '' : allowedTypes()[0] ?? '';
-    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; keyValues=['']; keyVisible=false; multiKey=false; deriveSelection(); modalOpen=true; error='';
+    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; keyValues=['']; keyVisible=false; multiKey=false; deriveSelection(); modalOpen=true; error='';
     if (!clone && config.credential_visible !== false) {
       try { const result = await api.get<{api_key?: string}>(`/admin/api/config/providers/${encodeURIComponent(providerName)}/key`); const keys=(result.api_key ?? '').split(','); keyValues=keys.length ? keys : ['']; multiKey=keys.length > 1; }
       catch { /* The modal remains usable for replacing or preserving the credential. */ }
@@ -80,7 +80,7 @@
   async function save(): Promise<void> {
     if (!name.trim() || !apiType || !allowedTypes().includes(apiType) || !/^https?:\/\//i.test(url.trim())) { error=t('error.providerFieldsRequired'); return; }
     const credential=keyValues.map((item)=>item.trim()).filter(Boolean).join(','); if (!editingName && !credential) { error=t('error.providerCredentialRequired'); return; }
-    busy=true; error=''; try { const body: Record<string,unknown>={provider:vendorId,api_type:apiType,base_url:url.trim(),proxy:proxy.trim(),allow_redirects:allowRedirects}; if(credential)body.api_key=credential; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',{name:name.trim()}); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
+    busy=true; error=''; try { const body: Record<string,unknown>={provider:vendorId,api_type:apiType,base_url:url.trim(),proxy:proxy.trim(),allow_redirects:allowRedirects}; if(apiType==='chat')body.soft_interrupt=softInterrupt; if(credential)body.api_key=credential; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',{name:name.trim()}); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
   }
   async function action(operation:()=>Promise<unknown>,success:string):Promise<void>{busy=true;error='';try{await operation();await load();notice=success;}catch(cause){error=message(cause);}finally{busy=false;}}
   async function toggle(providerName:string):Promise<void>{await action(()=>api.post(`/admin/api/config/providers/${encodeURIComponent(providerName)}/toggle`),t('toast.providerToggled'));}
@@ -129,6 +129,7 @@
   <div class="form-group"><label for="provApiKey">{t('label.apiKey')}</label>{#if multiKey}<div>{#each keyValues as key,index}<div class="multi-key-row"><input aria-label={t('format.apiKeyIndex',{index:index+1})} type={keyVisible?'text':'password'} value={key} oninput={(event)=>setKey(index,event.currentTarget.value)} /><button type="button" class="key-btn" onclick={()=>removeKey(index)} aria-label={t('aria.removeKey')}>×</button></div>{/each}</div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={addKey}>+ {t('label.addKey')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label={t('aria.toggleVisibility')}>◉</button></div>{:else}<div style="display:flex;gap:4px;align-items:center"><input id="provApiKey" type={keyVisible?'text':'password'} value={keyValues[0]} oninput={(event)=>setKey(0,event.currentTarget.value)} autocomplete="new-password" placeholder={editingName?t('label.keyUnchangedHint'):'${OPENAI_API_KEY}'} style="flex:1" /></div><div class="multi-key-footer"><button type="button" class="btn btn-sm" onclick={promoteKeys}>+ {t('label.addKey')}</button><button type="button" class="key-btn" onclick={()=>keyVisible=!keyVisible} aria-label={t('aria.toggleVisibility')}>◉</button></div>{/if}</div>
   <div class="form-group"><label for="provProxy">{t('label.proxyUrl')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label><input id="provProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} /></div>
   <div class="form-group checkbox-group"><label><input type="checkbox" bind:checked={allowRedirects} /><span>{t('label.allowRedirects')}</span></label></div>
+  {#if apiType==='chat'}<div class="form-group"><div class="checkbox-group"><label><input type="checkbox" bind:checked={softInterrupt} /><span>{t('label.softInterrupt')}</span></label></div><p class="provider-option-description">{t('provider.softInterruptDescription')}</p></div>{/if}
   {#snippet actions()}<button class="btn" onclick={()=>modalOpen=false}>{t('btn.cancel')}</button><button class="btn btn-primary" disabled={busy} onclick={()=>void save()}>{t('btn.save')}</button>{/snippet}
 </Modal>
 

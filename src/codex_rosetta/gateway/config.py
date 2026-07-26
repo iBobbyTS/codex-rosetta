@@ -23,6 +23,7 @@ from .provider_profiles import (
     API_TYPE_TO_PROVIDER_TYPE as PROFILE_API_TYPE_TO_PROVIDER_TYPE,
     api_type_order,
     resolve_provider_profile,
+    resolve_soft_interrupt,
 )
 from .stream_trace import StreamTraceConfig
 from .tool_profiles import (
@@ -875,6 +876,16 @@ class GatewayConfig:
             cfg["allow_redirects"] = allow_redirects
             api_type = resolve_provider_api_type(name, cfg, warn_on_default=True)
             cfg["api_type"] = api_type
+            provider_id = cfg.get("provider")
+            if not isinstance(provider_id, str) or not provider_id.strip():
+                raise ValueError(
+                    f"config: provider '{name}' requires an explicit provider main identity"
+                )
+            cfg["soft_interrupt"] = resolve_soft_interrupt(
+                provider_id.strip(),
+                api_type,
+                *([cfg["soft_interrupt"]] if "soft_interrupt" in cfg else []),
+            )
             provider_type, shim_name = resolve_provider_config_type_and_shim(name, cfg)
             if shim_name is None:
                 logger.warning(

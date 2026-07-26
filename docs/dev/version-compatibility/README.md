@@ -56,9 +56,9 @@ the current formal source and status are recorded separately above.
 | Check | Results |
 | --- | --- |
 | Codex source contract check | Baseline refreshed to exact formal commit `25af12f7…`; the extractor passes after review. Formal semantic changes are recorded in the upgrade report rather than hidden by the refreshed baseline |
-| Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 23 points |
-| Ledger integrity | Compatibility overview and test matrix contain the same 23 names exactly once; the previously unmatched Skill and Bing rows and deferred-tool naming were reconciled |
-| `0.142.0` … `0.145.0` source coverage | The prior range map and alpha.23 review were extended to the exact formal release; every CP-01…CP-23 point remains classified in the formal report |
+| Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 24 points, including the post-baseline soft-interrupt boundary |
+| Ledger integrity | Compatibility overview and test matrix contain the same 24 names exactly once; the previously unmatched Skill and Bing rows and deferred-tool naming were reconciled |
+| `0.142.0` … `0.145.0` source coverage | The prior range map and alpha.23 review were extended to the exact formal release; CP-01…CP-23 remain classified in the formal report, while CP-24 is a later daily-development addition requiring its own live ESC/Steer evidence |
 | Runtime adaptation and real Codex/API | Catalog schema v6 and the 57-item `ToolRuntimePlan` ownership migration are implemented; focused/full tests, build, compatibility check, WebUI, agentabi 3/3, and the recorded post-migration CLI cells pass their stated gates. Remaining blockers are listed in the upgrade report, so 0.145.0 is not approved |
 
 ## Files

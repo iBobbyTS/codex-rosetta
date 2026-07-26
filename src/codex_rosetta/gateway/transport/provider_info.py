@@ -76,6 +76,7 @@ class ProviderInfo:
         stream_url_template: str | None = None,
         proxy_url: str | None = None,
         allow_redirects: bool = False,
+        soft_interrupt: bool = False,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError(
@@ -90,6 +91,7 @@ class ProviderInfo:
         self._stream_url_template = stream_url_template
         self.proxy_url = proxy_url
         self.allow_redirects = allow_redirects
+        self.soft_interrupt = soft_interrupt
 
     @property
     def credential_values(self) -> tuple[str, ...]:

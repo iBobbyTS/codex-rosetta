@@ -159,6 +159,9 @@ def build_provider_info(
     allow_redirects = cfg.get("allow_redirects", False)
     if not isinstance(allow_redirects, bool):
         raise ValueError("config: provider allow_redirects must be a boolean")
+    soft_interrupt = cfg.get("soft_interrupt", False)
+    if not isinstance(soft_interrupt, bool):
+        raise ValueError("config: provider soft_interrupt must be a boolean")
 
     return ProviderInfo(
         name=provider_type,
@@ -169,4 +172,5 @@ def build_provider_info(
         stream_url_template=stream_tpl,
         proxy_url=proxy_url,
         allow_redirects=allow_redirects,
+        soft_interrupt=soft_interrupt,
     )

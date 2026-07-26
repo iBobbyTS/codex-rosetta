@@ -7,7 +7,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from interrupt_continuation.evidence import trace_usage
-from interrupt_continuation.run_live import _request_surface, _validate_trace_surfaces
+from interrupt_continuation.run_live import (
+    _inject_deepseek_user_id,
+    _request_surface,
+    _validate_trace_surfaces,
+)
 
 
 def test_trace_usage_keeps_request_tokens_and_signed_cache_delta(tmp_path):
@@ -155,3 +159,67 @@ def test_request_surface_requires_stable_tool_surface():
     )
     assert result["status"] == "confounded"
     assert result["reason"] == "tool_surface_changed"
+
+
+def test_request_surface_allows_canonical_turn_aborted_marker():
+    base = _request_surface(
+        {
+            "messages": [
+                {"role": "system", "content": "fixed instructions"},
+                {"role": "user", "content": "hello"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "plan"}}],
+        }
+    )
+    interrupted = _request_surface(
+        {
+            "messages": [
+                {"role": "system", "content": "fixed instructions"},
+                {
+                    "role": "system",
+                    "content": (
+                        "<turn_aborted>\n"
+                        "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. "
+                        "If any tools/commands were aborted, they may have partially executed.\n"
+                        "</turn_aborted>"
+                    ),
+                },
+                {"role": "user", "content": "hello"},
+            ],
+            "tools": [{"type": "function", "function": {"name": "plan"}}],
+        }
+    )
+
+    assert interrupted["expected_turn_aborted_count"] == 1
+    assert interrupted["context_fingerprint"] == base["context_fingerprint"]
+    assert (
+        _validate_trace_surfaces(
+            [
+                {
+                    "request_id": "base",
+                    "original_request": base,
+                    "target_request": base,
+                },
+                {
+                    "request_id": "interrupted",
+                    "original_request": interrupted,
+                    "target_request": interrupted,
+                },
+            ]
+        )["status"]
+        == "valid"
+    )
+
+
+def test_deepseek_user_id_proxy_overwrites_stale_id_without_changing_request():
+    body = json.dumps(
+        {"model": "deepseek-v4-flash", "messages": [], "user_id": "old"}
+    ).encode()
+
+    injected = json.loads(_inject_deepseek_user_id(body, "fresh-test-id"))
+
+    assert injected == {
+        "model": "deepseek-v4-flash",
+        "messages": [],
+        "user_id": "fresh-test-id",
+    }

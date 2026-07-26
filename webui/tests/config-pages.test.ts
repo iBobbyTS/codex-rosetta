@@ -14,7 +14,7 @@ const providerCatalog = {
   providers: {
     openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, custom: { endpoints: {} } } },
     moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
-    deepseek: { label_key: 'provider.deepseek', recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
+    deepseek: { label_key: 'provider.deepseek', soft_interrupt_default: true, recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
     custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
   },
 };
@@ -108,6 +108,53 @@ describe('ProvidersPage', () => {
     expect(protocol).not.toHaveTextContent('open_responses');
     expect(protocol).not.toHaveTextContent('openai_chat');
     expect(protocol).not.toHaveTextContent('openai_responses');
+  });
+
+  it('defaults DeepSeek Chat to soft interrupt and hides it for non-Chat protocols', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {},
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    await fireEvent.change(dialog.getByLabelText('Provider'), { target: { value: 'deepseek' } });
+    expect(dialog.getByLabelText('Soft interrupt')).toBeChecked();
+    expect(dialog.getByText(/force-interrupts with ESC/)).toHaveTextContent('24 hours');
+    await fireEvent.change(dialog.getByLabelText('Protocol'), { target: { value: 'anthropic' } });
+    expect(dialog.queryByLabelText('Soft interrupt')).not.toBeInTheDocument();
+    await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'deepseek-anthropic' } });
+    await fireEvent.input(dialog.getByPlaceholderText('https://api.openai.com/v1'), { target: { value: 'https://api.deepseek.com/anthropic' } });
+    await fireEvent.input(dialog.getByLabelText(/^API Key/), { target: { value: 'sk-test' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
+    expect(apiMock.put.mock.calls[0][1]).not.toHaveProperty('soft_interrupt');
+  });
+
+  it('preserves an explicitly disabled DeepSeek soft interrupt when editing and cloning', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        deepseek: {
+          provider: 'deepseek',
+          base_url: 'https://api.deepseek.com',
+          api_type: 'chat',
+          soft_interrupt: false,
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    expect(screen.getByLabelText('Soft interrupt')).not.toBeChecked();
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
+    expect(screen.getByLabelText('Soft interrupt')).not.toBeChecked();
   });
 });
 
