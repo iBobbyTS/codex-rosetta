@@ -19,24 +19,15 @@ Provider receives replayable plaintext rather than another Provider's encrypted
 compaction payload. Routes that convert Responses to another protocol also use
 the Rosetta coordinator.
 
-## Soft-interrupt retention
+## Hard-interrupt cache compatibility
 
-When enabled for a Chat Provider, soft interrupt may store model output that
-Codex did not display in the plaintext `soft_interrupt_handoffs` table in
-`gateway.db`. Each authenticated principal and exact Codex thread owns at most
-one row. Rows use an absolute 24-hour TTL and are removed on startup, access,
-write, and periodic cleanup after expiry. The limits are 8 MiB per row, 64 MiB
-per principal, and 512 MiB globally. Exceeding a limit does not cancel the
-upstream drain, but no replayable row is written.
-
-The row includes output items and cache-continuity fingerprints. It is not
-encrypted or redacted. Keep the existing owner-only data-directory and database
-permissions, protect backups, and treat `gateway.db` as potentially containing
-prompts, reasoning, assistant text, and tool calls. The logical TTL does not
-guarantee erasure from backups, raw traces, filesystem snapshots, or freed
-SQLite pages. Handoffs are isolated by authenticated principal plus `thread_id`;
-`session_id`, window ID, and fork ancestry are diagnostic only. A fork never
-inherits or consumes its parent's hidden output.
+The Chat-only compatibility option is a request-local role conversion. It does
+not retain model output, continue an abandoned upstream stream, or replay hidden
+content. Only the exact canonical Codex `<turn_aborted>` item in a request with
+valid Codex turn metadata is converted to a separate, explicitly attributed
+user-role `<codex_runtime_notice>`. Arbitrary system/developer content is not
+rewritten. The retired plaintext `soft_interrupt_handoffs` table, if present
+from an earlier development build, is deleted with all of its rows on startup.
 
 Codex-Rosetta fails closed: every gateway configuration must contain a
 non-empty Admin password and at least one gateway access key. The default bind

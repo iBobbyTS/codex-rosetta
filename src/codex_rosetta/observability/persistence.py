@@ -50,10 +50,6 @@ DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_BYTES = 64 * 1024 * 1024
 DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_ROWS = 8_192
 DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_BYTES = 512 * 1024 * 1024
 
-DEFAULT_SOFT_INTERRUPT_MAX_ROW_BYTES = 8 * 1024 * 1024
-DEFAULT_SOFT_INTERRUPT_MAX_PRINCIPAL_BYTES = 64 * 1024 * 1024
-DEFAULT_SOFT_INTERRUPT_MAX_GLOBAL_BYTES = 512 * 1024 * 1024
-
 _TOOL_MAPPING_SQL_BYTES = """
     8
     + length(CAST(principal_id AS BLOB))
@@ -141,26 +137,6 @@ _EXPECTED_SCHEMA_COLUMNS: dict[str, tuple[tuple[str, str, int, int], ...]] = {
         ("created_at", "TEXT", 1, 0),
         ("expires_at", "TEXT", 1, 0),
     ),
-    "soft_interrupt_handoffs": (
-        ("principal_id", "TEXT", 1, 1),
-        ("thread_id", "TEXT", 1, 2),
-        ("session_id", "TEXT", 1, 0),
-        ("turn_id", "TEXT", 1, 0),
-        ("window_id", "TEXT", 0, 0),
-        ("forked_from_thread_id", "TEXT", 0, 0),
-        ("provider_name", "TEXT", 1, 0),
-        ("model", "TEXT", 1, 0),
-        ("prompt_cache_key", "TEXT", 1, 0),
-        ("source_input_count", "INTEGER", 1, 0),
-        ("source_input_sha256", "TEXT", 1, 0),
-        ("target_message_count", "INTEGER", 1, 0),
-        ("target_message_hashes_json", "TEXT", 1, 0),
-        ("request_shape_sha256", "TEXT", 1, 0),
-        ("output_items_json", "TEXT", 1, 0),
-        ("payload_bytes", "INTEGER", 1, 0),
-        ("created_at", "TEXT", 1, 0),
-        ("expires_at", "TEXT", 1, 0),
-    ),
 }
 
 _EXPECTED_SCHEMA_INDEXES: dict[
@@ -188,10 +164,6 @@ _EXPECTED_SCHEMA_INDEXES: dict[
         "idx_ccm_expire_at": (("expires_at",), 0, "c", 0),
         "idx_ccm_principal": (("principal_id",), 0, "c", 0),
     },
-    "soft_interrupt_handoffs": {
-        "idx_sih_expires_at": (("expires_at",), 0, "c", 0),
-        "idx_sih_principal": (("principal_id",), 0, "c", 0),
-    },
 }
 
 
@@ -201,10 +173,6 @@ class ToolMappingCapacityError(RuntimeError):
 
 class CompactionMappingCapacityError(RuntimeError):
     """Plaintext remote-compaction state exceeded a configured hard budget."""
-
-
-class SoftInterruptCapacityError(RuntimeError):
-    """Plaintext soft-interrupt handoff exceeded a configured hard budget."""
 
 
 def _positive_tool_mapping_limit(value: int, *, field: str) -> int:
@@ -283,9 +251,6 @@ class PersistenceManager:
         codex_compaction_max_principal_bytes: int = DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_BYTES,
         codex_compaction_max_global_rows: int = DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_ROWS,
         codex_compaction_max_global_bytes: int = DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_BYTES,
-        soft_interrupt_max_row_bytes: int = DEFAULT_SOFT_INTERRUPT_MAX_ROW_BYTES,
-        soft_interrupt_max_principal_bytes: int = DEFAULT_SOFT_INTERRUPT_MAX_PRINCIPAL_BYTES,
-        soft_interrupt_max_global_bytes: int = DEFAULT_SOFT_INTERRUPT_MAX_GLOBAL_BYTES,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._success_max = validate_retention_cap(
@@ -301,7 +266,6 @@ class PersistenceManager:
         self._mapping_cipher: Any | None = None
         self._tool_mapping_lock = threading.RLock()
         self._compaction_mapping_lock = threading.RLock()
-        self._soft_interrupt_lock = threading.RLock()
         self._tool_mapping_max_row_bytes = _positive_tool_mapping_limit(
             tool_mapping_max_row_bytes,
             field="tool_mapping_max_row_bytes",
@@ -350,18 +314,6 @@ class PersistenceManager:
             codex_compaction_max_global_bytes,
             field="codex_compaction_max_global_bytes",
         )
-        self._soft_interrupt_max_row_bytes = _positive_tool_mapping_limit(
-            soft_interrupt_max_row_bytes,
-            field="soft_interrupt_max_row_bytes",
-        )
-        self._soft_interrupt_max_principal_bytes = _positive_tool_mapping_limit(
-            soft_interrupt_max_principal_bytes,
-            field="soft_interrupt_max_principal_bytes",
-        )
-        self._soft_interrupt_max_global_bytes = _positive_tool_mapping_limit(
-            soft_interrupt_max_global_bytes,
-            field="soft_interrupt_max_global_bytes",
-        )
         self._data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self._data_dir, 0o700)
 
@@ -375,9 +327,6 @@ class PersistenceManager:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._init_tables()
             self.cleanup_expired_codex_compaction_mappings(
-                datetime.now(timezone.utc).isoformat()
-            )
-            self.cleanup_expired_soft_interrupt_handoffs(
                 datetime.now(timezone.utc).isoformat()
             )
             self._validate_encrypted_tool_mappings()
@@ -511,6 +460,21 @@ class PersistenceManager:
     # ------------------------------------------------------------------
 
     def _init_tables(self) -> None:
+        retired_table = self._conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name = 'soft_interrupt_handoffs'"
+        ).fetchone()
+        if retired_table is not None:
+            retired_rows = self._conn.execute(
+                "SELECT COUNT(*) FROM soft_interrupt_handoffs"
+            ).fetchone()[0]
+            self._conn.execute("DROP TABLE soft_interrupt_handoffs")
+            self._conn.commit()
+            logger.warning(
+                "Deleted %d retired soft-interrupt handoff row(s); "
+                "hard-interrupt compatibility no longer retains model output",
+                retired_rows,
+            )
         self._conn.executescript("""
             CREATE TABLE IF NOT EXISTS request_log (
                 id              TEXT PRIMARY KEY,
@@ -602,31 +566,6 @@ class PersistenceManager:
                 ON codex_compaction_mappings(expires_at);
             CREATE INDEX IF NOT EXISTS idx_ccm_principal
                 ON codex_compaction_mappings(principal_id);
-            CREATE TABLE IF NOT EXISTS soft_interrupt_handoffs (
-                principal_id              TEXT NOT NULL,
-                thread_id                 TEXT NOT NULL,
-                session_id                TEXT NOT NULL,
-                turn_id                   TEXT NOT NULL,
-                window_id                 TEXT,
-                forked_from_thread_id     TEXT,
-                provider_name             TEXT NOT NULL,
-                model                     TEXT NOT NULL,
-                prompt_cache_key          TEXT NOT NULL,
-                source_input_count        INTEGER NOT NULL,
-                source_input_sha256       TEXT NOT NULL,
-                target_message_count      INTEGER NOT NULL,
-                target_message_hashes_json TEXT NOT NULL,
-                request_shape_sha256      TEXT NOT NULL,
-                output_items_json         TEXT NOT NULL,
-                payload_bytes             INTEGER NOT NULL,
-                created_at                TEXT NOT NULL,
-                expires_at                TEXT NOT NULL,
-                PRIMARY KEY (principal_id, thread_id)
-            );
-            CREATE INDEX IF NOT EXISTS idx_sih_expires_at
-                ON soft_interrupt_handoffs(expires_at);
-            CREATE INDEX IF NOT EXISTS idx_sih_principal
-                ON soft_interrupt_handoffs(principal_id);
         """)
         self._validate_schema()
 
@@ -1686,219 +1625,6 @@ class PersistenceManager:
                 "SELECT COUNT(*) FROM codex_compaction_mappings"
             ).fetchone()
             return row[0] if row else 0
-
-    # ------------------------------------------------------------------
-    # Codex soft-interrupt handoffs
-    # ------------------------------------------------------------------
-
-    def store_soft_interrupt_handoff(
-        self,
-        *,
-        principal_id: str,
-        thread_id: str,
-        session_id: str,
-        turn_id: str,
-        window_id: str | None,
-        forked_from_thread_id: str | None,
-        provider_name: str,
-        model: str,
-        prompt_cache_key: str,
-        source_input_count: int,
-        source_input_sha256: str,
-        target_message_hashes: list[str],
-        request_shape_sha256: str,
-        output_items: list[dict[str, Any]],
-        created_at: str,
-        expires_at: str,
-    ) -> int:
-        """Persist one plaintext, thread-owned soft-interrupt handoff."""
-
-        target_hashes_json = json.dumps(
-            target_message_hashes,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        output_items_json = json.dumps(
-            output_items,
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
-        payload_bytes = len(target_hashes_json.encode("utf-8")) + len(
-            output_items_json.encode("utf-8")
-        )
-        if payload_bytes > self._soft_interrupt_max_row_bytes:
-            raise SoftInterruptCapacityError(
-                "soft-interrupt handoff exceeds row byte limit "
-                f"({self._soft_interrupt_max_row_bytes})"
-            )
-        with self._soft_interrupt_lock:
-            try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                self._conn.execute(
-                    "DELETE FROM soft_interrupt_handoffs WHERE expires_at <= ?",
-                    (datetime.now(timezone.utc).isoformat(),),
-                )
-                existing = self._conn.execute(
-                    "SELECT payload_bytes FROM soft_interrupt_handoffs "
-                    "WHERE principal_id = ? AND thread_id = ?",
-                    (principal_id, thread_id),
-                ).fetchone()
-                byte_delta = payload_bytes - (int(existing[0]) if existing else 0)
-                principal_bytes = int(
-                    self._conn.execute(
-                        "SELECT COALESCE(SUM(payload_bytes), 0) "
-                        "FROM soft_interrupt_handoffs WHERE principal_id = ?",
-                        (principal_id,),
-                    ).fetchone()[0]
-                )
-                global_bytes = int(
-                    self._conn.execute(
-                        "SELECT COALESCE(SUM(payload_bytes), 0) "
-                        "FROM soft_interrupt_handoffs"
-                    ).fetchone()[0]
-                )
-                limits = (
-                    (
-                        "principal bytes",
-                        principal_bytes + byte_delta,
-                        self._soft_interrupt_max_principal_bytes,
-                    ),
-                    (
-                        "global bytes",
-                        global_bytes + byte_delta,
-                        self._soft_interrupt_max_global_bytes,
-                    ),
-                )
-                for label, observed, limit in limits:
-                    if observed > limit:
-                        raise SoftInterruptCapacityError(
-                            f"soft-interrupt handoff {label} exceeds limit ({limit})"
-                        )
-                self._conn.execute(
-                    "INSERT INTO soft_interrupt_handoffs ("
-                    "principal_id, thread_id, session_id, turn_id, window_id, "
-                    "forked_from_thread_id, provider_name, model, prompt_cache_key, "
-                    "source_input_count, source_input_sha256, target_message_count, "
-                    "target_message_hashes_json, request_shape_sha256, output_items_json, "
-                    "payload_bytes, created_at, expires_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT(principal_id, thread_id) DO UPDATE SET "
-                    "session_id = excluded.session_id, turn_id = excluded.turn_id, "
-                    "window_id = excluded.window_id, "
-                    "forked_from_thread_id = excluded.forked_from_thread_id, "
-                    "provider_name = excluded.provider_name, model = excluded.model, "
-                    "prompt_cache_key = excluded.prompt_cache_key, "
-                    "source_input_count = excluded.source_input_count, "
-                    "source_input_sha256 = excluded.source_input_sha256, "
-                    "target_message_count = excluded.target_message_count, "
-                    "target_message_hashes_json = excluded.target_message_hashes_json, "
-                    "request_shape_sha256 = excluded.request_shape_sha256, "
-                    "output_items_json = excluded.output_items_json, "
-                    "payload_bytes = excluded.payload_bytes, created_at = excluded.created_at, "
-                    "expires_at = excluded.expires_at",
-                    (
-                        principal_id,
-                        thread_id,
-                        session_id,
-                        turn_id,
-                        window_id,
-                        forked_from_thread_id,
-                        provider_name,
-                        model,
-                        prompt_cache_key,
-                        source_input_count,
-                        source_input_sha256,
-                        len(target_message_hashes),
-                        target_hashes_json,
-                        request_shape_sha256,
-                        output_items_json,
-                        payload_bytes,
-                        created_at,
-                        expires_at,
-                    ),
-                )
-                self._conn.commit()
-            except BaseException:
-                self._conn.rollback()
-                raise
-        return payload_bytes
-
-    def get_soft_interrupt_handoff(
-        self,
-        *,
-        principal_id: str,
-        thread_id: str,
-        now: str,
-    ) -> dict[str, Any] | None:
-        """Return one unexpired handoff owned by the exact principal and thread."""
-
-        with self._soft_interrupt_lock:
-            self._conn.execute(
-                "DELETE FROM soft_interrupt_handoffs WHERE expires_at <= ?", (now,)
-            )
-            row = self._conn.execute(
-                "SELECT session_id, turn_id, window_id, forked_from_thread_id, "
-                "provider_name, model, prompt_cache_key, source_input_count, "
-                "source_input_sha256, target_message_count, target_message_hashes_json, "
-                "request_shape_sha256, output_items_json, payload_bytes, created_at, "
-                "expires_at FROM soft_interrupt_handoffs "
-                "WHERE principal_id = ? AND thread_id = ?",
-                (principal_id, thread_id),
-            ).fetchone()
-            self._conn.commit()
-        if row is None:
-            return None
-        return {
-            "session_id": row[0],
-            "turn_id": row[1],
-            "window_id": row[2],
-            "forked_from_thread_id": row[3],
-            "provider_name": row[4],
-            "model": row[5],
-            "prompt_cache_key": row[6],
-            "source_input_count": row[7],
-            "source_input_sha256": row[8],
-            "target_message_count": row[9],
-            "target_message_hashes": json.loads(row[10]),
-            "request_shape_sha256": row[11],
-            "output_items": json.loads(row[12]),
-            "payload_bytes": row[13],
-            "created_at": row[14],
-            "expires_at": row[15],
-        }
-
-    def delete_soft_interrupt_handoff(
-        self, *, principal_id: str, thread_id: str
-    ) -> int:
-        """Delete one exact thread-owned handoff."""
-
-        with self._soft_interrupt_lock:
-            cursor = self._conn.execute(
-                "DELETE FROM soft_interrupt_handoffs "
-                "WHERE principal_id = ? AND thread_id = ?",
-                (principal_id, thread_id),
-            )
-            self._conn.commit()
-            return cursor.rowcount
-
-    def cleanup_expired_soft_interrupt_handoffs(self, now: str) -> int:
-        """Delete expired soft-interrupt handoffs."""
-
-        with self._soft_interrupt_lock:
-            cursor = self._conn.execute(
-                "DELETE FROM soft_interrupt_handoffs WHERE expires_at <= ?", (now,)
-            )
-            self._conn.commit()
-            return cursor.rowcount
-
-    def count_soft_interrupt_handoffs(self) -> int:
-        """Return the number of retained soft-interrupt handoffs."""
-
-        with self._soft_interrupt_lock:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM soft_interrupt_handoffs"
-            ).fetchone()
-            return int(row[0]) if row else 0
 
     # ------------------------------------------------------------------
     # Metrics

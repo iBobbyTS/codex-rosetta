@@ -6,7 +6,11 @@
   "provider_identity": "codex_rosetta",
   "provider_display_name": "OpenAI",
   "expected_hard_marker": true,
-  "expected_replay_mode": "steer_continuation",
+  "expected_notice_role": "user",
+  "expected_notice_wrapper": "codex_runtime_notice",
+  "require_cancelled_predecessor": true,
+  "require_cached_continuation": true,
+  "require_no_hidden_replay": true,
   "require_no_dynamic_surfaces": true,
   "require_stable_tool_surface": true,
   "require_no_tool_calls": true

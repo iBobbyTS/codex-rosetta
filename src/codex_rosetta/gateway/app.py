@@ -57,6 +57,7 @@ from .inbound_content_encoding import (
     bind_inbound_wire_request,
     take_inbound_wire_request,
 )
+from .interrupt_notice import rewrite_codex_interrupt_notices
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -77,7 +78,6 @@ from .proxy import (
     validate_model_id,
 )
 from .state_scope import GatewayStateScope
-from .soft_interrupt import SoftInterruptCoordinator, SoftInterruptPreparation
 from .tool_adaptation import CodexToolLocalizationStore
 from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
@@ -408,11 +408,6 @@ def _instrument_stream_response(
     on_finish: Callable[[], None] | None = None,
 ) -> None:
     """Attach request logging and terminal telemetry to an open stream."""
-    source_generator = response._generator
-    add_drain_callback = getattr(source_generator, "add_drain_callback", None)
-    if on_finish is not None and callable(add_drain_callback):
-        add_drain_callback(on_finish)
-        on_finish = None
     _record_request_log_entry(
         request,
         model=model,
@@ -457,7 +452,7 @@ def _instrument_stream_response(
                 on_finish()
 
     response._generator = _InstrumentedStream(
-        source_generator,
+        response._generator,
         source_provider=source_provider,
         success_status=response.status_code,
         finalize=_finalize_stream,
@@ -610,39 +605,6 @@ def _apply_route_model_alias(
     return model, model
 
 
-async def _prepare_soft_interrupt_request(
-    app: Any,
-    *,
-    enabled: bool,
-    is_stream: bool,
-    source_provider: ProviderType,
-    route: ResolvedRoute,
-    principal_id: str,
-    model: str,
-    body: dict[str, Any],
-) -> SoftInterruptPreparation | None:
-    """Prepare one eligible Responses-to-Chat request for soft interruption."""
-
-    if not (
-        enabled is True
-        and is_stream
-        and source_provider in ("openai_responses", "open_responses")
-        and route.target_provider == "openai_chat"
-    ):
-        return None
-    coordinator: SoftInterruptCoordinator | None = getattr(
-        app, "soft_interrupt_coordinator", None
-    )
-    if coordinator is None:
-        return None
-    return await coordinator.prepare_request(
-        principal_id=principal_id,
-        provider_name=route.provider_name,
-        model=model,
-        body=body,
-    )
-
-
 async def _resolve_request_tool_runtime_capabilities(
     app: Any,
     config: GatewayConfig,
@@ -761,6 +723,13 @@ async def _proxy_handler(
         body,
     )
 
+    body, interrupt_notice_rewritten_items = rewrite_codex_interrupt_notices(
+        body,
+        enabled=provider_info.soft_interrupt,
+        source_provider=source_provider,
+        target_provider=route.target_provider,
+    )
+
     # Model aliases are applied before converter/upstream use while logging
     # preserves both public and upstream identities.
     model_label, stats_model = _apply_route_model_alias(
@@ -782,18 +751,6 @@ async def _proxy_handler(
         model=model,
         window_id=codex_window_id,
     )
-    soft_interrupt_preparation = await _prepare_soft_interrupt_request(
-        request.app,
-        enabled=provider_info.soft_interrupt,
-        is_stream=is_stream,
-        source_provider=source_provider,
-        route=route,
-        principal_id=principal_id,
-        model=str(body.get("model", model)),
-        body=body,
-    )
-    if soft_interrupt_preparation is not None:
-        body = soft_interrupt_preparation.body
 
     record_request_stat(stats_model)
     logger.info(
@@ -862,11 +819,6 @@ async def _proxy_handler(
                 body_log_state=getattr(request.app, "body_log_state", None),
                 image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
                 inbound_wire_request=inbound_wire_request,
-                soft_interrupt_coordinator=getattr(
-                    request.app, "soft_interrupt_coordinator", None
-                ),
-                soft_interrupt_preparation=soft_interrupt_preparation,
-                principal_id=principal_id,
             )
         else:
             pre_entry_id = None
@@ -886,6 +838,10 @@ async def _proxy_handler(
                 ),
                 body_log_state=getattr(request.app, "body_log_state", None),
                 image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
+            )
+        if interrupt_notice_rewritten_items:
+            profile["interrupt_notice_rewritten_items"] = (
+                interrupt_notice_rewritten_items
             )
         status_code = response.status_code
         error_detail = _response_error_detail(response)
@@ -1147,7 +1103,6 @@ async def _periodic_tool_call_mapping_cleanup(app: App) -> None:
             now = datetime.now(timezone.utc).isoformat()
             persistence.cleanup_expired_tool_call_mappings(now)
             persistence.cleanup_expired_codex_compaction_mappings(now)
-            persistence.cleanup_expired_soft_interrupt_handoffs(now)
         except Exception as exc:
             logger.warning("Failed to clean up tool-call mapping cache: %s", exc)
 
@@ -1309,9 +1264,6 @@ def create_app(
     app.body_log_state = body_log_state  # type: ignore
 
     setup_admin(app, config, config_path)
-    app.soft_interrupt_coordinator = SoftInterruptCoordinator(  # type: ignore
-        getattr(app, "persistence", None)
-    )
 
     return app
 
@@ -1339,9 +1291,6 @@ async def run_gateway(
         admin_runtime_state = getattr(app, "admin_runtime_state", None)
         if admin_runtime_state is not None:
             await admin_runtime_state.aclose()
-        soft_interrupt_coordinator = getattr(app, "soft_interrupt_coordinator", None)
-        if soft_interrupt_coordinator is not None:
-            await soft_interrupt_coordinator.close()
         _flush_now(app)
         await close_resources(
             transport=app.transport,  # type: ignore

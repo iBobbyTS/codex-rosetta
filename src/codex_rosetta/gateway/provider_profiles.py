@@ -210,7 +210,7 @@ def resolve_soft_interrupt(
     api_type: str,
     value: Any = _MISSING,
 ) -> bool:
-    """Resolve one Provider's protocol-scoped soft-interrupt setting."""
+    """Resolve the legacy-named hard-interrupt cache compatibility setting."""
 
     entry = get_provider_catalog_entry(provider_id)
     if entry is None:

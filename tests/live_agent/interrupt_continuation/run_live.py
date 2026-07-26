@@ -31,6 +31,10 @@ sys.path.insert(0, str(SUITE.parent))
 
 from codex_rosetta.gateway.live_gate import require_live_call_approval  # noqa: E402
 from codex_rosetta.gateway.config import _strip_jsonc_comments  # noqa: E402
+from codex_rosetta.gateway.interrupt_notice import (  # noqa: E402
+    CODEX_RUNTIME_NOTICE_SUFFIX,
+    TURN_ABORTED_DEVELOPER_TEXT,
+)
 
 from tests.live_agent.context_compaction.run_live import (  # noqa: E402
     _AppServerClient,
@@ -336,11 +340,11 @@ _SURFACE_MARKERS = (
     "plugin.json",
 )
 
-_TURN_ABORTED_MARKER = (
-    "<turn_aborted>\n"
-    "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. "
-    "If any tools/commands were aborted, they may have partially executed.\n"
-    "</turn_aborted>"
+_TURN_ABORTED_MARKER = TURN_ABORTED_DEVELOPER_TEXT
+_WRAPPED_TURN_ABORTED_NOTICE = (
+    "<codex_runtime_notice>\n"
+    f"{TURN_ABORTED_DEVELOPER_TEXT}\n"
+    f"{CODEX_RUNTIME_NOTICE_SUFFIX}"
 )
 
 
@@ -393,21 +397,22 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
 
     messages = data.get("messages")
     input_items = data.get("input")
-    system_messages: list[dict[str, Any]] = []
+    request_messages: list[dict[str, Any]] = []
     if isinstance(messages, list):
-        system_messages = [
+        request_messages = [
             {"role": item.get("role"), "text": _text_from_message(item)}
             for item in messages
-            if isinstance(item, dict) and item.get("role") in {"system", "developer"}
+            if isinstance(item, dict)
         ]
     elif isinstance(input_items, list):
-        system_messages = [
+        request_messages = [
             {"role": item.get("role"), "text": _text_from_message(item)}
             for item in input_items
-            if isinstance(item, dict)
-            and item.get("role") in {"system", "developer"}
-            and item.get("type") != "additional_tools"
+            if isinstance(item, dict) and item.get("type") != "additional_tools"
         ]
+    system_messages = [
+        item for item in request_messages if item["role"] in {"system", "developer"}
+    ]
     marker_hits = sorted(
         marker
         for marker in _SURFACE_MARKERS
@@ -415,6 +420,10 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
     )
     expected_turn_aborted_count = sum(
         item["text"].strip() == _TURN_ABORTED_MARKER for item in system_messages
+    )
+    wrapped_turn_aborted_count = sum(
+        item["role"] == "user" and item["text"].strip() == _WRAPPED_TURN_ABORTED_NOTICE
+        for item in request_messages
     )
     normalized_system_messages = [
         item for item in system_messages if item["text"].strip() != _TURN_ABORTED_MARKER
@@ -438,6 +447,7 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
         "system_developer_count": len(system_messages),
         "system_developer_lengths": [len(item["text"]) for item in system_messages],
         "expected_turn_aborted_count": expected_turn_aborted_count,
+        "wrapped_turn_aborted_count": wrapped_turn_aborted_count,
         "dynamic_marker_hits": marker_hits,
         "tool_count": len(tool_names),
         "tool_names": tool_names,
@@ -519,6 +529,82 @@ def _validate_trace_surfaces(surfaces: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _validate_interrupt_cache_contract(
+    *,
+    mode: str,
+    surfaces: list[dict[str, Any]],
+    profiles: list[dict[str, Any]],
+    usage: list[dict[str, Any]],
+    provider_request_count: int,
+    upstream_usage: list[dict[str, int] | None] | None = None,
+) -> dict[str, Any]:
+    target_surfaces = [
+        surface["target_request"]
+        for surface in surfaces
+        if isinstance(surface.get("target_request"), dict)
+    ]
+    wrapped_count = sum(
+        int(item.get("wrapped_turn_aborted_count", 0)) for item in target_surfaces
+    )
+    system_marker_count = sum(
+        int(item.get("expected_turn_aborted_count", 0)) for item in target_surfaces
+    )
+    rewritten_count = sum(
+        int(profile.get("interrupt_notice_rewritten_items", 0)) for profile in profiles
+    )
+    if provider_request_count != 3:
+        return {
+            "status": "invalid",
+            "reason": "unexpected_provider_request_count",
+            "provider_request_count": provider_request_count,
+        }
+    expected_wrapped = 1 if mode == "interrupt" else 0
+    if (
+        wrapped_count != expected_wrapped
+        or rewritten_count != expected_wrapped
+        or system_marker_count != 0
+    ):
+        return {
+            "status": "invalid",
+            "reason": "interrupt_notice_shape",
+            "wrapped_notice_count": wrapped_count,
+            "system_marker_count": system_marker_count,
+            "rewritten_profile_count": rewritten_count,
+        }
+    continuation_usage: dict[str, Any] | None = None
+    usage_source: str | None = None
+    if upstream_usage and isinstance(upstream_usage[-1], dict):
+        continuation_usage = upstream_usage[-1]
+        usage_source = "test_proxy_numeric_summary"
+    else:
+        completed_usage: list[dict[str, Any]] = []
+        for item in usage:
+            value = item.get("usage")
+            if isinstance(value, dict):
+                completed_usage.append(value)
+        if completed_usage:
+            continuation_usage = completed_usage[-1]
+            usage_source = "gateway_trace"
+    if continuation_usage is None:
+        return {"status": "invalid", "reason": "completed_usage_missing"}
+    cached_tokens = continuation_usage.get("cached_tokens")
+    if not isinstance(cached_tokens, int) or cached_tokens <= 0:
+        return {
+            "status": "invalid",
+            "reason": "continuation_cache_miss",
+            "continuation_usage": continuation_usage,
+        }
+    return {
+        "status": "valid",
+        "wrapped_notice_count": wrapped_count,
+        "system_marker_count": system_marker_count,
+        "rewritten_profile_count": rewritten_count,
+        "provider_request_count": provider_request_count,
+        "continuation_usage": continuation_usage,
+        "usage_source": usage_source,
+    }
+
+
 def _create_conda_env(run_root: Path) -> Path:
     env_path = run_root / "conda_env"
     completed = subprocess.run(
@@ -585,7 +671,7 @@ def _profiles(run_root: Path) -> list[dict[str, Any]]:
 
 
 class _DeepSeekUserIdProxy(http.server.ThreadingHTTPServer):
-    """Test-only HTTPS forwarder that injects one isolated DeepSeek user id."""
+    """Inject one isolated DeepSeek user id and retain numeric usage only."""
 
     daemon_threads = True
     allow_reuse_address = True
@@ -594,11 +680,21 @@ class _DeepSeekUserIdProxy(http.server.ThreadingHTTPServer):
         super().__init__(server_address, _DeepSeekUserIdHandler)
         self.user_id = user_id
         self.request_count = 0
+        self.request_usage: list[dict[str, int] | None] = []
         self._request_count_lock = threading.Lock()
 
-    def count_request(self) -> None:
+    def begin_request(self) -> int:
         with self._request_count_lock:
+            request_index = self.request_count
             self.request_count += 1
+            self.request_usage.append(None)
+            return request_index
+
+    def record_request_usage(
+        self, request_index: int, usage: dict[str, int] | None
+    ) -> None:
+        with self._request_count_lock:
+            self.request_usage[request_index] = usage
 
 
 def _inject_deepseek_user_id(body: bytes, user_id: str) -> bytes:
@@ -607,6 +703,36 @@ def _inject_deepseek_user_id(body: bytes, user_id: str) -> bytes:
         raise ValueError("JSON body must be an object")
     payload["user_id"] = user_id
     return json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _deepseek_usage_from_sse_line(line: bytes) -> dict[str, int] | None:
+    """Extract a credential-free numeric usage summary from one SSE line."""
+
+    if not line.startswith(b"data:"):
+        return None
+    raw = line[5:].strip()
+    if not raw or raw == b"[DONE]":
+        return None
+    try:
+        event = json.loads(raw)
+    except UnicodeDecodeError, json.JSONDecodeError:
+        return None
+    if not isinstance(event, dict) or not isinstance(event.get("usage"), dict):
+        return None
+    usage = event["usage"]
+    field_map = {
+        "prompt_tokens": "input_tokens",
+        "completion_tokens": "output_tokens",
+        "total_tokens": "total_tokens",
+        "prompt_cache_hit_tokens": "cached_tokens",
+        "prompt_cache_miss_tokens": "cache_miss_tokens",
+    }
+    summary = {
+        target: value
+        for source, target in field_map.items()
+        if isinstance((value := usage.get(source)), int) and not isinstance(value, bool)
+    }
+    return summary or None
 
 
 class _DeepSeekUserIdHandler(http.server.BaseHTTPRequestHandler):
@@ -632,6 +758,8 @@ class _DeepSeekUserIdHandler(http.server.BaseHTTPRequestHandler):
             if name.lower() in {"authorization", "content-type", "accept"}
         }
         headers["Content-Length"] = str(len(body))
+        request_index = self.server.begin_request()
+        final_usage: dict[str, int] | None = None
         connection = http.client.HTTPSConnection("api.deepseek.com", timeout=600)
         try:
             connection.request("POST", self.path, body=body, headers=headers)
@@ -641,14 +769,22 @@ class _DeepSeekUserIdHandler(http.server.BaseHTTPRequestHandler):
                 if name.lower() not in {"connection", "transfer-encoding"}:
                     self.send_header(name, value)
             self.end_headers()
+            line_buffer = b""
             while chunk := response.read(64 * 1024):
+                line_buffer += chunk
+                while b"\n" in line_buffer:
+                    line, line_buffer = line_buffer.split(b"\n", 1)
+                    if usage := _deepseek_usage_from_sse_line(line.rstrip(b"\r")):
+                        final_usage = usage
+                if len(line_buffer) > 1024 * 1024:
+                    line_buffer = b""
                 try:
                     self.wfile.write(chunk)
                     self.wfile.flush()
                 except BrokenPipeError, ConnectionResetError:
                     break
-            self.server.count_request()
         finally:
+            self.server.record_request_usage(request_index, final_usage)
             connection.close()
 
     def log_message(self, format: str, *args: Any) -> None:
@@ -680,11 +816,7 @@ def main() -> int:
     parser.add_argument("--mode", choices=("steer", "interrupt"), required=True)
     parser.add_argument("--model", default=MODEL)
     args = parser.parse_args()
-    run_id = (
-        datetime.now().astimezone().strftime("%Y%m%d%H%M%S")
-        + "-"
-        + secrets.token_hex(3)
-    )
+    run_id = datetime.now().astimezone().strftime("%Y%m%d%H%M")
     run_root = ROOT / "tmp" / "agent_testing_workspace" / run_id
     gateway_log_root = Path("/Volumes/RAMDisk") / run_id
     if run_root.exists() or gateway_log_root.exists():
@@ -800,13 +932,31 @@ def main() -> int:
                 gateway_log_root / "rosetta-trace.jsonl"
             ),
             "deepseek_user_id_requests": deepseek_proxy.request_count,
+            "deepseek_upstream_usage": deepseek_proxy.request_usage,
         }
     )
     surface_check = _validate_trace_surfaces(result["request_surfaces"])
-    result["cache_comparison"] = surface_check
+    contract_check = _validate_interrupt_cache_contract(
+        mode=args.mode,
+        surfaces=result["request_surfaces"],
+        profiles=result["profiles"],
+        usage=result["request_usage"],
+        provider_request_count=deepseek_proxy.request_count,
+        upstream_usage=deepseek_proxy.request_usage,
+    )
+    result["cache_comparison"] = {
+        "surface": surface_check,
+        "interrupt_contract": contract_check,
+    }
     if result.get("classification") == "success" and surface_check["status"] != "valid":
         result["classification"] = "confounded"
         result["reason"] = surface_check["reason"]
+    if (
+        result.get("classification") == "success"
+        and contract_check["status"] != "valid"
+    ):
+        result["classification"] = "failure"
+        result["reason"] = contract_check["reason"]
     protocol_surface = result.get("protocol_surface")
     if (
         result.get("classification") == "success"
