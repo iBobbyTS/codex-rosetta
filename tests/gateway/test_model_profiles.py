@@ -7,6 +7,7 @@ import pytest
 from codex_rosetta.gateway.model_profiles import (
     canonical_model_overrides,
     deep_merge,
+    editable_model_info,
     normalized_deep_diff,
     resolve_model_profile,
 )
@@ -197,3 +198,30 @@ def test_legacy_eight_field_model_info_remains_readable() -> None:
     assert [
         item["effort"] for item in profile.model_info["supported_reasoning_levels"]
     ] == ["medium", "high"]
+
+
+def test_reasoning_config_is_compact_and_catalog_descriptions_are_canonical() -> None:
+    profile = resolve_model_profile(
+        exposed_model="glm-5.2",
+        upstream_model=None,
+        provider_id="opencode_go",
+        model_info_override={
+            "supported_reasoning_levels": [
+                {"effort": "high", "description": "provider-specific text"}
+            ]
+        },
+    )
+
+    catalog_levels = profile.catalog_model()["supported_reasoning_levels"]
+    assert catalog_levels == [
+        {
+            "effort": "high",
+            "description": "Greater reasoning depth for complex problems",
+        }
+    ]
+    assert editable_model_info(profile.catalog_model())[
+        "supported_reasoning_levels"
+    ] == ["high"]
+    assert canonical_model_overrides(profile)[0] == {
+        "supported_reasoning_levels": ["high"]
+    }

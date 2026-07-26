@@ -29,6 +29,7 @@ from ...model_presets import (
 )
 from ...model_profiles import (
     canonical_model_overrides,
+    editable_model_info,
     resolve_model_profile,
 )
 from ...provider_profiles import provider_catalog_for_admin
@@ -260,7 +261,7 @@ def _resolved_admin_model_entry(
         entry["validation_error"] = str(exc)
         return entry
 
-    model_info = profile.catalog_model()
+    model_info = editable_model_info(profile.catalog_model())
     if "identity" not in model_info:
         editable_preset = detect_model_preset(model_name, profile.upstream_model)
         if editable_preset is not None:
@@ -557,7 +558,7 @@ async def get_config(request: Any) -> Response:
             },
             "model_presets": [
                 dict(
-                    model,
+                    editable_model_info(model),
                     identity=editable_presets[slug]["identity"],
                 )
                 for slug, model in full_model_presets().items()

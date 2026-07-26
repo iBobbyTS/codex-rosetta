@@ -1259,6 +1259,10 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         and preset["identity"] == "DeepSeek V4 Pro Preview"
         for preset in body["model_presets"]
     )
+    glm_preset = next(
+        preset for preset in body["model_presets"] if preset["slug"] == "glm-5.2"
+    )
+    assert glm_preset["supported_reasoning_levels"] == ["high", "max"]
     assert body["codex"] == {}
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "gpt-5.6-terra"
@@ -1269,6 +1273,12 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
             "context_window"
         ]
         > 0
+    )
+    assert all(
+        isinstance(level, str)
+        for level in body["model_groups"]["OpenAI"]["models"]["grouped"]["model_info"][
+            "supported_reasoning_levels"
+        ]
     )
     assert (
         body["model_groups"]["OpenAI"]["models"]["grouped"]["model_info"]["identity"]

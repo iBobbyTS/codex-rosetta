@@ -112,6 +112,27 @@ def _reasoning_efforts(value: Any, *, field: str) -> list[str]:
     return _string_array(efforts, field=field)
 
 
+def _canonical_reasoning_levels(value: Any, *, field: str) -> list[dict[str, Any]]:
+    """Materialize effort names with the canonical Codex descriptions."""
+    efforts = _reasoning_efforts(value, field=field)
+    terra_levels = full_model_presets()["gpt-5.6-terra"]["supported_reasoning_levels"]
+    by_effort = {item["effort"]: item for item in terra_levels}
+    missing = [effort for effort in efforts if effort not in by_effort]
+    if missing:
+        raise ValueError(f"{field} contains unknown efforts: {missing}")
+    return [copy.deepcopy(by_effort[effort]) for effort in efforts]
+
+
+def editable_model_info(value: dict[str, Any]) -> dict[str, Any]:
+    """Return model metadata with reasoning levels reduced to effort names."""
+    result = copy.deepcopy(value)
+    result["supported_reasoning_levels"] = _reasoning_efforts(
+        value.get("supported_reasoning_levels"),
+        field="model_info.supported_reasoning_levels",
+    )
+    return result
+
+
 def validate_full_model_info(value: Any, *, field: str) -> dict[str, Any]:
     """Validate required fields while preserving the complete Codex record."""
     if not isinstance(value, dict):
@@ -130,25 +151,11 @@ def validate_full_model_info(value: Any, *, field: str) -> dict[str, Any]:
         ):
             raise ValueError(f"{field}.{key} must be a positive integer")
     _string_array(value["input_modalities"], field=f"{field}.input_modalities")
-    efforts = _reasoning_efforts(
+    normalized = copy.deepcopy(value)
+    normalized["supported_reasoning_levels"] = _canonical_reasoning_levels(
         value["supported_reasoning_levels"],
         field=f"{field}.supported_reasoning_levels",
     )
-    normalized = copy.deepcopy(value)
-    if all(isinstance(item, str) for item in value["supported_reasoning_levels"]):
-        terra_levels = full_model_presets()["gpt-5.6-terra"][
-            "supported_reasoning_levels"
-        ]
-        by_effort = {item["effort"]: item for item in terra_levels}
-        missing = [effort for effort in efforts if effort not in by_effort]
-        if missing:
-            raise ValueError(
-                f"{field}.supported_reasoning_levels contains unknown efforts: "
-                f"{missing}"
-            )
-        normalized["supported_reasoning_levels"] = [
-            copy.deepcopy(by_effort[effort]) for effort in efforts
-        ]
     return normalized
 
 
@@ -163,21 +170,6 @@ def _legacy_override_base(
     base = copy.deepcopy(preset or full_model_presets()["gpt-5.6-terra"])
     expanded = copy.deepcopy(override)
     expanded.pop("identity", None)
-    efforts = expanded.get("supported_reasoning_levels")
-    if isinstance(efforts, list) and all(isinstance(item, str) for item in efforts):
-        terra_levels = full_model_presets()["gpt-5.6-terra"][
-            "supported_reasoning_levels"
-        ]
-        by_effort = {item["effort"]: item for item in terra_levels}
-        missing = [effort for effort in efforts if effort not in by_effort]
-        if missing:
-            raise ValueError(
-                "model_info.supported_reasoning_levels contains unknown "
-                f"legacy efforts: {missing}"
-            )
-        expanded["supported_reasoning_levels"] = [
-            copy.deepcopy(by_effort[effort]) for effort in efforts
-        ]
     if "context_window" in expanded:
         expanded["max_context_window"] = expanded["context_window"]
     expanded["slug"] = exposed_model
@@ -299,11 +291,13 @@ def canonical_model_overrides(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Return normalized minimal config overrides for a resolved profile."""
     if profile.preset_slug is None:
-        model_diff = copy.deepcopy(profile.model_info)
+        model_diff = editable_model_info(profile.model_info)
     else:
         base = copy.deepcopy(full_model_presets()[profile.preset_slug])
         base["slug"] = profile.exposed_model
-        model_diff = normalized_deep_diff(profile.model_info, base)
+        model_diff = normalized_deep_diff(
+            editable_model_info(profile.model_info), editable_model_info(base)
+        )
     runtime_diff = normalized_deep_diff(
         profile.runtime_capabilities, profile.runtime_preset
     )
