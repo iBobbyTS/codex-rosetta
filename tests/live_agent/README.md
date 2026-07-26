@@ -45,6 +45,9 @@ handling rather than prose quality.
   projected plan/file/image tools, the three-tool Goal lifecycle, and actual
   upstream visual recognition. It also records why `request_user_input` cannot
   be driven by the current non-interactive `codex exec` runner.
+- [`interrupt_continuation`](interrupt_continuation/README.md): app-server
+  steer and hard-interrupt continuation, including the cache-preserving
+  steer-like replay boundary.
 - [`image_generation`](image_generation/README.md): a gated visual-model
   scenario that generates an image, opens the saved artifact through projected
   `view_image`, and leaves semantic agreement with the requested scene to the

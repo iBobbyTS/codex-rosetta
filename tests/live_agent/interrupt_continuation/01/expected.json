@@ -1,0 +1,13 @@
+{
+  "default_model": "deepseek-v4-flash",
+  "gateway_provider": "Deepseek (Official)",
+  "timeout_seconds": 360,
+  "model_auto_compact_token_limit": 100000,
+  "provider_identity": "codex_rosetta",
+  "provider_display_name": "OpenAI",
+  "expected_hard_marker": true,
+  "expected_replay_mode": "steer_continuation",
+  "require_no_dynamic_surfaces": true,
+  "require_stable_tool_surface": true,
+  "require_no_tool_calls": true
+}
