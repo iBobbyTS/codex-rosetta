@@ -22,6 +22,10 @@ from codex_rosetta.gateway.headers import (
     build_upstream_extra_headers,
     resolve_request_id,
 )
+from codex_rosetta.gateway.interrupt_notice import (
+    CODEX_RUNTIME_NOTICE_SUFFIX,
+    TURN_ABORTED_DEVELOPER_TEXT,
+)
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -789,6 +793,97 @@ def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
     assert scope.conversation_id == "thread-abc:0"
     assert scope.persistent is True
     assert "x-codex-window-id" not in captured_kwargs["extra_headers"]
+
+
+def test_proxy_handler_rewrites_enabled_codex_interrupt_notice_before_conversion(
+    monkeypatch,
+):
+    captured_body: dict[str, Any] = {}
+
+    class _Config:
+        models = {"deepseek-v4-flash": "test-provider"}
+        web_search: dict[str, Any] = {}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            provider_info = MagicMock()
+            provider_info.soft_interrupt = True
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name="test-provider",
+                ),
+                provider_info,
+            )
+
+    async def _fake_handle_streaming(*args: Any, **kwargs: Any):
+        captured_body.update(args[2])
+
+        async def _empty_stream():
+            if False:
+                yield ""
+
+        return StreamingResponse(_empty_stream(), content_type="text/event-stream"), {}
+
+    monkeypatch.setattr(app_module, "handle_streaming", _fake_handle_streaming)
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {
+        "model": "deepseek-v4-flash",
+        "input": [
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": TURN_ABORTED_DEVELOPER_TEXT}
+                ],
+            },
+            {"type": "message", "role": "user", "content": "Continue."},
+        ],
+        "client_metadata": {
+            "x-codex-turn-metadata": json.dumps(
+                {
+                    "request_kind": "turn",
+                    "session_id": "session-a",
+                    "thread_id": "thread-a",
+                    "turn_id": "turn-b",
+                }
+            )
+        },
+        "stream": True,
+    }
+    request.app.metadata_store = MagicMock()
+    request.app.codex_tool_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.stream_trace_state = None
+    request.app.transport = MagicMock()
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
+
+    assert response.status_code == 200
+    assert captured_body["input"][0] == {
+        "type": "message",
+        "role": "user",
+        "content": [
+            {
+                "type": "input_text",
+                "text": (
+                    "<codex_runtime_notice>\n"
+                    f"{TURN_ABORTED_DEVELOPER_TEXT}\n"
+                    f"{CODEX_RUNTIME_NOTICE_SUFFIX}"
+                ),
+            }
+        ],
+    }
+    assert captured_body["input"][1] == {
+        "type": "message",
+        "role": "user",
+        "content": "Continue.",
+    }
 
 
 def test_proxy_handler_passes_codex_window_id_to_non_streaming_proxy(monkeypatch):

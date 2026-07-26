@@ -121,6 +121,45 @@ Run artifacts:
 - trace: `/Volumes/RAMDisk/202607250101/rosetta-trace.jsonl`
 - evaluator: `artifacts/evaluation.json`
 
+### Hard-interrupt notice cache checkpoint — 2026-07-26
+
+Two isolated app-server cells used installed `codex-cli 0.145.0`,
+`deepseek-v4-flash`, Responses→Chat conversion, a temporary non-8765 Gateway,
+and a different fresh random DeepSeek `user_id` per cell. The fixture disabled
+Skills, plugins, apps, web search, and shell execution. Both cells retained the
+same system/developer and tool fingerprints, observed no tool call, made
+exactly three Provider requests, and completed successfully.
+
+The ESC cell `202607260944` completed its seed request, cancelled the active
+predecessor normally, and completed the next turn. Only the next turn was
+rewritten: its target history contained one attributed user-role
+`<codex_runtime_notice>`, zero canonical middle system notices, and profile
+count `interrupt_notice_rewritten_items=1`. Numeric upstream usage was
+`14366/87/0`, `usage-missing`, and `14485/1048/14336`, where each tuple is
+`input/output/cached`. The cancelled predecessor has no terminal usage, so no
+adjacent-request cache delta is calculable; the completed continuation itself
+reported 14,336 cached input tokens and 149 cache-miss tokens. No fourth
+request, hidden replay, stream drain, or continued Agent Loop was observed.
+
+The independent Steer cell `202607260945` kept one active turn ID, completed
+all three streams, and produced neither notice form nor any rewrite profile
+field. Its upstream usage was `14366/56/0`, `14396/1033/14336`, and
+`15408/22/14336`. The last signed adjacent delta was
+`14336 - (14396 + 1033) = -1093`; this reflects the uncached generated suffix,
+while the established 14,336-token block remained cached. The test-only
+localhost forwarder recorded only these numeric usage summaries because the
+bounded diagnostic trace can omit the final usage event after a long stream;
+it retained no response text.
+
+Artifacts:
+
+- ESC root: `tmp/agent_testing_workspace/202607260944`
+- ESC trace: `/Volumes/RAMDisk/202607260944/rosetta-trace.jsonl`
+- ESC thread: `019f9f19-9594-7382-b887-8a37ea369c8d`
+- Steer root: `tmp/agent_testing_workspace/202607260945`
+- Steer trace: `/Volumes/RAMDisk/202607260945/rosetta-trace.jsonl`
+- Steer thread: `019f9f1a-2698-7a22-9d11-6c6349c199d4`
+
 ### Attestation scope remains unknown — 2026-07-25
 
 The current Codex source proves that `x-oai-attestation` is requested just in

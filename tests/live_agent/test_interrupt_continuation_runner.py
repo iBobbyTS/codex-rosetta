@@ -1,6 +1,7 @@
 """Deterministic checks for interrupt-continuation live evidence parsing."""
 
 import json
+import socketserver
 import sys
 from pathlib import Path
 
@@ -8,8 +9,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from interrupt_continuation.evidence import trace_usage
 from interrupt_continuation.run_live import (
+    _TURN_ABORTED_MARKER,
+    _WRAPPED_TURN_ABORTED_NOTICE,
+    _deepseek_usage_from_sse_line,
     _inject_deepseek_user_id,
     _request_surface,
+    _validate_interrupt_cache_contract,
     _validate_trace_surfaces,
 )
 
@@ -177,12 +182,7 @@ def test_request_surface_allows_canonical_turn_aborted_marker():
                 {"role": "system", "content": "fixed instructions"},
                 {
                     "role": "system",
-                    "content": (
-                        "<turn_aborted>\n"
-                        "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. "
-                        "If any tools/commands were aborted, they may have partially executed.\n"
-                        "</turn_aborted>"
-                    ),
+                    "content": _TURN_ABORTED_MARKER,
                 },
                 {"role": "user", "content": "hello"},
             ],
@@ -211,6 +211,82 @@ def test_request_surface_allows_canonical_turn_aborted_marker():
     )
 
 
+def test_interrupt_contract_requires_wrapped_user_notice_and_cached_continuation():
+    surface = _request_surface(
+        {
+            "messages": [
+                {"role": "system", "content": "fixed instructions"},
+                {"role": "user", "content": _WRAPPED_TURN_ABORTED_NOTICE},
+                {"role": "user", "content": "continue"},
+            ],
+            "tools": [],
+        }
+    )
+
+    assert surface["expected_turn_aborted_count"] == 0
+    assert surface["wrapped_turn_aborted_count"] == 1
+    assert _validate_interrupt_cache_contract(
+        mode="interrupt",
+        surfaces=[{"target_request": surface}],
+        profiles=[{"interrupt_notice_rewritten_items": 1}],
+        usage=[
+            {
+                "usage": {
+                    "input_tokens": 15409,
+                    "cached_tokens": 14336,
+                    "output_tokens": 2,
+                }
+            }
+        ],
+        provider_request_count=3,
+        upstream_usage=[
+            None,
+            None,
+            {
+                "input_tokens": 15409,
+                "cached_tokens": 14336,
+                "output_tokens": 2,
+            },
+        ],
+    ) == {
+        "status": "valid",
+        "wrapped_notice_count": 1,
+        "system_marker_count": 0,
+        "rewritten_profile_count": 1,
+        "provider_request_count": 3,
+        "continuation_usage": {
+            "input_tokens": 15409,
+            "cached_tokens": 14336,
+            "output_tokens": 2,
+        },
+        "usage_source": "test_proxy_numeric_summary",
+    }
+
+
+def test_interrupt_contract_rejects_native_system_marker_or_cache_miss():
+    native = _request_surface(
+        {
+            "messages": [
+                {"role": "system", "content": "fixed instructions"},
+                {"role": "system", "content": _TURN_ABORTED_MARKER},
+                {"role": "user", "content": "continue"},
+            ],
+            "tools": [],
+        }
+    )
+
+    result = _validate_interrupt_cache_contract(
+        mode="interrupt",
+        surfaces=[{"target_request": native}],
+        profiles=[],
+        usage=[{"usage": {"input_tokens": 15409, "cached_tokens": 0}}],
+        provider_request_count=3,
+    )
+
+    assert result["status"] == "invalid"
+    assert result["reason"] == "interrupt_notice_shape"
+
+
 def test_deepseek_user_id_proxy_overwrites_stale_id_without_changing_request():
     body = json.dumps(
         {"model": "deepseek-v4-flash", "messages": [], "user_id": "old"}
@@ -223,3 +299,26 @@ def test_deepseek_user_id_proxy_overwrites_stale_id_without_changing_request():
         "messages": [],
         "user_id": "fresh-test-id",
     }
+
+
+def test_deepseek_usage_from_sse_line_retains_only_numeric_usage():
+    line = (
+        b'data: {"usage":{"prompt_tokens":15409,"completion_tokens":2,'
+        b'"total_tokens":15411,"prompt_cache_hit_tokens":14336,'
+        b'"prompt_cache_miss_tokens":1073},"choices":[]}'
+    )
+
+    assert _deepseek_usage_from_sse_line(line) == {
+        "input_tokens": 15409,
+        "output_tokens": 2,
+        "total_tokens": 15411,
+        "cached_tokens": 14336,
+        "cache_miss_tokens": 1073,
+    }
+    assert _deepseek_usage_from_sse_line(b"data: [DONE]") is None
+
+
+def test_usage_recorder_does_not_override_http_server_lifecycle():
+    from interrupt_continuation.run_live import _DeepSeekUserIdProxy
+
+    assert _DeepSeekUserIdProxy.finish_request is socketserver.BaseServer.finish_request

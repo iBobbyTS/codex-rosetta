@@ -80,12 +80,6 @@ from .image_workers import (
 from .inbound_content_encoding import InboundWireRequest
 from .stream_phase_buffer import ResponsesPhaseBuffer
 from .state_scope import GatewayStateScope
-from .soft_interrupt import (
-    SoftInterruptCapture,
-    SoftInterruptCoordinator,
-    SoftInterruptPreparation,
-    SoftInterruptReplay,
-)
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
@@ -1913,7 +1907,6 @@ async def _web_search_stream_event_generator(  # noqa: C901
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
     max_rounds: int = 5,
-    should_continue_agent_loop: Callable[[], bool] | None = None,
 ) -> AsyncIterator[str]:
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
@@ -1978,9 +1971,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
                     ):
                         yield sse_event
 
-            calls = _agent_loop_calls(
-                controller.pop_pending_calls(), should_continue_agent_loop
-            )
+            calls = controller.pop_pending_calls()
             if not calls:
                 break
             if round_index >= max_rounds:
@@ -2183,7 +2174,6 @@ def _converted_stream_response_generator(
     target_provider: ProviderType,
     target_body: dict[str, Any],
     extra_headers: dict[str, str] | None,
-    should_continue_agent_loop: Callable[[], bool] | None = None,
 ) -> AsyncIterator[str]:
     if web_search_runtime is None:
         return _stream_event_generator(
@@ -2213,7 +2203,6 @@ def _converted_stream_response_generator(
         entry_id=entry_id,
         request_log=request_log,
         trace=trace,
-        should_continue_agent_loop=should_continue_agent_loop,
     )
 
 
@@ -2236,143 +2225,6 @@ def _prepare_web_search_runtime_and_body(
     if runtime is None:
         return strip_responses_web_search_tools(body), None
     return body, runtime
-
-
-def _agent_loop_calls(
-    calls: list[Any], should_continue: Callable[[], bool] | None
-) -> list[Any]:
-    """Suppress pending local-agent work after the downstream has detached."""
-
-    if should_continue is not None and not should_continue():
-        return []
-    return calls
-
-
-@dataclass(slots=True)
-class _SoftInterruptConversion:
-    """Conversion state while a restored Chat prefix is being verified."""
-
-    original_request_body: dict[str, Any]
-    original_body: dict[str, Any]
-    body: dict[str, Any]
-    capture_source_body: dict[str, Any]
-    target_body: dict[str, Any]
-    web_search_runtime: WebSearchRuntime | None
-    source_tool_capabilities: NativeToolCapabilities
-    pipeline: ConversionPipeline
-    accepted_replay: SoftInterruptReplay | None = None
-
-
-async def _resolve_soft_interrupt_conversion(
-    state: _SoftInterruptConversion,
-    *,
-    coordinator: SoftInterruptCoordinator | None,
-    preparation: SoftInterruptPreparation | None,
-    profile: dict[str, Any],
-    preserve_native_wire: bool,
-    route: ResolvedRoute,
-    web_search_client: TavilySearchClient | None,
-    pipeline_factory: Callable[[], ConversionPipeline],
-    on_request_ir_ready: Callable[[dict[str, Any]], None],
-    image_fetch_workers: ImageFetchWorkerPool | None,
-    image_fetch_policy: ImageFetchPolicy,
-) -> _SoftInterruptConversion:
-    """Accept an exact Chat prefix or rebuild the untouched request on mismatch."""
-
-    replay = preparation.replay if preparation is not None else None
-    if coordinator is None or replay is None:
-        return state
-    if coordinator.target_prefix_matches(replay, state.target_body):
-        state.accepted_replay = replay
-        return state
-
-    await coordinator.finish_replay(replay, accepted=False)
-    profile["soft_interrupt_replayed_items"] = 0
-    profile["soft_interrupt_skip_reason"] = "target_prefix_mismatch"
-    fallback = copy.deepcopy(replay.original_body)
-    state.original_request_body = copy.deepcopy(fallback)
-    state.original_body = fallback
-    state.capture_source_body = copy.deepcopy(fallback)
-    if preserve_native_wire:
-        state.body = fallback
-        state.web_search_runtime = None
-    else:
-        state.body = _apply_tool_adaptation(fallback, route)
-        state.body, state.web_search_runtime = _prepare_web_search_runtime_and_body(
-            route=route,
-            body=state.body,
-            web_search_client=web_search_client,
-        )
-    state.source_tool_capabilities = _source_tool_capabilities_after_profile(
-        state.original_body, state.body, route
-    )
-    state.pipeline = pipeline_factory()
-    state.target_body = await _convert_request(
-        state.pipeline,
-        route,
-        state.body,
-        on_request_ir_ready,
-        image_fetch_workers=image_fetch_workers,
-        image_fetch_policy=image_fetch_policy,
-    )
-    return state
-
-
-def _prepare_soft_interrupt_capture(
-    *,
-    coordinator: SoftInterruptCoordinator | None,
-    preparation: SoftInterruptPreparation | None,
-    principal_id: str | None,
-    provider_name: str,
-    model: str,
-    source_body: dict[str, Any],
-    target_body: dict[str, Any],
-    source_provider: ProviderType,
-    entry_id: str | None,
-    request_log: Any | None,
-) -> tuple[SoftInterruptCapture | None, Callable[[dict[str, Any]], str]]:
-    """Create source-event capture and its SSE observer."""
-
-    base_format_sse = SSE_FORMATTERS[source_provider]
-    if coordinator is None or preparation is None or principal_id is None:
-        return None, base_format_sse
-    capture = coordinator.create_capture(
-        preparation=preparation,
-        principal_id=principal_id,
-        provider_name=provider_name,
-        model=model,
-        source_body=source_body,
-        target_body=target_body,
-        entry_id=entry_id,
-        request_log=request_log,
-    )
-    if capture is None:
-        return None, base_format_sse
-
-    def format_sse(event: dict[str, Any]) -> str:
-        capture.observe(event)
-        return base_format_sse(event)
-
-    return capture, format_sse
-
-
-def _soft_interrupt_agent_loop_guard(
-    capture: SoftInterruptCapture | None,
-) -> Callable[[], bool] | None:
-    if capture is None:
-        return None
-    return lambda: not capture.detached.is_set()
-
-
-async def _wrap_soft_interrupt_generator(
-    source: AsyncIterator[bytes | str],
-    *,
-    coordinator: SoftInterruptCoordinator | None,
-    capture: SoftInterruptCapture | None,
-) -> AsyncIterator[bytes | str]:
-    if coordinator is None or capture is None:
-        return source
-    return await coordinator.wrap(source, capture)
 
 
 def _finalize_stream_profile(
@@ -2768,9 +2620,6 @@ async def handle_streaming(  # noqa: C901
     image_fetch_workers: ImageFetchWorkerPool | None = None,
     web_search_client: TavilySearchClient | None = None,
     inbound_wire_request: InboundWireRequest | None = None,
-    soft_interrupt_coordinator: SoftInterruptCoordinator | None = None,
-    soft_interrupt_preparation: SoftInterruptPreparation | None = None,
-    principal_id: str | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Streaming proxy: convert -> forward -> stream-convert back -> SSE.
 
@@ -2796,11 +2645,7 @@ async def handle_streaming(  # noqa: C901
     )
     persistent_mappings: list[LocalizedToolMapping] = []
     used_mapping_call_ids: set[str] = set()
-    profile: dict[str, Any] = (
-        dict(soft_interrupt_preparation.profile)
-        if soft_interrupt_preparation is not None
-        else {}
-    )
+    profile: dict[str, Any] = {}
     (
         body,
         compaction_response,
@@ -2824,7 +2669,6 @@ async def handle_streaming(  # noqa: C901
         return compaction_response, profile
     # model was already injected into body by app.py
     original_body = body
-    soft_capture_source_body = copy.deepcopy(body)
     runtime_plan = build_tool_runtime_plan(original_body, route)
     native_tool_search_bridge = tool_search_bridge_active(runtime_plan, route)
     preserve_native_wire = (
@@ -2870,32 +2714,28 @@ async def handle_streaming(  # noqa: C901
         proxy_url=provider_info.proxy_url,
         cancellation=image_fetch_cancellation,
     )
-
-    def _new_pipeline() -> ConversionPipeline:
-        return ConversionPipeline(
-            route.source_provider,
-            route.target_provider,
-            route.shim_name,
-            upstream_model=model,
-            input_modalities=route.input_modalities,
-            supported_reasoning_levels=route.supported_reasoning_levels,
-            runtime_capabilities=(
-                route.resolved_model_profile.runtime_capabilities
-                if route.resolved_model_profile is not None
-                else None
+    pipeline = ConversionPipeline(
+        route.source_provider,
+        route.target_provider,
+        route.shim_name,
+        upstream_model=model,
+        input_modalities=route.input_modalities,
+        supported_reasoning_levels=route.supported_reasoning_levels,
+        runtime_capabilities=(
+            route.resolved_model_profile.runtime_capabilities
+            if route.resolved_model_profile is not None
+            else None
+        ),
+        conversion_options={
+            "image_fetch_policy": image_fetch_policy,
+            "provider_profile_warning": (
+                None
+                if route.provider_profile_adapted
+                else f"Provider profile {route.provider_profile_name} is not "
+                "adapted by Rosetta; applying only the selected standard protocol."
             ),
-            conversion_options={
-                "image_fetch_policy": image_fetch_policy,
-                "provider_profile_warning": (
-                    None
-                    if route.provider_profile_adapted
-                    else f"Provider profile {route.provider_profile_name} is not "
-                    "adapted by Rosetta; applying only the selected standard protocol."
-                ),
-            },
-        )
-
-    pipeline = _new_pipeline()
+        },
+    )
 
     # Phase 1+2: Source → IR → Target
     def _on_request_ir_ready(ir_request: dict[str, Any]) -> None:
@@ -2910,40 +2750,8 @@ async def handle_streaming(  # noqa: C901
             image_fetch_workers=image_fetch_workers,
             image_fetch_policy=image_fetch_policy,
         )
-        soft_conversion = await _resolve_soft_interrupt_conversion(
-            _SoftInterruptConversion(
-                original_request_body=original_request_body,
-                original_body=original_body,
-                body=body,
-                capture_source_body=soft_capture_source_body,
-                target_body=target_body,
-                web_search_runtime=web_search_runtime,
-                source_tool_capabilities=source_tool_capabilities,
-                pipeline=pipeline,
-            ),
-            coordinator=soft_interrupt_coordinator,
-            preparation=soft_interrupt_preparation,
-            profile=profile,
-            preserve_native_wire=preserve_native_wire,
-            route=route,
-            web_search_client=web_search_client,
-            pipeline_factory=_new_pipeline,
-            on_request_ir_ready=_on_request_ir_ready,
-            image_fetch_workers=image_fetch_workers,
-            image_fetch_policy=image_fetch_policy,
-        )
     except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
         return _conversion_failure_response(route.source_provider, exc), profile
-    original_request_body = soft_conversion.original_request_body
-    original_body = soft_conversion.original_body
-    body = soft_conversion.body
-    soft_capture_source_body = soft_conversion.capture_source_body
-    target_body = soft_conversion.target_body
-    web_search_runtime = soft_conversion.web_search_runtime
-    source_tool_capabilities = soft_conversion.source_tool_capabilities
-    pipeline = soft_conversion.pipeline
-    accepted_soft_replay = soft_conversion.accepted_replay
-    soft_capture_target_body = copy.deepcopy(target_body)
     if should_localize_code_tools(route) or native_tool_search_bridge:
         persistent_mappings = _load_persistent_tool_mappings(
             persistence,
@@ -3057,11 +2865,6 @@ async def handle_streaming(  # noqa: C901
             profile,
         )
 
-    if accepted_soft_replay is not None and soft_interrupt_coordinator is not None:
-        await soft_interrupt_coordinator.finish_replay(
-            accepted_soft_replay, accepted=True
-        )
-
     # Phase 4: No error — create stream processor and return SSE response
     request_id = extra_headers.get("x-request-id") if extra_headers else None
     trace = _create_stream_trace_logger(
@@ -3115,19 +2918,7 @@ async def handle_streaming(  # noqa: C901
         )
 
     processor = _create_processor()
-    capture, format_sse = _prepare_soft_interrupt_capture(
-        coordinator=soft_interrupt_coordinator,
-        preparation=soft_interrupt_preparation,
-        principal_id=principal_id,
-        provider_name=route.provider_name,
-        model=model,
-        source_body=soft_capture_source_body,
-        target_body=soft_capture_target_body,
-        source_provider=route.source_provider,
-        entry_id=entry_id,
-        request_log=request_log,
-    )
-
+    format_sse = SSE_FORMATTERS[route.source_provider]
     event_buffer = (
         ResponsesPhaseBuffer(window_id=codex_window_id)
         if route.source_provider in ("openai_responses", "open_responses")
@@ -3153,31 +2944,27 @@ async def handle_streaming(  # noqa: C901
         trace.log("target_request", target_body)
         trace.defer_response_diagnostics()
 
-    response_generator = _converted_stream_response_generator(
-        source_provider=route.source_provider,
-        stream=stream,
-        processor=processor,
-        processor_factory=_create_processor,
-        model=model,
-        format_sse=format_sse,
-        event_buffer=event_buffer,
-        entry_id=entry_id,
-        request_log=request_log,
-        trace=trace,
-        web_search_runtime=web_search_runtime,
-        transport=transport,
-        provider_info=provider_info,
-        target_provider=route.target_provider,
-        target_body=target_body,
-        extra_headers=extra_headers,
-        should_continue_agent_loop=_soft_interrupt_agent_loop_guard(capture),
-    )
-    response_generator = await _wrap_soft_interrupt_generator(
-        response_generator,
-        coordinator=soft_interrupt_coordinator,
-        capture=capture,
-    )
     return (
-        StreamingResponse(response_generator, content_type="text/event-stream"),
+        StreamingResponse(
+            _converted_stream_response_generator(
+                source_provider=route.source_provider,
+                stream=stream,
+                processor=processor,
+                processor_factory=_create_processor,
+                model=model,
+                format_sse=format_sse,
+                event_buffer=event_buffer,
+                entry_id=entry_id,
+                request_log=request_log,
+                trace=trace,
+                web_search_runtime=web_search_runtime,
+                transport=transport,
+                provider_info=provider_info,
+                target_provider=route.target_provider,
+                target_body=target_body,
+                extra_headers=extra_headers,
+            ),
+            content_type="text/event-stream",
+        ),
         profile,
     )

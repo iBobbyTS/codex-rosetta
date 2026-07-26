@@ -19,7 +19,6 @@ from codex_rosetta.gateway.admin.persistence import (
 from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
 from codex_rosetta.observability.persistence import (
     CompactionMappingCapacityError,
-    SoftInterruptCapacityError,
     ToolMappingCapacityError,
 )
 from codex_rosetta.observability.tool_mapping_crypto import (
@@ -37,92 +36,6 @@ _TOOL_SCOPE = {
     "model": "model-a",
     "session_id": "s1",
 }
-
-
-class TestSoftInterruptHandoffs:
-    @staticmethod
-    def _store(
-        pm: PersistenceManager,
-        *,
-        principal: str = "client-a",
-        thread: str = "thread-a",
-        output: str = "hidden",
-        expires_at: str = "2030-01-02T00:00:00+00:00",
-    ) -> int:
-        return pm.store_soft_interrupt_handoff(
-            principal_id=principal,
-            thread_id=thread,
-            session_id="session-a",
-            turn_id="turn-a",
-            window_id="window-a",
-            forked_from_thread_id=None,
-            provider_name="deepseek",
-            model="deepseek-chat",
-            prompt_cache_key="cache-a",
-            source_input_count=1,
-            source_input_sha256="a" * 64,
-            target_message_hashes=["b" * 64],
-            request_shape_sha256="c" * 64,
-            output_items=[{"type": "message", "content": output}],
-            created_at="2030-01-01T00:00:00+00:00",
-            expires_at=expires_at,
-        )
-
-    def test_exact_owner_lookup_upsert_and_expiry(self, tmp_path):
-        pm = PersistenceManager(str(tmp_path))
-        self._store(pm)
-        assert (
-            pm.get_soft_interrupt_handoff(
-                principal_id="client-b",
-                thread_id="thread-a",
-                now="2030-01-01T12:00:00+00:00",
-            )
-            is None
-        )
-        assert (
-            pm.get_soft_interrupt_handoff(
-                principal_id="client-a",
-                thread_id="thread-b",
-                now="2030-01-01T12:00:00+00:00",
-            )
-            is None
-        )
-        self._store(pm, output="replacement")
-        row = pm.get_soft_interrupt_handoff(
-            principal_id="client-a",
-            thread_id="thread-a",
-            now="2030-01-01T12:00:00+00:00",
-        )
-        assert row is not None
-        assert row["output_items"] == [{"type": "message", "content": "replacement"}]
-        assert pm.count_soft_interrupt_handoffs() == 1
-        assert (
-            pm.cleanup_expired_soft_interrupt_handoffs("2030-01-02T00:00:00+00:00") == 1
-        )
-        pm.close()
-
-    def test_enforces_row_principal_and_global_byte_limits_transactionally(
-        self, tmp_path
-    ):
-        probe = PersistenceManager(str(tmp_path / "probe"))
-        small_bytes = self._store(probe, output="x")
-        probe.close()
-        pm = PersistenceManager(
-            str(tmp_path / "limited"),
-            soft_interrupt_max_row_bytes=small_bytes,
-            soft_interrupt_max_principal_bytes=small_bytes,
-            soft_interrupt_max_global_bytes=small_bytes * 2,
-        )
-        self._store(pm, output="x")
-        with pytest.raises(SoftInterruptCapacityError, match="row byte limit"):
-            self._store(pm, thread="oversize", output="xx")
-        with pytest.raises(SoftInterruptCapacityError, match="principal bytes"):
-            self._store(pm, thread="thread-b", output="x")
-        self._store(pm, principal="client-b", thread="thread-b", output="x")
-        with pytest.raises(SoftInterruptCapacityError, match="global bytes"):
-            self._store(pm, principal="client-c", thread="thread-c", output="x")
-        assert pm.count_soft_interrupt_handoffs() == 2
-        pm.close()
 
 
 class TestCodexCompactionMappings:
@@ -282,6 +195,31 @@ class TestPersistenceManagerSchema:
     def test_creates_db_file(self, tmp_path):
         pm = PersistenceManager(str(tmp_path))
         assert pm.db_path.exists()
+        pm.close()
+
+    def test_drops_retired_soft_interrupt_handoff_table(self, tmp_path):
+        db_path = tmp_path / "gateway.db"
+        conn = sqlite3.connect(db_path)
+        conn.execute(
+            "CREATE TABLE soft_interrupt_handoffs ("
+            "principal_id TEXT, thread_id TEXT, hidden_output TEXT)"
+        )
+        conn.execute(
+            "INSERT INTO soft_interrupt_handoffs VALUES (?, ?, ?)",
+            ("principal-a", "thread-a", "plaintext hidden response"),
+        )
+        conn.commit()
+        conn.close()
+
+        pm = PersistenceManager(str(tmp_path))
+
+        assert (
+            pm._conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'soft_interrupt_handoffs'"
+            ).fetchone()
+            is None
+        )
         pm.close()
 
     def test_storage_permissions_are_owner_only(self, tmp_path):
