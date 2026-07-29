@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 import os
 import secrets
@@ -22,6 +23,7 @@ from typing import Any
 KEY_ENV_VAR = "CODEX_ROSETTA_TOOL_MAPPING_KEY"
 KEY_FILENAME = "tool-mapping.key"
 PAYLOAD_VERSION = 1
+TOOL_HISTORY_PAYLOAD_VERSION = 2
 _KEY_BYTES = 32
 _NONCE_BYTES = 12
 _KEY_FILE_PREFIX = "v1:"
@@ -53,6 +55,11 @@ class ToolMappingCipher:
                 "pip install 'codex-rosetta[gateway]'"
             ) from exc
         self._aead = AESGCM(key)
+        self._lookup_key = hmac.new(
+            key,
+            b"codex-rosetta-tool-history-lookup-key-v2",
+            hashlib.sha256,
+        ).digest()
         self.key_id = hashlib.sha256(key).hexdigest()
 
     @classmethod
@@ -133,6 +140,88 @@ class ToolMappingCipher:
             )
         return original, codex
 
+    def tool_history_lookup_token(
+        self,
+        *,
+        principal_id: str,
+        object_kind: str,
+        canonical_source: bytes,
+    ) -> bytes:
+        """Return a principal-scoped non-enumerable content lookup token."""
+        envelope = json.dumps(
+            [
+                "codex-rosetta-tool-history-lookup",
+                TOOL_HISTORY_PAYLOAD_VERSION,
+                principal_id,
+                object_kind,
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(
+            self._lookup_key,
+            envelope + b"\x00" + canonical_source,
+            hashlib.sha256,
+        ).digest()
+
+    def encrypt_tool_history_translation(
+        self,
+        *,
+        source_template: dict[str, Any],
+        target_template: dict[str, Any],
+        aad: bytes,
+    ) -> tuple[bytes, bytes]:
+        """Encrypt one exact ID-independent source/target template pair."""
+        payload = json.dumps(
+            {
+                "source_template": source_template,
+                "target_template": target_template,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        nonce = secrets.token_bytes(_NONCE_BYTES)
+        return nonce, self._aead.encrypt(nonce, payload, aad)
+
+    def decrypt_tool_history_translation(
+        self,
+        *,
+        key_id: str,
+        nonce: bytes,
+        encrypted_payload: bytes,
+        aad: bytes,
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Authenticate and deserialize one object translation pair."""
+        if key_id != self.key_id:
+            raise ToolMappingKeyError(
+                "Configured tool-mapping key does not match encrypted database rows"
+            )
+        if len(nonce) != _NONCE_BYTES:
+            raise ToolMappingIntegrityError("Invalid tool-mapping nonce length")
+        try:
+            payload = self._aead.decrypt(nonce, encrypted_payload, aad)
+        except Exception as exc:
+            raise ToolMappingIntegrityError(
+                "Tool-history translation payload authentication failed"
+            ) from exc
+        try:
+            decoded = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+            raise ToolMappingIntegrityError(
+                "Tool-history translation payload is not valid authenticated JSON"
+            ) from exc
+        if not isinstance(decoded, dict):
+            raise ToolMappingIntegrityError(
+                "Tool-history translation payload must be an object"
+            )
+        source = decoded.get("source_template")
+        target = decoded.get("target_template")
+        if not isinstance(source, dict) or not isinstance(target, dict):
+            raise ToolMappingIntegrityError(
+                "Tool-history translation payload is missing object templates"
+            )
+        return source, target
+
 
 def mapping_aad(
     *,
@@ -152,6 +241,26 @@ def mapping_aad(
             model,
             session_id,
             tool_call_id,
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def tool_history_translation_aad(
+    *,
+    principal_id: str,
+    object_kind: str,
+    lookup_token: bytes,
+) -> bytes:
+    """Bind one v2 ciphertext to its immutable ownership coordinates."""
+    return json.dumps(
+        [
+            "codex-rosetta-tool-history-translation",
+            TOOL_HISTORY_PAYLOAD_VERSION,
+            principal_id,
+            object_kind,
+            base64.urlsafe_b64encode(lookup_token).decode("ascii"),
         ],
         ensure_ascii=False,
         separators=(",", ":"),

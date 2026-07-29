@@ -371,11 +371,13 @@ Request log 的 success/error 上限会在启动和 Admin 热更新时使用同�
 
 ## 可执行工具历史存储
 
-启用代码工具本地化后，原生/本地化调用映射属于可执行重放状态，而不是诊断数据。
-Rosetta 使用 AES-256-GCM 把精确映射写入 SQLite；每行使用独立 nonce，并把完整 scope
-作为认证数据。SQLite payload 列保存的是 ciphertext，而不是有损的 `[REDACTED]`
-projection。Request log、stream trace、error dump、API 和 Admin UI 仍是独立的诊断
-界面，继续执行上文的 token-only 脱敏规则。
+启用工具本地化后，原生/模型端对象翻译属于可执行重放状态，而不是诊断数据。Call 与
+Result 会按已认证 principal 分开保存；session、thread、window、fork、Provider、
+model 和协议顶层 call ID 都不是所有权或查找维度。Rosetta 根据精确 source template
+派生按 principal 与对象类型做域隔离的 keyed HMAC lookup token，再使用 AES-256-GCM
+加密 source 和 target template；每行使用独立 nonce 和认证 scope。因此 SQLite 列中既
+没有普通 hash，也没有有损的 `[REDACTED]` projection。Request log、stream trace、
+error dump、API 和 Admin UI 仍是独立的诊断界面，继续执行上文的 token-only 脱敏规则。
 
 默认情况下，首次持久化映射会在 `gateway.db` 同目录原子创建
 `data/tool-mapping.key`。数据目录权限为 `0700`，key 文件权限为 `0600`；多个 gateway
@@ -390,14 +392,17 @@ rotation；只要仍有加密行，就不要替换任一 key source。
 
 若存在加密行但 key 缺失、格式损坏、不匹配，或任一行认证失败，gateway 会在启动时
 fail closed，不会重新生成 key，也不会重放有损历史。旧 plaintext 或 `[REDACTED]`
-映射不可恢复；schema migration 会发出 warning，并且只清除这些旧 mapping row。
-已过期或当前请求不再使用的加密映射继续沿用已配置的 TTL 清理语义。
+映射不可恢复；迁移会发出 warning，并只删除该 legacy table。Encrypted-v1 Call 映射
+会在一个原子迁移中解密并变为单对象记录：完全相同的记录合并，同一个 source 对应冲突
+target 时不迁移；任何完整性、容量或 SQLite 失败都会回滚整个迁移并保留 legacy table。
 
-加密 mapping 存储还执行固定硬预算。ciphertext 加 ownership metadata 每行最多
-16 MiB；每个 session 最多 2,048 行/64 MiB，每个 principal 最多 8,192 行/256 MiB，
-整个数据库最多 32,768 行/512 MiB。Upsert 的过期清理、replacement-aware 行数/字节
-accounting、预算校验和最终写入都在同一个 `BEGIN IMMEDIATE` transaction 中完成，
-因此 replacement 被拒绝或写入失败时会保留旧 mapping。启动时先校验 accounting 和
-全部分层预算，再解密行；session replay 也会在加载 ciphertext 前执行同样的
-accounting 检查。已有 encrypted-v1 表会无损增加并回填 `mapping_bytes` 列，不需要
-解密或删除有效历史。容量超限或 accounting 不一致均 fail closed。
+每个对象记录使用绝对 24 小时 TTL。查找和重复插入不会续期；过期后按普通 miss 处理，
+当前请求成功被接受后可以写入一条具有全新绝对 TTL 的记录。未使用的记录不会提前删除。
+启动、读写和周期清理都会删除过期行。
+
+加密对象存储还执行固定硬预算。ciphertext 加 ownership metadata 每行最多 16 MiB；
+每个 principal 最多 8,192 行/256 MiB，整个数据库最多 32,768 行/512 MiB。过期清理、
+行数/字节 accounting、校验、冲突检测和最终插入都在 transaction 内执行。启动时会先
+校验 accounting 和全部预算，再解密行。模型 Call 对象发生容量、冲突或 accounting
+不一致时会 fail closed；上游已经接受请求后，Result 记录写入失败可以跳过，但不会改变
+已发送的请求。

@@ -37,6 +37,10 @@ from codex_rosetta.pipeline import ConversionError, ConversionPipeline
 from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from codex_rosetta.observability.error_dump import dump_error
+from codex_rosetta.observability.tool_history_store import (
+    ToolHistoryCapacityError,
+    ToolHistoryConflictError,
+)
 
 from .codex_search_references import CodexSearchReferenceStore
 from .codex_compaction import (
@@ -92,11 +96,16 @@ from .tool_adaptation import (
     NativeToolCapabilities,
     ReadOutputCache,
     injected_local_tool_names,
-    localized_mapping_from_tool_calls,
     localized_native_tool_names,
     localize_code_editing_chat_request,
     should_localize_code_tools,
     translate_localized_ir_response,
+)
+from .tool_history_translation import (
+    ToolHistoryObjectKind,
+    ToolHistorySnapshot,
+    ToolHistoryTranslationCandidate,
+    tool_history_object_template,
 )
 from .tool_profiles import (
     apply_profile_tool_mutations,
@@ -858,8 +867,6 @@ def _apply_converted_request_tool_adaptation(
     route: ResolvedRoute,
     *,
     codex_tool_store: CodexToolLocalizationStore | None = None,
-    persistent_mappings: list[LocalizedToolMapping] | None = None,
-    used_mapping_call_ids: set[str] | None = None,
     capabilities: NativeToolCapabilities | None = None,
     native_tool_search_bridge: bool = False,
 ) -> dict[str, Any]:
@@ -868,8 +875,6 @@ def _apply_converted_request_tool_adaptation(
         adapted = localize_code_editing_chat_request(
             body,
             store=codex_tool_store,
-            mappings=persistent_mappings,
-            used_call_ids=used_mapping_call_ids,
             capabilities=capabilities,
             native_tool_names=localized_native_tool_names(route),
             injected_tool_names=injected_local_tool_names(route),
@@ -948,109 +953,149 @@ def _pop_exec_tool_projections(
     }
 
 
-def _load_persistent_tool_mappings(
+def _replay_persistent_tool_history(
     persistence: Any | None,
     *,
     state_scope: GatewayStateScope,
-) -> list[LocalizedToolMapping]:
-    if not state_scope.persistent:
-        return []
+    enabled: bool,
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], ToolHistorySnapshot, set[int]]:
+    snapshot = ToolHistorySnapshot.capture(body)
+    if not snapshot.objects:
+        return body, snapshot, set()
+    if not enabled:
+        return body, snapshot, set()
     if persistence is None:
         raise RuntimeError(
             "Persistent tool-history storage is unavailable; refusing lossy replay"
         )
     now = datetime.now(timezone.utc)
     try:
-        rows = persistence.query_tool_call_mappings(
+        hits = persistence.lookup_tool_history_translation_templates(
             principal_id=state_scope.principal_id,
-            provider_name=state_scope.provider_name,
-            model=state_scope.model,
-            session_id=state_scope.conversation_id,
+            objects=[(item.kind, item.source_template) for item in snapshot.objects],
             now=now.isoformat(),
-            renew_expire_at=(
-                now + timedelta(hours=DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
-            ).isoformat(),
-            renewed_at=now.isoformat(),
         )
     except Exception as exc:
-        logger.error("Failed to load persistent tool-call mappings", exc_info=True)
+        logger.error("Failed to load persistent tool-history objects", exc_info=True)
         raise RuntimeError(
             "Persistent tool history could not be authenticated; refusing lossy replay"
         ) from exc
-
-    mappings: list[LocalizedToolMapping] = []
-    for row in rows:
-        mapping = localized_mapping_from_tool_calls(
-            row.get("original_tool_call") or {},
-            row.get("codex_tool_call") or {},
-        )
-        if mapping is None:
-            raise RuntimeError(
-                "Authenticated persistent tool history contains an invalid mapping"
-            )
-        mappings.append(mapping)
-    return mappings
+    hit_indexes = {index for index, target in enumerate(hits) if target is not None}
+    return snapshot.apply(body, hits), snapshot, hit_indexes
 
 
-def _delete_unused_persistent_tool_mappings(
+def _persist_tool_history_candidate(
     persistence: Any | None,
     *,
     state_scope: GatewayStateScope,
-    loaded_mappings: list[LocalizedToolMapping],
-    used_call_ids: set[str],
-) -> None:
-    if persistence is None or not state_scope.persistent or not loaded_mappings:
-        return
-    unused = [
-        mapping.call_id
-        for mapping in loaded_mappings
-        if mapping.call_id not in used_call_ids
-    ]
-    if not unused:
-        return
-    try:
-        persistence.delete_tool_call_mappings(
-            principal_id=state_scope.principal_id,
-            provider_name=state_scope.provider_name,
-            model=state_scope.model,
-            session_id=state_scope.conversation_id,
-            tool_call_ids=unused,
-        )
-    except Exception:
-        logger.debug("Failed to delete unused tool-call mappings", exc_info=True)
-
-
-def _persist_tool_mapping(
-    persistence: Any | None,
-    *,
-    state_scope: GatewayStateScope,
-    ttl_hours: float,
-    mapping: LocalizedToolMapping,
-) -> None:
-    if not state_scope.persistent or not mapping.call_id:
-        return
+    enabled: bool,
+    candidate: ToolHistoryTranslationCandidate,
+) -> bool:
+    if not enabled:
+        return False
     if persistence is None:
         raise RuntimeError(
-            "Persistent tool-history storage is unavailable; refusing volatile mapping"
+            "Persistent tool-history storage is unavailable; refusing volatile translation"
         )
     now = datetime.now(timezone.utc)
     try:
-        persistence.upsert_tool_call_mapping(
+        return persistence.upsert_tool_history_translation_templates(
             principal_id=state_scope.principal_id,
-            provider_name=state_scope.provider_name,
-            model=state_scope.model,
-            session_id=state_scope.conversation_id,
-            tool_call_id=mapping.call_id,
-            original_tool_call=mapping.original_tool_call(),
-            codex_tool_call=mapping.codex_tool_call(),
-            expire_at=(now + timedelta(hours=ttl_hours)).isoformat(),
+            object_kind=candidate.kind,
+            source_template=candidate.source_template,
+            target_template=candidate.target_template,
+            expire_at=(
+                now + timedelta(hours=DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
+            ).isoformat(),
             timestamp=now.isoformat(),
         )
     except Exception as exc:
-        logger.error("Failed to persist tool-call mapping", exc_info=True)
+        logger.error("Failed to persist tool-history translation", exc_info=True)
         raise RuntimeError(
-            "Tool history could not be durably protected; refusing volatile mapping"
+            "Tool history could not be durably protected; refusing volatile translation"
         ) from exc
+
+
+def _persist_accepted_request_tool_history(
+    persistence: Any | None,
+    *,
+    state_scope: GatewayStateScope,
+    enabled: bool,
+    candidates: list[ToolHistoryTranslationCandidate],
+) -> tuple[int, int]:
+    """Persist accepted request candidates; result capacity skips are non-fatal."""
+    written = 0
+    skipped = 0
+    for candidate in candidates:
+        try:
+            if _persist_tool_history_candidate(
+                persistence,
+                state_scope=state_scope,
+                enabled=enabled,
+                candidate=candidate,
+            ):
+                written += 1
+        except RuntimeError as exc:
+            cause = exc.__cause__
+            if candidate.kind is ToolHistoryObjectKind.RESULT and isinstance(
+                cause, (ToolHistoryCapacityError, ToolHistoryConflictError)
+            ):
+                skipped += 1
+                logger.warning(
+                    "Skipped result tool-history translation (%s)",
+                    type(cause).__name__,
+                )
+                continue
+            raise
+    return written, skipped
+
+
+def _persist_accepted_request_tool_history_or_error(
+    persistence: Any | None,
+    *,
+    source_provider: ProviderType,
+    state_scope: GatewayStateScope,
+    enabled: bool,
+    candidates: list[ToolHistoryTranslationCandidate],
+    profile: dict[str, Any],
+) -> Response | None:
+    """Persist accepted request history and translate fatal failures to HTTP."""
+    try:
+        written, skipped = _persist_accepted_request_tool_history(
+            persistence,
+            state_scope=state_scope,
+            enabled=enabled,
+            candidates=candidates,
+        )
+    except RuntimeError as exc:
+        return error_response_for_source(source_provider, 503, str(exc))
+    if candidates:
+        profile["tool_history_cache_writes"] = written
+        profile["tool_history_cache_write_skips"] = skipped
+    return None
+
+
+def _candidate_from_mapping(
+    mapping: LocalizedToolMapping,
+) -> ToolHistoryTranslationCandidate:
+    source_call = mapping.codex_tool_call()
+    # ``codex_tool_call()`` also serves the legacy v1 persistence decoder and
+    # may carry this private type hint.  It is not part of the real Chat object
+    # produced by Responses -> Chat conversion, so it must not affect v2 exact
+    # content identity.
+    source_call.pop("_codex_rosetta_native_type", None)
+    return ToolHistoryTranslationCandidate(
+        kind=ToolHistoryObjectKind.CALL,
+        source_template=tool_history_object_template(
+            ToolHistoryObjectKind.CALL,
+            source_call,
+        ),
+        target_template=tool_history_object_template(
+            ToolHistoryObjectKind.CALL,
+            mapping.original_tool_call(),
+        ),
+    )
 
 
 def _translate_and_persist_localized_response_tools(
@@ -1060,31 +1105,83 @@ def _translate_and_persist_localized_response_tools(
     tool_store: CodexToolLocalizationStore,
     persistence: Any | None,
     state_scope: GatewayStateScope,
+    persistent_tool_history: bool,
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
     exec_projections: dict[str, ExecToolProjection] | None = None,
 ) -> None:
     if not should_localize_code_tools(route) and not exec_projections:
         return
-    ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
     def _remember_mapping(mapping: LocalizedToolMapping) -> None:
-        _persist_tool_mapping(
+        _persist_tool_history_candidate(
             persistence,
             state_scope=state_scope,
-            ttl_hours=ttl_hours,
-            mapping=mapping,
+            enabled=persistent_tool_history,
+            candidate=_candidate_from_mapping(mapping),
         )
 
     translate_localized_ir_response(
         ir_response,
-        store=tool_store if not state_scope.persistent else None,
-        on_mapping=_remember_mapping if state_scope.persistent else None,
+        store=tool_store if not persistent_tool_history else None,
+        on_mapping=_remember_mapping if persistent_tool_history else None,
         capabilities=capabilities,
         read_cache=read_cache,
         use_apply_patch=True,
         exec_projections=exec_projections,
     )
+
+
+def _convert_non_streaming_upstream_response(
+    *,
+    pipeline: ConversionPipeline,
+    upstream_body: dict[str, Any],
+    route: ResolvedRoute,
+    tool_store: CodexToolLocalizationStore,
+    persistence: Any | None,
+    state_scope: GatewayStateScope,
+    persistent_tool_history: bool,
+    metadata_store: ProviderMetadataStore,
+    tool_capabilities: NativeToolCapabilities | None,
+    read_cache: ReadOutputCache | None,
+    exec_projections: dict[str, ExecToolProjection],
+    body_log_state: BodyLogState | None,
+    profile: dict[str, Any],
+) -> Response:
+    """Translate one accepted upstream response and persist model tool calls."""
+
+    def _on_response_ir_ready(ir_response: dict[str, Any]) -> None:
+        _translate_and_persist_localized_response_tools(
+            ir_response,
+            route,
+            tool_store=tool_store,
+            persistence=persistence,
+            state_scope=state_scope,
+            persistent_tool_history=persistent_tool_history,
+            capabilities=tool_capabilities,
+            read_cache=read_cache,
+            exec_projections=exec_projections,
+        )
+        metadata_store.cache_from_response(ir_response)
+
+    try:
+        source_response = pipeline.convert_response(
+            upstream_body,
+            on_ir_ready=_on_response_ir_ready,
+        )
+    except RuntimeError as exc:
+        return error_response_for_source(route.source_provider, 503, str(exc))
+    except ConversionError as exc:
+        profile.update(pipeline.profile)
+        return error_response_for_source(route.source_provider, 502, str(exc))
+
+    log_response(
+        upstream_body,
+        label="UPSTREAM RESPONSE",
+        state=body_log_state,
+    )
+    profile.update(pipeline.profile)
+    return JSONResponse(source_response)
 
 
 def _create_stream_trace_logger(
@@ -1534,6 +1631,7 @@ async def handle_non_streaming(
         gateway-level measurements (upstream latency).
     """
     model = body.get("model", "")
+    persistent_tool_history = state_scope is not None
     scope, store, tool_store = _resolve_state_stores(
         route=route,
         model=model,
@@ -1541,8 +1639,9 @@ async def handle_non_streaming(
         metadata_store=metadata_store,
         codex_tool_store=codex_tool_store,
     )
-    persistent_mappings: list[LocalizedToolMapping] = []
-    used_mapping_call_ids: set[str] = set()
+    tool_history_snapshot = ToolHistorySnapshot(objects=())
+    tool_history_hit_indexes: set[int] = set()
+    tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
     profile: dict[str, Any] = {}
     error_dump_persistence = None if disable_error_dump else persistence
     (
@@ -1691,19 +1790,32 @@ async def handle_non_streaming(
     except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
         return _conversion_failure_response(route.source_provider, exc), profile
     if should_localize_code_tools(route) or native_tool_search_bridge:
-        persistent_mappings = _load_persistent_tool_mappings(
+        (
+            target_body,
+            tool_history_snapshot,
+            tool_history_hit_indexes,
+        ) = _replay_persistent_tool_history(
             persistence,
             state_scope=scope,
+            enabled=persistent_tool_history,
+            body=target_body,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
         route,
-        codex_tool_store=tool_store if not scope.persistent else None,
-        persistent_mappings=persistent_mappings,
-        used_mapping_call_ids=used_mapping_call_ids,
+        codex_tool_store=tool_store,
         capabilities=source_tool_capabilities,
         native_tool_search_bridge=native_tool_search_bridge,
     )
+    tool_history_candidates = tool_history_snapshot.collect_miss_candidates(
+        target_body,
+        hit_indexes=tool_history_hit_indexes,
+    )
+    if tool_history_snapshot.objects:
+        profile["tool_history_cache_hits"] = len(tool_history_hit_indexes)
+        profile["tool_history_cache_misses"] = len(tool_history_snapshot.objects) - len(
+            tool_history_hit_indexes
+        )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
     exec_projections = _pop_exec_tool_projections(target_body)
@@ -1736,12 +1848,6 @@ async def handle_non_streaming(
             ),
             profile,
         )
-    _delete_unused_persistent_tool_mappings(
-        persistence,
-        state_scope=scope,
-        loaded_mappings=persistent_mappings,
-        used_call_ids=used_mapping_call_ids,
-    )
     profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
 
     if resp.is_error:
@@ -1774,39 +1880,37 @@ async def handle_non_streaming(
             profile,
         )
 
+    tool_history_error = _persist_accepted_request_tool_history_or_error(
+        persistence,
+        source_provider=route.source_provider,
+        state_scope=scope,
+        enabled=persistent_tool_history,
+        candidates=tool_history_candidates,
+        profile=profile,
+    )
+    if tool_history_error is not None:
+        return tool_history_error, profile
+
     # Phase 4: Target response → Source response
     assert resp.body is not None
-
-    def _on_response_ir_ready(ir_response: dict[str, Any]) -> None:
-        _translate_and_persist_localized_response_tools(
-            ir_response,
-            route,
+    return (
+        _convert_non_streaming_upstream_response(
+            pipeline=pipeline,
+            upstream_body=resp.body,
+            route=route,
             tool_store=tool_store,
             persistence=persistence,
             state_scope=scope,
-            capabilities=tool_capabilities,
+            persistent_tool_history=persistent_tool_history,
+            metadata_store=store,
+            tool_capabilities=tool_capabilities,
             read_cache=read_cache,
             exec_projections=exec_projections,
-        )
-        store.cache_from_response(ir_response)
-
-    try:
-        source_response = pipeline.convert_response(
-            resp.body, on_ir_ready=_on_response_ir_ready
-        )
-    except ConversionError as exc:
-        profile.update(pipeline.profile)
-        return error_response_for_source(route.source_provider, 502, str(exc)), profile
-
-    log_response(
-        resp.body,
-        label="UPSTREAM RESPONSE",
-        state=body_log_state,
+            body_log_state=body_log_state,
+            profile=profile,
+        ),
+        profile,
     )
-
-    # Merge response-phase timings from pipeline
-    profile.update(pipeline.profile)
-    return JSONResponse(source_response), profile
 
 
 async def _stream_event_generator(
@@ -2655,6 +2759,7 @@ async def handle_streaming(  # noqa: C901
     """
     original_request_body = copy.deepcopy(body)
     model = body.get("model", "")
+    persistent_tool_history = state_scope is not None
     scope, store, tool_store = _resolve_state_stores(
         route=route,
         model=model,
@@ -2662,8 +2767,9 @@ async def handle_streaming(  # noqa: C901
         metadata_store=metadata_store,
         codex_tool_store=codex_tool_store,
     )
-    persistent_mappings: list[LocalizedToolMapping] = []
-    used_mapping_call_ids: set[str] = set()
+    tool_history_snapshot = ToolHistorySnapshot(objects=())
+    tool_history_hit_indexes: set[int] = set()
+    tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
     profile: dict[str, Any] = {}
     (
         body,
@@ -2772,19 +2878,32 @@ async def handle_streaming(  # noqa: C901
     except (ImageWorkerCapacityError, ImageWorkerTimeoutError, ConversionError) as exc:
         return _conversion_failure_response(route.source_provider, exc), profile
     if should_localize_code_tools(route) or native_tool_search_bridge:
-        persistent_mappings = _load_persistent_tool_mappings(
+        (
+            target_body,
+            tool_history_snapshot,
+            tool_history_hit_indexes,
+        ) = _replay_persistent_tool_history(
             persistence,
             state_scope=scope,
+            enabled=persistent_tool_history,
+            body=target_body,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
         route,
-        codex_tool_store=tool_store if not scope.persistent else None,
-        persistent_mappings=persistent_mappings,
-        used_mapping_call_ids=used_mapping_call_ids,
+        codex_tool_store=tool_store,
         capabilities=source_tool_capabilities,
         native_tool_search_bridge=native_tool_search_bridge,
     )
+    tool_history_candidates = tool_history_snapshot.collect_miss_candidates(
+        target_body,
+        hit_indexes=tool_history_hit_indexes,
+    )
+    if tool_history_snapshot.objects:
+        profile["tool_history_cache_hits"] = len(tool_history_hit_indexes)
+        profile["tool_history_cache_misses"] = len(tool_history_snapshot.objects) - len(
+            tool_history_hit_indexes
+        )
     tool_capabilities = _pop_tool_localization_capabilities(target_body)
     read_cache = _pop_read_output_cache(target_body)
     exec_projections = _pop_exec_tool_projections(target_body)
@@ -2839,13 +2958,6 @@ async def handle_streaming(  # noqa: C901
             ),
             profile,
         )
-    _delete_unused_persistent_tool_mappings(
-        persistence,
-        state_scope=scope,
-        loaded_mappings=persistent_mappings,
-        used_call_ids=used_mapping_call_ids,
-    )
-
     profile["stream_connect_ms"] = round((time.perf_counter() - t_connect) * 1000, 2)
 
     # Application-level error — preserve the upstream envelope and codes while
@@ -2884,6 +2996,20 @@ async def handle_streaming(  # noqa: C901
             profile,
         )
 
+    try:
+        written, skipped = _persist_accepted_request_tool_history(
+            persistence,
+            state_scope=scope,
+            enabled=persistent_tool_history,
+            candidates=tool_history_candidates,
+        )
+    except RuntimeError as exc:
+        await stream.close()
+        return error_response_for_source(route.source_provider, 503, str(exc)), profile
+    if tool_history_candidates:
+        profile["tool_history_cache_writes"] = written
+        profile["tool_history_cache_write_skips"] = skipped
+
     # Phase 4: No error — create stream processor and return SSE response
     request_id = extra_headers.get("x-request-id") if extra_headers else None
     trace = _create_stream_trace_logger(
@@ -2904,18 +3030,17 @@ async def handle_streaming(  # noqa: C901
             trace.log("ir_event", ir_event)
 
     if should_localize_code_tools(route) or exec_projections:
-        ttl_hours = DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
 
         def _persist_stream_mapping(mapping: LocalizedToolMapping) -> None:
-            _persist_tool_mapping(
+            _persist_tool_history_candidate(
                 persistence,
                 state_scope=scope,
-                ttl_hours=ttl_hours,
-                mapping=mapping,
+                enabled=persistent_tool_history,
+                candidate=_candidate_from_mapping(mapping),
             )
 
         stream_transformer = LocalizedToolCallStreamTransformer(
-            store=tool_store if not scope.persistent else None,
+            store=tool_store if not persistent_tool_history else None,
             on_mapping=_persist_stream_mapping,
             capabilities=tool_capabilities,
             read_cache=read_cache,

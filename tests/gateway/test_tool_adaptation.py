@@ -31,9 +31,7 @@ from codex_rosetta.gateway.tool_adaptation import (
     localized_mapping_from_tool_calls,
     generated_patch_for_edit,
     localize_code_editing_chat_request,
-    tool_call_cache_ttl_hours,
     translate_localized_tool_call_part,
-    validate_tool_call_cache_ttl_hours,
 )
 from codex_rosetta.gateway.tool_profiles import (
     catalog_runtime_adapters,
@@ -41,7 +39,12 @@ from codex_rosetta.gateway.tool_profiles import (
 )
 from codex_rosetta.gateway.tool_search_bridge import tool_search_bridge_projection
 from codex_rosetta.observability.persistence import PersistenceManager
-from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
+from codex_rosetta.observability.tool_history_store import ToolHistoryCapacityError
+from codex_rosetta.gateway.transport._base import (
+    UpstreamConnectionError,
+    UpstreamResponse,
+    UpstreamStream,
+)
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -68,22 +71,6 @@ def _persistent_scope(principal_id: str = "test-client") -> GatewayStateScope:
         model="glm-5.2",
         conversation_id="window-1",
         persistent=True,
-    )
-
-
-@pytest.mark.parametrize("value", [True, "nan", "inf", "1e999", 720.01, 1e100])
-def test_tool_call_cache_ttl_runtime_helper_rejects_invalid_values(value):
-    with pytest.raises(ValueError, match="at most 720 hours"):
-        validate_tool_call_cache_ttl_hours(value)
-    with pytest.raises(ValueError, match="at most 720 hours"):
-        tool_call_cache_ttl_hours({"tool_call_cache_ttl_hours": value})
-
-
-@pytest.mark.parametrize("value", [0.25, "24", 720])
-def test_tool_call_cache_ttl_runtime_helper_accepts_supported_values(value):
-    assert validate_tool_call_cache_ttl_hours(value) == float(value)
-    assert tool_call_cache_ttl_hours({"tool_call_cache_ttl_hours": value}) == float(
-        value
     )
 
 
@@ -1003,14 +990,11 @@ def test_encrypted_mapping_restores_exact_raw_history_after_restart(tmp_path):
             ),
         },
     }
-    persistence.upsert_tool_call_mapping(
+    persistence.upsert_tool_history_translation(
         principal_id="test-client",
-        provider_name="test-provider",
-        model="glm-5.2",
-        session_id="window-1",
-        tool_call_id="call_bash",
-        original_tool_call=original_tool_call,
-        codex_tool_call=codex_tool_call,
+        object_kind="call",
+        source_object=codex_tool_call,
+        target_object=original_tool_call,
         expire_at="2030-01-01T00:00:00+00:00",
         timestamp="2026-01-01T00:00:00+00:00",
     )
@@ -1020,34 +1004,14 @@ def test_encrypted_mapping_restores_exact_raw_history_after_restart(tmp_path):
         str(tmp_path),
         token_values={"sk-live-secret"},
     )
-    rows = restarted.query_tool_call_mappings(
+    rows = restarted.lookup_tool_history_translations(
         principal_id="test-client",
-        provider_name="test-provider",
-        model="glm-5.2",
-        session_id="window-1",
+        objects=[("call", {**codex_tool_call, "id": "fork-call"})],
         now="2026-01-01T00:00:00+00:00",
     )
-    mapping = localized_mapping_from_tool_calls(
-        rows[0]["original_tool_call"],
-        rows[0]["codex_tool_call"],
-    )
-    assert mapping is not None
-    used_call_ids: set[str] = set()
-
-    adapted = localize_code_editing_chat_request(
-        {
-            "messages": [
-                {
-                    "role": "assistant",
-                    "tool_calls": [codex_tool_call],
-                }
-            ]
-        },
-        mappings=[mapping],
-        used_call_ids=used_call_ids,
-    )
-
-    function = adapted["messages"][0]["tool_calls"][0]["function"]
+    restored = rows[0]
+    assert restored is not None
+    function = restored["function"]
     arguments = json.loads(function["arguments"])
     assert function["name"] == "Bash"
     assert arguments["command"] == command
@@ -1055,11 +1019,13 @@ def test_encrypted_mapping_restores_exact_raw_history_after_restart(tmp_path):
     assert arguments["password"] == "ordinary-password"
     assert arguments["client_secret"] == "ordinary-client-secret"
     assert "user@example.com" in arguments["command"]
-    assert used_call_ids == {"call_bash"}
+    assert restored["id"] == "fork-call"
     restarted.close()
 
 
-def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
+def test_gateway_non_streaming_reuses_tool_objects_across_fork_without_window_and_restart(
+    tmp_path,
+):
     captured_bodies: list[dict[str, Any]] = []
     upstream_body = {
         "id": "chatcmpl-test",
@@ -1140,7 +1106,7 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
 
     first_response, _ = asyncio.run(first_run())
     first_output = json.loads(first_response.body)["output"][0]
-    assert persistence.count_tool_call_mappings() == 1
+    assert persistence.count_tool_history_translations() == 1
     assert len(tool_store) == 0
 
     second_body = {
@@ -1148,7 +1114,7 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
         "input": [
             {
                 "type": "custom_tool_call",
-                "call_id": "call_edit",
+                "call_id": "fork_call_edit",
                 "name": "apply_patch",
                 "input": first_output["input"],
             },
@@ -1158,6 +1124,13 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
     }
 
     async def continue_run():
+        fork_scope = GatewayStateScope(
+            principal_id="test-client",
+            provider_name="different-provider",
+            model="different-model",
+            conversation_id="request:fork-without-window",
+            persistent=False,
+        )
         return await handle_non_streaming(
             _route(),
             _provider_info(),
@@ -1166,11 +1139,12 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
             metadata_store=ProviderMetadataStore(),
             codex_tool_store=tool_store,
             persistence=persistence,
-            state_scope=_persistent_scope(),
+            state_scope=fork_scope,
         )
 
     asyncio.run(continue_run())
     same_process_call = captured_bodies[-1]["messages"][0]["tool_calls"][0]
+    assert same_process_call["id"] == "fork_call_edit"
     assert same_process_call["function"]["name"] == "Edit"
     same_process_arguments = json.loads(same_process_call["function"]["arguments"])
     assert same_process_arguments["new_string"] == (
@@ -1186,25 +1160,24 @@ def test_gateway_non_streaming_persists_and_reuses_tool_mapping(tmp_path):
     asyncio.run(continue_run())
     restarted_call = captured_bodies[-1]["messages"][0]["tool_calls"][0]
     assert restarted_call == same_process_call
-    assert persistence.count_tool_call_mappings() == 1
+    # The continued request also stores its independently translated synthetic
+    # tool result, so call and result history occupy separate cache rows.
+    assert persistence.count_tool_history_translations() == 2
     persistence.close()
 
 
-def test_gateway_deletes_unused_persistent_mappings_after_request(tmp_path):
+def test_gateway_preserves_unused_translation_for_other_forks(tmp_path):
     captured_body: dict[str, Any] = {}
     persistence = PersistenceManager(str(tmp_path))
-    persistence.upsert_tool_call_mapping(
+    persistence.upsert_tool_history_translation(
         principal_id="test-client",
-        provider_name="test-provider",
-        model="glm-5.2",
-        session_id="window-1",
-        tool_call_id="unused",
-        original_tool_call={
+        object_kind="call",
+        target_object={
             "id": "unused",
             "type": "function",
             "function": {"name": "Bash", "arguments": '{"command":"pwd"}'},
         },
-        codex_tool_call={
+        source_object={
             "id": "unused",
             "type": "function",
             "function": {"name": "exec_command", "arguments": '{"cmd":"pwd"}'},
@@ -1263,7 +1236,224 @@ def test_gateway_deletes_unused_persistent_mappings_after_request(tmp_path):
 
     asyncio.run(run())
     assert "messages" in captured_body
-    assert persistence.count_tool_call_mappings() == 0
+    assert persistence.count_tool_history_translations() == 1
+    persistence.close()
+
+
+@pytest.mark.parametrize("failure", ["http", "connection"])
+def test_gateway_does_not_store_request_history_before_upstream_acceptance(
+    tmp_path, failure
+):
+    body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_request",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "pwd"}),
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_request",
+                "output": "workspace",
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def send_request(*args, **kwargs):
+        if failure == "connection":
+            raise UpstreamConnectionError("upstream unavailable")
+        return UpstreamResponse(
+            status_code=400,
+            body={"error": {"message": "rejected"}},
+            raw_content=b'{"error":{"message":"rejected"}}',
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    persistence = PersistenceManager(str(tmp_path))
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+            persistence=persistence,
+            state_scope=_persistent_scope(),
+        )
+
+    response, profile = asyncio.run(run())
+    assert response.status_code >= 400
+    assert profile["tool_history_cache_misses"] == 2
+    assert persistence.count_tool_history_translations() == 0
+    persistence.close()
+
+
+def test_gateway_skips_result_capacity_failure_after_upstream_acceptance(
+    tmp_path, monkeypatch
+):
+    body = {
+        "model": "glm-5.2",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_request",
+                "name": "exec_command",
+                "arguments": json.dumps({"cmd": "pwd"}),
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_request",
+                "output": "workspace",
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    upstream_body = {
+        "id": "chatcmpl-result-capacity",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "done"},
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    transport = MagicMock()
+    transport.send_request = AsyncMock(
+        return_value=UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+    )
+    persistence = PersistenceManager(str(tmp_path))
+    original_upsert = persistence.upsert_tool_history_translation_templates
+
+    def capacity_on_result(**kwargs):
+        if str(kwargs["object_kind"]) == "result":
+            raise ToolHistoryCapacityError("result capacity")
+        return original_upsert(**kwargs)
+
+    monkeypatch.setattr(
+        persistence,
+        "upsert_tool_history_translation_templates",
+        capacity_on_result,
+    )
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+            persistence=persistence,
+            state_scope=_persistent_scope(),
+        )
+
+    response, profile = asyncio.run(run())
+    assert response.status_code == 200
+    assert profile["tool_history_cache_writes"] == 1
+    assert profile["tool_history_cache_write_skips"] == 1
+    assert persistence.count_tool_history_translations() == 1
+    persistence.close()
+
+
+def test_gateway_fails_closed_when_model_call_cannot_be_persisted(
+    tmp_path, monkeypatch
+):
+    upstream_body = {
+        "id": "chatcmpl-call-capacity",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_bash",
+                            "type": "function",
+                            "function": {
+                                "name": "Bash",
+                                "arguments": json.dumps({"command": "pwd"}),
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+    transport = MagicMock()
+    transport.send_request = AsyncMock(
+        return_value=UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+    )
+    persistence = PersistenceManager(str(tmp_path))
+
+    def reject_call(**kwargs):
+        raise ToolHistoryCapacityError("call capacity")
+
+    monkeypatch.setattr(
+        persistence,
+        "upsert_tool_history_translation_templates",
+        reject_call,
+    )
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "run pwd"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+            persistence=persistence,
+            state_scope=_persistent_scope(),
+        )
+
+    response, _profile = asyncio.run(run())
+    assert response.status_code == 503
+    assert persistence.count_tool_history_translations() == 0
     persistence.close()
 
 
@@ -1674,15 +1864,27 @@ def test_gateway_streaming_persists_tool_mapping(tmp_path):
     chunks = asyncio.run(run())
 
     assert '"name": "exec_command"' in "\n".join(chunks)
-    rows = persistence.query_tool_call_mappings(
+    rows = persistence.lookup_tool_history_translations(
         principal_id="test-client",
-        provider_name="test-provider",
-        model="glm-5.2",
-        session_id="window-1",
+        objects=[
+            (
+                "call",
+                {
+                    "id": "fork-call",
+                    "type": "function",
+                    "function": {
+                        "name": "exec_command",
+                        "arguments": json.dumps({"cmd": "printf ok"}),
+                    },
+                },
+            )
+        ],
         now="2026-01-01T00:00:00+00:00",
     )
-    assert rows[0]["original_tool_call"]["function"]["name"] == "Bash"
-    assert rows[0]["codex_tool_call"]["function"]["name"] == "exec_command"
+    restored = rows[0]
+    assert restored is not None
+    assert restored["function"]["name"] == "Bash"
+    assert restored["id"] == "fork-call"
     persistence.close()
 
 

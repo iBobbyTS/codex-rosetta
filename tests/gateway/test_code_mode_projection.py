@@ -3386,17 +3386,32 @@ def test_gateway_projects_direct_tools_and_persists_exec_round_trip_with_ttl(tmp
     assert {"Edit", "Write"}.issubset(first_names)
     assert "apply_patch" not in first_names
 
-    rows = persistence.query_tool_call_mappings(
+    rows = persistence.lookup_tool_history_translations(
         principal_id="client",
-        provider_name="test",
-        model="deepseek-v4-flash",
-        session_id="window-1",
+        objects=[
+            (
+                "call",
+                {
+                    "id": "fork-call",
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "arguments": json.dumps({"input": first_output["input"]}),
+                    },
+                },
+            )
+        ],
         now=datetime.now(timezone.utc).isoformat(),
     )
-    assert rows[0]["original_tool_call"]["function"]["name"] == "web-run"
-    assert rows[0]["codex_tool_call"]["function"]["name"] == "exec"
-    created = datetime.fromisoformat(rows[0]["created_at"])
-    expires = datetime.fromisoformat(rows[0]["expire_at"])
+    restored = rows[0]
+    assert restored is not None
+    assert restored["function"]["name"] == "web-run"
+    assert restored["id"] == "fork-call"
+    created_at, expire_at = persistence._conn.execute(
+        "SELECT created_at, expire_at FROM tool_history_object_translations"
+    ).fetchone()
+    created = datetime.fromisoformat(created_at)
+    expires = datetime.fromisoformat(expire_at)
     assert (expires - created).total_seconds() == 24 * 60 * 60
 
     second_body = {

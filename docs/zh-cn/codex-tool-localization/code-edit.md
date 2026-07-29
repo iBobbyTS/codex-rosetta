@@ -12,7 +12,6 @@ Codex-Rosetta 可以在 Responses 到 Chat 的路由上本地化模型端编辑�
 
 - `Localize code editing tools`（本地化代码编辑工具）：将 Codex 原生编辑工具替换为面向上游模型的本地化 Chat 工具。
 - Tool Profile 管理当前嵌套在 Code Mode `exec` 中的 `image_gen__imagegen` Function（运行时身份为 `image_gen.imagegen`）。已废弃的 Hosted `image_generation` 工具不再属于打包的 Profile 目录。
-- `Tool call mapping cache TTL`（工具调用映射缓存 TTL）：持久化的本地化/原生工具调用映射的有效时长。
 
 只有配置了该选项的模型路由会受到影响。
 
@@ -49,26 +48,36 @@ Codex-Rosetta 可以在 Responses 到 Chat 的路由上本地化模型端编辑�
 
 在成功对该文件执行修改操作后，该文件的缓存会被失效，因此过期的读取结果不会在后续编辑中被重用。
 
-## 历史工具调用映射
+## 历史工具对象翻译
 
 Codex 在本地会话历史中存储助手工具调用，并在后续轮次中重新发送该历史。本地化之后，Codex 看到的是 `apply_patch` 这样的原生调用，但上游 Chat 模型最初看到的是 `Edit` 这样的本地化调用。
 
-为了保持供应商端提示缓存和模型连续性，Rosetta 存储了一个映射：
+为了保持供应商端提示缓存和模型连续性，Rosetta 会按 principal 归属，分别保存单个
+Chat 工具对象的翻译。Call 与 Result 是彼此独立的记录。内容身份只排除协议顶层的调用
+标识符（Call 的 `id` 或 Result 的 `tool_call_id`）；参数或结果内容内部的 `id` 仍参与
+匹配。命中时会注入当前请求的协议顶层标识符。
 
-- `session_id`（会话 ID）
-- 原始本地化工具调用
-- Codex 原生工具调用
-- 过期时间
-
-对于已认证且带 window scope 的 gateway 请求，SQLite 是跨请求 source of truth；映射
-不会作为跨轮内存缓存保留。精确、可逆的 payload 使用 AES-256-GCM 进行 at-rest
-保护。诊断脱敏不会应用到这份可执行 payload，因为 `[REDACTED]` 调用已无法描述 Codex
-真实执行的工具动作。Key lifecycle、备份、失败和 legacy row 语义见
+已认证 principal 是唯一的所有权边界。Session、thread、window、fork、Provider、model
+和 call ID 都不是缓存键，因此 window 变化、compact、resume 或 fork 后仍可复用完全一致
+的单对象翻译，而无需复制外围会话。按 principal 和对象类型做域隔离的 keyed HMAC
+可防止 SQLite lookup token 成为枚举界面；精确 source 与翻译后的 template 使用
+AES-256-GCM 进行 at-rest 保护。诊断脱敏不会应用到这份可执行 payload，因为
+`[REDACTED]` 对象已无法描述 Codex 真实执行的工具动作。Key lifecycle、备份、失败和
+legacy row 语义见
 [网关安全与认证](../gateway-security.md#可执行工具历史存储)。
 
-在后续同一会话的请求中，Rosetta 会遍历历史消息，在发送请求到上游之前，将已知的 Codex 原生调用替换为原始本地化调用。如果加载的映射未被当前出站请求使用，Rosetta 会在请求发送后将其删除。过期的行会定期清理。
+Rosetta 会先重放精确命中，再执行当前请求的本地化。Miss 会正常重新翻译：请求历史中的
+Result 只会在上游接受本次请求后写入；模型新返回的 Call 则必须先安全持久化，Rosetta
+才会把它发给 Codex。Result 的容量或冲突错误只跳过该条 Result 记录；Call 无法持久化
+时会 fail closed，避免向 Codex 暴露后续无法恢复的历史。
 
-这样既保持了 Codex 下游历史的原生性，又使上游模型的重复上下文保持稳定。
+每条记录使用绝对 24 小时 TTL；读取和重复写入都不会续期。过期记录按普通 miss 处理：
+Rosetta 重新翻译，并在满足相同接受规则后写入新的 24 小时记录。某次请求没有使用一条
+记录不会导致其删除，因此多个独立 fork 可以复用同一个精确对象。
+
+这样既保持了 Codex 下游历史的原生性，又避免工具对象重新翻译改变上游模型的重复上下文。
+但它不保证供应商提示缓存一定命中：Codex 在 fork 或 resume 时可能追加其他上下文；即使
+先前 Chat messages 仍是逐项精确前缀，供应商也可能选择新的缓存分段。
 
 ## 当前限制
 
