@@ -788,12 +788,11 @@ def test_responses_chat_streaming_trace_records_when_enabled(tmp_path):
     assert records[4]["data"]["messages"] == [{"role": "user", "content": "hello"}]
 
 
-def test_deferred_response_trace_capacity_drops_the_entire_batch(
+def test_deferred_response_trace_preserves_complete_long_stream(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    trace_path = tmp_path / "capacity-drop.jsonl"
-    monkeypatch.setattr(stream_trace, "MAX_PENDING_RESPONSE_BYTES", 120)
+    """Enabled tracing retains every safe record beyond the former limits."""
+    trace_path = tmp_path / "complete-long-stream.jsonl"
     state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
     trace = state.create_logger(
         request_id="req-capacity",
@@ -806,16 +805,69 @@ def test_deferred_response_trace_capacity_drops_the_entire_batch(
     assert trace is not None
     trace.log("stream_start", {"safe": True})
     trace.defer_response_diagnostics()
-    trace.log("upstream_chunk", {"content": "first pending record"})
-    trace.log("upstream_chunk", {"content": "second pending record"})
+    for index in range(4_100):
+        trace.log(
+            "upstream_chunk",
+            {"index": index, "content": "x" * 256},
+            chunk_index=index,
+        )
+    trace.log(
+        "upstream_chunk",
+        {
+            "usage": {
+                "prompt_tokens": 500_000,
+                "prompt_cache_hit_tokens": 499_000,
+                "prompt_cache_miss_tokens": 1_000,
+            }
+        },
+        chunk_index=4_100,
+    )
     trace.finish_response_diagnostics(safe=True)
     trace.log("stream_complete", {"stream_outcome": "completed"})
 
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [record["stage"] for record in records] == [
-        "stream_start",
-        "stream_complete",
-    ]
+    assert len(records) == 4_103
+    assert trace_path.stat().st_size > 1_048_576
+    assert records[0]["stage"] == "stream_start"
+    assert records[1]["chunk_index"] == 0
+    assert records[-2]["data"]["usage"] == {
+        "prompt_tokens": 500_000,
+        "prompt_cache_hit_tokens": 499_000,
+        "prompt_cache_miss_tokens": 1_000,
+    }
+    assert records[-1]["stage"] == "stream_complete"
+
+
+def test_deferred_response_trace_spool_failure_does_not_change_stream(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Trace spool I/O failure disables diagnostics without raising."""
+    trace_path = tmp_path / "spool-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-spool-failure",
+        request_log_id="log-spool-failure",
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    trace.log("stream_start", {"safe": True})
+
+    def fail_spool(*args: Any, **kwargs: Any) -> Any:
+        raise OSError("spool unavailable")
+
+    monkeypatch.setattr(stream_trace.tempfile, "TemporaryFile", fail_spool)
+    trace.defer_response_diagnostics()
+    trace.log("upstream_chunk", {"content": "still delivered to client"})
+    trace.finish_response_diagnostics(safe=True)
+    trace.log("stream_complete", {"stream_outcome": "completed"})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["stream_start"]
+    assert "Disabling stream trace after deferred spool failure" in caplog.text
 
 
 def test_terminal_response_trace_uses_protocol_diagnostic_redaction(
@@ -875,6 +927,7 @@ def test_deferred_response_trace_explicitly_discards_or_releases(
 
     if not safe:
         assert not trace_path.exists()
+        assert list(tmp_path.iterdir()) == []
         return
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     assert [record["stage"] for record in records] == ["upstream_chunk"]

@@ -406,9 +406,11 @@ The following behavior can be automatically verified using the fixed Codex reque
   4xx/5xx and retry boundaries; verify that below-limit raw Responses SSE is
   byte-identical even when ordinary text equals a configured Provider token;
   verify direct and converted streams with more than 4096 ordinary deltas reach
-  their normal completed event; verify the 1 MiB/4096-record trace capacity may
-  drop only the deferred diagnostic batch and never closes the upstream or
-  changes client output; verify response logs, trace records, and error dumps
+  their normal completed event; verify enabled tracing retains every deferred
+  diagnostic and terminal usage after a safely completed response beyond both
+  1 MiB and 4096 records, while failure/cancellation discards and closes the
+  anonymous spool without closing the upstream or changing client output;
+  verify response logs, trace records, and error dumps
   retain ordinary configured-token strings while redacting explicitly named
   authentication/token fields; keep auxiliary-client exact collision and
   redaction tests unchanged;

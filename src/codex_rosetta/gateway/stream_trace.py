@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import tempfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TextIO
 
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.redaction import SecretRedactor
@@ -18,8 +19,6 @@ logger = logging.getLogger("codex-rosetta-gateway")
 
 DEFAULT_MAX_CHARS = 20_000
 DEFAULT_TRACE_PATH = "~/.config/codex-rosetta-gateway/log.jsonl"
-MAX_PENDING_RESPONSE_BYTES = 1_048_576
-MAX_PENDING_RESPONSE_RECORDS = 4096
 
 
 @dataclass
@@ -172,18 +171,27 @@ class StreamTraceLogger:
         self._redactor = redactor or SecretRedactor()
         self._disabled = False
         self._defer_response = False
-        self._pending_response_lines: list[str] = []
-        self._pending_response_bytes = 0
-        self._pending_response_dropped = False
+        self._pending_response_file: TextIO | None = None
 
     def defer_response_diagnostics(self) -> None:
         """Hold subsequent response records until the request is proven safe."""
         if self._defer_response:
             raise RuntimeError("Stream response diagnostics are already deferred")
         self._defer_response = True
-        self._pending_response_lines.clear()
-        self._pending_response_bytes = 0
-        self._pending_response_dropped = False
+        try:
+            self._ensure_parent_directory()
+            self._pending_response_file = tempfile.TemporaryFile(
+                mode="w+",
+                encoding="utf-8",
+                newline="",
+                dir=self.path.parent,
+            )
+        except OSError as exc:
+            self._defer_response = False
+            self._disabled = True
+            logger.warning(
+                "Disabling stream trace after deferred spool failure: %s", exc
+            )
 
     def finish_response_diagnostics(
         self,
@@ -193,14 +201,31 @@ class StreamTraceLogger:
         """Release a completed response batch or discard incomplete diagnostics."""
         if not self._defer_response:
             return
-        lines = self._pending_response_lines
-        should_release = safe and not self._pending_response_dropped
+        pending_file = self._pending_response_file
         self._defer_response = False
-        self._pending_response_lines = []
-        self._pending_response_bytes = 0
-        self._pending_response_dropped = False
-        if should_release and lines:
-            self._append_lines(lines)
+        self._pending_response_file = None
+        if pending_file is None:
+            return
+        try:
+            if safe:
+                try:
+                    pending_file.flush()
+                    pending_file.seek(0)
+                except OSError as exc:
+                    self._disabled = True
+                    logger.warning(
+                        "Disabling stream trace after deferred spool failure: %s",
+                        exc,
+                    )
+                else:
+                    self._append_file(pending_file)
+        finally:
+            try:
+                pending_file.close()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to close deferred stream trace spool: %s", exc
+                )
 
     def log(
         self,
@@ -237,23 +262,22 @@ class StreamTraceLogger:
         }
         line = json.dumps(record, ensure_ascii=False, default=str) + "\n"
         if self._defer_response:
-            if self._pending_response_dropped:
+            pending_file = self._pending_response_file
+            if pending_file is None:
                 return
-            line_bytes = len(line.encode("utf-8"))
-            if (
-                len(self._pending_response_lines) + 1 > MAX_PENDING_RESPONSE_RECORDS
-                or self._pending_response_bytes + line_bytes
-                > MAX_PENDING_RESPONSE_BYTES
-            ):
-                self._pending_response_lines.clear()
-                self._pending_response_bytes = 0
-                self._pending_response_dropped = True
+            try:
+                pending_file.write(line)
+            except OSError as exc:
+                self._defer_response = False
+                self._pending_response_file = None
+                self._disabled = True
+                try:
+                    pending_file.close()
+                except OSError:
+                    pass
                 logger.warning(
-                    "Dropping deferred stream response diagnostics after capacity limit"
+                    "Disabling stream trace after deferred spool failure: %s", exc
                 )
-                return
-            self._pending_response_lines.append(line)
-            self._pending_response_bytes += line_bytes
             return
         self._append_lines([line])
 
@@ -284,10 +308,7 @@ class StreamTraceLogger:
     def _append_lines(self, lines: list[str]) -> None:
         """Append a prepared record batch to the configured JSONL path."""
         try:
-            parent_existed = self.path.parent.exists()
-            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            if not parent_existed:
-                os.chmod(self.path.parent, 0o700)
+            self._ensure_parent_directory()
             fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             os.fchmod(fd, 0o600)
             with os.fdopen(fd, "a", encoding="utf-8") as fh:
@@ -295,6 +316,26 @@ class StreamTraceLogger:
         except OSError as exc:
             self._disabled = True
             logger.warning("Disabling stream trace after write failure: %s", exc)
+
+    def _append_file(self, source: TextIO) -> None:
+        """Append a prepared trace spool without materializing it in memory."""
+        try:
+            self._ensure_parent_directory()
+            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+            os.fchmod(fd, 0o600)
+            with os.fdopen(fd, "a", encoding="utf-8") as target:
+                while chunk := source.read(1_048_576):
+                    target.write(chunk)
+        except OSError as exc:
+            self._disabled = True
+            logger.warning("Disabling stream trace after write failure: %s", exc)
+
+    def _ensure_parent_directory(self) -> None:
+        """Create the owner-only trace directory when it does not yet exist."""
+        parent_existed = self.path.parent.exists()
+        self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if not parent_existed:
+            os.chmod(self.path.parent, 0o700)
 
 
 def _matches_filter(
