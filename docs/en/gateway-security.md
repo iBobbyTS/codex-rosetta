@@ -477,13 +477,17 @@ manual clearing also delete unreferenced body blobs.
 
 ## Executable tool-history storage
 
-When code-tool localization is enabled, the native/localized call mapping is
-executable replay state rather than diagnostic data. Rosetta stores the exact
-mapping in SQLite using AES-256-GCM with a unique nonce and authenticated scope
-for every row. The SQLite columns contain ciphertext, not a redacted
-`[REDACTED]` projection. Request logs, traces, error dumps, APIs, and the Admin
-UI remain separate diagnostic surfaces and continue to apply the token-only
-redaction policy above.
+When tool localization is enabled, native/model-facing object translations are
+executable replay state rather than diagnostic data. Calls and results are
+stored independently under the authenticated principal. Session, thread,
+window, fork, Provider, model, and protocol-level call ID are not ownership or
+lookup dimensions. Rosetta derives a principal- and object-kind-separated keyed
+HMAC lookup token from the exact source template, then encrypts both the source
+and target templates with AES-256-GCM using a unique nonce and authenticated
+scope for every row. The SQLite columns therefore contain neither a plain hash
+nor a redacted `[REDACTED]` projection. Request logs, traces, error dumps, APIs,
+and the Admin UI remain separate diagnostic surfaces and continue to apply the
+token-only redaction policy above.
 
 By default the first persisted mapping atomically creates
 `data/tool-mapping.key` next to `gateway.db`. The data directory is mode `0700`
@@ -501,17 +505,23 @@ implemented: do not replace either key source while encrypted rows remain.
 If encrypted rows exist and the key is missing, malformed, mismatched, or a row
 fails authentication, gateway startup fails closed instead of regenerating a
 key or replaying lossy history. Legacy plaintext or `[REDACTED]` mapping rows
-cannot be recovered; the schema migration emits a warning and removes only
-those legacy mapping rows. Expired and unused encrypted mappings retain the
-configured TTL cleanup behavior.
+cannot be recovered; migration emits a warning and removes only that legacy
+table. Encrypted-v1 call mappings are decrypted and migrated atomically into
+single-object entries. Exact duplicates merge, while one source with conflicting
+targets is not migrated. Any integrity, capacity, or SQLite failure rolls the
+whole migration back and retains the legacy table.
 
-Encrypted mapping storage also has fixed hard budgets. Ciphertext plus ownership
-metadata is limited to 16 MiB per row; each session is limited to 2,048 rows or
-64 MiB, each principal to 8,192 rows or 256 MiB, and the database to 32,768 rows
-or 512 MiB. Upsert cleanup, replacement-aware row/byte accounting, validation,
-and the final write run in one `BEGIN IMMEDIATE` transaction, so a rejected or
-failed replacement preserves the previous mapping. Startup validates accounting
-and all hierarchical budgets before decrypting rows; session replay performs the
-same accounting check before loading ciphertext. Existing encrypted-v1 tables
-gain and backfill the `mapping_bytes` column without decrypting or deleting valid
-history. Capacity or inconsistent-accounting failures are fail-closed.
+Each object entry has an absolute 24-hour TTL. Lookup and duplicate insertion do
+not renew it; expiry produces a normal miss, and a successfully accepted request
+may create a new entry with a fresh absolute TTL. Unused entries are not deleted
+early. Expired rows are removed at startup, during reads/writes, and by periodic
+cleanup.
+
+Encrypted object storage also has fixed hard budgets. Ciphertext plus ownership
+metadata is limited to 16 MiB per row; each principal is limited to 8,192 rows
+or 256 MiB, and the database to 32,768 rows or 512 MiB. Expiry cleanup,
+row/byte accounting, validation, conflict detection, and the final insert run
+inside transactions. Startup validates accounting and all budgets before
+decrypting rows. Capacity, conflict, or inconsistent-accounting failures for
+model call objects fail closed; accepted request-result records may be skipped
+without changing the request already sent upstream.

@@ -35,10 +35,10 @@ from .metrics import MetricsCollector
 from .persistence import (
     CompactionMappingCapacityError,
     PersistenceManager,
-    ToolMappingCapacityError,
 )
 from .profiling import ProfilerState
 from .request_log import RequestLog, RequestLogEntry
+from .tool_history_store import ToolHistoryCapacityError, ToolHistoryConflictError
 from .retention import (
     DEFAULT_ERROR_MAX,
     DEFAULT_SUCCESS_MAX,
@@ -57,7 +57,8 @@ __all__ = [
     "ProfilerState",
     "RequestLog",
     "RequestLogEntry",
-    "ToolMappingCapacityError",
+    "ToolHistoryCapacityError",
+    "ToolHistoryConflictError",
     "compress_body",
     "compute_body_hash",
     "decompress_body",

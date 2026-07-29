@@ -191,4 +191,9 @@ If a model emits reasoning inside ordinary text, for example as `<think>...</thi
 
 Codex currently sends full conversation context in repeated requests instead of relying only on `previous_response_id`. Rosetta therefore treats the incoming request body as the source of truth for the current turn. It does not implement server-side Responses conversation storage.
 
-This matters for Chat conversion: if Codex resends historical assistant tool calls, Rosetta must keep those historical calls coherent with what the upstream model originally saw. Code editing localization uses a persistent mapping cache for that reason.
+This matters for Chat conversion: if Codex resends historical assistant tool
+calls or results, Rosetta must keep each historical object coherent with what
+the upstream model originally saw. Tool localization therefore uses a
+principal-isolated, encrypted, content-addressed object cache. It matches calls
+and results independently without treating session, thread, window, fork,
+Provider, model, or protocol-level call ID as content identity.

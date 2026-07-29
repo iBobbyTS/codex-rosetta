@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import base64
 import json
-import math
 import shlex
 import uuid
 from collections import OrderedDict
@@ -40,7 +39,6 @@ from .tool_profiles import catalog_runtime_adapters, catalog_tool_definition
 
 
 DEFAULT_TOOL_CALL_CACHE_TTL_HOURS = 24.0
-MAX_TOOL_CALL_CACHE_TTL_HOURS = 720.0
 DEFAULT_USE_APPLY_PATCH_FOR_CODE_EDITS = True
 DEFAULT_ENABLE_PHASE_DETECTION = True
 LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
@@ -1733,48 +1731,6 @@ def localized_mapping_from_tool_calls(
         native_input=native_input,
         native_type=native_type,
     )
-
-
-def tool_call_cache_ttl_hours(tool_adaptation: dict[str, Any] | None) -> float:
-    """Return the configured persistent tool-call mapping cache TTL in hours."""
-    if not isinstance(tool_adaptation, dict):
-        return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
-    value = tool_adaptation.get("tool_call_cache_ttl_hours")
-    if value is None:
-        return DEFAULT_TOOL_CALL_CACHE_TTL_HOURS
-
-    return validate_tool_call_cache_ttl_hours(value)
-
-
-def validate_tool_call_cache_ttl_hours(
-    value: Any,
-    *,
-    field: str = "tool_call_cache_ttl_hours",
-) -> float:
-    """Validate and normalize the persistent tool-mapping TTL.
-
-    Numeric strings are accepted so environment-substituted configuration uses
-    the same boundary as literal JSON numbers. Booleans, non-finite values,
-    and values outside the supported retention window are rejected.
-    """
-    if isinstance(value, bool):
-        raise ValueError(
-            f"{field} must be a finite number greater than 0 and at most "
-            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
-        )
-    try:
-        ttl = float(value)
-    except TypeError, ValueError:
-        raise ValueError(
-            f"{field} must be a finite number greater than 0 and at most "
-            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
-        ) from None
-    if not math.isfinite(ttl) or not 0 < ttl <= MAX_TOOL_CALL_CACHE_TTL_HOURS:
-        raise ValueError(
-            f"{field} must be a finite number greater than 0 and at most "
-            f"{MAX_TOOL_CALL_CACHE_TTL_HOURS:g} hours"
-        )
-    return ttl
 
 
 def _chat_tool_name(tool: Any) -> str | None:

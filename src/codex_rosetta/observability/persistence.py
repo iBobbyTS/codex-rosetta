@@ -34,8 +34,6 @@ logger = logging.getLogger("codex-rosetta.observability")
 _DB_FILENAME = "gateway.db"
 
 DEFAULT_TOOL_MAPPING_MAX_ROW_BYTES = 16 * 1024 * 1024
-DEFAULT_TOOL_MAPPING_MAX_SESSION_ROWS = 2_048
-DEFAULT_TOOL_MAPPING_MAX_SESSION_BYTES = 64 * 1024 * 1024
 DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_ROWS = 8_192
 DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_BYTES = 256 * 1024 * 1024
 DEFAULT_TOOL_MAPPING_MAX_GLOBAL_ROWS = 32_768
@@ -49,22 +47,6 @@ DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_ROWS = 1_024
 DEFAULT_CODEX_COMPACTION_MAX_PRINCIPAL_BYTES = 64 * 1024 * 1024
 DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_ROWS = 8_192
 DEFAULT_CODEX_COMPACTION_MAX_GLOBAL_BYTES = 512 * 1024 * 1024
-
-_TOOL_MAPPING_SQL_BYTES = """
-    8
-    + length(CAST(principal_id AS BLOB))
-    + length(CAST(provider_name AS BLOB))
-    + length(CAST(model AS BLOB))
-    + length(CAST(session_id AS BLOB))
-    + length(CAST(tool_call_id AS BLOB))
-    + length(CAST(key_id AS BLOB))
-    + length(nonce)
-    + length(encrypted_payload)
-    + length(CAST(expire_at AS BLOB))
-    + length(CAST(created_at AS BLOB))
-    + length(CAST(updated_at AS BLOB))
-    + 8
-""".strip()
 
 # Legacy filenames for migration
 _LEGACY_LOG = "request_log.jsonl"
@@ -111,21 +93,6 @@ _EXPECTED_SCHEMA_COLUMNS: dict[str, tuple[tuple[str, str, int, int], ...]] = {
         ("upstream_url", "TEXT", 0, 0),
         ("converted_body_hash", "TEXT", 0, 0),
     ),
-    "tool_call_mappings": (
-        ("principal_id", "TEXT", 1, 1),
-        ("provider_name", "TEXT", 1, 2),
-        ("model", "TEXT", 1, 3),
-        ("session_id", "TEXT", 1, 4),
-        ("tool_call_id", "TEXT", 1, 5),
-        ("payload_version", "INTEGER", 1, 0),
-        ("key_id", "TEXT", 1, 0),
-        ("nonce", "BLOB", 1, 0),
-        ("encrypted_payload", "BLOB", 1, 0),
-        ("mapping_bytes", "INTEGER", 1, 0),
-        ("expire_at", "TEXT", 1, 0),
-        ("created_at", "TEXT", 1, 0),
-        ("updated_at", "TEXT", 1, 0),
-    ),
     "codex_compaction_mappings": (
         ("principal_id", "TEXT", 1, 1),
         ("token_hash", "TEXT", 1, 2),
@@ -150,25 +117,11 @@ _EXPECTED_SCHEMA_INDEXES: dict[
         "idx_ed_timestamp": (("timestamp",), 0, "c", 0),
         "idx_ed_request_log": (("request_log_id",), 0, "c", 0),
     },
-    "tool_call_mappings": {
-        "idx_tcm_expire_at": (("expire_at",), 0, "c", 0),
-        "idx_tcm_principal": (("principal_id",), 0, "c", 0),
-        "idx_tcm_session": (
-            ("principal_id", "provider_name", "model", "session_id"),
-            0,
-            "c",
-            0,
-        ),
-    },
     "codex_compaction_mappings": {
         "idx_ccm_expire_at": (("expires_at",), 0, "c", 0),
         "idx_ccm_principal": (("principal_id",), 0, "c", 0),
     },
 }
-
-
-class ToolMappingCapacityError(RuntimeError):
-    """Encrypted executable tool history exceeded a configured hard budget."""
 
 
 class CompactionMappingCapacityError(RuntimeError):
@@ -219,8 +172,6 @@ class PersistenceManager:
         token_values: Exact API-token values to redact from newly persisted
             diagnostics. Non-token diagnostic data is retained.
         tool_mapping_max_row_bytes: Maximum ciphertext plus metadata bytes per row.
-        tool_mapping_max_session_rows: Maximum rows in one owned session scope.
-        tool_mapping_max_session_bytes: Maximum bytes in one owned session scope.
         tool_mapping_max_principal_rows: Maximum rows owned by one principal.
         tool_mapping_max_principal_bytes: Maximum bytes owned by one principal.
         tool_mapping_max_global_rows: Maximum encrypted mapping rows in the database.
@@ -240,8 +191,6 @@ class PersistenceManager:
         *,
         token_values: Iterable[str] = (),
         tool_mapping_max_row_bytes: int = DEFAULT_TOOL_MAPPING_MAX_ROW_BYTES,
-        tool_mapping_max_session_rows: int = DEFAULT_TOOL_MAPPING_MAX_SESSION_ROWS,
-        tool_mapping_max_session_bytes: int = DEFAULT_TOOL_MAPPING_MAX_SESSION_BYTES,
         tool_mapping_max_principal_rows: int = DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_ROWS,
         tool_mapping_max_principal_bytes: int = DEFAULT_TOOL_MAPPING_MAX_PRINCIPAL_BYTES,
         tool_mapping_max_global_rows: int = DEFAULT_TOOL_MAPPING_MAX_GLOBAL_ROWS,
@@ -264,19 +213,12 @@ class PersistenceManager:
         self._insert_count = 0
         self._redactor = SecretRedactor(token_values)
         self._mapping_cipher: Any | None = None
+        self._tool_history_store: Any | None = None
         self._tool_mapping_lock = threading.RLock()
         self._compaction_mapping_lock = threading.RLock()
         self._tool_mapping_max_row_bytes = _positive_tool_mapping_limit(
             tool_mapping_max_row_bytes,
             field="tool_mapping_max_row_bytes",
-        )
-        self._tool_mapping_max_session_rows = _positive_tool_mapping_limit(
-            tool_mapping_max_session_rows,
-            field="tool_mapping_max_session_rows",
-        )
-        self._tool_mapping_max_session_bytes = _positive_tool_mapping_limit(
-            tool_mapping_max_session_bytes,
-            field="tool_mapping_max_session_bytes",
         )
         self._tool_mapping_max_principal_rows = _positive_tool_mapping_limit(
             tool_mapping_max_principal_rows,
@@ -329,7 +271,6 @@ class PersistenceManager:
             self.cleanup_expired_codex_compaction_mappings(
                 datetime.now(timezone.utc).isoformat()
             )
-            self._validate_encrypted_tool_mappings()
             self._secure_storage_paths()
             self._reject_legacy_files()
             self._prune()
@@ -524,32 +465,6 @@ class PersistenceManager:
                 ON error_dumps(timestamp DESC);
             CREATE INDEX IF NOT EXISTS idx_ed_request_log
                 ON error_dumps(request_log_id);
-            CREATE TABLE IF NOT EXISTS tool_call_mappings (
-                principal_id      TEXT NOT NULL,
-                provider_name     TEXT NOT NULL,
-                model             TEXT NOT NULL,
-                session_id         TEXT NOT NULL,
-                tool_call_id       TEXT NOT NULL,
-                payload_version    INTEGER NOT NULL,
-                key_id             TEXT NOT NULL,
-                nonce              BLOB NOT NULL,
-                encrypted_payload  BLOB NOT NULL,
-                mapping_bytes      INTEGER NOT NULL,
-                expire_at          TEXT NOT NULL,
-                created_at         TEXT NOT NULL,
-                updated_at         TEXT NOT NULL,
-                PRIMARY KEY (
-                    principal_id, provider_name, model, session_id, tool_call_id
-                )
-            );
-            CREATE INDEX IF NOT EXISTS idx_tcm_expire_at
-                ON tool_call_mappings(expire_at);
-            CREATE INDEX IF NOT EXISTS idx_tcm_principal
-                ON tool_call_mappings(principal_id);
-            CREATE INDEX IF NOT EXISTS idx_tcm_session
-                ON tool_call_mappings(
-                    principal_id, provider_name, model, session_id
-                );
             CREATE TABLE IF NOT EXISTS codex_compaction_mappings (
                 principal_id      TEXT NOT NULL,
                 token_hash        TEXT NOT NULL,
@@ -567,6 +482,18 @@ class PersistenceManager:
             CREATE INDEX IF NOT EXISTS idx_ccm_principal
                 ON codex_compaction_mappings(principal_id);
         """)
+        from .tool_history_store import ToolHistoryStore
+
+        self._tool_history_store = ToolHistoryStore(
+            connection=self._conn,
+            lock=self._tool_mapping_lock,
+            cipher_loader=lambda create: self._mapping_crypto(create=create),
+            max_row_bytes=self._tool_mapping_max_row_bytes,
+            max_principal_rows=self._tool_mapping_max_principal_rows,
+            max_principal_bytes=self._tool_mapping_max_principal_bytes,
+            max_global_rows=self._tool_mapping_max_global_rows,
+            max_global_bytes=self._tool_mapping_max_global_bytes,
+        )
         self._validate_schema()
 
     def _validate_schema(self) -> None:
@@ -637,228 +564,6 @@ class PersistenceManager:
                 f"directory before startup: {present}"
             )
 
-    def _migrate_tool_call_mapping_encryption(self) -> None:
-        """Replace legacy plaintext/lossy mappings with encrypted schema v1.
-
-        Legacy mappings may already contain ``[REDACTED]`` and cannot be made
-        exact again.  The migration therefore discards only that table inside
-        one explicit transaction; observability tables are left untouched.
-        """
-        columns = {
-            row[1]
-            for row in self._conn.execute(
-                "PRAGMA table_info(tool_call_mappings)"
-            ).fetchall()
-        }
-        encrypted_columns = {
-            "principal_id",
-            "provider_name",
-            "model",
-            "session_id",
-            "tool_call_id",
-            "payload_version",
-            "key_id",
-            "nonce",
-            "encrypted_payload",
-            "expire_at",
-            "created_at",
-            "updated_at",
-        }
-        if encrypted_columns.issubset(columns):
-            return
-        legacy_count = self._conn.execute(
-            "SELECT COUNT(*) FROM tool_call_mappings"
-        ).fetchone()[0]
-        try:
-            self._conn.execute("BEGIN IMMEDIATE")
-            self._conn.execute("DROP INDEX IF EXISTS idx_tcm_expire_at")
-            self._conn.execute("DROP INDEX IF EXISTS idx_tcm_principal")
-            self._conn.execute("DROP INDEX IF EXISTS idx_tcm_session")
-            self._conn.execute(
-                "ALTER TABLE tool_call_mappings RENAME TO tool_call_mappings_legacy"
-            )
-            self._conn.execute("""
-                CREATE TABLE tool_call_mappings (
-                    principal_id      TEXT NOT NULL,
-                    provider_name     TEXT NOT NULL,
-                    model             TEXT NOT NULL,
-                    session_id         TEXT NOT NULL,
-                    tool_call_id       TEXT NOT NULL,
-                    payload_version    INTEGER NOT NULL,
-                    key_id             TEXT NOT NULL,
-                    nonce              BLOB NOT NULL,
-                    encrypted_payload  BLOB NOT NULL,
-                    mapping_bytes      INTEGER NOT NULL,
-                    expire_at          TEXT NOT NULL,
-                    created_at         TEXT NOT NULL,
-                    updated_at         TEXT NOT NULL,
-                    PRIMARY KEY (
-                        principal_id, provider_name, model, session_id, tool_call_id
-                    )
-                )
-            """)
-            self._conn.execute(
-                "CREATE INDEX idx_tcm_expire_at ON tool_call_mappings(expire_at)"
-            )
-            self._conn.execute(
-                "CREATE INDEX idx_tcm_principal ON tool_call_mappings(principal_id)"
-            )
-            self._conn.execute(
-                "CREATE INDEX idx_tcm_session ON tool_call_mappings("
-                "principal_id, provider_name, model, session_id)"
-            )
-            self._conn.execute("DROP TABLE tool_call_mappings_legacy")
-            self._conn.commit()
-        except Exception:
-            self._conn.rollback()
-            raise
-        logger.warning(
-            "Discarded %d legacy tool-call mapping row(s): plaintext/redacted "
-            "history cannot be migrated to exact encrypted replay",
-            legacy_count,
-        )
-
-    @staticmethod
-    def _tool_mapping_row_bytes(
-        *,
-        principal_id: str,
-        provider_name: str,
-        model: str,
-        session_id: str,
-        tool_call_id: str,
-        key_id: str,
-        nonce: bytes,
-        encrypted_payload: bytes,
-        expire_at: str,
-        created_at: str,
-        updated_at: str,
-    ) -> int:
-        """Return canonical ciphertext plus ownership metadata bytes."""
-        text_values = (
-            principal_id,
-            provider_name,
-            model,
-            session_id,
-            tool_call_id,
-            key_id,
-            expire_at,
-            created_at,
-            updated_at,
-        )
-        return (
-            16
-            + len(nonce)
-            + len(encrypted_payload)
-            + sum(len(value.encode("utf-8")) for value in text_values)
-        )
-
-    def _migrate_tool_call_mapping_accounting(self) -> None:
-        """Backfill queryable byte accounting for encrypted-v1 rows."""
-        columns = {
-            row[1]
-            for row in self._conn.execute(
-                "PRAGMA table_info(tool_call_mappings)"
-            ).fetchall()
-        }
-        if "mapping_bytes" not in columns:
-            self._conn.execute(
-                "ALTER TABLE tool_call_mappings "
-                "ADD COLUMN mapping_bytes INTEGER NOT NULL DEFAULT 0"
-            )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tcm_principal "
-            "ON tool_call_mappings(principal_id)"
-        )
-        self._conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_tcm_session ON tool_call_mappings("
-            "principal_id, provider_name, model, session_id)"
-        )
-        self._conn.commit()
-        try:
-            self._conn.execute("BEGIN IMMEDIATE")
-            self._conn.execute(
-                f"UPDATE tool_call_mappings SET mapping_bytes = "
-                f"({_TOOL_MAPPING_SQL_BYTES})"
-            )
-            self._validate_tool_mapping_capacity_locked()
-            self._conn.commit()
-        except BaseException:
-            self._conn.rollback()
-            raise
-
-    def _tool_mapping_usage_locked(
-        self,
-        where: str = "",
-        params: tuple[Any, ...] = (),
-    ) -> tuple[int, int]:
-        predicate = f" WHERE {where}" if where else ""
-        row = self._conn.execute(
-            "SELECT COUNT(*), COALESCE(SUM(mapping_bytes), 0), "
-            f"COALESCE(SUM({_TOOL_MAPPING_SQL_BYTES}), 0), "
-            f"COALESCE(SUM(mapping_bytes != ({_TOOL_MAPPING_SQL_BYTES})), 0) "
-            f"FROM tool_call_mappings{predicate}",
-            params,
-        ).fetchone()
-        count = int(row[0]) if row else 0
-        stored_bytes = int(row[1]) if row else 0
-        actual_bytes = int(row[2]) if row else 0
-        mismatches = int(row[3]) if row else 0
-        if mismatches or stored_bytes != actual_bytes:
-            raise ToolMappingCapacityError(
-                "Encrypted tool-history accounting is invalid; refusing replay"
-            )
-        return count, actual_bytes
-
-    @staticmethod
-    def _raise_tool_mapping_capacity(label: str, limit: int) -> None:
-        raise ToolMappingCapacityError(
-            f"Encrypted tool-history {label} exceeds hard limit {limit}"
-        )
-
-    def _validate_tool_mapping_capacity_locked(self) -> None:
-        global_rows, global_bytes = self._tool_mapping_usage_locked()
-        if global_rows > self._tool_mapping_max_global_rows:
-            self._raise_tool_mapping_capacity(
-                "global row count", self._tool_mapping_max_global_rows
-            )
-        if global_bytes > self._tool_mapping_max_global_bytes:
-            self._raise_tool_mapping_capacity(
-                "global bytes", self._tool_mapping_max_global_bytes
-            )
-        principals = self._conn.execute(
-            "SELECT DISTINCT principal_id FROM tool_call_mappings"
-        )
-        for (principal_id,) in principals:
-            rows, byte_size = self._tool_mapping_usage_locked(
-                "principal_id = ?", (principal_id,)
-            )
-            if rows > self._tool_mapping_max_principal_rows:
-                self._raise_tool_mapping_capacity(
-                    "principal row count", self._tool_mapping_max_principal_rows
-                )
-            if byte_size > self._tool_mapping_max_principal_bytes:
-                self._raise_tool_mapping_capacity(
-                    "principal bytes", self._tool_mapping_max_principal_bytes
-                )
-        sessions = self._conn.execute(
-            "SELECT DISTINCT principal_id, provider_name, model, session_id "
-            "FROM tool_call_mappings"
-        )
-        for principal_id, provider_name, model, session_id in sessions:
-            rows, byte_size = self._tool_mapping_usage_locked(
-                "principal_id = ? AND provider_name = ? AND model = ? "
-                "AND session_id = ?",
-                (principal_id, provider_name, model, session_id),
-            )
-            if rows > self._tool_mapping_max_session_rows:
-                self._raise_tool_mapping_capacity(
-                    "session row count", self._tool_mapping_max_session_rows
-                )
-            if byte_size > self._tool_mapping_max_session_bytes:
-                self._raise_tool_mapping_capacity(
-                    "session bytes", self._tool_mapping_max_session_bytes
-                )
-
     def _mapping_crypto(self, *, create: bool) -> Any:
         """Return the lazy gateway-only AEAD boundary."""
         if self._mapping_cipher is None:
@@ -869,71 +574,6 @@ class PersistenceManager:
                 create=create,
             )
         return self._mapping_cipher
-
-    @staticmethod
-    def _tool_mapping_aad(
-        *,
-        principal_id: str,
-        provider_name: str,
-        model: str,
-        session_id: str,
-        tool_call_id: str,
-    ) -> bytes:
-        from .tool_mapping_crypto import mapping_aad
-
-        return mapping_aad(
-            principal_id=principal_id,
-            provider_name=provider_name,
-            model=model,
-            session_id=session_id,
-            tool_call_id=tool_call_id,
-        )
-
-    def _validate_encrypted_tool_mappings(self) -> None:
-        """Fail startup if durable encrypted history cannot be authenticated."""
-        with self._tool_mapping_lock:
-            self._validate_tool_mapping_capacity_locked()
-            cursor = self._conn.execute(
-                "SELECT principal_id, provider_name, model, session_id, tool_call_id, "
-                "payload_version, key_id, nonce, encrypted_payload "
-                "FROM tool_call_mappings"
-            )
-            first_batch = cursor.fetchmany(128)
-        if not first_batch:
-            return
-        cipher = self._mapping_crypto(create=False)
-        batch = first_batch
-        while batch:
-            for row in batch:
-                self._decrypt_tool_mapping_row(row, cipher=cipher)
-            with self._tool_mapping_lock:
-                batch = cursor.fetchmany(128)
-
-    def _decrypt_tool_mapping_row(
-        self,
-        row: tuple[Any, ...],
-        *,
-        cipher: Any | None = None,
-    ) -> tuple[dict[str, Any], dict[str, Any]]:
-        from .tool_mapping_crypto import PAYLOAD_VERSION, ToolMappingIntegrityError
-
-        if row[5] != PAYLOAD_VERSION:
-            raise ToolMappingIntegrityError(
-                f"Unsupported encrypted tool-mapping format version {row[5]!r}"
-            )
-        active_cipher = cipher or self._mapping_crypto(create=False)
-        return active_cipher.decrypt(
-            key_id=row[6],
-            nonce=row[7],
-            encrypted_payload=row[8],
-            aad=self._tool_mapping_aad(
-                principal_id=row[0],
-                provider_name=row[1],
-                model=row[2],
-                session_id=row[3],
-                tool_call_id=row[4],
-            ),
-        )
 
     # ------------------------------------------------------------------
     # Request log
@@ -1185,272 +825,121 @@ class PersistenceManager:
         self._conn.commit()
 
     # ------------------------------------------------------------------
-    # Tool call mappings
+    # Tool-history object translations
     # ------------------------------------------------------------------
 
-    def upsert_tool_call_mapping(
+    def lookup_tool_history_translation_templates(
         self,
         *,
         principal_id: str,
-        provider_name: str,
-        model: str,
-        session_id: str,
-        tool_call_id: str,
-        original_tool_call: dict[str, Any],
-        codex_tool_call: dict[str, Any],
+        objects: list[tuple[Any, dict[str, Any]]],
+        now: str,
+    ) -> list[dict[str, Any] | None]:
+        """Return ordered ID-independent target templates for exact hits."""
+        assert self._tool_history_store is not None
+        return self._tool_history_store.lookup_templates(
+            principal_id=principal_id,
+            objects=objects,
+            now=now,
+        )
+
+    def lookup_tool_history_translations(
+        self,
+        *,
+        principal_id: str,
+        objects: list[tuple[Any, dict[str, Any]]],
+        now: str,
+    ) -> list[dict[str, Any] | None]:
+        """Return ordered hits rebuilt with each current request protocol ID."""
+        from ..gateway.tool_history_translation import (
+            ToolHistoryObjectKind,
+            inject_tool_history_object_id,
+            tool_history_object_template,
+        )
+
+        templates: list[tuple[ToolHistoryObjectKind, dict[str, Any]]] = []
+        protocol_ids: list[str] = []
+        for kind_value, source_object in objects:
+            kind = ToolHistoryObjectKind(kind_value)
+            id_field = "id" if kind is ToolHistoryObjectKind.CALL else "tool_call_id"
+            protocol_id = source_object.get(id_field)
+            if not isinstance(protocol_id, str) or not protocol_id:
+                raise ValueError(f"tool-history {kind.value} object needs {id_field}")
+            templates.append((kind, tool_history_object_template(kind, source_object)))
+            protocol_ids.append(protocol_id)
+        hits = self.lookup_tool_history_translation_templates(
+            principal_id=principal_id,
+            objects=templates,
+            now=now,
+        )
+        return [
+            None
+            if target is None
+            else inject_tool_history_object_id(kind, target, protocol_id)
+            for (kind, _source), protocol_id, target in zip(
+                templates,
+                protocol_ids,
+                hits,
+                strict=True,
+            )
+        ]
+
+    def upsert_tool_history_translation_templates(
+        self,
+        *,
+        principal_id: str,
+        object_kind: Any,
+        source_template: dict[str, Any],
+        target_template: dict[str, Any],
         expire_at: str,
         timestamp: str,
-    ) -> None:
-        """Encrypt and atomically insert or refresh one quota-bounded mapping."""
-        from .tool_mapping_crypto import PAYLOAD_VERSION
-
-        cipher = self._mapping_crypto(create=True)
-        aad = self._tool_mapping_aad(
+    ) -> bool:
+        """Persist one exact ID-independent source/target translation."""
+        assert self._tool_history_store is not None
+        return self._tool_history_store.upsert_template(
             principal_id=principal_id,
-            provider_name=provider_name,
-            model=model,
-            session_id=session_id,
-            tool_call_id=tool_call_id,
+            object_kind=object_kind,
+            source_template=source_template,
+            target_template=target_template,
+            expire_at=expire_at,
+            timestamp=timestamp,
         )
-        nonce, encrypted_payload = cipher.encrypt(
-            original_tool_call=original_tool_call,
-            codex_tool_call=codex_tool_call,
-            aad=aad,
-        )
-        with self._tool_mapping_lock:
-            try:
-                self._conn.execute("BEGIN IMMEDIATE")
-                self._conn.execute(
-                    "DELETE FROM tool_call_mappings WHERE expire_at <= ?",
-                    (timestamp,),
-                )
-                existing = self._conn.execute(
-                    "SELECT mapping_bytes, created_at FROM tool_call_mappings "
-                    "WHERE principal_id = ? AND provider_name = ? AND model = ? "
-                    "AND session_id = ? AND tool_call_id = ?",
-                    (
-                        principal_id,
-                        provider_name,
-                        model,
-                        session_id,
-                        tool_call_id,
-                    ),
-                ).fetchone()
-                created_at = str(existing[1]) if existing is not None else timestamp
-                mapping_bytes = self._tool_mapping_row_bytes(
-                    principal_id=principal_id,
-                    provider_name=provider_name,
-                    model=model,
-                    session_id=session_id,
-                    tool_call_id=tool_call_id,
-                    key_id=cipher.key_id,
-                    nonce=nonce,
-                    encrypted_payload=encrypted_payload,
-                    expire_at=expire_at,
-                    created_at=created_at,
-                    updated_at=timestamp,
-                )
-                if mapping_bytes > self._tool_mapping_max_row_bytes:
-                    self._raise_tool_mapping_capacity(
-                        "row bytes", self._tool_mapping_max_row_bytes
-                    )
-                old_bytes = int(existing[0]) if existing is not None else 0
-                row_delta = 0 if existing is not None else 1
-                byte_delta = mapping_bytes - old_bytes
-                session_where = (
-                    "principal_id = ? AND provider_name = ? AND model = ? "
-                    "AND session_id = ?"
-                )
-                session_params = (principal_id, provider_name, model, session_id)
-                session_rows, session_bytes = self._tool_mapping_usage_locked(
-                    session_where, session_params
-                )
-                principal_rows, principal_bytes = self._tool_mapping_usage_locked(
-                    "principal_id = ?", (principal_id,)
-                )
-                global_rows, global_bytes = self._tool_mapping_usage_locked()
-                projected = (
-                    (
-                        "session row count",
-                        session_rows + row_delta,
-                        self._tool_mapping_max_session_rows,
-                    ),
-                    (
-                        "session bytes",
-                        session_bytes + byte_delta,
-                        self._tool_mapping_max_session_bytes,
-                    ),
-                    (
-                        "principal row count",
-                        principal_rows + row_delta,
-                        self._tool_mapping_max_principal_rows,
-                    ),
-                    (
-                        "principal bytes",
-                        principal_bytes + byte_delta,
-                        self._tool_mapping_max_principal_bytes,
-                    ),
-                    (
-                        "global row count",
-                        global_rows + row_delta,
-                        self._tool_mapping_max_global_rows,
-                    ),
-                    (
-                        "global bytes",
-                        global_bytes + byte_delta,
-                        self._tool_mapping_max_global_bytes,
-                    ),
-                )
-                for label, actual, limit in projected:
-                    if actual > limit:
-                        self._raise_tool_mapping_capacity(label, limit)
 
-                self._conn.execute(
-                    "INSERT INTO tool_call_mappings "
-                    "(principal_id, provider_name, model, session_id, tool_call_id, "
-                    "payload_version, key_id, nonce, encrypted_payload, mapping_bytes, "
-                    "expire_at, created_at, updated_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                    "ON CONFLICT("
-                    "principal_id, provider_name, model, session_id, tool_call_id"
-                    ") DO UPDATE SET "
-                    "payload_version = excluded.payload_version, "
-                    "key_id = excluded.key_id, "
-                    "nonce = excluded.nonce, "
-                    "encrypted_payload = excluded.encrypted_payload, "
-                    "mapping_bytes = excluded.mapping_bytes, "
-                    "expire_at = excluded.expire_at, "
-                    "updated_at = excluded.updated_at",
-                    (
-                        principal_id,
-                        provider_name,
-                        model,
-                        session_id,
-                        tool_call_id,
-                        PAYLOAD_VERSION,
-                        cipher.key_id,
-                        nonce,
-                        encrypted_payload,
-                        mapping_bytes,
-                        expire_at,
-                        created_at,
-                        timestamp,
-                    ),
-                )
-                self._conn.commit()
-            except BaseException:
-                self._conn.rollback()
-                raise
-
-    def query_tool_call_mappings(
+    def upsert_tool_history_translation(
         self,
         *,
         principal_id: str,
-        provider_name: str,
-        model: str,
-        session_id: str,
-        now: str,
-        renew_expire_at: str | None = None,
-        renewed_at: str | None = None,
-    ) -> list[dict[str, Any]]:
-        """Authenticate, return, and optionally renew non-expired session mappings."""
-        if (renew_expire_at is None) != (renewed_at is None):
-            raise ValueError("renew_expire_at and renewed_at must be provided together")
-        where = (
-            "principal_id = ? AND provider_name = ? AND model = ? "
-            "AND session_id = ? AND expire_at > ?"
+        object_kind: Any,
+        source_object: dict[str, Any],
+        target_object: dict[str, Any],
+        expire_at: str,
+        timestamp: str,
+    ) -> bool:
+        """Normalize protocol IDs and persist one object translation."""
+        from ..gateway.tool_history_translation import (
+            ToolHistoryObjectKind,
+            tool_history_object_template,
         )
-        params = (principal_id, provider_name, model, session_id, now)
-        with self._tool_mapping_lock:
-            row_count, byte_size = self._tool_mapping_usage_locked(where, params)
-            if row_count > self._tool_mapping_max_session_rows:
-                self._raise_tool_mapping_capacity(
-                    "session row count", self._tool_mapping_max_session_rows
-                )
-            if byte_size > self._tool_mapping_max_session_bytes:
-                self._raise_tool_mapping_capacity(
-                    "session bytes", self._tool_mapping_max_session_bytes
-                )
-            rows = self._conn.execute(
-                "SELECT principal_id, provider_name, model, session_id, tool_call_id, "
-                "payload_version, key_id, nonce, encrypted_payload, "
-                "expire_at, created_at, updated_at, mapping_bytes "
-                "FROM tool_call_mappings "
-                f"WHERE {where} ORDER BY updated_at ASC",
-                params,
-            ).fetchall()
-            if rows and renew_expire_at is not None and renewed_at is not None:
-                try:
-                    self._conn.execute(
-                        "UPDATE tool_call_mappings "
-                        "SET expire_at = ?, updated_at = ? "
-                        f"WHERE {where}",
-                        (renew_expire_at, renewed_at, *params),
-                    )
-                    self._conn.commit()
-                except BaseException:
-                    self._conn.rollback()
-                    raise
-        result: list[dict[str, Any]] = []
-        for row in rows:
-            original_tool_call, codex_tool_call = self._decrypt_tool_mapping_row(row)
-            result.append(
-                {
-                    "session_id": row[3],
-                    "principal_id": row[0],
-                    "provider_name": row[1],
-                    "model": row[2],
-                    "tool_call_id": row[4],
-                    "original_tool_call": original_tool_call,
-                    "codex_tool_call": codex_tool_call,
-                    "expire_at": renew_expire_at or row[9],
-                    "created_at": row[10],
-                    "updated_at": renewed_at or row[11],
-                }
-            )
-        return result
 
-    def delete_tool_call_mappings(
-        self,
-        *,
-        principal_id: str,
-        provider_name: str,
-        model: str,
-        session_id: str,
-        tool_call_ids: list[str],
-    ) -> None:
-        """Delete selected tool-call mappings for a session."""
-        if not tool_call_ids:
-            return
-        with self._tool_mapping_lock:
-            self._conn.executemany(
-                "DELETE FROM tool_call_mappings WHERE principal_id = ? "
-                "AND provider_name = ? AND model = ? AND session_id = ? "
-                "AND tool_call_id = ?",
-                [
-                    (principal_id, provider_name, model, session_id, call_id)
-                    for call_id in tool_call_ids
-                ],
-            )
-            self._conn.commit()
+        kind = ToolHistoryObjectKind(object_kind)
+        return self.upsert_tool_history_translation_templates(
+            principal_id=principal_id,
+            object_kind=kind,
+            source_template=tool_history_object_template(kind, source_object),
+            target_template=tool_history_object_template(kind, target_object),
+            expire_at=expire_at,
+            timestamp=timestamp,
+        )
 
-    def cleanup_expired_tool_call_mappings(self, now: str) -> int:
-        """Delete expired tool-call mappings and return the deleted row count."""
-        with self._tool_mapping_lock:
-            cursor = self._conn.execute(
-                "DELETE FROM tool_call_mappings WHERE expire_at <= ?",
-                (now,),
-            )
-            self._conn.commit()
-            return cursor.rowcount
+    def cleanup_expired_tool_history_translations(self, now: str) -> int:
+        """Delete expired object translations and return the deleted count."""
+        assert self._tool_history_store is not None
+        return self._tool_history_store.cleanup_expired(now)
 
-    def count_tool_call_mappings(self) -> int:
-        """Return the total number of persistent tool-call mappings."""
-        with self._tool_mapping_lock:
-            row = self._conn.execute(
-                "SELECT COUNT(*) FROM tool_call_mappings"
-            ).fetchone()
-            return row[0] if row else 0
+    def count_tool_history_translations(self) -> int:
+        """Return the total number of persistent object translations."""
+        assert self._tool_history_store is not None
+        return self._tool_history_store.count()
 
     # ------------------------------------------------------------------
     # Codex remote-compaction mappings

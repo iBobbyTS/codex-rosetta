@@ -162,4 +162,7 @@ Provider 控制，只能视为 best-effort。
 
 Codex 当前在重复请求中发送完整的对话上下文，而不是仅依赖 `previous_response_id`。因此，Rosetta 将传入的请求体视为当前轮次的真实来源。它不实现服务端的 Responses 对话存储。
 
-这对 Chat 转换很重要：如果 Codex 重新发送历史助手工具调用，Rosetta 必须使这些历史调用与上游模型最初看到的内容保持一致。代码编辑本地化为此使用了持久化的映射缓存。
+这对 Chat 转换很重要：如果 Codex 重新发送历史助手工具调用或结果，Rosetta 必须使每个
+历史对象与上游模型最初看到的内容保持一致。因此，工具本地化使用按 principal 隔离、
+加密且按内容寻址的单对象缓存。Call 与 Result 独立匹配，不把 session、thread、window、
+fork、Provider、model 或协议顶层 call ID 当作内容身份。
