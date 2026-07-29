@@ -5,6 +5,7 @@ import KeysPage from '../src/admin/pages/KeysPage.svelte';
 import ModelsPage from '../src/admin/pages/ModelsPage.svelte';
 import ProvidersPage from '../src/admin/pages/ProvidersPage.svelte';
 import SettingsPage from '../src/admin/pages/SettingsPage.svelte';
+import { setLanguage } from '../src/shared/i18n.svelte';
 
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
@@ -22,6 +23,7 @@ const providerCatalog = {
 beforeEach(() => {
   vi.clearAllMocks();
   localStorage.setItem('codex-rosetta-lang', 'en');
+  setLanguage('en');
   apiMock.post.mockResolvedValue({ ok: true });
   apiMock.put.mockResolvedValue({ ok: true });
   apiMock.del.mockResolvedValue({ ok: true });
@@ -57,6 +59,7 @@ describe('ProvidersPage', () => {
       proxy: 'http://proxy.example:8080',
       allow_redirects: false,
       api_type: 'responses',
+      force_rosetta_compaction: false,
       api_key: 'provider-secret',
     });
     expect(body).not.toHaveProperty('preset');
@@ -155,6 +158,53 @@ describe('ProvidersPage', () => {
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
     expect(screen.getByLabelText('Hard-interrupt cache compatibility')).not.toBeChecked();
+  });
+
+  it('shows forced prompt compaction only for Responses and preserves it when editing and cloning', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        cockpit: {
+          provider: 'openai',
+          base_url: 'https://cockpit.example/v1',
+          api_type: 'responses',
+          force_rosetta_compaction: true,
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const toggle = screen.getByLabelText('Force Rosetta prompt compaction');
+    expect(toggle).toBeChecked();
+    expect(screen.getByText(/summary plaintext in SQLite for seven days/)).toBeInTheDocument();
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
+    expect(apiMock.put.mock.calls[0][1]).toMatchObject({ force_rosetta_compaction: true });
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Clone' }));
+    expect(screen.getByLabelText('Force Rosetta prompt compaction')).toBeChecked();
+    await fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'chat' } });
+    expect(screen.queryByLabelText('Force Rosetta prompt compaction')).not.toBeInTheDocument();
+  });
+
+  it('renders the forced prompt compaction control in Chinese', async () => {
+    localStorage.setItem('codex-rosetta-lang', 'zh');
+    setLanguage('zh');
+    apiMock.get.mockResolvedValue({
+      providers: {},
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ 添加服务方' }));
+    await fireEvent.change(screen.getByLabelText('协议'), { target: { value: 'responses' } });
+    expect(screen.getByLabelText('强制 Rosetta 提示词压缩')).toBeInTheDocument();
+    expect(screen.getByText(/SQLite 中以明文保存摘要七天/)).toBeInTheDocument();
   });
 });
 

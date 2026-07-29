@@ -7,6 +7,7 @@ import pytest
 from codex_rosetta.gateway.provider_profiles import (
     get_provider_catalog_entry,
     provider_catalog_for_admin,
+    resolve_force_rosetta_compaction,
     resolve_provider_profile,
     resolve_soft_interrupt,
 )
@@ -43,6 +44,17 @@ def test_soft_interrupt_defaults_are_protocol_scoped_and_overridable() -> None:
         resolve_soft_interrupt("deepseek", "anthropic", True)
     with pytest.raises(ValueError, match="must be a boolean"):
         resolve_soft_interrupt("deepseek", "chat", "true")
+
+
+def test_force_rosetta_compaction_is_responses_only_and_strict() -> None:
+    assert resolve_force_rosetta_compaction("responses") is False
+    assert resolve_force_rosetta_compaction("responses", True) is True
+    assert resolve_force_rosetta_compaction("chat", False) is False
+
+    with pytest.raises(ValueError, match="supported only.*responses"):
+        resolve_force_rosetta_compaction("chat", True)
+    with pytest.raises(ValueError, match="must be a boolean"):
+        resolve_force_rosetta_compaction("responses", "true")
 
 
 def test_unadapted_combination_uses_only_selected_standard() -> None:

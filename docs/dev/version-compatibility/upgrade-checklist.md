@@ -579,9 +579,16 @@ Select a model by debugging target, don't just look at the Codex-facing alias:
 
 - `reasoning_content` of `deepseek-v4-flash` remains renewable before and after the tool and in subsequent turns;
 - reasoning summary/encrypted state does not lead to invalid requests or repeated thinking content;
-- Run `tests/live_agent/context_compaction` as a protocol-only four-cell matrix,
-  retaining the configured GPT route without requiring a specific upstream
-  provider. Any configured provider is valid when the GPT model responds.
+- Run the isolated Provider-policy matrix in `tests/live_agent/context_compaction`
+  with the same Codex-visible `gpt-5.6-terra` model and same window inside each
+  cell. Run Pixel native and Cockpit native baselines independently; the latter
+  must reproduce exact `400 invalid_request/model is required` while the body
+  still contains `model`. If either baseline mismatches, classify the suite as
+  `blocked`. Otherwise run Cockpit forced Rosetta to Pixel native and Pixel
+  native to Cockpit forced Rosetta, hot-switching only the model group's
+  Provider through the isolated Admin API. Cell 4 must run after a Cell 3
+  failure. Require mapping/install/replay evidence without recording summary
+  plaintext, Rosetta handles, or native opaque payloads.
   Separately run
   `tests/live_agent/context_compaction_summary_quality` for GPT and DeepSeek;
   require byte-identical task/scenario/resume-query input, exactly one command

@@ -15,6 +15,13 @@ compaction 仍原样交给上游。模型切换压缩（包括 `comp_hash_change
 另一个 Provider 的加密 compaction payload。从 Responses 转换到其他协议的路由也继续
 使用 Rosetta coordinator。
 
+单个 Responses Provider 可以设置 `force_rosetta_compaction: true`，让所有合法
+compaction reason（包括 `context_limit`、`user_requested`、模型切换 reason 与未知
+reason）都使用 Rosetta coordinator。该策略不会改变普通请求，也不会丢弃历史中已有的
+native compaction。SQLite 持久化不可用时，Rosetta 会在调用摘要上游前返回 HTTP 503，
+且绝不回退 native compaction。mapping 会包含留存七天的摘要明文，因此必须相应保护
+Gateway 数据目录、备份和复制出的测试 artifact。
+
 ## 硬打断缓存兼容
 
 这个仅适用于 Chat 的兼容选项只做当前请求内的 role 转换，不保存模型输出、不继续接收

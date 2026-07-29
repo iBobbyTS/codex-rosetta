@@ -116,3 +116,21 @@ initiates compaction and the target model produces the resume marker.
 
 Never use summary wording or fact retention to change this suite's protocol
 classification.
+
+## Provider-policy matrix classification
+
+For `run_provider_matrix.py`, Cells 1 and 2 are independent baselines. Cell 2
+passes only when its normal turn succeeds and the compact request reproduces
+HTTP 400 with code `invalid_request`, message `model is required`, phase
+`stream_header`, a present model field, a final `compaction_trigger`, and
+`wire_passthrough=true`. Authentication, network, other upstream errors, or an
+unexpected compact success block the main matrix.
+
+After both baselines pass, evaluate Cells 3 and 4 independently and execute
+Cell 4 even after a Cell 3 runner or protocol failure. Require no
+`comp_hash_changed`, the configured Provider sequence, matching native/forced
+request profiles, mapping cardinality, installed/replayed item correlation,
+and successful final turns. Cell 3 must prove no `rskc_v1_` handle was sent to
+Pixel. Cell 4 records only the retained native item's type and Provider
+correlation. The top-level result is `success` only when both switch cells pass,
+otherwise `failure`.

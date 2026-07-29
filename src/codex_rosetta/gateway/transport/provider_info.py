@@ -77,6 +77,7 @@ class ProviderInfo:
         proxy_url: str | None = None,
         allow_redirects: bool = False,
         soft_interrupt: bool = False,
+        force_rosetta_compaction: bool = False,
     ) -> None:
         if not base_url.startswith(("http://", "https://")):
             raise ValueError(
@@ -92,6 +93,7 @@ class ProviderInfo:
         self.proxy_url = proxy_url
         self.allow_redirects = allow_redirects
         self.soft_interrupt = soft_interrupt
+        self.force_rosetta_compaction = force_rosetta_compaction
 
     @property
     def credential_values(self) -> tuple[str, ...]:

@@ -9,6 +9,18 @@ from codex_rosetta.shims.providers import load_providers
 
 
 class TestBuildProviderInfo:
+    def test_force_rosetta_compaction_is_propagated(self):
+        info = build_provider_info(
+            "openai_responses",
+            {
+                "api_key": "test",
+                "base_url": "https://upstream.example/v1",
+                "force_rosetta_compaction": True,
+            },
+        )
+
+        assert info.force_rosetta_compaction is True
+
     def test_argo_openai_chat_uses_bearer_auth(self, monkeypatch):
         load_providers()
         monkeypatch.setenv("ARGO_API_KEY", "pding")

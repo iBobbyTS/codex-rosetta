@@ -279,14 +279,25 @@ async def _run_rosetta_compaction(
     stream: bool,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Execute the internal no-tools summary call and return a V2 item."""
+    force_rosetta_compaction = (
+        getattr(provider_info, "force_rosetta_compaction", False) is True
+    )
     if persistence is None:
         return (
             error_response_for_source(
                 route.source_provider,
                 503,
-                "Rosetta remote compaction requires gateway persistence",
+                "Codex Rosetta: SQLite is not available for prompt compaction",
             ),
-            {"compaction_mode": "rosetta", "compaction_reason": preparation.reason},
+            {
+                "compaction_mode": "rosetta",
+                "compaction_reason": preparation.reason,
+                **(
+                    {"compaction_forced_rosetta": True}
+                    if force_rosetta_compaction
+                    else {}
+                ),
+            },
         )
     assert preparation.summary_request is not None
     summary_response, summary_profile = await handle_non_streaming(
@@ -314,6 +325,8 @@ async def _run_rosetta_compaction(
         "compaction_dropped_native_count": preparation.dropped_native_count,
         "compaction_prompt_sha256": COMPACT_PROMPT_SHA256,
     }
+    if force_rosetta_compaction:
+        profile["compaction_forced_rosetta"] = True
     profile.update(
         {f"compaction_summary_{key}": value for key, value in summary_profile.items()}
     )
@@ -377,12 +390,16 @@ async def _prepare_codex_compaction_request(
     """Apply V2 replay/policy, returning an early response only when required."""
     if not enabled:
         return body, None, {}
+    force_rosetta_compaction = (
+        getattr(provider_info, "force_rosetta_compaction", False) is True
+    )
     try:
         preparation = prepare_codex_compaction(
             body,
             route=route,
             persistence=persistence,
             principal_id=state_scope.principal_id,
+            force_rosetta_compaction=force_rosetta_compaction,
         )
     except InvalidCodexCompactionRequest as exc:
         return (
@@ -397,6 +414,8 @@ async def _prepare_codex_compaction_request(
         "compaction_dropped_rosetta_count": preparation.dropped_rosetta_count,
         "compaction_dropped_native_count": preparation.dropped_native_count,
     }
+    if preparation.mode and force_rosetta_compaction:
+        profile["compaction_forced_rosetta"] = True
     if preparation.mode != "rosetta":
         return preparation.body, None, profile if preparation.mode else {}
     response, compaction_profile = await _run_rosetta_compaction(

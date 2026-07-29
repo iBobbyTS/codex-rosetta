@@ -5,20 +5,28 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import shutil
-import socket
 import sqlite3
 import subprocess
+import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from codex_rosetta.gateway.config import _strip_jsonc_comments
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from codex_rosetta.gateway.live_gate import require_live_call_approval
+from gateway_runtime import (
+    GATEWAY_CONFIG_SOURCE,
+    check_ignored as _shared_check_ignored,
+    codex_env as _codex_env,
+    configure_gateway_and_codex,
+    free_port as _free_port,
+    validate_auth as _validate_auth,
+    wait_ready as _wait_ready,
+    write_json as _write_json,
+)
 
 
 SUITE = Path(__file__).resolve().parent
@@ -26,39 +34,14 @@ ROOT = SUITE.parents[2]
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_TASK_ID = "02"
 DEFAULT_TRIGGER = "manual"
-AUTH_SOURCE = Path("/Users/ibobby/.codex-multi-2/auth.json")
-GATEWAY_CONFIG_SOURCE = Path.home() / ".config/codex-rosetta-gateway/config.jsonc"
-
-
-def _write_json(path: Path, value: Any) -> None:
-    path.write_text(
-        json.dumps(value, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-
-def _toml_string(value: str) -> str:
-    return json.dumps(value)
 
 
 def _is_gpt_model(model: str) -> bool:
     return model.startswith("gpt-")
 
 
-def _free_port() -> int:
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
-
-
 def _check_ignored(*paths: Path) -> None:
-    for path in paths:
-        completed = subprocess.run(
-            ["git", "-C", str(ROOT), "check-ignore", "-q", str(path)],
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError(f"secret destination is not git-ignored: {path}")
+    _shared_check_ignored(ROOT, *paths)
 
 
 def _copy_task(run_root: Path, task_id: str) -> None:
@@ -79,135 +62,15 @@ def _configure_run(
     auto_compact_token_limit: int,
     expected_gateway_provider: str | None,
 ) -> tuple[str, list[str]]:
-    gateway_path = run_root / "gateway" / "config.jsonc"
-    config = json.loads(_strip_jsonc_comments(gateway_path.read_text(encoding="utf-8")))
-    server = config.setdefault("server", {})
-    server["host"] = "127.0.0.1"
-    server["port"] = port
-    server["stream_trace"] = {
-        "enabled": True,
-        "filter": model,
-        "path": str(gateway_log_root / "rosetta-trace.jsonl"),
-    }
-    api_keys = server.get("api_keys")
-    if not isinstance(api_keys, list) or not api_keys:
-        raise ValueError("copied gateway config has no server.api_keys")
-    client_key = api_keys[0].get("key")
-    if not isinstance(client_key, str) or not client_key:
-        raise ValueError("copied gateway config has no usable client key")
-
-    groups = config.get("model_groups")
-    if not isinstance(groups, dict):
-        raise ValueError("copied gateway config has no model_groups")
-    matching_groups = [
-        (name, group)
-        for name, group in groups.items()
-        if isinstance(group, dict) and model in group.get("models", {})
-    ]
-    if not matching_groups:
-        raise RuntimeError(
-            "USER_DECISION_REQUIRED: copied Gateway config does not route "
-            f"model {model!r}; stop and choose whether to update the config or "
-            "select another model"
-        )
-    providers = sorted(
-        {
-            provider
-            for _, group in matching_groups
-            if isinstance(provider := group.get("provider"), str) and provider
-        }
+    return configure_gateway_and_codex(
+        ROOT,
+        run_root,
+        gateway_log_root,
+        model=model,
+        port=port,
+        auto_compact_token_limit=auto_compact_token_limit,
+        expected_gateway_provider=expected_gateway_provider,
     )
-    if expected_gateway_provider and expected_gateway_provider not in providers:
-        raise RuntimeError(
-            "USER_DECISION_REQUIRED: expected provider "
-            f"{expected_gateway_provider!r} is not configured for model {model!r}; "
-            "stop and choose whether to accept the observed provider or update "
-            "the Gateway config"
-        )
-
-    _write_json(gateway_path, config)
-    codex_config = "\n".join(
-        [
-            'model_provider = "codex_rosetta"',
-            f"model = {_toml_string(model)}",
-            'sandbox_mode = "danger-full-access"',
-            'approval_policy = "never"',
-            'model_reasoning_effort = "medium"',
-            f"model_auto_compact_token_limit = {auto_compact_token_limit}",
-            "",
-            "[model_providers.codex_rosetta]",
-            'name = "OpenAI"',
-            'wire_api = "responses"',
-            "requires_openai_auth = true",
-            f'base_url = "http://127.0.0.1:{port}/v1"',
-            f"experimental_bearer_token = {_toml_string(client_key)}",
-            "",
-            f"[projects.{_toml_string(str(run_root / 'worktree'))}]",
-            'trust_level = "trusted"',
-            "",
-        ]
-    )
-    (run_root / "codex_home" / "config.toml").write_text(
-        codex_config,
-        encoding="utf-8",
-    )
-    return client_key, providers
-
-
-def _codex_env(run_root: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env["CODEX_HOME"] = str(run_root / "codex_home")
-    return env
-
-
-def _validate_auth(run_root: Path, *, port: int, client_key: str) -> None:
-    auth = json.loads(AUTH_SOURCE.read_text(encoding="utf-8"))
-    if auth.get("auth_mode") != "chatgpt" or not isinstance(auth.get("tokens"), dict):
-        raise RuntimeError("authorized Codex auth source is not ChatGPT OAuth")
-    shutil.copy2(AUTH_SOURCE, run_root / "codex_home" / "auth.json")
-    os.chmod(run_root / "codex_home" / "auth.json", 0o600)
-    status = subprocess.run(
-        ["codex", "login", "status"],
-        check=False,
-        capture_output=True,
-        text=True,
-        env=_codex_env(run_root),
-    )
-    if status.returncode != 0 or "ChatGPT" not in status.stdout + status.stderr:
-        raise RuntimeError("isolated Codex Home did not report ChatGPT authentication")
-    _write_json(
-        run_root / "artifacts" / "runtime-auth.json",
-        {
-            "execution_mode": "oauth_plus_experimental_bearer_local_mode",
-            "gateway_secret_source_directory": "~/.config/codex-rosetta-gateway",
-            "auth_source": str(AUTH_SOURCE),
-            "codex_login_status": "chatgpt_oauth",
-            "gateway_mode": "local_mode",
-            "provider_identity": "codex_rosetta",
-            "provider_display_name": "OpenAI",
-            "provider_requires_openai_auth": True,
-            "provider_bearer_present": bool(client_key),
-            "provider_base_url": f"http://127.0.0.1:{port}/v1",
-        },
-    )
-
-
-def _wait_ready(port: int, client_key: str, process: subprocess.Popen[bytes]) -> None:
-    deadline = time.monotonic() + 30
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/v1/models",
-        headers={"Authorization": f"Bearer {client_key}"},
-    )
-    while time.monotonic() < deadline:
-        if process.poll() is not None:
-            raise RuntimeError(f"isolated gateway exited with {process.returncode}")
-        try:
-            with urllib.request.urlopen(request, timeout=1) as response:
-                if response.status == 200:
-                    return
-        except OSError, urllib.error.URLError:
-            time.sleep(0.2)
-    raise TimeoutError("isolated gateway did not become ready")
 
 
 def _contains_item_type(value: Any, item_type: str) -> bool:
@@ -358,8 +221,11 @@ def _run_codex(run_root: Path, timeout_seconds: int) -> tuple[int, str | None]:
 
 
 class _AppServerClient:
-    def __init__(self, run_root: Path, timeout_seconds: int) -> None:
+    def __init__(
+        self, run_root: Path, timeout_seconds: int, *, record_protocol: bool = True
+    ) -> None:
         self.protocol_path = run_root / "artifacts" / "app-server.jsonl"
+        self.record_protocol = record_protocol
         self.deadline = time.monotonic() + timeout_seconds
         self.messages: list[dict[str, Any]] = []
         self._stderr = (run_root / "artifacts" / "app-server.stderr").open("wb")
@@ -398,8 +264,9 @@ class _AppServerClient:
             if line:
                 message = json.loads(line)
                 self.messages.append(message)
-                with self.protocol_path.open("a", encoding="utf-8") as artifact:
-                    artifact.write(json.dumps(message, ensure_ascii=False) + "\n")
+                if self.record_protocol:
+                    with self.protocol_path.open("a", encoding="utf-8") as artifact:
+                        artifact.write(json.dumps(message, ensure_ascii=False) + "\n")
                 return message
             if self.process.poll() is not None:
                 raise RuntimeError(

@@ -205,6 +205,7 @@ def prepare_codex_compaction(
     route: ResolvedRoute,
     persistence: Any | None,
     principal_id: str,
+    force_rosetta_compaction: bool = False,
     now: datetime | None = None,
 ) -> CompactionPreparation:
     """Rehydrate history and select native passthrough or Rosetta summary."""
@@ -237,7 +238,9 @@ def prepare_codex_compaction(
     reason = _compaction_reason(request)
     mode = (
         "native"
-        if is_responses_passthrough(route) and reason in NATIVE_COMPACTION_REASONS
+        if not force_rosetta_compaction
+        and is_responses_passthrough(route)
+        and reason in NATIVE_COMPACTION_REASONS
         else "rosetta"
     )
     if mode == "native":

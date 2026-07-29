@@ -336,6 +336,17 @@ profile containing `compaction_mode` and `compaction_reason`, combined with
 mapping or native-item persistence and installed follow-up evidence, is not a
 rollout-only signal.
 
+For the Provider-level forced-compaction matrix, use
+`tests/live_agent/context_compaction/run_provider_matrix.py`. Keep the
+Codex-visible model fixed at `gpt-5.6-terra` and hot-switch only the isolated
+model group's Provider through the temporary Gateway Admin API. Run Pixel
+native and Cockpit native-error baselines independently; a baseline mismatch is
+`blocked`. After both pass, run Cockpit Rosetta to Pixel native and Pixel native
+to Cockpit Rosetta. Cell 4 must still execute after Cell 3 fails. Never persist
+the Admin token, Rosetta handle, summary plaintext, or native opaque payload;
+record only bounded item types, Provider/request correlations, mapping counts,
+and per-request usage/cache deltas.
+
 Keep Remote Compaction protocol correctness separate from post-compaction
 model behavior. A protocol-scoped cell passes after its required number of
 complete trigger/result/install/replay chains; later model command repetition

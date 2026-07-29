@@ -569,6 +569,10 @@ def _build_provider_entry(
     if "soft_interrupt" in body:
         entry["soft_interrupt"] = body["soft_interrupt"]
 
+    force_rosetta_compaction = body.get("force_rosetta_compaction", False)
+    if force_rosetta_compaction is not False:
+        entry["force_rosetta_compaction"] = force_rosetta_compaction
+
     if resolve_name in existing_providers:
         existing_enabled = existing_providers[resolve_name].get("enabled")
         if existing_enabled is not None:

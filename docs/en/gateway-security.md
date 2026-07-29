@@ -19,6 +19,15 @@ Provider receives replayable plaintext rather than another Provider's encrypted
 compaction payload. Routes that convert Responses to another protocol also use
 the Rosetta coordinator.
 
+An individual Responses Provider may set `force_rosetta_compaction: true` to
+use the Rosetta coordinator for every valid compaction reason, including
+`context_limit`, `user_requested`, model-switch reasons, and unknown reasons.
+This does not alter ordinary requests or discard existing native compaction
+history. If SQLite persistence is unavailable, Rosetta returns HTTP 503 before
+calling the summary upstream and never falls back to native compaction. Because
+the mapping contains summary plaintext for seven days, protect the Gateway data
+directory, backups, and copied test artifacts accordingly.
+
 ## Hard-interrupt cache compatibility
 
 The Chat-only compatibility option is a request-local role conversion. It does

@@ -26,9 +26,15 @@ Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应�
 
 现在只支持 `responses` 这一种 Responses 协议值；旧的 `responses_passthrough` 与 `responses_rosetta` 不再接受，加载配置前必须替换为 `responses`。
 
+Responses Provider 还可以设置 `force_rosetta_compaction: true`。这个
+Provider 级策略只影响合法的 Codex compaction trigger：无论 reason 是什么，都使用
+Rosetta 的无工具提示词摘要，而不转发 native Remote Compaction V2。普通 Responses
+请求仍走直接路径，历史中已有的上游 native `compaction` item 也保持不变。其他协议启用
+该选项会被拒绝，而且该功能依赖 Gateway SQLite 持久化。
+
 ## Responses 直接传输
 
-对于所有同协议 Responses 路由，网关不会通过 IR 解码和重新编码完整请求体。它会应用所选 Tool Profile；选择 **透传** 时则跳过工具映射。随后网关转发请求，并将上游原始 SSE 字节流式传输回 Codex。模型切换压缩是唯一的语义例外：Rosetta 会让旧模型生成明文摘要，保存对应替换内容七天，并在下一个 Provider 请求前还原。传输层还有一个编码例外：经过认证且带有 `Content-Encoding: zstd` 的请求会先在配置的解压前、解压后大小限制内解码，并移除编码 header。
+对于所有同协议 Responses 路由，网关不会通过 IR 解码和重新编码完整请求体。它会应用所选 Tool Profile；选择 **透传** 时则跳过工具映射。随后网关转发请求，并将上游原始 SSE 字节流式传输回 Codex。模型切换压缩，以及启用强制 Rosetta 压缩的 Provider 上的所有合法 trigger，是有意的语义例外：Rosetta 会让当前模型生成明文摘要，保存对应替换内容七天，并在下一个 Provider 请求前还原。传输层还有一个编码例外：经过认证且带有 `Content-Encoding: zstd` 的请求会先在配置的解压前、解压后大小限制内解码，并移除编码 header。
 
 这一点很重要，因为 Codex 依赖的某些字段不属于最小跨供应商 IR 的一部分，包括：
 

@@ -1059,6 +1059,75 @@ def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):
     assert json.loads(config_path.read_text(encoding="utf-8")) == original
 
 
+def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = _config_data()
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    initial_config = GatewayConfig(original)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "DeepSeek"})
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "responses",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "sk-new",
+        "force_rosetta_compaction": True,
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["DeepSeek"]["force_rosetta_compaction"] is True
+    assert app.gateway_config.providers["DeepSeek"].force_rosetta_compaction is True
+
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "responses",
+        "base_url": "https://api.deepseek.com/v1",
+        "api_key": "sk-new",
+        "force_rosetta_compaction": False,
+    }
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "force_rosetta_compaction" not in saved["providers"]["DeepSeek"]
+    assert app.gateway_config.providers["DeepSeek"].force_rosetta_compaction is False
+
+
+def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
+    config_path = tmp_path / "config.jsonc"
+    original = _config_data()
+    config_path.write_text(json.dumps(original), encoding="utf-8")
+    initial_config = GatewayConfig(original)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app, path_params={"name": "DeepSeek"})
+    request.json = lambda: {
+        "provider": "deepseek",
+        "api_type": "chat",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "sk-new",
+        "force_rosetta_compaction": True,
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert "supported only for api_type 'responses'" in response.body.decode("utf-8")
+    assert json.loads(config_path.read_text(encoding="utf-8")) == original
+
+
 def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
     config = _config_data()
     config["providers"]["zulu"] = {
