@@ -36,9 +36,16 @@ Provider configuration stores the selected `provider` together with `api_type: "
 
 The only supported Responses protocol value is `responses`; the former `responses_passthrough` and `responses_rosetta` values are no longer accepted and must be replaced before loading the configuration.
 
+A Responses Provider may additionally set `force_rosetta_compaction: true`.
+This Provider-level policy affects only valid Codex compaction triggers: every
+reason uses Rosetta's no-tools prompt summary instead of forwarding native
+Remote Compaction V2. Ordinary Responses requests remain on the direct path,
+and an existing upstream-native `compaction` history item remains intact. The
+option is rejected on other protocols and requires Gateway SQLite persistence.
+
 ## Direct Responses Transport
 
-For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, or skips tool mapping when **Pass through** is selected, then forwards the resulting request and streams raw upstream SSE bytes back to Codex. Model-switch compaction is the deliberate semantic exception: Rosetta asks the previous model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
+For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, or skips tool mapping when **Pass through** is selected, then forwards the resulting request and streams raw upstream SSE bytes back to Codex. Model-switch compaction, and every valid trigger on a Provider with forced Rosetta compaction, are deliberate semantic exceptions: Rosetta asks the current model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
 
 This is important because Codex relies on fields that are not part of a minimal cross-provider IR, including:
 

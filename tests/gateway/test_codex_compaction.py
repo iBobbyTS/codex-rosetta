@@ -85,6 +85,44 @@ def test_policy_uses_only_route_configuration_and_metadata_reason(
         assert prepared.summary_request is not None
 
 
+@pytest.mark.parametrize(
+    "reason", ["context_limit", "user_requested", "comp_hash_changed", "unknown"]
+)
+def test_forced_responses_policy_always_uses_rosetta(reason: str) -> None:
+    prepared = prepare_codex_compaction(
+        _request(reason),
+        route=_route(passthrough=True),
+        persistence=None,
+        principal_id="client-a",
+        force_rosetta_compaction=True,
+    )
+
+    assert prepared.mode == "rosetta"
+    assert prepared.reason == reason
+    assert prepared.summary_request is not None
+
+
+def test_forced_policy_does_not_change_ordinary_requests_or_native_history() -> None:
+    body = {
+        "model": "gpt-5.6-terra",
+        "input": [
+            {"type": "compaction", "encrypted_content": "native-opaque"},
+            {"type": "message", "role": "user", "content": "continue"},
+        ],
+    }
+
+    prepared = prepare_codex_compaction(
+        body,
+        route=_route(passthrough=True),
+        persistence=None,
+        principal_id="client-a",
+        force_rosetta_compaction=True,
+    )
+
+    assert prepared.mode is None
+    assert prepared.body == body
+
+
 def test_malformed_metadata_or_header_never_promotes_native_passthrough() -> None:
     body = _request()
     body["client_metadata"]["x-codex-turn-metadata"] = "not json"
@@ -319,6 +357,53 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
     assert captured["disable_error_dump"] is True
     assert persistence.count_codex_compaction_mappings() == 1
     persistence.close()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_missing_persistence_returns_exact_503_before_summary_call(
+    monkeypatch, stream: bool
+) -> None:
+    prepared = prepare_codex_compaction(
+        _request("user_requested"),
+        route=_route(passthrough=True),
+        persistence=None,
+        principal_id="client-a",
+        force_rosetta_compaction=True,
+    )
+    summary_handler = MagicMock()
+    monkeypatch.setattr(proxy, "handle_non_streaming", summary_handler)
+    provider_info = MagicMock(force_rosetta_compaction=True)
+    transport = MagicMock()
+
+    response, profile = asyncio.run(
+        proxy._run_rosetta_compaction(
+            route=_route(passthrough=True),
+            provider_info=provider_info,
+            preparation=prepared,
+            transport=transport,
+            metadata_store=None,
+            codex_tool_store=None,
+            extra_headers=None,
+            persistence=None,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+            codex_window_id="thread-a:0",
+            image_fetch_workers=None,
+            stream=stream,
+        )
+    )
+
+    assert response.status_code == 503
+    assert "Codex Rosetta: SQLite is not available for prompt compaction" in (
+        response.body.decode("utf-8")
+    )
+    assert profile["compaction_forced_rosetta"] is True
+    summary_handler.assert_not_called()
+    assert transport.mock_calls == []
 
 
 def test_live_quality_matrix_uses_identical_input_and_optional_gpt_provider() -> None:

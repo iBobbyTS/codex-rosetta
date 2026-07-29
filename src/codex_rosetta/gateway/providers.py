@@ -162,6 +162,9 @@ def build_provider_info(
     soft_interrupt = cfg.get("soft_interrupt", False)
     if not isinstance(soft_interrupt, bool):
         raise ValueError("config: provider soft_interrupt must be a boolean")
+    force_rosetta_compaction = cfg.get("force_rosetta_compaction", False)
+    if not isinstance(force_rosetta_compaction, bool):
+        raise ValueError("config: provider force_rosetta_compaction must be a boolean")
 
     return ProviderInfo(
         name=provider_type,
@@ -173,4 +176,5 @@ def build_provider_info(
         proxy_url=proxy_url,
         allow_redirects=allow_redirects,
         soft_interrupt=soft_interrupt,
+        force_rosetta_compaction=force_rosetta_compaction,
     )

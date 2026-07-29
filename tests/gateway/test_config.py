@@ -1062,6 +1062,40 @@ class TestModelGroups:
         with pytest.raises(ValueError, match="supported only.*chat"):
             GatewayConfig(raw)
 
+    def test_provider_force_rosetta_compaction_defaults_disabled(self):
+        cfg = GatewayConfig(_minimal_raw())
+
+        assert cfg.providers["test"].force_rosetta_compaction is False
+
+    def test_responses_provider_force_rosetta_compaction_is_propagated(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"].update(
+            {"api_type": "responses", "force_rosetta_compaction": True}
+        )
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.providers["test"].force_rosetta_compaction is True
+
+    @pytest.mark.parametrize("value", [1, "true", None, []])
+    def test_provider_force_rosetta_compaction_requires_boolean(self, value):
+        raw = _minimal_raw()
+        raw["providers"]["test"].update(
+            {"api_type": "responses", "force_rosetta_compaction": value}
+        )
+
+        with pytest.raises(
+            ValueError, match="force_rosetta_compaction must be a boolean"
+        ):
+            GatewayConfig(raw)
+
+    def test_provider_force_rosetta_compaction_rejects_non_responses_protocol(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["force_rosetta_compaction"] = True
+
+        with pytest.raises(ValueError, match="supported only.*responses"):
+            GatewayConfig(raw)
+
 
 def test_cli_add_model_group_then_grouped_model(tmp_path):
     config_path = tmp_path / "config.jsonc"

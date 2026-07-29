@@ -230,6 +230,23 @@ def resolve_soft_interrupt(
     return resolved if api_type == "chat" else False
 
 
+def resolve_force_rosetta_compaction(
+    api_type: str,
+    value: Any = _MISSING,
+) -> bool:
+    """Resolve the Responses-only prompt-compaction policy."""
+
+    resolved = False if value is _MISSING else value
+    if not isinstance(resolved, bool):
+        raise ValueError("config: provider force_rosetta_compaction must be a boolean")
+    if resolved and api_type != "responses":
+        raise ValueError(
+            "config: provider force_rosetta_compaction is supported only for "
+            "api_type 'responses'"
+        )
+    return resolved if api_type == "responses" else False
+
+
 def resolve_provider_profile(provider_id: str, api_type: str) -> ProviderProfile:
     """Resolve an explicit provider/protocol pair without URL inference."""
 

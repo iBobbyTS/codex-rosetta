@@ -36,7 +36,7 @@ from codex_rosetta.gateway.interrupt_notice import (  # noqa: E402
     TURN_ABORTED_DEVELOPER_TEXT,
 )
 
-from tests.live_agent.context_compaction.run_live import (  # noqa: E402
+from context_compaction.run_live import (  # noqa: E402
     _AppServerClient,
     _configure_run,
     _free_port,

@@ -20,6 +20,45 @@ and replay through Codex-Rosetta. It does not score summary quality; use
 Every cell uses a separate timestamped run root, Codex Home, copied gateway
 configuration, port, gateway process, and Gateway Logs trace.
 
+## Provider policy matrix
+
+`run_provider_matrix.py` is the four-cell acceptance runner for the
+Responses-only `force_rosetta_compaction` policy. It always exposes
+`gpt-5.6-terra` to Codex and targets the configured `Pixel (Plus)` and
+`Cockpit Tools` Providers:
+
+1. Pixel with the policy off: ordinary turn, native manual compact, installed
+   native item, and follow-up all succeed with zero Rosetta mappings.
+2. Cockpit with the policy off: the ordinary turn succeeds and native compact
+   reproduces exact HTTP 400 `invalid_request/model is required` in
+   `stream_header`, while the trigger request still contains `model` and uses
+   exact wire passthrough.
+3. Cockpit forced Rosetta, then an Admin API hot switch to Pixel in the same
+   thread/window: Rosetta mapping/install/replay succeeds, followed by Pixel
+   native compact and a final turn.
+4. Pixel native, then an Admin API hot switch to forced-Rosetta Cockpit in the
+   same thread/window: Cockpit accepts the retained native history, then
+   Rosetta compact and the final turn succeed.
+
+Run both baseline cells. A baseline mismatch makes the suite `blocked` and
+skips the switch matrix. After both baselines pass, run both switch cells even
+when Cell 3 fails. Only two passing switch cells produce `success`; otherwise
+the result is `failure`.
+
+```bash
+CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
+  conda run -n llm-rosetta python \
+  tests/live_agent/context_compaction/run_provider_matrix.py
+```
+
+Each cell creates its own standard-GIL CPython 3.14.6 Conda prefix, starts the
+current checkout on a temporary port, and uses an
+independent timestamp-only RAMDisk trace directory. Provider switching uses
+only the isolated Admin API; it never changes Codex's model or restarts or
+rewrites the main Gateway. Artifacts contain item types and correlations only,
+never credentials, summary plaintext, `rskc_v1_` handles, attestations, or
+native opaque payloads.
+
 ## Automated native smoke run
 
 `run_live.py` automates the isolated setup, dual-auth validation, gateway
