@@ -346,8 +346,11 @@ compaction、Tool Profile 过滤和协议转换之前写入一条 `original_requ
 仍会递归执行 token 脱敏，但有意不受 `stream_trace.max_string_chars` 限制；排查完成后应
 关闭 stream tracing，并严格限制 trace 文件访问权限，因为 prompt、源码和个人数据仍会保留。它
 捕获的是 proxy handler 收到的请求体，不包含认证 header。延迟保存的模型响应 trace
-record 只执行协议字段脱敏；超过有界 trace 容量时只丢弃该响应 trace batch，不得中断或
-改变模型 stream。
+record 只执行协议字段脱敏。响应等待最终安全分类期间，每条记录都会写入配置 trace 目录
+中的当前请求专属匿名暂存文件；安全完成后会完整追加到 trace，不再按延迟 batch 的 stream
+长度、聚合字节数或记录数截断。单个诊断字符串仍遵守 `stream_trace.max_string_chars`。失败、
+取消或其他不安全的响应 batch 仍会丢弃。trace 目录、暂存文件或最终文件写入失败时，只会
+停止记录当前请求，不得中断或改变模型 stream。
 
 Request log 的 success/error 上限会在启动和 Admin 热更新时使用同一规则验证。
 `server.request_log.success_max`、`error_max`、旧版 `max_entries`，以及环境变量

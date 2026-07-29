@@ -443,9 +443,15 @@ limited by `stream_trace.max_string_chars`. Disable stream tracing after the
 investigation and restrict the trace file because prompts, source code, and
 personal data remain present. It captures the request body received by the
 proxy handler, not authentication headers. Deferred model-response trace
-records use protocol-field-only redaction. If the bounded deferred trace
-capacity is exceeded, the response trace batch is dropped without interrupting
-or changing the model stream.
+records use protocol-field-only redaction. While the response is pending its
+terminal safety classification, every record is written to a request-owned
+anonymous spool in the configured trace directory. A safely completed response
+is appended to the trace in full, with no deferred-batch stream-length,
+aggregate-byte, or record-count truncation. Individual diagnostic strings still
+honor `stream_trace.max_string_chars`. Failed, cancelled, or otherwise unsafe
+response batches are still discarded. Trace-directory, spool, or final-file
+write failures disable tracing for that request without interrupting or
+changing the model stream.
 
 Request-log success and error caps are validated during both startup and Admin
 hot reload. `server.request_log.success_max`, `error_max`, legacy
