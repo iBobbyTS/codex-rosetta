@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from codex_rosetta._vendor.httpclient import AsyncClient, DEFAULT_MAX_REDIRECTS
 
+DEFAULT_HTTP_TIMEOUT_SECONDS = 10 * 60.0
+
 
 class HttpClientPool:
     """Manages :class:`AsyncClient` instances keyed by proxy URL.
@@ -17,7 +19,7 @@ class HttpClientPool:
     gets its own ``AsyncClient`` with connection pooling.
     """
 
-    def __init__(self, *, timeout: float = 300.0) -> None:
+    def __init__(self, *, timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS) -> None:
         self._clients: dict[tuple[str | None, bool], AsyncClient] = {}
         self._timeout = timeout
 

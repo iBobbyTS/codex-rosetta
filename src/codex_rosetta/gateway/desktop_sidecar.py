@@ -29,6 +29,8 @@ from .logging import setup_logging
 
 
 LOOPBACK_HOST = "127.0.0.1"
+_STARTUP_BIND_ATTEMPTS = 1_500
+_STARTUP_BIND_POLL_SECONDS = 0.01
 
 
 def _read_command(stream: BinaryIO) -> dict[str, Any]:
@@ -127,7 +129,7 @@ def _confirm_local_mode(config_path: str, codex_home: str) -> None:
 
 async def _wait_for_bind(app: Any, server_task: asyncio.Task[None]) -> int:
     """Wait until the owned App has actually bound its listener."""
-    for _ in range(300):
+    for _ in range(_STARTUP_BIND_ATTEMPTS):
         if server_task.done():
             await server_task
             raise RuntimeError("Gateway exited before binding")
@@ -136,7 +138,7 @@ async def _wait_for_bind(app: Any, server_task: asyncio.Task[None]) -> int:
         if sockets:
             address = sockets[0].getsockname()
             return int(address[1])
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(_STARTUP_BIND_POLL_SECONDS)
     app.shutdown()
     await server_task
     raise DesktopProtocolError("startup_timeout", "Gateway did not bind in time")

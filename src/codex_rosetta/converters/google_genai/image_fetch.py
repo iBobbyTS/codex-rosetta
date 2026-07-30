@@ -97,7 +97,7 @@ class ImageFetchPolicy:
     """
 
     proxy_url: str | None = None
-    timeout_seconds: float = 30.0
+    timeout_seconds: float = 120.0
     max_bytes: int = DEFAULT_MAX_IMAGE_BYTES
     max_redirects: int = 3
     cancellation: ImageFetchCancellation | None = field(

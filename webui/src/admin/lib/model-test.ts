@@ -1,5 +1,7 @@
 import { api } from './api';
 
+export const DEFAULT_MODEL_TEST_TIMEOUT_MS = 900_000;
+
 export type TestTaskResult = {
   status: 'pending' | 'done' | 'error' | 'cancelled';
   status_code?: number;
@@ -35,7 +37,7 @@ export async function pollModelTest(
   taskId: string,
   signal: AbortSignal,
   wait: (milliseconds: number, signal: AbortSignal) => Promise<void> = delay,
-  timeoutMs = 120_000,
+  timeoutMs = DEFAULT_MODEL_TEST_TIMEOUT_MS,
   now: () => number = Date.now,
 ): Promise<TestTaskResult> {
   const deadline = now() + timeoutMs;

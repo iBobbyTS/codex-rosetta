@@ -634,11 +634,16 @@ def test_stream_request_uses_open_timeout_and_body_uses_idle_timeout(
     assert transport._stream_idle_timeout == 17
 
 
-def test_stream_open_timeout_defaults_to_ten_minutes() -> None:
+def test_upstream_transport_uses_extended_default_timeouts() -> None:
     transport = HttpTransport()
 
     assert transport_module.DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS == 600.0
+    assert transport_module.DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS == 300.0
+    assert transport_module.DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS == 5.0
     assert transport._stream_open_timeout == 600.0
+    assert transport._stream_idle_timeout == 300.0
+    assert transport._close_timeout == 5.0
+    assert transport._pool._timeout == 600.0
 
 
 @pytest.mark.parametrize(

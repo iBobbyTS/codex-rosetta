@@ -36,7 +36,7 @@ from .._base import (
     UpstreamStreamLimitError,
 )
 from ..provider_info import ProviderInfo
-from .client_pool import HttpClientPool
+from .client_pool import DEFAULT_HTTP_TIMEOUT_SECONDS, HttpClientPool
 
 logger = logging.getLogger("codex-rosetta-gateway")
 
@@ -46,8 +46,8 @@ MAX_UPSTREAM_SSE_LINE_BYTES = 1024 * 1024
 MAX_UPSTREAM_SSE_EVENT_BYTES = 8 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
 DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS = 10 * 60.0
-DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS = 60.0
-DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS = 2.0
+DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS = 5 * 60.0
+DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS = 5.0
 
 
 def _consume_background_task_result(task: asyncio.Task[Any]) -> None:
@@ -484,7 +484,7 @@ class HttpTransport:
     def __init__(
         self,
         *,
-        timeout: float = 300.0,
+        timeout: float = DEFAULT_HTTP_TIMEOUT_SECONDS,
         stream_open_timeout: float = DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS,
         stream_idle_timeout: float = DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS,
         close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,

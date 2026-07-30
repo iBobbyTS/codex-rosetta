@@ -1,10 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AUTH_EXPIRED_EVENT, RESTART_REQUIRED_EVENT, request, setAdminToken } from '../src/admin/lib/api';
+import { AUTH_EXPIRED_EVENT, DEFAULT_API_TIMEOUT_MS, RESTART_REQUIRED_EVENT, request, setAdminToken } from '../src/admin/lib/api';
 
 describe('admin API client', () => {
   beforeEach(() => {
     localStorage.clear();
     vi.restoreAllMocks();
+  });
+
+  it('allows one minute for ordinary Admin API operations', () => {
+    expect(DEFAULT_API_TIMEOUT_MS).toBe(60_000);
   });
 
   it('adds the admin token and serializes JSON', async () => {

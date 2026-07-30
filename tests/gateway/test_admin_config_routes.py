@@ -898,7 +898,7 @@ def test_network_search_status_reports_service_and_browser(
         "service_online": expected[0],
         "browser_ready": expected[1],
     }
-    assert calls[0][0]["timeout"] == 2.0
+    assert calls[0][0]["timeout"] == 5.0
     assert calls[0][1:3] == ("GET", "http://web-run:8080/health")
     assert calls[0][3] == {
         "max_success_bytes": 64 * 1024,

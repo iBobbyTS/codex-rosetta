@@ -582,7 +582,7 @@ A Codex upgrade that introduces larger required single events must be measured
 and reviewed rather than disabling the limits.
 
 The Gateway also bounds streaming connection establishment to 10 minutes,
-upstream SSE inactivity to 60 seconds, and connection cleanup to 2 seconds.
+upstream SSE inactivity to 5 minutes, and connection cleanup to 5 seconds.
 This prevents a route change from leaving Codex attached to a black-holed
 upstream socket: after HTTP 200 has begun, Rosetta emits one source-protocol
 terminal error event labeled `Upstream: ` instead of leaving Codex to infer an

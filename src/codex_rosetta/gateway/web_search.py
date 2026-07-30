@@ -14,6 +14,7 @@ from .downstream_errors import CodexRosettaBlockedError
 from .transport.http.transport import request_bounded_response
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+DEFAULT_TAVILY_TIMEOUT_SECONDS = 120.0
 WEB_SEARCH_TOOL_NAMES = {"web_search", "web_search_preview"}
 WEB_SEARCH_PROFILE_ITEM_ID = "hosted.web_search"
 
@@ -80,7 +81,12 @@ TavilySearchClient = WebSearchClient
 class TavilyHTTPClient:
     """Small async Tavily REST client using the vendored HTTP transport."""
 
-    def __init__(self, api_key: str, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        timeout: float = DEFAULT_TAVILY_TIMEOUT_SECONDS,
+    ) -> None:
         self.api_key = api_key
         self.timeout = timeout
         self._redactor = SecretRedactor([api_key])

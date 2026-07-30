@@ -143,9 +143,9 @@ def _wait_for_parser_count(app: Any, expected: int) -> None:
 def test_gateway_uses_default_body_limit_and_fixed_parser_budgets() -> None:
     with _RunningGateway() as running:
         assert running.app.max_body_size == 128 * 1024 * 1024
-        assert running.app.request_line_timeout == 5.0
-        assert running.app.header_timeout == 10.0
-        assert running.app.body_timeout == 30.0
+        assert running.app.request_line_timeout == 15.0
+        assert running.app.header_timeout == 30.0
+        assert running.app.body_timeout == 120.0
         assert running.app.max_concurrent_request_parses == 64
 
 

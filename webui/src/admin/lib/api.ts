@@ -1,4 +1,5 @@
 const TOKEN_KEY = 'admin_token';
+export const DEFAULT_API_TIMEOUT_MS = 60_000;
 export const AUTH_EXPIRED_EVENT = 'admin-auth-expired';
 export const RESTART_REQUIRED_EVENT = 'admin-restart-required';
 
@@ -32,7 +33,7 @@ export function setAdminToken(token: string): void {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (!path.startsWith('/admin/api/')) throw new Error('Admin API path required');
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? 15_000);
+  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS);
   const onAbort = () => controller.abort();
   options.signal?.addEventListener('abort', onAbort, { once: true });
   const headers = new Headers(options.headers);

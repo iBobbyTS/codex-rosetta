@@ -61,9 +61,9 @@ Admin 模型测试使用的内部 Bearer token 仍然只存在于内存中，并
 Authorization: Bearer rsk-...
 ```
 
-入站解析还执行固定的进程级资源限制。request line 必须在单个 5 秒 monotonic deadline
-内完成；每个 header 或 chunked trailer section 必须在 10 秒内完成，且最多包含 100 个
-字段或 64 KiB（包含 framing）；完整 request body 必须在单个 30 秒 monotonic deadline
+入站解析还执行固定的进程级资源限制。request line 必须在单个 15 秒 monotonic deadline
+内完成；每个 header 或 chunked trailer section 必须在 30 秒内完成，且最多包含 100 个
+字段或 64 KiB（包含 framing）；完整 request body 必须在单个 120 秒 monotonic deadline
 内到达。同一时间最多允许 64 条连接占用 request parser；第 65 条连接会立即收到 HTTP
 503，不会排队等待容量。
 
@@ -192,12 +192,13 @@ docker-compose -f docker/docker-compose.yaml \
 收到 Provider credential。它的 Bearer Token 会在 Admin 配置 API 和 Gateway Logs 中
 被遮盖。若既不使用 Compose，也不使用 CLI 托管参数，需要显式配置相互匹配的
 `server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
+Sidecar 操作默认超时为 300 秒；`server.web_run.timeout_seconds` 接受 1 到 600 秒。
 
 Admin **联网搜索**页面允许基础搜索选择 Tavily 凭据，或现有 sidecar 内的
 **Self-hosted (Google)**、**Self-hosted (Bing RSS)** 与
 **Self-hosted (Bing Browser)**。self-hosted Provider 不会发送搜索 API 凭据，但搜索引擎可能限流、要求验证
 或改变结果页；这类失败会作为有界的 `502` 搜索错误返回，不会静默切换 Provider。高级 Section
-只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以两秒超时、
+只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以五秒超时、
 有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token
 或上游错误正文。页面进入后立即检查，仅在页面停留期间每五秒刷新，离开后停止。
 模型请求复用同一个五秒健康缓存；Modified `web.run` 只有在缓存状态在线且
@@ -247,10 +248,11 @@ JSON bytes 保存。每条 retained record（包含 metadata）上限为 4 MiB�
 completed record 共用 32 MiB 预算。容量收敛只会驱逐当前 app 最旧的 completed result，
 绝不会驱逐 active work。Running task 会计入 128 条数量上限，但不计入 completed-byte
 预算。App shutdown 会取消并等待自身 active test，同时清空自身 completed result。
+每个 active model test 的前端与后端均使用一致的 15 分钟 deadline。
 
 ## 出站网络与响应上限
 
-请求转换到 Google GenAI 时，公共 HTTP(S) 图片 URL 的下载使用一个 30 秒 monotonic
+请求转换到 Google GenAI 时，公共 HTTP(S) 图片 URL 的下载使用一个 120 秒 monotonic
 deadline，统一覆盖 DNS、连接、重定向、响应头和请求体读取。每个重定向目标以及直连
 DNS 返回的所有地址都会重新验证；私有或不可路由地址会被拒绝，最多跟随三次重定向，
 每个图片响应体上限为 10 MiB。网关为每个 app 单独持有一个四 worker 的有界池；排队、
@@ -269,6 +271,11 @@ budget。超限或非 identity 响应会被关闭，并作为稳定的 gateway u
 每条 SSE line 上限为 1 MiB，每个 event 累积的 `data:` payload 上限为 8 MiB，并在每个
 delimiter 后重置 event 计数。转换后的 SSE 和保留原始字节的 Responses passthrough 都
 执行同一限制；超限时会关闭 upstream，并返回稳定的 Gateway safety error。
+
+普通 upstream HTTP 请求的超时为 10 分钟。流式请求允许 upstream response 最长用
+10 分钟建立，建立后相邻 upstream bytes 最长间隔为 5 分钟，连接清理最长等待 5 秒。
+静态页面打开最长等待 60 秒；Tavily、浏览器导航/搜索、PDF 下载及 Google 图片下载
+最长等待 120 秒。
 
 转换型 Provider stream 接受 JSON `data:` event、显式 `[DONE]` marker、空 `data:`
 keepalive 和普通 SSE comment。若非空 event 既不是 JSON 也不是 `[DONE]`，Rosetta 会把它
