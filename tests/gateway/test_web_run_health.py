@@ -67,7 +67,7 @@ def test_health_probe_is_bounded_and_reports_browser_readiness(monkeypatch):
     }
     assert calls == [
         (
-            {"timeout": 2.0},
+            {"timeout": 5.0},
             "GET",
             "http://web-run:8080/health",
             {

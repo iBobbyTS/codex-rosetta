@@ -308,7 +308,7 @@ def test_web_run_sidecar_is_disabled_by_default() -> None:
 
     assert config.web_run_sidecar_url is None
     assert config.web_run_sidecar_token is None
-    assert config.web_run_sidecar_timeout == 45.0
+    assert config.web_run_sidecar_timeout == 300.0
     route, _provider = config.resolve("openai_responses", "gpt-test")
     assert WEB_RUN_SIDECAR_CAPABILITY not in route.tool_runtime_capabilities
 
@@ -395,11 +395,30 @@ def test_empty_web_run_sidecar_environment_preserves_config(monkeypatch) -> None
             "token": "sidecar-secret-token-for-tests",
             "timeout_seconds": 0,
         },
+        {
+            "base_url": "http://web-run:8080",
+            "token": "sidecar-secret-token-for-tests",
+            "timeout_seconds": 601,
+        },
     ],
 )
 def test_invalid_web_run_sidecar_config_is_rejected(web_run) -> None:
     with pytest.raises(ValueError, match="server.web_run"):
         GatewayConfig(_minimal_raw(web_run=web_run))
+
+
+def test_web_run_sidecar_accepts_extended_timeout_ceiling() -> None:
+    config = GatewayConfig(
+        _minimal_raw(
+            web_run={
+                "base_url": "http://web-run:8080",
+                "token": "sidecar-secret-token-for-tests",
+                "timeout_seconds": 600,
+            }
+        )
+    )
+
+    assert config.web_run_sidecar_timeout == 600.0
 
 
 @pytest.mark.parametrize("field", ["local_mode", "local_mode_confirmed"])

@@ -7,6 +7,7 @@ from typing import Any, Protocol
 from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.observability.redaction import SecretRedactor
 
+from .config import DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS
 from .downstream_errors import CodexRosettaBlockedError
 from .transport.http.transport import request_bounded_response
 from .web_search import WebSearchSettings
@@ -65,7 +66,7 @@ class WebRunSidecarHTTPClient:
         base_url: str,
         token: str,
         *,
-        timeout: float = 45.0,
+        timeout: float = DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS,
         search_provider: str = "self_hosted_google",
     ) -> None:
         root = base_url.rstrip("/")

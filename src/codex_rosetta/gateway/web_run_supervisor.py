@@ -21,7 +21,10 @@ from .web_run_health import WebRunHealthState
 
 DEFAULT_WEB_RUN_HOST_PORT = 8766
 MAX_WEB_RUN_PORT_ATTEMPTS = 100
-WEB_RUN_STARTUP_TIMEOUT_SECONDS = 90.0
+WEB_RUN_STARTUP_TIMEOUT_SECONDS = 300.0
+DOCKER_DAEMON_TIMEOUT_SECONDS = 30
+DOCKER_COMPOSE_TIMEOUT_SECONDS = 600
+DOCKER_COMPOSE_STOP_GRACE_SECONDS = 30
 WEB_RUN_HOST_PORT_ENV = "CODEX_ROSETTA_WEB_RUN_HOST_PORT"
 
 _ENV_UNSET = object()
@@ -143,7 +146,7 @@ class WebRunSidecarSupervisor:
                     "down",
                     "--remove-orphans",
                     "--timeout",
-                    "10",
+                    str(DOCKER_COMPOSE_STOP_GRACE_SECONDS),
                     environment=self._compose_environment,
                 )
                 if result.returncode != 0:
@@ -172,7 +175,7 @@ class WebRunSidecarSupervisor:
                 ["docker", "info", "--format", "{{.ServerVersion}}"],
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=DOCKER_DAEMON_TIMEOUT_SECONDS,
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
@@ -209,7 +212,7 @@ class WebRunSidecarSupervisor:
                 command,
                 capture_output=True,
                 text=True,
-                timeout=300,
+                timeout=DOCKER_COMPOSE_TIMEOUT_SECONDS,
                 check=False,
                 env=environment,
             )
@@ -278,7 +281,7 @@ class WebRunSidecarSupervisor:
             "down",
             "--remove-orphans",
             "--timeout",
-            "10",
+            str(DOCKER_COMPOSE_STOP_GRACE_SECONDS),
             environment=environment,
         )
 

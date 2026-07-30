@@ -10,6 +10,7 @@ const pollMock = vi.hoisted(() => vi.fn());
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 vi.mock('../src/admin/lib/model-test', () => ({
   buildModelTestPayload: (model: string) => ({ model }),
+  DEFAULT_MODEL_TEST_TIMEOUT_MS: 900_000,
   pollModelTest: pollMock,
   responseText: (body: { output_text?: string }) => body.output_text ?? '',
   safeUsageRows: () => [],

@@ -13,7 +13,7 @@ from codex_rosetta._vendor.httpclient import AsyncClient
 from .transport.http.transport import request_bounded_response
 
 WEB_RUN_HEALTH_MAX_BYTES = 64 * 1024
-WEB_RUN_HEALTH_TIMEOUT_SECONDS = 2.0
+WEB_RUN_HEALTH_TIMEOUT_SECONDS = 5.0
 WEB_RUN_HEALTH_TTL_SECONDS = 5.0
 
 

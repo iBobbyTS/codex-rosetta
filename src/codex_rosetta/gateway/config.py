@@ -66,6 +66,8 @@ DEFAULT_REQUEST_BODY_LIMIT_MB = 128
 UNLIMITED_REQUEST_BODY_LIMIT = "unlimited"
 WEB_RUN_SIDECAR_URL_ENV = "CODEX_ROSETTA_WEB_RUN_URL"
 WEB_RUN_SIDECAR_TOKEN_ENV = "CODEX_ROSETTA_WEB_RUN_TOKEN"
+DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS = 300.0
+MAX_WEB_RUN_SIDECAR_TIMEOUT_SECONDS = 600.0
 SELF_HOSTED_WEB_SEARCH_PROVIDERS = frozenset(
     {"self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"}
 )
@@ -248,13 +250,13 @@ def normalize_web_run_sidecar(
             )
         if parsed.path not in {"", "/"}:
             raise ValueError("config: server.web_run base_url must not contain a path")
-    timeout = mapping.get("timeout_seconds", 45.0)
+    timeout = mapping.get("timeout_seconds", DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS)
     if isinstance(timeout, bool) or not isinstance(timeout, int | float):
         raise ValueError("config: server.web_run timeout_seconds must be a number")
     timeout = float(timeout)
-    if not 1.0 <= timeout <= 120.0:
+    if not 1.0 <= timeout <= MAX_WEB_RUN_SIDECAR_TIMEOUT_SECONDS:
         raise ValueError(
-            "config: server.web_run timeout_seconds must be between 1 and 120"
+            "config: server.web_run timeout_seconds must be between 1 and 600"
         )
     return base_url or None, token or None, timeout
 

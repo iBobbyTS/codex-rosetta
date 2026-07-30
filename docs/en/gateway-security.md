@@ -76,10 +76,10 @@ Authorization: Bearer rsk-...
 ```
 
 Inbound parsing also has fixed process-level resource limits. A request line
-must complete within one 5-second monotonic deadline; each header or chunked
-trailer section must complete within 10 seconds and may contain at most 100
+must complete within one 15-second monotonic deadline; each header or chunked
+trailer section must complete within 30 seconds and may contain at most 100
 fields or 64 KiB including framing; and the complete request body must arrive
-within one 30-second monotonic deadline. At most 64 connections may occupy the
+within one 120-second monotonic deadline. At most 64 connections may occupy the
 request parser at once. A 65th connection receives HTTP 503 immediately rather
 than waiting for capacity.
 
@@ -235,7 +235,8 @@ configuration directory or provider credentials. Its bearer token is masked by
 the Admin configuration API and Gateway Logs. Outside Compose or the managed
 CLI option, configure matching `server.web_run.base_url` and
 `server.web_run.token` values (or the corresponding URL/Token environment
-variables) explicitly.
+variables) explicitly. Sidecar operations default to a 300-second timeout;
+`server.web_run.timeout_seconds` accepts values from 1 through 600 seconds.
 
 The Admin **Web Search** page lets basic search use Tavily credentials,
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, or
@@ -245,7 +246,7 @@ rate-limit, challenge, or change its result page; such
 failures are returned as bounded `502` search errors instead of silently falling
 back to another provider. The read-only advanced section reports sidecar service
 availability and browser readiness independently. The status endpoint uses a
-two-second bounded request to the sidecar's public `/health` route and never
+five-second bounded request to the sidecar's public `/health` route and never
 returns the sidecar URL, bearer token, or upstream error text. The page checks
 immediately, refreshes every five seconds while active, and stops when another
 Admin page is selected. Model requests share the same five-second health cache;
@@ -311,11 +312,12 @@ completed records in one app share a 32 MiB budget. Capacity enforcement evicts
 only that app's oldest completed results, never active work. Running tasks count
 toward the 128-record limit but not the completed-byte budget. App shutdown
 cancels and awaits its own active tests and clears its own completed results.
+Each active model test has a matching 15-minute frontend and backend deadline.
 
 ## Outbound network and response limits
 
 When a request is converted to Google GenAI, public HTTP(S) image URLs are
-downloaded under one 30-second monotonic deadline covering DNS, connect,
+downloaded under one 120-second monotonic deadline covering DNS, connect,
 redirects, response headers, and body reads. Redirect targets and every direct
 DNS answer are revalidated, private/non-routable addresses are rejected, at
 most three redirects are followed, and each image body is limited to 10 MiB.
@@ -342,6 +344,12 @@ accumulated `data:` payload is limited to 8 MiB; the event counter resets after
 every delimiter. The same limits apply to converted SSE and byte-preserving
 Responses passthrough. Overflow closes the upstream and surfaces a stable
 Gateway safety error.
+
+Ordinary upstream HTTP requests have a 10-minute timeout. Streaming requests
+allow 10 minutes for the upstream response to open, five minutes between
+subsequent upstream bytes, and five seconds for connection cleanup. Static page
+opens allow 60 seconds; Tavily, browser navigation/search, PDF downloads, and
+Google image downloads allow 120 seconds.
 
 Converted provider streams accept JSON `data:` events, the explicit `[DONE]`
 marker, empty `data:` keepalives, and normal SSE comments. A non-empty event

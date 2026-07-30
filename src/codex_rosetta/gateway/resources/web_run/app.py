@@ -52,8 +52,9 @@ _MAX_PDF_TEXT_CHARS = 100_000
 _MAX_SESSIONS = 16
 _MAX_REFERENCES_PER_SESSION = 16
 _SESSION_TTL_SECONDS = 15 * 60
-_NAVIGATION_TIMEOUT_MS = 30_000
-_ACTION_TIMEOUT_MS = 15_000
+_NAVIGATION_TIMEOUT_MS = 120_000
+_ACTION_TIMEOUT_MS = 60_000
+_PDF_DOWNLOAD_TIMEOUT_SECONDS = 120.0
 _USER_AGENT = "Codex-Rosetta/1.0 (+web-run sidecar)"
 
 
@@ -511,7 +512,7 @@ def _render_pdf_page(document: PDFDocument, ref_id: str, pageno: int) -> str:
 async def _download_pdf(url: str) -> PDFDocument:
     current = url
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(30.0),
+        timeout=httpx.Timeout(_PDF_DOWNLOAD_TIMEOUT_SECONDS),
         follow_redirects=False,
         headers={"User-Agent": _USER_AGENT, "Accept": "application/pdf"},
     ) as client:

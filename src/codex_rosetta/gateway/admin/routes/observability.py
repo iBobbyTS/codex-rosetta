@@ -13,6 +13,7 @@ from ._shared import _bounded_int_qp, _qp
 
 _MAX_PAGE_LIMIT = 1000
 _MAX_PAGE_OFFSET = 1_000_000
+_NETWORK_DIAGNOSTICS_TIMEOUT_SECONDS = 60.0
 
 
 def _detect_host_ip() -> dict[str, Any]:
@@ -230,7 +231,7 @@ async def network_diagnostics(request: Any) -> Response:
     gw_config: GatewayConfig | None = getattr(request.app, "gateway_config", None)
     proxy_url = gw_config.proxy if gw_config else None
 
-    client_kwargs: dict[str, Any] = {"timeout": 15.0}
+    client_kwargs: dict[str, Any] = {"timeout": _NETWORK_DIAGNOSTICS_TIMEOUT_SECONDS}
     if proxy_url:
         client_kwargs["proxy"] = proxy_url
 

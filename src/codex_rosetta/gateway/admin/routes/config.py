@@ -56,6 +56,7 @@ from ._shared import (
 import logging
 
 logger = logging.getLogger("codex-rosetta-gateway")
+_PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -1139,7 +1140,10 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
     headers = pinfo.auth_headers()
 
     try:
-        async with AsyncClient(timeout=10.0, proxy=pinfo.proxy_url) as client:
+        async with AsyncClient(
+            timeout=_PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+            proxy=pinfo.proxy_url,
+        ) as client:
             resp = await request_bounded_response(
                 client,
                 "GET",

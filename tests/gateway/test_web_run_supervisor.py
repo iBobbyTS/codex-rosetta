@@ -195,3 +195,13 @@ def test_web_run_container_uses_patchright_without_playwright_runtime() -> None:
     assert "patchright install --with-deps chromium" in dockerfile
     assert "from patchright.async_api import" in app_source
     assert "from playwright." not in app_source
+    assert "_NAVIGATION_TIMEOUT_MS = 120_000" in app_source
+    assert "_ACTION_TIMEOUT_MS = 60_000" in app_source
+    assert "_PDF_DOWNLOAD_TIMEOUT_SECONDS = 120.0" in app_source
+
+
+def test_supervisor_uses_extended_lifecycle_timeouts() -> None:
+    assert web_run_supervisor.WEB_RUN_STARTUP_TIMEOUT_SECONDS == 300.0
+    assert web_run_supervisor.DOCKER_DAEMON_TIMEOUT_SECONDS == 30
+    assert web_run_supervisor.DOCKER_COMPOSE_TIMEOUT_SECONDS == 600
+    assert web_run_supervisor.DOCKER_COMPOSE_STOP_GRACE_SECONDS == 30

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildModelTestPayload, pollModelTest, safeUsageRows } from '../src/admin/lib/model-test';
+import { buildModelTestPayload, DEFAULT_MODEL_TEST_TIMEOUT_MS, pollModelTest, safeUsageRows } from '../src/admin/lib/model-test';
 
 const apiMock = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
@@ -7,6 +7,10 @@ vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 beforeEach(() => vi.clearAllMocks());
 
 describe('model testing', () => {
+  it('allows fifteen minutes for a complete model test', () => {
+    expect(DEFAULT_MODEL_TEST_TIMEOUT_MS).toBe(900_000);
+  });
+
   it('polls serially until a completed task without contacting a provider directly', async () => {
     apiMock.post.mockResolvedValueOnce({ status: 'pending' }).mockResolvedValueOnce({ status: 'done', status_code: 200, body: { output_text: 'ok' } });
     const wait = vi.fn().mockResolvedValue(undefined);

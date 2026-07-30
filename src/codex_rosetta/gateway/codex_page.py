@@ -26,6 +26,7 @@ _MAX_RENDERED_LINES = 400
 _LINE_WINDOW = 200
 _READ_CHUNK_BYTES = 64 * 1024
 _USER_AGENT = "Codex-Rosetta/1.0 (+static web.run.open)"
+DEFAULT_STATIC_PAGE_TIMEOUT_SECONDS = 60.0
 
 
 class PageOpenError(RuntimeError):
@@ -98,7 +99,7 @@ class StaticPageHTTPClient:
     def __init__(
         self,
         *,
-        timeout: float = 15.0,
+        timeout: float = DEFAULT_STATIC_PAGE_TIMEOUT_SECONDS,
         max_redirects: int = _MAX_REDIRECTS,
         max_response_bytes: int = _MAX_RESPONSE_BYTES,
         opener: Callable[..., Any] | None = None,
