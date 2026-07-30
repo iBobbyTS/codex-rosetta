@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run an isolated app-server steer or hard-interrupt continuation cell."""
+"""Run an isolated app-server steer, interrupt, or fork cache cell."""
 
 from __future__ import annotations
 
@@ -120,7 +120,110 @@ def _protocol_surface(client: _AppServerClient) -> dict[str, Any]:
     return {"tool_call_types": sorted(calls), "tool_calls_observed": bool(calls)}
 
 
-def _run_protocol(run_root: Path, mode: str) -> dict[str, Any]:
+def _agent_messages(client: _AppServerClient, thread_id: str) -> list[str]:
+    messages: list[str] = []
+    for message in client.messages:
+        if message.get("method") != "item/completed":
+            continue
+        params = message.get("params")
+        if not isinstance(params, dict) or params.get("threadId") != thread_id:
+            continue
+        item = params.get("item")
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "agentMessage"
+            and isinstance(item.get("text"), str)
+        ):
+            messages.append(item["text"])
+    return messages
+
+
+def _run_fork_protocol(
+    client: _AppServerClient, run_root: Path, model: str
+) -> dict[str, Any]:
+    thread_response = client.request(
+        2,
+        "thread/start",
+        {
+            "cwd": str(run_root / "worktree"),
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access",
+            "experimentalRawEvents": True,
+        },
+    )
+    parent_thread_data = thread_response.get("thread", {})
+    parent_thread = _thread_id(thread_response)
+    parent_start = len(client.messages)
+    parent_turn = _turn_id(
+        client.request(
+            3,
+            "turn/start",
+            {
+                "threadId": parent_thread,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "Reply only PARENT_OK. Do not call tools.",
+                    }
+                ],
+            },
+        )
+    )
+    parent_completion = _completed_since(client, parent_thread, parent_start)
+    fork_response = client.request(
+        4,
+        "thread/fork",
+        {"threadId": parent_thread, "lastTurnId": parent_turn},
+    )
+    fork_thread_data = fork_response.get("thread", {})
+    fork_thread = _thread_id(fork_response)
+    fork_start = len(client.messages)
+    fork_turn = _turn_id(
+        client.request(
+            5,
+            "turn/start",
+            {
+                "threadId": fork_thread,
+                "input": [
+                    {
+                        "type": "text",
+                        "text": "Reply only FORK_OK. Do not call tools.",
+                    }
+                ],
+                "collaborationMode": {
+                    "mode": "default",
+                    "settings": {
+                        "model": model,
+                        "reasoning_effort": "medium",
+                        "developer_instructions": (
+                            "This fork was created for an isolated cache test. "
+                            "Follow the next user instruction exactly."
+                        ),
+                    },
+                },
+            },
+        )
+    )
+    fork_completion = _completed_since(client, fork_thread, fork_start)
+    return {
+        "classification": "success",
+        "parent_thread_id": parent_thread,
+        "parent_session_id": parent_thread_data.get("sessionId"),
+        "parent_turn_id": parent_turn,
+        "parent_status": _status(parent_completion),
+        "parent_agent_messages": _agent_messages(client, parent_thread),
+        "fork_thread_id": fork_thread,
+        "fork_session_id": fork_thread_data.get("sessionId"),
+        "forked_from_id": fork_thread_data.get("forkedFromId"),
+        "fork_turn_id": fork_turn,
+        "fork_status": _status(fork_completion),
+        "fork_agent_messages": _agent_messages(client, fork_thread),
+        "protocol_message_count": len(client.messages),
+        "protocol_surface": _protocol_surface(client),
+    }
+
+
+def _run_protocol(run_root: Path, mode: str, model: str = MODEL) -> dict[str, Any]:
     client = _AppServerClient(run_root, timeout_seconds=360)
     try:
         client.request(
@@ -139,6 +242,8 @@ def _run_protocol(run_root: Path, mode: str) -> dict[str, Any]:
             },
         )
         client.send({"method": "initialized", "params": {}})
+        if mode == "fork":
+            return _run_fork_protocol(client, run_root, model)
         thread = _thread_id(
             client.request(
                 2,
@@ -386,6 +491,15 @@ def _tool_names(tools: Any) -> list[str]:
     return sorted(names)
 
 
+def _is_wrapped_system_user(message: dict[str, Any]) -> bool:
+    text = _text_from_message(message).strip()
+    return (
+        message.get("role") == "user"
+        and text.startswith("<system>\n")
+        and text.endswith("\n</system>")
+    )
+
+
 def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
     """Summarize dynamic model context without storing its content."""
 
@@ -419,6 +533,12 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
         item["role"] == "user" and item["text"].strip() == _WRAPPED_TURN_ABORTED_NOTICE
         for item in request_messages
     )
+    wrapped_system_user_count = sum(
+        item["role"] == "user"
+        and item["text"].strip().startswith("<system>\n")
+        and item["text"].strip().endswith("\n</system>")
+        for item in request_messages
+    )
     normalized_system_messages = [
         item for item in system_messages if item["text"].strip() != _TURN_ABORTED_MARKER
     ]
@@ -442,6 +562,7 @@ def _request_surface(data: dict[str, Any]) -> dict[str, Any]:
         "system_developer_lengths": [len(item["text"]) for item in system_messages],
         "expected_turn_aborted_count": expected_turn_aborted_count,
         "wrapped_turn_aborted_count": wrapped_turn_aborted_count,
+        "wrapped_system_user_count": wrapped_system_user_count,
         "dynamic_marker_hits": marker_hits,
         "tool_count": len(tool_names),
         "tool_names": tool_names,
@@ -472,6 +593,71 @@ def trace_surfaces(path: Path) -> list[dict[str, Any]]:
         entry = requests.setdefault(request_id, {"request_id": request_id})
         entry[event["stage"]] = _request_surface(data)
     return list(requests.values())
+
+
+def trace_fork_evidence(path: Path) -> dict[str, Any]:
+    """Return bounded prefix/cache evidence for exactly two fork requests."""
+
+    requests: list[dict[str, Any]] = []
+    if not path.is_file():
+        return {"request_count": 0, "requests": []}
+    for line in path.open(encoding="utf-8"):
+        event = json.loads(line)
+        if event.get("stage") != "target_request":
+            continue
+        data = event.get("data")
+        if not isinstance(data, dict):
+            continue
+        messages = data.get("messages")
+        if not isinstance(messages, list):
+            continue
+        message_objects = [item for item in messages if isinstance(item, dict)]
+        tools = data.get("tools") if isinstance(data.get("tools"), list) else []
+        prompt_cache_key = data.get("prompt_cache_key")
+        requests.append(
+            {
+                "request_id": event.get("request_id"),
+                "message_count": len(message_objects),
+                "roles": [item.get("role") for item in message_objects],
+                "message_lengths": [
+                    len(_text_from_message(item)) for item in message_objects
+                ],
+                "message_hashes": [_canonical_hash(item) for item in message_objects],
+                "wrapped_system_user_count": sum(
+                    _is_wrapped_system_user(item) for item in message_objects
+                ),
+                "tool_count": len(tools),
+                "tool_hash": _canonical_hash(tools),
+                "prompt_cache_key_present": isinstance(prompt_cache_key, str),
+                "prompt_cache_key_hash": (
+                    _canonical_hash(prompt_cache_key)
+                    if isinstance(prompt_cache_key, str)
+                    else None
+                ),
+            }
+        )
+    evidence: dict[str, Any] = {
+        "request_count": len(requests),
+        "requests": [
+            {key: value for key, value in item.items() if key != "message_hashes"}
+            for item in requests
+        ],
+    }
+    if len(requests) == 2:
+        parent, fork = requests
+        parent_hashes = parent["message_hashes"]
+        evidence.update(
+            {
+                "parent_messages_are_fork_prefix": (
+                    fork["message_hashes"][: len(parent_hashes)] == parent_hashes
+                ),
+                "tool_definitions_stable": parent["tool_hash"] == fork["tool_hash"],
+                "prompt_cache_key_changed": (
+                    parent["prompt_cache_key_hash"] != fork["prompt_cache_key_hash"]
+                ),
+            }
+        )
+    return evidence
 
 
 def _validate_trace_surfaces(surfaces: list[dict[str, Any]]) -> dict[str, Any]:
@@ -595,6 +781,103 @@ def _validate_interrupt_cache_contract(
         "rewritten_profile_count": rewritten_count,
         "provider_request_count": provider_request_count,
         "continuation_usage": continuation_usage,
+        "usage_source": usage_source,
+    }
+
+
+def _completed_usage_pair(
+    usage: list[dict[str, Any]],
+    upstream_usage: list[dict[str, int] | None] | None,
+) -> tuple[list[dict[str, Any]], str]:
+    if upstream_usage and len(upstream_usage) >= 2:
+        pair = upstream_usage[-2:]
+        if all(isinstance(item, dict) for item in pair):
+            return [dict(item) for item in pair if isinstance(item, dict)], (
+                "test_proxy_numeric_summary"
+            )
+    completed = [item["usage"] for item in usage if isinstance(item.get("usage"), dict)]
+    return completed[-2:], "gateway_trace"
+
+
+def _validate_fork_cache_contract(
+    *,
+    protocol: dict[str, Any],
+    evidence: dict[str, Any],
+    profiles: list[dict[str, Any]],
+    usage: list[dict[str, Any]],
+    provider_request_count: int,
+    upstream_usage: list[dict[str, int] | None] | None = None,
+) -> dict[str, Any]:
+    parent_thread = protocol.get("parent_thread_id")
+    fork_thread = protocol.get("fork_thread_id")
+    if (
+        not isinstance(parent_thread, str)
+        or not isinstance(fork_thread, str)
+        or parent_thread == fork_thread
+        or protocol.get("forked_from_id") != parent_thread
+        or protocol.get("parent_session_id") != parent_thread
+        or protocol.get("fork_session_id") != fork_thread
+    ):
+        return {"status": "invalid", "reason": "fork_identity"}
+    if (
+        protocol.get("parent_status") != "completed"
+        or protocol.get("fork_status") != "completed"
+        or protocol.get("parent_agent_messages") != ["PARENT_OK"]
+        or protocol.get("fork_agent_messages") != ["FORK_OK"]
+    ):
+        return {"status": "invalid", "reason": "fork_protocol_result"}
+    if provider_request_count != 2 or evidence.get("request_count") != 2:
+        return {
+            "status": "invalid",
+            "reason": "unexpected_provider_request_count",
+            "provider_request_count": provider_request_count,
+            "evidence_request_count": evidence.get("request_count"),
+        }
+    requests = evidence.get("requests")
+    if not isinstance(requests, list) or len(requests) != 2:
+        return {"status": "invalid", "reason": "fork_request_evidence"}
+    wrapper_counts = [item.get("wrapped_system_user_count") for item in requests]
+    rewritten_count = sum(
+        int(profile.get("late_developer_rewritten_items", 0)) for profile in profiles
+    )
+    if wrapper_counts != [0, 1] or rewritten_count != 1:
+        return {
+            "status": "invalid",
+            "reason": "late_developer_shape",
+            "wrapped_system_user_counts": wrapper_counts,
+            "rewritten_profile_count": rewritten_count,
+        }
+    if not evidence.get("parent_messages_are_fork_prefix"):
+        return {"status": "invalid", "reason": "fork_prefix_changed"}
+    if not evidence.get("tool_definitions_stable"):
+        return {"status": "invalid", "reason": "tool_surface_changed"}
+    usage_pair, usage_source = _completed_usage_pair(usage, upstream_usage)
+    if len(usage_pair) != 2:
+        return {"status": "invalid", "reason": "completed_usage_missing"}
+    parent_usage, fork_usage = usage_pair
+    cached_tokens = fork_usage.get("cached_tokens")
+    parent_input = parent_usage.get("input_tokens")
+    parent_output = parent_usage.get("output_tokens")
+    if not isinstance(cached_tokens, int) or cached_tokens <= 0:
+        return {
+            "status": "invalid",
+            "reason": "fork_cache_miss",
+            "fork_usage": fork_usage,
+        }
+    adjacent_cache_delta = None
+    if isinstance(parent_input, int) and isinstance(parent_output, int):
+        adjacent_cache_delta = cached_tokens - (parent_input + parent_output)
+    return {
+        "status": "valid",
+        "provider_request_count": provider_request_count,
+        "wrapped_system_user_counts": wrapper_counts,
+        "rewritten_profile_count": rewritten_count,
+        "parent_messages_are_fork_prefix": True,
+        "tool_definitions_stable": True,
+        "prompt_cache_key_changed": evidence.get("prompt_cache_key_changed"),
+        "parent_usage": parent_usage,
+        "fork_usage": fork_usage,
+        "adjacent_cache_delta": adjacent_cache_delta,
         "usage_source": usage_source,
     }
 
@@ -807,7 +1090,7 @@ def _set_provider_base_url(path: Path, provider_name: str, base_url: str) -> Non
 def main() -> int:
     require_live_call_approval()
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("steer", "interrupt"), required=True)
+    parser.add_argument("--mode", choices=("steer", "interrupt", "fork"), required=True)
     parser.add_argument("--model", default=MODEL)
     args = parser.parse_args()
     run_id = datetime.now().astimezone().strftime("%Y%m%d%H%M")
@@ -897,7 +1180,7 @@ def main() -> int:
     result: dict[str, Any]
     try:
         _wait_ready(port, client_key, gateway)
-        result = _run_protocol(run_root, args.mode)
+        result = _run_protocol(run_root, args.mode, args.model)
     except Exception as exc:
         result = {
             "classification": "failure",
@@ -929,18 +1212,32 @@ def main() -> int:
             "deepseek_upstream_usage": deepseek_proxy.request_usage,
         }
     )
+    trace_path = gateway_log_root / "rosetta-trace.jsonl"
     surface_check = _validate_trace_surfaces(result["request_surfaces"])
-    contract_check = _validate_interrupt_cache_contract(
-        mode=args.mode,
-        surfaces=result["request_surfaces"],
-        profiles=result["profiles"],
-        usage=result["request_usage"],
-        provider_request_count=deepseek_proxy.request_count,
-        upstream_usage=deepseek_proxy.request_usage,
-    )
+    if args.mode == "fork":
+        result["fork_evidence"] = trace_fork_evidence(trace_path)
+        contract_name = "fork_contract"
+        contract_check = _validate_fork_cache_contract(
+            protocol=result,
+            evidence=result["fork_evidence"],
+            profiles=result["profiles"],
+            usage=result["request_usage"],
+            provider_request_count=deepseek_proxy.request_count,
+            upstream_usage=deepseek_proxy.request_usage,
+        )
+    else:
+        contract_name = "interrupt_contract"
+        contract_check = _validate_interrupt_cache_contract(
+            mode=args.mode,
+            surfaces=result["request_surfaces"],
+            profiles=result["profiles"],
+            usage=result["request_usage"],
+            provider_request_count=deepseek_proxy.request_count,
+            upstream_usage=deepseek_proxy.request_usage,
+        )
     result["cache_comparison"] = {
         "surface": surface_check,
-        "interrupt_contract": contract_check,
+        contract_name: contract_check,
     }
     if result.get("classification") == "success" and surface_check["status"] != "valid":
         result["classification"] = "confounded"

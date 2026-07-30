@@ -1,7 +1,7 @@
-# Interrupt continuation
+# Interrupt and fork continuation
 
-This protocol-level live suite compares Codex Responses → DeepSeek Chat Steer
-and ESC hard-interrupt behavior in two independent app-server cells. The
+This protocol-level live suite compares Codex Responses → DeepSeek Chat Steer,
+ESC hard-interrupt, and explicit fork behavior in independent app-server cells. The
 fixture is deliberately tool/skill/plugin-neutral: it has no `.agents` tree,
 MCP manifest, plugin, or skill. Its isolated Codex config disables configurable
 skills, apps, plugin discovery, tool suggestions, web search, collaboration,
@@ -16,6 +16,12 @@ fingerprinted and must stay unchanged.
   Rosetta must not drain the cancelled stream, retain hidden output, replay an
   assistant response, synthesize a tool result, or issue an extra upstream
   request.
+- `fork`: a completed parent turn is copied through a real `thread/fork`, then
+  the fork's first `turn/start` supplies a Codex collaboration-mode developer
+  instruction. The fork must have a new thread/session ID, preserve the parent
+  target messages as an exact prefix, keep tool definitions unchanged, convert
+  the late developer item to exactly one user-role `<system>` envelope, and
+  complete with non-zero cached input tokens.
 
 Run each real-provider cell only with the repository live-call gate enabled:
 
@@ -27,6 +33,10 @@ CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
 CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
   conda run -n llm-rosetta python tests/live_agent/interrupt_continuation/run_live.py \
   --mode interrupt
+
+CODEX_ROSETTA_ALLOW_LIVE_CALLS=I_UNDERSTAND_REAL_API_CALLS \
+  conda run -n llm-rosetta python tests/live_agent/interrupt_continuation/run_live.py \
+  --mode fork
 ```
 
 Each invocation uses a fresh ignored timestamp root under
@@ -44,7 +54,10 @@ it never retains response text. The interrupted request may have no final usage
 because its stream is cancelled; the completed continuation must report
 non-zero cached input tokens. The runner also records credential-free system/developer and
 tool fingerprints, canonical-system-marker count, wrapped-user-notice count,
-Provider request count, and app-server turn status. A Skill/Plugin marker, tool
+Provider request count, and app-server turn status. Fork evidence additionally
+records only message roles, lengths and comparison results—not message text—and
+reports whether `prompt_cache_key` changed without treating that change as a
+pass/fail condition. A Skill/Plugin marker, tool
 surface change, or observed tool call makes the result `confounded` instead of
 mixing another variable into the cache result.
 

@@ -164,6 +164,43 @@ Artifacts:
 - Steer trace: `/Volumes/RAMDisk/202607260945/rosetta-trace.jsonl`
 - Steer thread: `019f9f1a-2698-7a22-9d11-6c6349c199d4`
 
+### Explicit-fork cache checkpoint — 2026-07-29
+
+The formal `interrupt_continuation --mode fork` cell `202607291949` used
+installed `codex-cli 0.145.0`, `deepseek-v4-flash`, Responses→Chat conversion,
+Rosetta base commit `896a728015a8f1b1ebc41bed07047876d7a08525` plus the
+uncommitted formal-test additions, a temporary non-8765 Gateway, and a fresh
+random DeepSeek `user_id`. It executed a real `thread/fork` after one completed
+parent turn and injected a collaboration-mode developer instruction only on
+the fork's first turn. Parent and fork returned exact `PARENT_OK`/`FORK_OK`
+markers, completed naturally, and observed no tool call.
+
+The parent thread/session was
+`019fb0b7-045f-7882-ad13-814090bda238`; the fork created the distinct
+thread/session `019fb0b7-0be4-7cc0-8438-78f1a22261f7` and reported the parent
+through `forkedFromId`. Exactly two Provider requests reached DeepSeek. The
+fork target preserved all six parent target messages as an exact prefix, kept
+the same 19 converted tool definitions, and changed only the late developer
+item to one user-role `<system>` envelope (`late_developer_rewritten_items=1`).
+The observed `prompt_cache_key` changed across the fork, but this was recorded
+as a Codex behavior rather than used as a pass condition.
+
+Numeric upstream usage was `14372/60/0/14372` for the parent and
+`14424/26/14336/88` for the fork, where each tuple is
+`input/output/cached/cache-miss`. The strict adjacent cache delta was
+`14336 - (14372 + 60) = -96`. The fork therefore retained the established
+14,336-token cache block despite its new thread/session, changed cache key, and
+late developer instruction. Both the temporary Gateway on port `60372` and the
+test-only DeepSeek forwarder on port `60373` were stopped after the cell.
+
+Artifacts:
+
+- run root: `tmp/agent_testing_workspace/202607291949`
+- result: `artifacts/automation-result.json`
+- trace: `/Volumes/RAMDisk/202607291949/rosetta-trace.jsonl`
+- parent thread: `019fb0b7-045f-7882-ad13-814090bda238`
+- fork thread: `019fb0b7-0be4-7cc0-8438-78f1a22261f7`
+
 ### Attestation scope remains unknown — 2026-07-25
 
 The current Codex source proves that `x-oai-attestation` is requested just in
