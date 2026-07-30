@@ -46,8 +46,8 @@ handling rather than prose quality.
   upstream visual recognition. It also records why `request_user_input` cannot
   be driven by the current non-interactive `codex exec` runner.
 - [`interrupt_continuation`](interrupt_continuation/README.md): app-server
-  steer and hard-interrupt continuation, including the cache-compatible
-  attributed-user notice boundary.
+  Steer, hard-interrupt continuation, and real `thread/fork`, including the
+  cache-compatible late-developer user-envelope boundary.
 - [`image_generation`](image_generation/README.md): a gated visual-model
   scenario that generates an image, opens the saved artifact through projected
   `view_image`, and leaves semantic agreement with the requested scene to the

@@ -14,8 +14,10 @@ from interrupt_continuation.run_live import (
     _deepseek_usage_from_sse_line,
     _inject_deepseek_user_id,
     _request_surface,
+    _validate_fork_cache_contract,
     _validate_interrupt_cache_contract,
     _validate_trace_surfaces,
+    trace_fork_evidence,
 )
 
 
@@ -209,6 +211,146 @@ def test_request_surface_allows_canonical_turn_aborted_marker():
         )["status"]
         == "valid"
     )
+
+
+def test_trace_fork_evidence_requires_exact_parent_prefix_and_wrapped_user(tmp_path):
+    path = tmp_path / "trace.jsonl"
+    parent_messages = [
+        {"role": "system", "content": "fixed instructions"},
+        {"role": "user", "content": "parent"},
+        {"role": "assistant", "content": "PARENT_OK"},
+    ]
+    fork_messages = [
+        *parent_messages,
+        {
+            "role": "user",
+            "content": "<system>\nfork developer instructions\n</system>",
+        },
+        {"role": "user", "content": "fork"},
+    ]
+    tools = [{"type": "function", "function": {"name": "plan"}}]
+    events = [
+        {
+            "request_id": "parent",
+            "stage": "target_request",
+            "data": {
+                "messages": parent_messages,
+                "tools": tools,
+                "prompt_cache_key": "parent-key",
+            },
+        },
+        {
+            "request_id": "fork",
+            "stage": "target_request",
+            "data": {
+                "messages": fork_messages,
+                "tools": tools,
+                "prompt_cache_key": "fork-key",
+            },
+        },
+    ]
+    path.write_text("\n".join(json.dumps(event) for event in events) + "\n")
+
+    evidence = trace_fork_evidence(path)
+
+    assert evidence["request_count"] == 2
+    assert evidence["parent_messages_are_fork_prefix"] is True
+    assert evidence["tool_definitions_stable"] is True
+    assert evidence["prompt_cache_key_changed"] is True
+    assert [item["wrapped_system_user_count"] for item in evidence["requests"]] == [
+        0,
+        1,
+    ]
+    assert all("message_hashes" not in item for item in evidence["requests"])
+
+
+def test_fork_contract_requires_real_fork_prefix_rewrite_and_cache_hit():
+    result = _validate_fork_cache_contract(
+        protocol={
+            "parent_thread_id": "parent",
+            "parent_session_id": "parent",
+            "parent_status": "completed",
+            "parent_agent_messages": ["PARENT_OK"],
+            "fork_thread_id": "fork",
+            "fork_session_id": "fork",
+            "forked_from_id": "parent",
+            "fork_status": "completed",
+            "fork_agent_messages": ["FORK_OK"],
+        },
+        evidence={
+            "request_count": 2,
+            "requests": [
+                {"wrapped_system_user_count": 0},
+                {"wrapped_system_user_count": 1},
+            ],
+            "parent_messages_are_fork_prefix": True,
+            "tool_definitions_stable": True,
+            "prompt_cache_key_changed": True,
+        },
+        profiles=[{}, {"late_developer_rewritten_items": 1}],
+        usage=[],
+        provider_request_count=2,
+        upstream_usage=[
+            {"input_tokens": 14372, "output_tokens": 53, "cached_tokens": 0},
+            {"input_tokens": 14424, "output_tokens": 31, "cached_tokens": 14336},
+        ],
+    )
+
+    assert result == {
+        "status": "valid",
+        "provider_request_count": 2,
+        "wrapped_system_user_counts": [0, 1],
+        "rewritten_profile_count": 1,
+        "parent_messages_are_fork_prefix": True,
+        "tool_definitions_stable": True,
+        "prompt_cache_key_changed": True,
+        "parent_usage": {
+            "input_tokens": 14372,
+            "output_tokens": 53,
+            "cached_tokens": 0,
+        },
+        "fork_usage": {
+            "input_tokens": 14424,
+            "output_tokens": 31,
+            "cached_tokens": 14336,
+        },
+        "adjacent_cache_delta": -89,
+        "usage_source": "test_proxy_numeric_summary",
+    }
+
+
+def test_fork_contract_rejects_broken_prefix_before_interpreting_cache():
+    result = _validate_fork_cache_contract(
+        protocol={
+            "parent_thread_id": "parent",
+            "parent_session_id": "parent",
+            "parent_status": "completed",
+            "parent_agent_messages": ["PARENT_OK"],
+            "fork_thread_id": "fork",
+            "fork_session_id": "fork",
+            "forked_from_id": "parent",
+            "fork_status": "completed",
+            "fork_agent_messages": ["FORK_OK"],
+        },
+        evidence={
+            "request_count": 2,
+            "requests": [
+                {"wrapped_system_user_count": 0},
+                {"wrapped_system_user_count": 1},
+            ],
+            "parent_messages_are_fork_prefix": False,
+            "tool_definitions_stable": True,
+        },
+        profiles=[{"late_developer_rewritten_items": 1}],
+        usage=[],
+        provider_request_count=2,
+        upstream_usage=[
+            {"input_tokens": 100, "output_tokens": 4, "cached_tokens": 0},
+            {"input_tokens": 110, "output_tokens": 2, "cached_tokens": 96},
+        ],
+    )
+
+    assert result == {"status": "invalid", "reason": "fork_prefix_changed"}
 
 
 def test_interrupt_contract_requires_wrapped_user_notice_and_cached_continuation():
