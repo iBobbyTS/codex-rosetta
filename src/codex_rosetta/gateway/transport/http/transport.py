@@ -45,7 +45,7 @@ MAX_UPSTREAM_ERROR_BODY_BYTES = 1_000_000
 MAX_UPSTREAM_SSE_LINE_BYTES = 1024 * 1024
 MAX_UPSTREAM_SSE_EVENT_BYTES = 8 * 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
-DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS = 30.0
+DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS = 10 * 60.0
 DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS = 60.0
 DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS = 2.0
 
@@ -581,7 +581,7 @@ class HttpTransport:
                     url,
                     headers=headers,
                     stream=True,
-                    timeout=self._stream_idle_timeout,
+                    timeout=self._stream_open_timeout,
                     **request_payload,
                 ),
                 timeout=self._stream_open_timeout,

@@ -581,7 +581,7 @@ rule must be registered and regression-tested explicitly.
 A Codex upgrade that introduces larger required single events must be measured
 and reviewed rather than disabling the limits.
 
-The Gateway also bounds streaming connection establishment to 30 seconds,
+The Gateway also bounds streaming connection establishment to 10 minutes,
 upstream SSE inactivity to 60 seconds, and connection cleanup to 2 seconds.
 This prevents a route change from leaving Codex attached to a black-holed
 upstream socket: after HTTP 200 has begun, Rosetta emits one source-protocol

@@ -610,7 +610,7 @@ def test_stream_http_error_body_and_outer_cleanup_close_once(
     assert response.close_calls == 1
 
 
-def test_stream_body_uses_idle_timeout_not_open_timeout(
+def test_stream_request_uses_open_timeout_and_body_uses_idle_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FakeStreamingResponse(
@@ -630,7 +630,15 @@ def test_stream_body_uses_idle_timeout_not_open_timeout(
             return [event async for event in stream]
 
     assert asyncio.run(_collect()) == [{"delta": "ok"}]
-    assert client.calls[0]["timeout"] == 17
+    assert client.calls[0]["timeout"] == 3
+    assert transport._stream_idle_timeout == 17
+
+
+def test_stream_open_timeout_defaults_to_ten_minutes() -> None:
+    transport = HttpTransport()
+
+    assert transport_module.DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS == 600.0
+    assert transport._stream_open_timeout == 600.0
 
 
 @pytest.mark.parametrize(
