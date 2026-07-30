@@ -57,7 +57,7 @@ from .inbound_content_encoding import (
     bind_inbound_wire_request,
     take_inbound_wire_request,
 )
-from .interrupt_notice import rewrite_codex_interrupt_notices
+from .late_developer_message import rewrite_late_codex_developer_messages
 from .logging import (
     BodyLogState,
     UpstreamErrorLogState,
@@ -723,7 +723,7 @@ async def _proxy_handler(
         body,
     )
 
-    body, interrupt_notice_rewritten_items = rewrite_codex_interrupt_notices(
+    body, late_developer_rewritten_items = rewrite_late_codex_developer_messages(
         body,
         enabled=provider_info.soft_interrupt,
         source_provider=source_provider,
@@ -839,10 +839,8 @@ async def _proxy_handler(
                 body_log_state=getattr(request.app, "body_log_state", None),
                 image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
             )
-        if interrupt_notice_rewritten_items:
-            profile["interrupt_notice_rewritten_items"] = (
-                interrupt_notice_rewritten_items
-            )
+        if late_developer_rewritten_items:
+            profile["late_developer_rewritten_items"] = late_developer_rewritten_items
         status_code = response.status_code
         error_detail = _response_error_detail(response)
         if isinstance(response, StreamingResponse):

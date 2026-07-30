@@ -123,6 +123,10 @@ Run artifacts:
 
 ### Hard-interrupt notice cache checkpoint — 2026-07-26
 
+> Historical checkpoint: this records the former exact-marker implementation.
+> The current CP-24 rule is content-agnostic and wraps every late developer
+> message in a user-role `<system>` envelope; see `compatibility-points.md`.
+
 Two isolated app-server cells used installed `codex-cli 0.145.0`,
 `deepseek-v4-flash`, Responses→Chat conversion, a temporary non-8765 Gateway,
 and a different fresh random DeepSeek `user_id` per cell. The fixture disabled

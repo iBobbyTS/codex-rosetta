@@ -22,10 +22,6 @@ from codex_rosetta.gateway.headers import (
     build_upstream_extra_headers,
     resolve_request_id,
 )
-from codex_rosetta.gateway.interrupt_notice import (
-    CODEX_RUNTIME_NOTICE_SUFFIX,
-    TURN_ABORTED_DEVELOPER_TEXT,
-)
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -795,7 +791,7 @@ def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):
     assert "x-codex-window-id" not in captured_kwargs["extra_headers"]
 
 
-def test_proxy_handler_rewrites_enabled_codex_interrupt_notice_before_conversion(
+def test_proxy_handler_rewrites_enabled_late_codex_developer_before_conversion(
     monkeypatch,
 ):
     captured_body: dict[str, Any] = {}
@@ -834,9 +830,13 @@ def test_proxy_handler_rewrites_enabled_codex_interrupt_notice_before_conversion
             {
                 "type": "message",
                 "role": "developer",
-                "content": [
-                    {"type": "input_text", "text": TURN_ABORTED_DEVELOPER_TEXT}
-                ],
+                "content": [{"type": "input_text", "text": "You are Codex."}],
+            },
+            {"type": "message", "role": "user", "content": "Initial task."},
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [{"type": "input_text", "text": "Late context."}],
             },
             {"type": "message", "role": "user", "content": "Continue."},
         ],
@@ -865,21 +865,19 @@ def test_proxy_handler_rewrites_enabled_codex_interrupt_notice_before_conversion
     response = asyncio.run(app_module._proxy_handler(request, "openai_responses"))
 
     assert response.status_code == 200
-    assert captured_body["input"][0] == {
+    assert captured_body["input"][0]["role"] == "developer"
+    assert captured_body["input"][1]["role"] == "user"
+    assert captured_body["input"][2] == {
         "type": "message",
         "role": "user",
         "content": [
             {
                 "type": "input_text",
-                "text": (
-                    "<codex_runtime_notice>\n"
-                    f"{TURN_ABORTED_DEVELOPER_TEXT}\n"
-                    f"{CODEX_RUNTIME_NOTICE_SUFFIX}"
-                ),
+                "text": "<system>\nLate context.\n</system>",
             }
         ],
     }
-    assert captured_body["input"][1] == {
+    assert captured_body["input"][3] == {
         "type": "message",
         "role": "user",
         "content": "Continue.",

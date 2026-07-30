@@ -22,14 +22,15 @@ native compaction。SQLite 持久化不可用时，Rosetta 会在调用摘要上
 且绝不回退 native compaction。mapping 会包含留存七天的摘要明文，因此必须相应保护
 Gateway 数据目录、备份和复制出的测试 artifact。
 
-## 硬打断缓存兼容
+## 后置 developer 缓存兼容
 
 这个仅适用于 Chat 的兼容选项只做当前请求内的 role 转换，不保存模型输出、不继续接收
-已放弃的上游 stream，也不回放隐藏内容。只有带有效 Codex turn metadata 的请求中，精确
-匹配 canonical `<turn_aborted>` 的项才会改写为独立、明确注明来源的 user-role
-`<codex_runtime_notice>`；任意其他 system/developer 内容不会改写。如果数据库中存在
-早期开发版本遗留的明文 `soft_interrupt_handoffs` 表，Rosetta 会在启动时删除该表及其
-全部记录。
+已放弃的上游 stream，也不回放隐藏内容。对于带有效 Codex turn metadata 的请求，
+Rosetta 会保留开头连续的 system/developer 前缀；第一条普通对话项之后的每条 developer
+消息都会改为独立的 user-role 消息，内容用 `<system>...</system>` 包裹。该规则只按位置
+判断，不检查或单独识别 `<turn_aborted>` 文本；普通 user 消息和后置 system 消息不变。
+如果数据库中存在早期开发版本遗留的明文 `soft_interrupt_handoffs` 表，Rosetta 会在启动
+时删除该表及其全部记录。
 
 Codex-Rosetta 默认关闭未授权访问：每份网关配置都必须包含非空的 Admin 密码，
 并至少包含一个网关访问密钥。默认监听地址为 `127.0.0.1`，API 凭证显示功能默认关闭。
