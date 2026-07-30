@@ -7,7 +7,7 @@
   "provider_display_name": "OpenAI",
   "expected_hard_marker": true,
   "expected_notice_role": "user",
-  "expected_notice_wrapper": "codex_runtime_notice",
+  "expected_notice_wrapper": "system",
   "require_cancelled_predecessor": true,
   "require_cached_continuation": true,
   "require_no_hidden_replay": true,

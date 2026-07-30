@@ -31,10 +31,6 @@ sys.path.insert(0, str(SUITE.parent))
 
 from codex_rosetta.gateway.live_gate import require_live_call_approval  # noqa: E402
 from codex_rosetta.gateway.config import _strip_jsonc_comments  # noqa: E402
-from codex_rosetta.gateway.interrupt_notice import (  # noqa: E402
-    CODEX_RUNTIME_NOTICE_SUFFIX,
-    TURN_ABORTED_DEVELOPER_TEXT,
-)
 
 from context_compaction.run_live import (  # noqa: E402
     _AppServerClient,
@@ -340,12 +336,10 @@ _SURFACE_MARKERS = (
     "plugin.json",
 )
 
-_TURN_ABORTED_MARKER = TURN_ABORTED_DEVELOPER_TEXT
-_WRAPPED_TURN_ABORTED_NOTICE = (
-    "<codex_runtime_notice>\n"
-    f"{TURN_ABORTED_DEVELOPER_TEXT}\n"
-    f"{CODEX_RUNTIME_NOTICE_SUFFIX}"
-)
+_TURN_ABORTED_MARKER = """<turn_aborted>
+The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.
+</turn_aborted>"""
+_WRAPPED_TURN_ABORTED_NOTICE = f"<system>\n{_TURN_ABORTED_MARKER}\n</system>"
 
 
 def _text_from_message(message: dict[str, Any]) -> str:
@@ -550,7 +544,7 @@ def _validate_interrupt_cache_contract(
         int(item.get("expected_turn_aborted_count", 0)) for item in target_surfaces
     )
     rewritten_count = sum(
-        int(profile.get("interrupt_notice_rewritten_items", 0)) for profile in profiles
+        int(profile.get("late_developer_rewritten_items", 0)) for profile in profiles
     )
     if provider_request_count != 3:
         return {
@@ -566,7 +560,7 @@ def _validate_interrupt_cache_contract(
     ):
         return {
             "status": "invalid",
-            "reason": "interrupt_notice_shape",
+            "reason": "late_developer_shape",
             "wrapped_notice_count": wrapped_count,
             "system_marker_count": system_marker_count,
             "rewritten_profile_count": rewritten_count,

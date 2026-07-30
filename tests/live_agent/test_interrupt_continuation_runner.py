@@ -228,7 +228,7 @@ def test_interrupt_contract_requires_wrapped_user_notice_and_cached_continuation
     assert _validate_interrupt_cache_contract(
         mode="interrupt",
         surfaces=[{"target_request": surface}],
-        profiles=[{"interrupt_notice_rewritten_items": 1}],
+        profiles=[{"late_developer_rewritten_items": 1}],
         usage=[
             {
                 "usage": {
@@ -284,7 +284,7 @@ def test_interrupt_contract_rejects_native_system_marker_or_cache_miss():
     )
 
     assert result["status"] == "invalid"
-    assert result["reason"] == "interrupt_notice_shape"
+    assert result["reason"] == "late_developer_shape"
 
 
 def test_deepseek_user_id_proxy_overwrites_stale_id_without_changing_request():

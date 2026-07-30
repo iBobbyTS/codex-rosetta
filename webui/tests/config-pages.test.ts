@@ -113,7 +113,7 @@ describe('ProvidersPage', () => {
     expect(protocol).not.toHaveTextContent('openai_responses');
   });
 
-  it('defaults DeepSeek Chat to hard-interrupt cache compatibility and hides it for non-Chat protocols', async () => {
+  it('defaults DeepSeek Chat to late-developer cache compatibility and hides it for non-Chat protocols', async () => {
     apiMock.get.mockResolvedValue({
       providers: {},
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -125,10 +125,10 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
     await fireEvent.change(dialog.getByLabelText('Provider'), { target: { value: 'deepseek' } });
-    expect(dialog.getByLabelText('Hard-interrupt cache compatibility')).toBeChecked();
-    expect(dialog.getByText(/force-interrupts with ESC/)).toHaveTextContent('does not retain or replay hidden output');
+    expect(dialog.getByLabelText('Late developer cache compatibility')).toBeChecked();
+    expect(dialog.getByText(/append developer messages/)).toHaveTextContent('does not inspect or special-case turn_aborted');
     await fireEvent.change(dialog.getByLabelText('Protocol'), { target: { value: 'anthropic' } });
-    expect(dialog.queryByLabelText('Hard-interrupt cache compatibility')).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText('Late developer cache compatibility')).not.toBeInTheDocument();
     await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'deepseek-anthropic' } });
     await fireEvent.input(dialog.getByPlaceholderText('https://api.openai.com/v1'), { target: { value: 'https://api.deepseek.com/anthropic' } });
     await fireEvent.input(dialog.getByLabelText(/^API Key/), { target: { value: 'sk-test' } });
@@ -137,7 +137,7 @@ describe('ProvidersPage', () => {
     expect(apiMock.put.mock.calls[0][1]).not.toHaveProperty('soft_interrupt');
   });
 
-  it('preserves explicitly disabled hard-interrupt cache compatibility when editing and cloning', async () => {
+  it('preserves explicitly disabled late-developer cache compatibility when editing and cloning', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
         deepseek: {
@@ -154,10 +154,10 @@ describe('ProvidersPage', () => {
     });
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    expect(screen.getByLabelText('Hard-interrupt cache compatibility')).not.toBeChecked();
+    expect(screen.getByLabelText('Late developer cache compatibility')).not.toBeChecked();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
-    expect(screen.getByLabelText('Hard-interrupt cache compatibility')).not.toBeChecked();
+    expect(screen.getByLabelText('Late developer cache compatibility')).not.toBeChecked();
   });
 
   it('shows forced prompt compaction only for Responses and preserves it when editing and cloning', async () => {
