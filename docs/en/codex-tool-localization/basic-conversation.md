@@ -137,32 +137,33 @@ For Chat-only providers, Codex-Rosetta converts the incoming Responses request i
 
 When the Chat response returns, Rosetta converts it back into Responses-compatible output so Codex can keep driving the agent loop.
 
-Chat Providers can also enable **Late developer cache compatibility**. DeepSeek
+Chat Providers can also enable **Late instruction cache compatibility**. DeepSeek
 enables it by default; other Chat Providers default to disabled, and the option
 does not apply to Responses, Anthropic, or Google protocols. Codex can append
-developer items after the leading instruction prefix for ESC interrupts, forks,
-plugins, skills, and other runtime context. Some Chat Providers turn those
-middle developer items into system messages and lose the earlier input-cache
+system or developer items after the leading instruction prefix for ESC
+interrupts, forks, plugins, skills, and other runtime context. Some Chat Providers turn those
+middle instruction items into system messages and lose the earlier input-cache
 hit.
 
 For an authenticated Codex turn, Rosetta preserves the contiguous leading
 system/developer prefix. After the first ordinary conversation item, every
-later developer message becomes a separate user-role message whose original
+later system or developer message becomes a separate user-role message whose original
 content is wrapped as:
 
 ```text
 <system>
-original developer content
+original instruction content
 ...
 </system>
 ```
 
 Rosetta does not inspect or special-case `<turn_aborted>`; the internal text
-continues to explain its own meaning. Ordinary user messages and late system
-messages remain separate and unchanged. The conversion does not alter stream
+continues to explain its own meaning. Ordinary user messages remain separate
+and unchanged. The conversion does not alter stream
 cancellation, retain hidden output, synthesize tool results, or replay content
 into another request. Cache behavior remains Provider-controlled and
-best-effort.
+best-effort. Because the conversion intentionally lowers role precedence,
+enable it only when later instruction content is safe to deliver as user text.
 
 The gateway also preserves selected runtime state across the request and response phases:
 

@@ -43,6 +43,20 @@ from context_compaction.run_live import (  # noqa: E402
 from interrupt_continuation.evidence import trace_usage  # noqa: E402
 
 
+def _fork_collaboration_mode(model: str) -> dict[str, Any]:
+    return {
+        "mode": "default",
+        "settings": {
+            "model": model,
+            "reasoning_effort": "max",
+            "developer_instructions": (
+                "This fork was created for an isolated cache test. "
+                "Follow the next user instruction exactly."
+            ),
+        },
+    }
+
+
 def _turn_id(result: Any) -> str:
     value = result.get("turn", {}).get("id") if isinstance(result, dict) else None
     if not isinstance(value, str) or not value:
@@ -190,17 +204,7 @@ def _run_fork_protocol(
                         "text": "Reply only FORK_OK. Do not call tools.",
                     }
                 ],
-                "collaborationMode": {
-                    "mode": "default",
-                    "settings": {
-                        "model": model,
-                        "reasoning_effort": "medium",
-                        "developer_instructions": (
-                            "This fork was created for an isolated cache test. "
-                            "Follow the next user instruction exactly."
-                        ),
-                    },
-                },
+                "collaborationMode": _fork_collaboration_mode(model),
             },
         )
     )

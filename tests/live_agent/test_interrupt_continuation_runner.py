@@ -12,6 +12,7 @@ from interrupt_continuation.run_live import (
     _TURN_ABORTED_MARKER,
     _WRAPPED_TURN_ABORTED_NOTICE,
     _deepseek_usage_from_sse_line,
+    _fork_collaboration_mode,
     _inject_deepseek_user_id,
     _request_surface,
     _validate_fork_cache_contract,
@@ -19,6 +20,20 @@ from interrupt_continuation.run_live import (
     _validate_trace_surfaces,
     trace_fork_evidence,
 )
+
+
+def test_fork_collaboration_mode_keeps_matrix_reasoning_effort_max():
+    assert _fork_collaboration_mode("deepseek-v4-flash") == {
+        "mode": "default",
+        "settings": {
+            "model": "deepseek-v4-flash",
+            "reasoning_effort": "max",
+            "developer_instructions": (
+                "This fork was created for an isolated cache test. "
+                "Follow the next user instruction exactly."
+            ),
+        },
+    }
 
 
 def test_trace_usage_keeps_request_tokens_and_signed_cache_delta(tmp_path):

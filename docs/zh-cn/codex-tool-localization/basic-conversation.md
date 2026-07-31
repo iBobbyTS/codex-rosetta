@@ -112,26 +112,29 @@ Base URL 以 `/v1` 结尾时，上游收到 `/v1/alpha/search`；不带版本路
 
 当 Chat 响应返回时，Rosetta 将其转换回 Responses 兼容的输出，以便 Codex 继续驱动 agent 循环。
 
-Chat Provider 还可以启用**后置 developer 缓存兼容**。DeepSeek 默认开启，其他 Chat
+Chat Provider 还可以启用**后置指令缓存兼容**。DeepSeek 默认开启，其他 Chat
 Provider 默认关闭；Responses、Anthropic 和 Google 协议不适用。Codex 可能在开头的
-指令前缀之后追加 developer 项，用于 ESC 打断、fork、插件、Skill 或其他运行时上下文。
-部分 Chat Provider 会把这些中途 developer 项转换为 system 消息，导致前文输入缓存失效。
+指令前缀之后追加 system 或 developer 项，用于 ESC 打断、fork、插件、Skill 或其他
+运行时上下文。
+部分 Chat Provider 会把这些中途指令项转换为 system 消息，导致前文输入缓存失效。
 
 对于带有效 Codex turn metadata 的请求，Rosetta 会保留开头连续的 system/developer
-前缀。从第一条普通对话项开始，之后每条 developer 消息都改为独立的 user-role 消息，
+前缀。从第一条普通对话项开始，之后每条 system 或 developer 消息都改为独立的
+user-role 消息，
 原内容按下列形式包裹：
 
 ```text
 <system>
-原 developer 内容
+原指令内容
 ...
 </system>
 ```
 
 Rosetta 不检查或单独识别 `<turn_aborted>`；内部文本本身会继续说明其含义。普通 user
-消息和后置 system 消息保持独立且不变。这项转换不会改变 stream 取消行为、保存隐藏
+消息保持独立且不变。这项转换不会改变 stream 取消行为、保存隐藏
 输出、合成工具结果或在另一请求中回放内容。缓存行为仍由 Provider 控制，只能视为
-best-effort。
+best-effort。由于转换会主动降低 role 优先级，仅应在后置指令内容可以安全地作为 user
+文本传递时启用。
 
 网关还会在请求和响应阶段之间保留选定的运行时状态：
 
