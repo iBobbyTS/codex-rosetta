@@ -45,6 +45,8 @@ def _make_config(
     image_base_url: str = "https://images.example/v1",
     image_token: str = "image-token",
     upstream_base_url: str = "https://upstream.example/v1",
+    additional_image_base_url: str | None = None,
+    additional_image_token: str = "other-image-token",
 ) -> GatewayConfig:
     provider_by_api_type = {
         "responses": "openai",
@@ -111,29 +113,57 @@ def _make_config(
             "tools": tools,
             "inputs": inputs,
         }
+    providers = {
+        "upstream": {
+            "provider": provider_by_api_type[api_type],
+            "api_type": api_type,
+            "api_key": "upstream-key",
+            "base_url": upstream_base_url,
+        }
+    }
+    model_groups = {
+        "codex": {
+            "provider": "upstream",
+            "type": "llm",
+            **({"tool_profile": tool_profile} if tool_profile is not None else {}),
+            "models": {"gateway-model": model},
+        }
+    }
+    if additional_image_base_url is not None:
+        assert tool_profile is not None
+        secondary_profile = "secondary-image-profile"
+        secondary_document = tool_profiles[tool_profile]
+        secondary_inputs = {
+            item_id: dict(values)
+            for item_id, values in secondary_document["inputs"].items()
+        }
+        secondary_inputs["namespace.image_gen.imagegen"] = {
+            "base_url": additional_image_base_url,
+            "token": additional_image_token,
+        }
+        tool_profiles[secondary_profile] = {
+            **secondary_document,
+            "tools": dict(secondary_document["tools"]),
+            "inputs": secondary_inputs,
+        }
+        providers["secondary"] = {
+            "provider": provider_by_api_type[api_type],
+            "api_type": api_type,
+            "api_key": "secondary-upstream-key",
+            "base_url": "https://secondary-upstream.example/v1",
+        }
+        model_groups["secondary"] = {
+            "provider": "secondary",
+            "type": "llm",
+            "tool_profile": secondary_profile,
+            "models": {"secondary-model": {"model_info": model["model_info"]}},
+        }
+
     return GatewayConfig(
         {
-            "providers": {
-                "upstream": {
-                    "provider": provider_by_api_type[api_type],
-                    "api_type": api_type,
-                    "api_key": "upstream-key",
-                    "base_url": upstream_base_url,
-                }
-            },
+            "providers": providers,
             "tool_profiles": tool_profiles,
-            "model_groups": {
-                "codex": {
-                    "provider": "upstream",
-                    "type": "llm",
-                    **(
-                        {"tool_profile": tool_profile}
-                        if tool_profile is not None
-                        else {}
-                    ),
-                    "models": {"gateway-model": model},
-                }
-            },
+            "model_groups": model_groups,
             "server": {
                 "admin_password": "test-admin-password",
                 "api_keys": [
@@ -687,6 +717,49 @@ def test_modified_imagegen_uses_profile_openai_images_api(
         "prompt": "draw a fox",
         "images": [{"image_url": "data:image/png;base64,AAAA"}],
     }
+
+
+def test_fixed_codex_image_model_uses_unique_modified_profile_mapping() -> None:
+    config = _make_config(
+        "chat",
+        image_state="modified",
+        upstream_model="qwen3.7-plus",
+    )
+    request = _make_request({"model": "gpt-image-2", "prompt": "draw a fox"})
+
+    response = asyncio.run(
+        handle_codex_auxiliary(request, config, "images/generations")
+    )
+
+    assert response.status_code == 202
+    provider_info, url, forwarded_body = (
+        request.app.transport.send_passthrough.call_args.args
+    )
+    assert provider_info.base_url == "https://images.example/v1"
+    assert provider_info.auth_headers() == {"Authorization": "Bearer image-token"}
+    assert url == "https://images.example/v1/images/generations"
+    assert forwarded_body == {"model": "gpt-image-2", "prompt": "draw a fox"}
+
+
+def test_fixed_codex_image_model_rejects_ambiguous_modified_profile_mappings() -> None:
+    config = _make_config(
+        "chat",
+        image_state="modified",
+        upstream_model="qwen3.7-plus",
+        additional_image_base_url="https://other-images.example/v1",
+    )
+    request = _make_request({"model": "gpt-image-2", "prompt": "draw a fox"})
+
+    response = asyncio.run(
+        handle_codex_auxiliary(request, config, "images/generations")
+    )
+
+    assert response.status_code == 400
+    assert (
+        "multiple distinct Modified image_gen.imagegen mappings"
+        in json.loads(response.body)["error"]["message"]
+    )
+    request.app.transport.send_passthrough.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
