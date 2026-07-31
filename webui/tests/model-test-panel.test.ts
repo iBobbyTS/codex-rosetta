@@ -8,12 +8,9 @@ import ModelTestPanel from '../src/admin/components/ModelTestPanel.svelte';
 const apiMock = vi.hoisted(() => ({ post: vi.fn(), del: vi.fn() }));
 const pollMock = vi.hoisted(() => vi.fn());
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
-vi.mock('../src/admin/lib/model-test', () => ({
-  buildModelTestPayload: (model: string) => ({ model }),
-  DEFAULT_MODEL_TEST_TIMEOUT_MS: 900_000,
+vi.mock('../src/admin/lib/model-test', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/admin/lib/model-test')>(),
   pollModelTest: pollMock,
-  responseText: (body: { output_text?: string }) => body.output_text ?? '',
-  safeUsageRows: () => [],
 }));
 
 beforeEach(() => { vi.clearAllMocks(); apiMock.post.mockResolvedValue({ task_id: 'task-one' }); apiMock.del.mockResolvedValue({ ok: true }); });
@@ -31,8 +28,36 @@ describe('ModelTestPanel', () => {
     expect(apiMock.post).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'More tests for demo' })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
-    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/test', { endpoint: '/v1/responses', payload: { model: 'demo' } }, expect.any(AbortSignal)));
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/test', { endpoint: '/v1/responses', payload: {
+      model: 'demo',
+      store: false,
+      stream: true,
+      input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
+    } }, expect.any(AbortSignal)));
     expect(await screen.findByText('safe result')).toBeInTheDocument();
+  });
+
+  it('shows the final SSE answer while retaining the complete stream under Raw Response', async () => {
+    const raw = [
+      'event: response.created',
+      'data: {"type":"response.created"}',
+      '',
+      'event: response.output_text.done',
+      'data: {"type":"response.output_text.done","text":"Final answer"}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed"}',
+      '',
+    ].join('\n');
+    pollMock.mockResolvedValue({ status: 'done', status_code: 200, body: raw });
+
+    const { container } = render(ModelTestPanel, { props: { model: 'demo' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByText('Final answer')).toBeInTheDocument();
+    expect(container.querySelector('.test-output')?.textContent).toBe('Final answer');
+    expect(container.querySelector('.detail-body pre')?.textContent).toBe(raw);
+    expect(container.querySelector('.detail-body pre')?.textContent).toContain('\n\nevent: response.completed');
   });
 
   it('aborts polling and cancels the owned server task', async () => {
