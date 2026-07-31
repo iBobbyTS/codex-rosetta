@@ -6,15 +6,17 @@ import time
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
-from codex_rosetta.routing import is_responses_passthrough
+from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from .auth import api_key_principal_var
 from .codex_images import (
+    CODEX_IMAGE_MODEL,
     IMAGE_ENDPOINTS,
     IMAGEGEN_PROFILE_ITEM_ID,
     CodexImageConfigurationError,
     image_trace_summary,
     profile_image_provider,
+    resolve_unique_profile_image_route,
 )
 from .codex_page import StaticPageClient
 from .codex_search import (
@@ -38,7 +40,7 @@ from .logging import record_request_stat
 from .proxy import error_response_for_source, extract_model
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_profiles import route_tool_state
-from .transport import UpstreamConnectionError, UpstreamTransport
+from .transport import ProviderInfo, UpstreamConnectionError, UpstreamTransport
 from .transport.credential_redaction import CredentialRedactingTransport
 from .web_run_sidecar import WebRunBrowserClient, WebRunSidecarHTTPClient
 from .web_search import TavilySearchClient
@@ -108,6 +110,43 @@ def _log_profile_image_response(
         trace.log("codex_image_response", {"status_code": status_code})
 
 
+def _resolve_auxiliary_route(
+    config: GatewayConfig,
+    *,
+    model: str,
+    upstream_path: str,
+) -> tuple[ResolvedRoute, ProviderInfo, bool] | Response:
+    """Resolve a normal route or Codex's unambiguous fixed-image fallback."""
+    try:
+        route, provider_info = config.resolve("openai_responses", model)
+        return route, provider_info, False
+    except KeyError:
+        resolved_image_route = None
+        if upstream_path in IMAGE_ENDPOINTS and model == CODEX_IMAGE_MODEL:
+            try:
+                resolved_image_route = resolve_unique_profile_image_route(config)
+            except CodexImageConfigurationError as exc:
+                return error_response_for_source("openai_responses", 400, str(exc))
+        if resolved_image_route is not None:
+            route, provider_info = resolved_image_route
+            return route, provider_info, True
+
+    configured = ", ".join(sorted(config.models.keys()))
+    return JSONResponse(
+        {
+            "error": {
+                "message": format_downstream_error(
+                    f"Unknown model: '{model}'. Configured models: {configured}",
+                    DownstreamErrorOrigin.ROSETTA,
+                ),
+                "type": "model_not_found",
+                "code": None,
+            }
+        },
+        status_code=404,
+    )
+
+
 async def handle_codex_auxiliary(
     request: Any,
     config: GatewayConfig,
@@ -142,25 +181,14 @@ async def handle_codex_auxiliary(
             "openai_responses", 400, "Missing 'model' in request body"
         )
 
-    try:
-        route, provider_info = config.resolve("openai_responses", model)
-    except KeyError:
-        configured = ", ".join(sorted(config.models.keys()))
-        return JSONResponse(
-            {
-                "error": {
-                    "message": (
-                        format_downstream_error(
-                            f"Unknown model: '{model}'. Configured models: {configured}",
-                            DownstreamErrorOrigin.ROSETTA,
-                        )
-                    ),
-                    "type": "model_not_found",
-                    "code": None,
-                }
-            },
-            status_code=404,
-        )
+    resolved_route = _resolve_auxiliary_route(
+        config,
+        model=model,
+        upstream_path=upstream_path,
+    )
+    if isinstance(resolved_route, Response):
+        return resolved_route
+    route, provider_info, fixed_image_route_fallback = resolved_route
 
     native_passthrough = is_responses_passthrough(route)
     web_run_state = route_tool_state(route, "namespace.web.run", "modified")
@@ -218,7 +246,7 @@ async def handle_codex_auxiliary(
             )
         except CodexImageConfigurationError as exc:
             return error_response_for_source("openai_responses", 400, str(exc))
-    if route.upstream_model:
+    if route.upstream_model and not fixed_image_route_fallback:
         body["model"] = route.upstream_model
 
     resolved_model = str(body.get("model") or route.upstream_model or model)
