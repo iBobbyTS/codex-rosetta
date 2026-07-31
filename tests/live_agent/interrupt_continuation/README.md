@@ -65,7 +65,7 @@ Deterministic coverage lives in `tests/gateway/test_late_developer_message.py`,
 `tests/gateway/test_persistence_sqlite.py`, and
 `tests/live_agent/test_interrupt_continuation_runner.py`.
 
-## Why later developer messages are rewritten
+## Why later instruction messages are rewritten
 
 Codex's native hard-interrupt behavior adds this exact runtime marker to later
 history:
@@ -80,7 +80,7 @@ Direct DeepSeek controls using the full Codex system prompt and a fresh random
 `user_id` showed that changing this later item from system to user retained the
 established 14,336-token cache block. The production rule is positional rather
 than marker-specific: it preserves the leading system/developer prefix, then
-changes every later developer message to a separate user message with the
+changes every later system or developer message to a separate user message with the
 original content inside a `<system>` envelope. The interrupt case therefore
 arrives upstream as:
 
@@ -93,6 +93,6 @@ The previous turn was interrupted on purpose. Any running unified exec processes
 ```
 
 The implementation does not parse or special-case `<turn_aborted>`; fork,
-plugin, skill, and other Codex runtime developer items follow the same rule.
+plugin, skill, and other Codex runtime instruction items follow the same rule.
 This is a request-local role conversion, not a continuation cache or a
 steer-like replay. Provider caching remains best-effort.

@@ -28,18 +28,19 @@ calling the summary upstream and never falls back to native compaction. Because
 the mapping contains summary plaintext for seven days, protect the Gateway data
 directory, backups, and copied test artifacts accordingly.
 
-## Late developer cache compatibility
+## Late instruction cache compatibility
 
 The Chat-only compatibility option is a request-local role conversion. It does
 not retain model output, continue an abandoned upstream stream, or replay hidden
 content. In a request with valid Codex turn metadata, Rosetta preserves the
-contiguous leading system/developer prefix. Every developer message after the
-first ordinary conversation item becomes a separate user-role message with its
+contiguous leading system/developer prefix. Every system or developer message
+after the first ordinary conversation item becomes a separate user-role message with its
 content wrapped in `<system>...</system>`. The rule is positional and does not
-inspect or special-case `<turn_aborted>` text. Ordinary user messages and late
-system messages are unchanged. The retired plaintext `soft_interrupt_handoffs`
+inspect or special-case `<turn_aborted>` text. Ordinary user messages are
+unchanged. The retired plaintext `soft_interrupt_handoffs`
 table, if present from an earlier development build, is deleted with all of its
-rows on startup.
+rows on startup. Because the conversion intentionally lowers role precedence,
+enable it only when later instruction content is safe to deliver as user text.
 
 Codex-Rosetta fails closed: every gateway configuration must contain a
 non-empty Admin password and at least one gateway access key. The default bind

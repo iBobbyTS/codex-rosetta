@@ -1,4 +1,4 @@
-"""Late Codex developer-message conversion for Chat-provider cache stability."""
+"""Late Codex instruction-message conversion for Chat-provider cache stability."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def _rewrite_item(item: Any) -> tuple[Any, bool]:
     if (
         not isinstance(item, dict)
         or item.get("type") != "message"
-        or item.get("role") != "developer"
+        or item.get("role") not in {"system", "developer"}
     ):
         return item, False
 
@@ -87,11 +87,11 @@ def rewrite_late_codex_developer_messages(
     source_provider: ProviderType,
     target_provider: ProviderType,
 ) -> tuple[dict[str, Any], int]:
-    """Rewrite Codex developer messages after the leading instruction prefix.
+    """Rewrite Codex instruction messages after the leading instruction prefix.
 
     The leading contiguous system/developer message prefix remains authoritative.
-    Once ordinary conversation history begins, later developer messages become
-    separate user messages whose original content is enclosed by
+    Once ordinary conversation history begins, later system/developer messages
+    become separate user messages whose original content is enclosed by
     ``<system>...</system>``. This is a request-local role conversion and does
     not inspect the message text.
 
@@ -103,7 +103,7 @@ def rewrite_late_codex_developer_messages(
 
     Returns:
         The original body and zero when no item matches, otherwise a copy with
-        every valid late developer message rewritten and the rewritten count.
+        every valid late instruction message rewritten and the rewritten count.
     """
     if (
         not enabled

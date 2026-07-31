@@ -1,4 +1,4 @@
-"""Tests for late Codex developer-message cache compatibility."""
+"""Tests for late Codex instruction-message cache compatibility."""
 
 from __future__ import annotations
 
@@ -51,7 +51,7 @@ def _rewrite(body: dict[str, Any], *, enabled: bool = True):
     )
 
 
-def test_preserves_leading_instruction_prefix_and_rewrites_every_late_developer():
+def test_preserves_leading_instruction_prefix_and_rewrites_every_late_instruction():
     plugin_notice = "Capabilities from the Chrome plugin."
     fork_notice = "Fork debugging context."
     original = _body(
@@ -61,18 +61,20 @@ def test_preserves_leading_instruction_prefix_and_rewrites_every_late_developer(
         _message("user", "First task."),
         _message("developer", plugin_notice),
         _message("assistant", "Done."),
+        _message("system", "Late system context."),
         _message("developer", fork_notice),
         _message("user", "Continue."),
     )
 
     rewritten, count = _rewrite(original)
 
-    assert count == 2
+    assert count == 3
     assert rewritten is not original
     assert rewritten["input"][:4] == original["input"][:4]
     assert original["input"][4]["role"] == "developer"
     assert rewritten["input"][4] == _message("user", _wrapped(plugin_notice))
-    assert rewritten["input"][6] == _message("user", _wrapped(fork_notice))
+    assert rewritten["input"][6] == _message("user", _wrapped("Late system context."))
+    assert rewritten["input"][7] == _message("user", _wrapped(fork_notice))
 
 
 def test_does_not_special_case_turn_aborted_text():
@@ -190,7 +192,7 @@ def test_wraps_nontext_only_content_with_text_boundary_parts():
     ]
 
 
-def test_leaves_late_system_user_and_malformed_developer_unchanged():
+def test_rewrites_late_system_and_leaves_user_and_malformed_developer_unchanged():
     original = _body(
         _message("developer", "You are Codex."),
         _message("user", "Task."),
@@ -201,8 +203,10 @@ def test_leaves_late_system_user_and_malformed_developer_unchanged():
 
     rewritten, count = _rewrite(original)
 
-    assert rewritten is original
-    assert count == 0
+    assert rewritten is not original
+    assert count == 1
+    assert rewritten["input"][2] == _message("user", _wrapped("Late system."))
+    assert rewritten["input"][3:] == original["input"][3:]
 
 
 def test_returns_original_body_when_developer_messages_are_only_in_prefix():

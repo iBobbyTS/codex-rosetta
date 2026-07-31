@@ -47,7 +47,7 @@ handling rather than prose quality.
   be driven by the current non-interactive `codex exec` runner.
 - [`interrupt_continuation`](interrupt_continuation/README.md): app-server
   Steer, hard-interrupt continuation, and real `thread/fork`, including the
-  cache-compatible late-developer user-envelope boundary.
+  cache-compatible late-instruction user-envelope boundary.
 - [`image_generation`](image_generation/README.md): a gated visual-model
   scenario that generates an image, opens the saved artifact through projected
   `view_image`, and leaves semantic agreement with the requested scene to the
