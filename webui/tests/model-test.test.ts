@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildModelTestPayload, DEFAULT_MODEL_TEST_TIMEOUT_MS, pollModelTest, safeUsageRows } from '../src/admin/lib/model-test';
+import { buildModelTestPayload, DEFAULT_MODEL_TEST_TIMEOUT_MS, pollModelTest, rawResponseText, responseText, safeUsageRows } from '../src/admin/lib/model-test';
 
 const apiMock = vi.hoisted(() => ({ post: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
@@ -23,9 +23,50 @@ describe('model testing', () => {
   it('builds only the basic text test through the Responses endpoint contract', () => {
     expect(buildModelTestPayload('demo')).toEqual({
       model: 'demo',
-      max_output_tokens: 256,
+      store: false,
+      stream: true,
       input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }],
     });
+  });
+
+  it('shows only the final model answer for a buffered Responses event stream', () => {
+    const raw = [
+      'event: response.created',
+      'data: {"type":"response.created"}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"hello "}',
+      '',
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"world"}',
+      '',
+      'event: response.output_text.done',
+      'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"text":"Hello world"}',
+      '',
+      'event: response.completed',
+      'data: {"type":"response.completed","response":{"status":"completed"}}',
+      '',
+    ].join('\n');
+
+    expect(responseText(raw)).toBe('Hello world');
+  });
+
+  it('falls back to delta text and leaves non-SSE strings unchanged', () => {
+    const deltaOnly = [
+      'event: response.output_text.delta',
+      'data: {"type":"response.output_text.delta","delta":"partial answer"}',
+      '',
+    ].join('\n');
+
+    expect(responseText(deltaOnly)).toBe('partial answer');
+    expect(responseText('plain response')).toBe('plain response');
+  });
+
+  it('preserves real line breaks for raw string responses', () => {
+    expect(rawResponseText('event: one\ndata: first\n\nevent: two\ndata: second')).toBe(
+      'event: one\ndata: first\n\nevent: two\ndata: second',
+    );
+    expect(rawResponseText({ status: 'completed' })).toBe('{\n  "status": "completed"\n}');
   });
 
   it('renders only non-negative safe integer usage without coercing hostile values', () => {
