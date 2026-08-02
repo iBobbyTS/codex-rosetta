@@ -197,7 +197,10 @@ Sidecar 操作默认超时为 300 秒；`server.web_run.timeout_seconds` 接受 
 
 Admin **联网搜索**页面允许基础搜索选择 Tavily 凭据，或现有 sidecar 内的
 **Self-hosted (Google)**、**Self-hosted (Bing RSS)** 与
-**Self-hosted (Bing Browser)**。self-hosted Provider 不会发送搜索 API 凭据，但搜索引擎可能限流、要求验证
+**Self-hosted (Bing Browser)**，也可以选择一个已启用的已配置 Responses Provider。
+在后一模式中，Gateway 会使用该 Provider 既有的凭据、代理与重定向策略，把 Codex
+Search body 原样发送到它的 `alpha/search` 端点；已禁用或非 Responses Provider
+会在配置阶段被拒绝。self-hosted Provider 不会发送搜索 API 凭据，但搜索引擎可能限流、要求验证
 或改变结果页；这类失败会作为有界的 `502` 搜索错误返回，不会静默切换 Provider。高级 Section
 只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以五秒超时、
 有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token

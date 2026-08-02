@@ -134,7 +134,11 @@ def _apply_web_search_settings(
         return JSONResponse(
             {"error": "'web_search' must be an object"}, status_code=400
         )
-    unsupported = set(incoming) - {"provider", "tavily_api_key"}
+    unsupported = set(incoming) - {
+        "provider",
+        "responses_provider",
+        "tavily_api_key",
+    }
     if unsupported:
         return JSONResponse(
             {"error": f"'web_search' has unsupported fields: {sorted(unsupported)}"},
@@ -144,6 +148,16 @@ def _apply_web_search_settings(
     current = dict(current) if isinstance(current, dict) else {}
     provider = incoming.get("provider", current.get("provider", "tavily"))
     next_value: dict[str, Any] = {"provider": provider}
+    responses_provider = incoming.get(
+        "responses_provider", current.get("responses_provider", "")
+    )
+    if not isinstance(responses_provider, str):
+        return JSONResponse(
+            {"error": "'web_search.responses_provider' must be a string"},
+            status_code=400,
+        )
+    if responses_provider.strip():
+        next_value["responses_provider"] = responses_provider.strip()
     if "tavily_api_key" in incoming:
         api_key = incoming["tavily_api_key"]
         if not isinstance(api_key, str):

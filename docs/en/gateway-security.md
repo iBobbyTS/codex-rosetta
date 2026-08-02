@@ -241,7 +241,11 @@ variables) explicitly. Sidecar operations default to a 300-second timeout;
 
 The Admin **Web Search** page lets basic search use Tavily credentials,
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, or
-**Self-hosted (Bing Browser)** in the existing sidecar. The
+**Self-hosted (Bing Browser)** in the existing sidecar. It can also select an
+enabled configured Responses Provider; in that mode the Gateway sends the
+unchanged Codex Search body to the Provider's `alpha/search` endpoint with that
+Provider's existing credential, proxy, and redirect policy. Disabled and
+non-Responses Providers are rejected during configuration. The
 self-hosted providers send no search API credential, but either engine may
 rate-limit, challenge, or change its result page; such
 failures are returned as bounded `502` search errors instead of silently falling

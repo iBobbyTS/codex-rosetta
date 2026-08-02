@@ -86,7 +86,12 @@ locally: `search_query` uses the global Provider configured under Admin
 **Self-hosted (Bing Browser)** run in the existing `web-run` container and
 therefore require that sidecar to be healthy. Bing RSS reads the XML result
 representation, while Bing Browser loads and parses the interactive HTML result
-page. All providers are normalized to the same Codex-visible source format. Direct-URL
+page. **Configured Responses Provider** instead selects one enabled configured
+Provider whose API type is `responses`. Every resulting `web.run` request is
+forwarded unchanged to that Provider's relative `alpha/search` endpoint, using
+its credential and transport settings; the current model route and upstream
+model alias do not replace this explicit search route. All local providers are
+normalized to the same Codex-visible source format. Direct-URL
 `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,
 rejects credentials and non-public addresses, permits at most five redirects,
@@ -116,8 +121,11 @@ before any partial operation runs. Every `501` message from these auxiliary
 endpoints also ends with `Consider "Browser Use" skill` so Codex can choose the
 browser fallback. When a selected Profile sets `web.run` to Passthrough,
 `/v1/alpha/search` remains native upstream pass-through even when Tavily or the
-sidecar is configured. When it sets `web.run` to Modified, supported commands
-use Rosetta's search service. The model-visible definition always retains
+sidecar is configured. **Configured Responses Provider** is the explicit
+exception: every enabled `web.run` endpoint request uses that selected Provider
+for both Modified and Passthrough Profiles. Disabled remains blocked. In other
+Modified modes, supported commands use Rosetta's local search service. The
+model-visible definition always retains
 direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
 `search_query` when either a global Tavily API Key is configured or
 either self-hosted provider is selected and the sidecar reports ready, and adds

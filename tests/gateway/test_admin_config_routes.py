@@ -822,6 +822,72 @@ def test_put_server_settings_selects_self_hosted_google_and_preserves_tavily_key
     assert app.gateway_config.web_search["provider"] == "self_hosted_google"
 
 
+def test_put_server_settings_selects_configured_responses_provider(tmp_path):
+    config = _config_data()
+    config["providers"]["search"] = {
+        "provider": "openai",
+        "api_type": "responses",
+        "api_key": "search-secret",
+        "base_url": "https://search.example/v1",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {
+            "web_search": {
+                "provider": "configured_responses_provider",
+                "responses_provider": "search",
+            }
+        },
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
+        "web_search"
+    ] == {
+        "provider": "configured_responses_provider",
+        "responses_provider": "search",
+    }
+    assert app.gateway_config.web_search["responses_provider"] == "search"
+
+
+def test_put_server_settings_rejects_configured_non_responses_provider(tmp_path):
+    config = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        json=lambda: {
+            "web_search": {
+                "provider": "configured_responses_provider",
+                "responses_provider": next(iter(config["providers"])),
+            }
+        },
+    )
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 400
+    assert "api_type 'responses'" in json.loads(response.body)["error"]
+    assert app.gateway_config is initial_config
+
+
 def test_put_server_settings_rejects_invalid_web_search_fields(tmp_path):
     config_path = tmp_path / "config.jsonc"
     original = json.dumps(_config_data()).encode()

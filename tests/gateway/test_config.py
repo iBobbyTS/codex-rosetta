@@ -673,12 +673,59 @@ class TestWebSearchConfig:
         }
         assert WEB_RUN_BASIC_SEARCH_CAPABILITY not in route.tool_runtime_capabilities
 
+    def test_configured_responses_provider_enables_basic_search(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+        raw["providers"]["test"]["api_type"] = "responses"
+        config = GatewayConfig(raw)
+
+        route, _provider = config.resolve("openai_responses", "gpt-test")
+
+        assert config.web_search == {
+            "provider": "configured_responses_provider",
+            "responses_provider": "test",
+            "tavily_api_key": "",
+        }
+        assert WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
+
+    def test_configured_search_rejects_non_responses_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+
+        with pytest.raises(ValueError, match="api_type 'responses'"):
+            GatewayConfig(raw)
+
+    def test_configured_search_rejects_missing_or_disabled_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+        raw["providers"]["test"]["enabled"] = False
+
+        with pytest.raises(ValueError, match="must name an enabled provider"):
+            GatewayConfig(raw)
+
     @pytest.mark.parametrize(
         ("value", "message"),
         [
             ("tavily", "must be an object"),
             ({"provider": "other"}, "provider must be one of"),
             ({"tavily_api_key": 42}, "tavily_api_key must be a string"),
+            (
+                {"provider": "configured_responses_provider"},
+                "responses_provider is required",
+            ),
+            ({"responses_provider": 42}, "responses_provider must be a string"),
             ({"token": "legacy"}, "unsupported fields"),
         ],
     )
