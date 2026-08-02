@@ -92,6 +92,36 @@ describe('NetworkSearchPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { provider: 'tavily', tavily_api_key: 'tav***key' } });
   });
+
+  it('selects an enabled Responses provider instead of showing an API key input', async () => {
+    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
+      ? Promise.resolve({
+          providers: {
+            chat: { api_type: 'chat' },
+            disabled: { api_type: 'responses', enabled: false },
+            search: { api_type: 'responses' },
+          },
+          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search' } },
+        })
+      : Promise.resolve({ configured: false }));
+    apiMock.put.mockResolvedValue({ server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search' } } });
+    render(NetworkSearchPage);
+
+    const providerSelect = await screen.findByLabelText('Search Provider');
+    await waitFor(() => expect(providerSelect).toHaveValue('configured_responses_provider'));
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+    const responsesSelect = await screen.findByLabelText('Responses Provider');
+    expect(responsesSelect).toHaveTextContent('search');
+    expect(responsesSelect).not.toHaveTextContent('chat');
+    expect(responsesSelect).not.toHaveTextContent('disabled');
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
+      web_search: {
+        provider: 'configured_responses_provider',
+        responses_provider: 'search',
+      },
+    });
+  });
 });
 
 describe('ToolsPage', () => {

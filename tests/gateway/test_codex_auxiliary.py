@@ -40,6 +40,7 @@ def _make_config(
     upstream_model: str | None = "gpt-image-2",
     tavily_api_key: str | None = None,
     search_provider: str = "tavily",
+    responses_search_provider: str | None = None,
     tool_profile: str | None = None,
     image_state: str | None = None,
     image_base_url: str = "https://images.example/v1",
@@ -121,6 +122,13 @@ def _make_config(
             "base_url": upstream_base_url,
         }
     }
+    if responses_search_provider is not None:
+        providers[responses_search_provider] = {
+            "provider": "openai",
+            "api_type": "responses",
+            "api_key": "search-provider-key",
+            "base_url": "https://search-provider.example/v1",
+        }
     model_groups = {
         "codex": {
             "provider": "upstream",
@@ -176,6 +184,11 @@ def _make_config(
                 "web_search": {
                     "provider": search_provider,
                     "tavily_api_key": tavily_api_key or "",
+                    **(
+                        {"responses_provider": responses_search_provider}
+                        if responses_search_provider is not None
+                        else {}
+                    ),
                 },
             },
         }
@@ -525,6 +538,33 @@ def test_search_passthrough_does_not_force_v1_into_upstream_base_url() -> None:
     assert request.app.transport.send_passthrough.await_args.args[1] == (
         "https://upstream.example/alpha/search"
     )
+
+
+def test_configured_responses_provider_routes_all_search_requests() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        search_provider="configured_responses_provider",
+        responses_search_provider="search-upstream",
+    )
+    body = _search_body(
+        {
+            "search_query": [{"q": "Python documentation"}],
+            "weather": [{"location": "Edmonton"}],
+        }
+    )
+    request = _make_request(body)
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 202
+    provider_info, url, forwarded_body = (
+        request.app.transport.send_passthrough.await_args.args
+    )
+    assert provider_info.base_url == "https://search-provider.example/v1"
+    assert provider_info.credential_values == ("search-provider-key",)
+    assert url == "https://search-provider.example/v1/alpha/search"
+    assert forwarded_body == body
 
 
 def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:

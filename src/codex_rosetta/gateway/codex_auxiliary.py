@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
+from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from .auth import api_key_principal_var
@@ -28,7 +29,7 @@ from .codex_search import (
     should_use_local_codex_search,
 )
 from .codex_search_references import CodexSearchReferenceStore
-from .config import GatewayConfig
+from .config import CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER, GatewayConfig
 from .downstream_errors import (
     DownstreamErrorOrigin,
     classify_downstream_exception,
@@ -60,6 +61,45 @@ def _native_auxiliary_endpoint_available(
     return native_passthrough and (
         upstream_path != "alpha/search" or web_run_state == "passthrough"
     )
+
+
+def _configured_responses_search_provider(
+    config: GatewayConfig,
+    *,
+    upstream_path: str,
+    web_run_state: str,
+) -> tuple[str, ProviderInfo] | None:
+    """Resolve the global Responses search endpoint for an eligible web.run."""
+    if upstream_path != "alpha/search" or web_run_state == "disabled":
+        return None
+    if config.web_search["provider"] != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        return None
+    provider_name = config.web_search["responses_provider"]
+    return provider_name, config.providers[provider_name]
+
+
+def _active_auxiliary_provider(
+    route: ResolvedRoute,
+    provider_info: ProviderInfo,
+    configured_search_provider: tuple[str, ProviderInfo] | None,
+) -> tuple[str, ProviderType, ProviderInfo]:
+    """Return telemetry identity and transport for the effective endpoint."""
+    if configured_search_provider is None:
+        return route.provider_name, route.target_provider, provider_info
+    provider_name, search_provider = configured_search_provider
+    return provider_name, "openai_responses", search_provider
+
+
+def _apply_auxiliary_model_alias(
+    body: dict[str, Any],
+    route: ResolvedRoute,
+    *,
+    fixed_image_route_fallback: bool,
+    preserve_model: bool,
+) -> None:
+    """Apply model routing only when the effective endpoint owns that alias."""
+    if route.upstream_model and not fixed_image_route_fallback and not preserve_model:
+        body["model"] = route.upstream_model
 
 
 def _unavailable_auxiliary_message(
@@ -195,12 +235,19 @@ async def handle_codex_auxiliary(
     image_tool_state = route_tool_state(route, IMAGEGEN_PROFILE_ITEM_ID, "disabled")
     web_run_mapping = web_run_state == "modified"
     web_run_config = config.web_search
+    configured_search_provider = _configured_responses_search_provider(
+        config,
+        upstream_path=upstream_path,
+        web_run_state=web_run_state,
+    )
+    use_configured_provider_search = configured_search_provider is not None
     resolved_browser_client = browser_client or _configured_browser_client(config)
     use_profile_images = (
         upstream_path in IMAGE_ENDPOINTS and image_tool_state == "modified"
     )
     use_local_search = (
         upstream_path == "alpha/search"
+        and not use_configured_provider_search
         and web_run_mapping
         and should_use_local_codex_search(
             body,
@@ -209,11 +256,14 @@ async def handle_codex_auxiliary(
             browser_available=resolved_browser_client is not None,
         )
     )
-    native_endpoint_available = _native_auxiliary_endpoint_available(
-        native_passthrough=native_passthrough,
-        upstream_path=upstream_path,
-        web_run_state=web_run_state,
-        image_tool_state=image_tool_state,
+    native_endpoint_available = (
+        use_configured_provider_search
+        or _native_auxiliary_endpoint_available(
+            native_passthrough=native_passthrough,
+            upstream_path=upstream_path,
+            web_run_state=web_run_state,
+            image_tool_state=image_tool_state,
+        )
     )
     if (
         not native_endpoint_available
@@ -237,7 +287,9 @@ async def handle_codex_auxiliary(
             ),
         )
 
-    active_provider_info = provider_info
+    active_provider_name, active_target_provider, active_provider_info = (
+        _active_auxiliary_provider(route, provider_info, configured_search_provider)
+    )
     if use_profile_images:
         try:
             active_provider_info = profile_image_provider(
@@ -246,8 +298,12 @@ async def handle_codex_auxiliary(
             )
         except CodexImageConfigurationError as exc:
             return error_response_for_source("openai_responses", 400, str(exc))
-    if route.upstream_model and not fixed_image_route_fallback:
-        body["model"] = route.upstream_model
+    _apply_auxiliary_model_alias(
+        body,
+        route,
+        fixed_image_route_fallback=fixed_image_route_fallback,
+        preserve_model=use_configured_provider_search,
+    )
 
     resolved_model = str(body.get("model") or route.upstream_model or model)
     record_request_stat(resolved_model)
@@ -261,6 +317,8 @@ async def handle_codex_auxiliary(
         request_id=request_id,
         model=model,
         route=route,
+        target_provider=active_target_provider,
+        provider_name=active_provider_name,
     )
     started_at = time.monotonic()
     status_code = 500
@@ -337,8 +395,8 @@ async def handle_codex_auxiliary(
             request,
             model=model,
             source_provider="openai_responses",
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
+            target_provider=active_target_provider,
+            provider_name=active_provider_name,
             is_stream=False,
             status_code=status_code,
             duration_ms=(time.monotonic() - started_at) * 1000,
@@ -451,6 +509,8 @@ def _create_auxiliary_trace(
     request_id: str,
     model: str,
     route: Any,
+    target_provider: str | None = None,
+    provider_name: str | None = None,
 ) -> StreamTraceLogger | None:
     state = getattr(request.app, "stream_trace_state", None)
     if not isinstance(state, StreamTraceState):
@@ -460,6 +520,6 @@ def _create_auxiliary_trace(
         request_log_id=None,
         model=model,
         source_provider=route.source_provider,
-        target_provider=route.target_provider,
-        provider_name=route.provider_name,
+        target_provider=target_provider or route.target_provider,
+        provider_name=provider_name or route.provider_name,
     )

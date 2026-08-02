@@ -70,7 +70,10 @@ OpenAI `images/generations` 和 `images/edits` 线协议；Rosetta 不转换供�
 API Key；**Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
 **Self-hosted (Bing Browser)** 则在现有 `web-run` 容器中运行，因此要求
 sidecar 健康。Bing RSS 读取 XML 结果表示，Bing Browser 加载并解析交互式
-HTML 结果页。所有 Provider 都会被规范化为相同的 Codex 可见来源格式。
+HTML 结果页。**从已配置的 Provider 中选择**则要求再选择一个已启用且 API 类型为
+`responses` 的 Provider。由此产生的每个 `web.run` 请求都会原样转发到该 Provider
+的相对 `alpha/search` 端点，并使用其凭据和传输设置；当前模型路由及其 upstream
+model alias 不会覆盖这条显式搜索路由。所有本地搜索 Provider 都会被规范化为相同的 Codex 可见来源格式。
 直接 URL 的 `open` 获取公开静态 HTML 或纯文本，`time` 使用 Python 的固定
 UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
@@ -93,8 +96,10 @@ blocked-domain、location 或非 live 访问语义，就会在任何部分操作
 HTTP `501` 和 `code: "not_implemented"`。这些辅助端点的所有 `501` 文案还会
 以 `Consider "Browser Use" skill` 结尾，提示 Codex 改用浏览器回退。把
 `web.run` 设为 Passthrough 时，即使配置了 Tavily 或 sidecar，`/v1/alpha/search`
-也会继续原生透传给上游。把 `web.run` 设为 Modified 时，受支持命令走本地
-Rosetta 搜索服务。模型可见定义始终保留直接 URL 的 `open`、固定时区 `time`
+也会继续原生透传给上游。**从已配置的 Provider 中选择**是明确例外：Modified
+和 Passthrough Profile 产生的每个 `web.run` 端点请求都使用这里选定的 Provider；
+Disabled 仍会阻止该端点。其他 Modified 模式的受支持命令走本地 Rosetta 搜索服务。
+模型可见定义始终保留直接 URL 的 `open`、固定时区 `time`
 和 `response_length`；配置全局 Tavily API Key，或选择任一 self-hosted Provider 且
 sidecar 报告就绪后，才增加 `search_query`；
 只有可选 sidecar 报告 `browser_ready=true` 时才增加 `click`、`find` 和
