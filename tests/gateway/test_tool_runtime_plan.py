@@ -1,4 +1,4 @@
-"""Catalog v6 compilation and runtime planning tests."""
+"""Catalog v7 compilation and runtime planning tests."""
 
 from __future__ import annotations
 
@@ -55,10 +55,18 @@ def _native_tool_search() -> dict[str, object]:
     }
 
 
-def test_catalog_v6_compiles_57_immutable_items_and_history_aliases():
+def test_catalog_v7_compiles_complete_immutable_source_inventory():
     compiled = compile_tool_catalog(copy.deepcopy(load_tool_catalog()))
 
     assert len(compiled.items) == 57
+    assert len(compiled.source_registrations) == 62
+    assert set(compiled.dynamic_families) == {
+        "runtime.mcp",
+        "runtime.apps_connectors",
+        "runtime.thread_function",
+        "runtime.thread_namespace",
+        "runtime.extension_contributor",
+    }
     assert compiled.history_aliases["Bash"] == "function.exec_command"
     assert (
         compiled.items["injection.claude_code.read"]["catalog_definition"]["function"][
@@ -68,13 +76,39 @@ def test_catalog_v6_compiles_57_immutable_items_and_history_aliases():
     )
     with pytest.raises(TypeError):
         cast(Any, compiled.items["injection.claude_code.read"])["name"] = "changed"
+    with pytest.raises(TypeError):
+        cast(Any, compiled.dynamic_families["runtime.mcp"])["id"] = "changed"
+
+
+def test_catalog_codex_source_bindings_match_reviewed_registration_sites():
+    root = Path(__file__).resolve().parents[2]
+    baseline = json.loads(
+        (root / "docs/dev/version-compatibility/codex-source-contract.json").read_text()
+    )
+    sites = baseline["contract"]["tool_registration_sites"]
+    compiled = compile_tool_catalog(copy.deepcopy(load_tool_catalog()))
+
+    for item in compiled.items.values():
+        if item["source_binding"]["origin"] != "codex_source":
+            continue
+        for registration_id in item["source_binding"]["registration_ids"]:
+            registration = compiled.source_registrations[registration_id]
+            assert registration["source_symbol"] in sites
+            assert (
+                sites[registration["source_symbol"]]["path"]
+                == registration["source_path"]
+            )
+
+    for family in compiled.dynamic_families.values():
+        assert family["source_symbol"] in sites
+        assert sites[family["source_symbol"]]["path"] == family["source_path"]
 
 
 @pytest.mark.parametrize(
     ("mutate", "error"),
     [
         (
-            lambda catalog: catalog["items"][0].update({"unknown_v6_field": True}),
+            lambda catalog: catalog["items"][0].update({"unknown_v7_field": True}),
             "unsupported fields",
         ),
         (
@@ -93,7 +127,7 @@ def test_catalog_v6_compiles_57_immutable_items_and_history_aliases():
         ),
     ],
 )
-def test_catalog_v6_fails_closed_for_invalid_runtime_contracts(mutate, error):
+def test_catalog_v7_fails_closed_for_invalid_runtime_contracts(mutate, error):
     catalog = copy.deepcopy(load_tool_catalog())
     mutate(catalog)
 
@@ -101,7 +135,7 @@ def test_catalog_v6_fails_closed_for_invalid_runtime_contracts(mutate, error):
         compile_tool_catalog(catalog)
 
 
-def test_catalog_v6_rejects_availability_dependency_cycles():
+def test_catalog_v7_rejects_availability_dependency_cycles():
     catalog = copy.deepcopy(load_tool_catalog())
     write_stdin = next(
         item for item in catalog["items"] if item["id"] == "function.write_stdin"
@@ -111,6 +145,43 @@ def test_catalog_v6_rejects_availability_dependency_cycles():
     }
 
     with pytest.raises(ValueError, match="dependency cycle"):
+        compile_tool_catalog(catalog)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda catalog: catalog["items"][0]["source_binding"].update(
+                {"registration_ids": ["missing.registration"]}
+            ),
+            "unknown source registration",
+        ),
+        (
+            lambda catalog: catalog["source_registrations"][0].update(
+                {"family_id": "runtime.mcp"}
+            ),
+            "exactly one item or family",
+        ),
+        (
+            lambda catalog: catalog["dynamic_families"][0].update(
+                {"deferred_adapters": ["guessed_adapter"]}
+            ),
+            "deferred adapters are invalid",
+        ),
+        (
+            lambda catalog: catalog["items"][0]["surface_policy"].update(
+                {"stability": "unknown"}
+            ),
+            "surface stability is invalid",
+        ),
+    ],
+)
+def test_catalog_v7_rejects_incomplete_source_inventory(mutate, error):
+    catalog = copy.deepcopy(load_tool_catalog())
+    mutate(catalog)
+
+    with pytest.raises(ValueError, match=error):
         compile_tool_catalog(catalog)
 
 

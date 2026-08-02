@@ -24,6 +24,7 @@ from codex_rosetta.gateway.code_mode_projection import (
     discovered_all_tools_search_names,
     discovered_deferred_exec_tools,
     discovered_node_repl_exec_tools,
+    deferred_tool_definition_hash,
     exec_tool_section_names,
     exec_tool_projections_for_route,
     plan_exec_tool_definitions,
@@ -33,6 +34,7 @@ from codex_rosetta.gateway.code_mode_projection import (
 )
 from codex_rosetta.gateway.tool_adaptation import (
     CodexToolLocalizationStore,
+    DEFERRED_CANDIDATES_KEY,
     EXEC_PROJECTIONS_KEY,
     LocalizedToolCallStreamTransformer,
     NativeToolCapabilities,
@@ -110,6 +112,11 @@ declare const tools: {{ {name}(args: {{ record_id: string; }}): Promise<CallTool
 
 
 def _all_tools_read_result(name: str, *, found: bool = True) -> dict:
+    description = (
+        _node_repl_description(name)
+        if name in NODE_REPL_TOOL_NAMES
+        else _deferred_mcp_description(name)
+    )
     return {
         "protocol": ALL_TOOLS_READ_RESULT_PROTOCOL,
         "name": name,
@@ -117,11 +124,8 @@ def _all_tools_read_result(name: str, *, found: bool = True) -> dict:
         "tool": (
             {
                 "name": name,
-                "description": (
-                    _node_repl_description(name)
-                    if name in NODE_REPL_TOOL_NAMES
-                    else _deferred_mcp_description(name)
-                ),
+                "description": description,
+                "definition_hash": deferred_tool_definition_hash(name, description),
             }
             if found
             else None
@@ -813,8 +817,15 @@ def test_deferred_exec_projects_stateless_all_tools_search_definition():
         "properties": {
             "name": {
                 "type": "string",
-                "pattern": "^mcp__",
+                "pattern": "^[A-Za-z0-9_.-]+$",
                 "maxLength": 512,
+            },
+            "definition_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": (
+                    "Exact definition_hash returned by the paired tool_read result."
+                ),
             },
             "arguments": {
                 "type": "object",
@@ -823,7 +834,7 @@ def test_deferred_exec_projects_stateless_all_tools_search_definition():
                 ),
             },
         },
-        "required": ["name", "arguments"],
+        "required": ["name", "definition_hash", "arguments"],
         "additionalProperties": False,
     }
 
@@ -964,7 +975,7 @@ def test_all_tools_search_runtime_enforces_whole_match_budget():
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
-def test_all_tools_read_appends_dispatch_guidance_to_unblocked_mcp_matches():
+def test_all_tools_read_returns_exact_hash_bound_declarations():
     projection = replace(
         exec_tool_projections_for_route(_route())["tool_read"],
         authorized_names=(
@@ -1007,19 +1018,15 @@ def test_all_tools_read_appends_dispatch_guidance_to_unblocked_mcp_matches():
         )
         return json.loads(completed.stdout)
 
-    descriptions = {
-        name: read(name)["tool"]["description"]
+    results = {
+        name: read(name)["tool"]
         for name in (catalog_entry["name"] for catalog_entry in catalog)
     }
-    assert 'set `name` to\n"mcp__node_repl__js"' in descriptions["mcp__node_repl__js"]
-    assert (
-        "Do not call this tool directly or through raw `exec`."
-        in descriptions["mcp__node_repl__js"]
-    )
-    assert "invoke_deferred_tool" not in descriptions["mcp__node_repl__js_reset"]
-    assert (
-        'set `name` to\n"mcp__archive__lookup"' in descriptions["mcp__archive__lookup"]
-    )
+    for name, tool in results.items():
+        assert tool["definition_hash"] == deferred_tool_definition_hash(
+            name, tool["description"]
+        )
+        assert "invoke_deferred_tool" not in tool["description"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js is not installed")
@@ -1384,6 +1391,25 @@ def test_paired_tool_read_authorizes_node_repl_but_search_summary_does_not():
     }
 
 
+def test_complete_unknown_non_mcp_declaration_can_be_hash_bound_and_deferred():
+    name = "plugin_runtime_tool"
+    plan = discovered_deferred_exec_tools(_node_repl_discovery_messages(name))
+
+    assert set(plan.definitions) == {name}
+    assert plan.projections[name].nested_name == name
+    assert plan.definition_hashes[name].startswith("sha256:")
+
+
+def test_tool_read_definition_hash_rejects_toctou_or_forged_declaration():
+    name = "plugin_runtime_tool"
+    messages = _node_repl_discovery_messages(name)
+    result = json.loads(messages[-1]["content"])
+    result["tool"]["description"] += "\nChanged after hashing."
+    messages[-1]["content"] = json.dumps(result)
+
+    assert discovered_deferred_exec_tools(messages).definitions == {}
+
+
 def test_search_authorization_requires_exact_paired_arguments_and_summary_shape():
     result = _all_tools_search_result("mcp__node_repl__js")
     messages = [
@@ -1744,9 +1770,13 @@ def test_unknown_mcp_projection_is_recovered_from_paired_search_and_read():
 
 
 def test_dispatcher_call_translates_to_allowlisted_custom_exec():
+    definition_hash = _all_tools_read_result("mcp__node_repl__js")["tool"][
+        "definition_hash"
+    ]
     projection = replace(
         exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
         authorized_names=("mcp__node_repl__js",),
+        authorized_definition_hashes=(("mcp__node_repl__js", definition_hash),),
     )
 
     translated = translate_localized_tool_call_part(
@@ -1756,6 +1786,7 @@ def test_dispatcher_call_translates_to_allowlisted_custom_exec():
             "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
             "tool_input": {
                 "name": "mcp__node_repl__js",
+                "definition_hash": definition_hash,
                 "arguments": {
                     "code": "nodeRepl.write(await iab.tabs.list())",
                     "title": "List tabs",
@@ -1781,9 +1812,11 @@ def test_dispatcher_call_translates_to_allowlisted_custom_exec():
 
 def test_dispatcher_call_translates_history_authorized_unknown_mcp():
     name = "mcp__archive__lookup"
+    definition_hash = _all_tools_read_result(name)["tool"]["definition_hash"]
     projection = replace(
         exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
         authorized_names=(name,),
+        authorized_definition_hashes=((name, definition_hash),),
     )
 
     translated = translate_localized_tool_call_part(
@@ -1793,6 +1826,7 @@ def test_dispatcher_call_translates_history_authorized_unknown_mcp():
             "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
             "tool_input": {
                 "name": name,
+                "definition_hash": definition_hash,
                 "arguments": {"record_id": "ARCHIVE-7"},
             },
         },
@@ -1804,6 +1838,35 @@ def test_dispatcher_call_translates_history_authorized_unknown_mcp():
     assert translated.part["tool_input"]["input"].startswith(
         'const result = await tools["mcp__archive__lookup"]({"record_id":"ARCHIVE-7"});'
     )
+
+
+def test_dispatcher_rejects_stale_definition_hash_without_live_invocation():
+    name = "plugin_runtime_tool"
+    definition_hash = _all_tools_read_result(name)["tool"]["definition_hash"]
+    projection = replace(
+        exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
+        authorized_names=(name,),
+        authorized_definition_hashes=((name, definition_hash),),
+    )
+
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_stale",
+            "tool_name": DEFERRED_TOOL_DISPATCH_CHAT_NAME,
+            "tool_input": {
+                "name": name,
+                "definition_hash": "sha256:" + "0" * 64,
+                "arguments": {"record_id": "ARCHIVE-7"},
+            },
+        },
+        exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection},
+    )
+
+    assert translated is not None
+    script = translated.part["tool_input"]["input"]
+    assert "definition_hash does not match" in script
+    assert "await tools" not in script
 
 
 @pytest.mark.parametrize(
@@ -1821,8 +1884,8 @@ def test_dispatcher_call_translates_history_authorized_unknown_mcp():
             "no valid paired tool_read authorization",
         ),
         (
-            {"name": "exec_command", "arguments": {}},
-            "name must be an MCP deferred tool",
+            {"name": "bad name!", "arguments": {}},
+            "name must be a valid deferred tool",
         ),
         (
             {"name": "mcp__node_repl__js", "arguments": "bad"},
@@ -1831,10 +1894,16 @@ def test_dispatcher_call_translates_history_authorized_unknown_mcp():
     ],
 )
 def test_dispatcher_call_fails_closed_without_invoking_dynamic_tool(tool_input, error):
+    definition_hash = _all_tools_read_result("mcp__node_repl__js")["tool"][
+        "definition_hash"
+    ]
     projection = replace(
         exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
         authorized_names=("mcp__node_repl__js",),
+        authorized_definition_hashes=(("mcp__node_repl__js", definition_hash),),
     )
+    if tool_input.get("name") == "mcp__node_repl__js":
+        tool_input = {**tool_input, "definition_hash": definition_hash}
 
     translated = translate_localized_tool_call_part(
         {
@@ -1878,9 +1947,13 @@ def test_dispatcher_non_object_outer_arguments_fail_as_safe_custom_exec():
 
 
 def test_streaming_dispatcher_call_emits_custom_exec_input():
+    definition_hash = _all_tools_read_result("mcp__node_repl__js_reset")["tool"][
+        "definition_hash"
+    ]
     projection = replace(
         exec_tool_projections_for_route(_route())[DEFERRED_TOOL_DISPATCH_CHAT_NAME],
         authorized_names=("mcp__node_repl__js_reset",),
+        authorized_definition_hashes=(("mcp__node_repl__js_reset", definition_hash),),
     )
     transformer = LocalizedToolCallStreamTransformer(
         exec_projections={DEFERRED_TOOL_DISPATCH_CHAT_NAME: projection}
@@ -1902,7 +1975,13 @@ def test_streaming_dispatcher_call_emits_custom_exec_input():
                 "type": "tool_call_delta",
                 "tool_call_id": "call_dispatch",
                 "arguments_delta": (
-                    '{"name":"mcp__node_repl__js_reset","arguments":{}}'
+                    json.dumps(
+                        {
+                            "name": "mcp__node_repl__js_reset",
+                            "definition_hash": definition_hash,
+                            "arguments": {},
+                        }
+                    )
                 ),
             }
         )
@@ -2247,6 +2326,31 @@ def test_exec_description_with_unknown_typescript_syntax_fails_closed():
             )
             == {}
         )
+
+
+def test_bare_exec_section_heading_accepts_only_bounded_tool_names():
+    projection = ExecToolProjection(
+        item_id="function.request_plugin_install",
+        chat_name="request_plugin_install",
+        nested_name="request_plugin_install",
+    )
+    quoted = _section("request_plugin_install", "args", "{ plugin_id: string; }")
+    bare = quoted.replace(
+        "### `request_plugin_install`", "### request_plugin_install", 1
+    )
+
+    plan = plan_exec_tool_definitions(bare, {projection.chat_name: projection})
+
+    assert set(plan.definitions) == {"request_plugin_install"}
+    assert exec_tool_section_names(bare) == ("request_plugin_install",)
+    unsafe = bare.replace("### request_plugin_install", "### request plugin install")
+    assert (
+        plan_exec_tool_definitions(
+            unsafe, {projection.chat_name: projection}
+        ).definitions
+        == {}
+    )
+    assert exec_tool_section_names(unsafe) == ()
 
 
 def test_projection_plan_rejects_duplicate_sections_and_preserves_them():
@@ -2741,6 +2845,9 @@ def test_gateway_all_tools_search_round_trips_as_custom_exec():
 
 def test_gateway_search_history_dispatches_node_repl_with_stable_tools():
     captured_bodies: list[dict] = []
+    definition_hash = _all_tools_read_result("mcp__node_repl__js")["tool"][
+        "definition_hash"
+    ]
     upstream_responses = [
         {
             "id": "chatcmpl-node-search",
@@ -2813,6 +2920,7 @@ def test_gateway_search_history_dispatches_node_repl_with_stable_tools():
                                     "arguments": json.dumps(
                                         {
                                             "name": "mcp__node_repl__js",
+                                            "definition_hash": definition_hash,
                                             "arguments": {
                                                 "code": (
                                                     "nodeRepl.write(await iab.tabs.list())"
@@ -3200,6 +3308,10 @@ def test_same_named_direct_function_prevents_projection_and_translation_metadata
         "exec_command"
     ) == 1
     assert "exec_command" not in adapted[EXEC_PROJECTIONS_KEY]
+    assert (
+        adapted[DEFERRED_CANDIDATES_KEY]["exec_command"]["projection"].nested_name
+        == "exec_command"
+    )
 
 
 def test_projected_mapping_history_restores_original_chat_call():

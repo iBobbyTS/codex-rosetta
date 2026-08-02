@@ -1,4 +1,11 @@
 # Codex 0.145.0 Upgrade Review
+
+> Daily-development addendum (2026-08-01): catalog schema v7 inventories exact
+> Codex source registrations and dynamic families. CP-11 now uses exact
+> `definition_hash` authorization, CP-23 owns the registration inventory, and
+> CP-25 owns encrypted window-scoped Chat tool-surface locking. See
+> `../evidence/window_chat_tool_surface_stability.md`. This does not approve
+> 0.145.0 or advance the package version.
 Date: 2026-07-25
 Codex version: 0.145.0
 

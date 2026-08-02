@@ -43,6 +43,11 @@ from codex_rosetta.observability.tool_history_store import (
 )
 
 from .codex_search_references import CodexSearchReferenceStore
+from .chat_tool_surface import (
+    ChatToolSurfaceCoordinator,
+    ChatToolSurfaceUnavailable,
+    apply_chat_tool_surface,
+)
 from .codex_compaction import (
     COMPACT_PROMPT_SHA256,
     InvalidCodexCompactionRequest,
@@ -88,6 +93,7 @@ from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_adaptation import (
     CodexToolLocalizationStore,
     DEFAULT_TOOL_CALL_CACHE_TTL_HOURS,
+    DEFERRED_CANDIDATES_KEY,
     EXEC_PROJECTIONS_KEY,
     LOCALIZATION_CAPABILITIES_KEY,
     READ_OUTPUT_CACHE_KEY,
@@ -943,6 +949,7 @@ def _pop_exec_tool_projections(
     body: dict[str, Any],
 ) -> dict[str, ExecToolProjection]:
     """Remove and return request-local exec projection metadata."""
+    body.pop(DEFERRED_CANDIDATES_KEY, None)
     value = body.pop(EXEC_PROJECTIONS_KEY, None)
     if not isinstance(value, dict):
         return {}
@@ -1613,6 +1620,7 @@ async def handle_non_streaming(
     transport: UpstreamTransport,
     metadata_store: ProviderMetadataStore | None = None,
     codex_tool_store: CodexToolLocalizationStore | None = None,
+    chat_tool_surface_coordinator: ChatToolSurfaceCoordinator | None = None,
     extra_headers: dict[str, str] | None = None,
     persistence: Any | None = None,
     state_scope: GatewayStateScope | None = None,
@@ -1807,6 +1815,19 @@ async def handle_non_streaming(
         capabilities=source_tool_capabilities,
         native_tool_search_bridge=native_tool_search_bridge,
     )
+    try:
+        surface_decision = apply_chat_tool_surface(
+            chat_tool_surface_coordinator,
+            target_body,
+            route=route,
+            state_scope=scope,
+            codex_window_id=codex_window_id,
+            persistence=persistence,
+        )
+    except ChatToolSurfaceUnavailable as exc:
+        return error_response_for_source(route.source_provider, 503, str(exc)), profile
+    target_body = surface_decision.body
+    profile.update(surface_decision.profile)
     tool_history_candidates = tool_history_snapshot.collect_miss_candidates(
         target_body,
         hit_indexes=tool_history_hit_indexes,
@@ -2731,6 +2752,7 @@ async def handle_streaming(  # noqa: C901
     transport: UpstreamTransport,
     metadata_store: ProviderMetadataStore | None = None,
     codex_tool_store: CodexToolLocalizationStore | None = None,
+    chat_tool_surface_coordinator: ChatToolSurfaceCoordinator | None = None,
     extra_headers: dict[str, str] | None = None,
     entry_id: str | None = None,
     request_log: Any | None = None,
@@ -2895,6 +2917,19 @@ async def handle_streaming(  # noqa: C901
         capabilities=source_tool_capabilities,
         native_tool_search_bridge=native_tool_search_bridge,
     )
+    try:
+        surface_decision = apply_chat_tool_surface(
+            chat_tool_surface_coordinator,
+            target_body,
+            route=route,
+            state_scope=scope,
+            codex_window_id=codex_window_id,
+            persistence=persistence,
+        )
+    except ChatToolSurfaceUnavailable as exc:
+        return error_response_for_source(route.source_provider, 503, str(exc)), profile
+    target_body = surface_decision.body
+    profile.update(surface_decision.profile)
     tool_history_candidates = tool_history_snapshot.collect_miss_candidates(
         target_body,
         hit_indexes=tool_history_hit_indexes,

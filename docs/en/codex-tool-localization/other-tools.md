@@ -180,3 +180,48 @@ All Namespace rows start expanded on the Tools page. This display default is ind
 The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Collaboration children are flattened for Chat and restored to native Responses namespace calls; they are not translated through Code Mode `exec`. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
 
 User Profiles persist their applicable protocol set in `api_types` and user-entered values under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current protocol set and values into the new Profile; switching or resetting a Profile restores its saved values. The bundled Profile protocol set and tool delivery states remain read-only. Bundled visible fields can still be explicitly saved under `tool_profile_input_overrides.<profile-id>` without changing the packaged JSON. Inputs have no effect unless their runtime feature consumes them; currently Modified Functions consume hidden catalog guidance, Hosted `web_search` consumes its Profile credentials, and `image_gen.imagegen` consumes its Base URL and Token. Modified `web.run` instead reads `server.web_search`.
+
+## Complete catalog and deferred runtime matrix
+
+Tool Catalog schema v7 separates concrete items from source registration sites
+and runtime-dynamic families. The packaged catalog is bound to the reviewed
+Codex source commit. Gateway startup fails if a static, generated, Hosted, or
+Hidden registration is unmapped, or if a dynamic MCP, plugin, app, connector,
+thread, Namespace, or extension entry point lacks exactly one family.
+
+| Codex source surface | Normal mode | Code Mode→Chat delivery | Drift behavior |
+|---|---|---|---|
+| Stable concrete Function/custom tool | Eager when Codex supplies it | Eager or a catalog-declared projection | Missing/opaque changes start a new surface epoch |
+| Conditional concrete tool | Eager only when its Codex condition holds | Eager on the first window request; later reliable additions are deferred | The live declaration remains authoritative |
+| Hidden or client-only registration | Not model-visible | Hidden unless the catalog declares a safe projection | Never synthesized from its source name |
+| MCP/plugin/app/connector/dynamic Function or Namespace | Runtime-defined | Deferred only when a family matches and a complete live adapter exists | Unknown or ambiguous wire shapes remain unchanged and roll the epoch |
+| Rosetta injection | Not a Codex registration | Delivered only as declared by the selected Profile | A Profile/catalog/adapter change creates a new contract generation |
+
+The fixed discovery surface is `tool_search`, `tool_read`, and
+`invoke_deferred_tool`. A successful `tool_read` includes a SHA-256
+`definition_hash`. Invocation requires paired search/read call-result history
+in the current request, the exact name/hash/declaration, the same live runtime
+definition, and an enabled Profile adapter. Window persistence never grants
+tool-call authority.
+
+## Window-scoped Chat tool stability
+
+For authenticated Codex Responses or Responses Lite requests converted to
+Chat, a valid `x-codex-window-id` locks the first final ordered Chat tool array
+for that contract generation. The lock is isolated by principal, Provider,
+model, source/target API, window, catalog/source identity, Profile, and adapter
+contract.
+
+- Reliable new or same-name changed tools stay out of the eager array and are
+  available through the live deferred path.
+- A removed eager definition remains visible for prompt stability, but its
+  executor is never recreated; calls fail as unavailable or unsupported.
+- An incomplete, ambiguous, unsupported, or explicitly selected change starts
+  a new epoch with the current unmodified tool shape.
+- Persistent snapshots are encrypted, renew a 24-hour TTL on successful reads,
+  and are never evicted while valid to make room for another window. A storage,
+  integrity, or quota failure returns 503 before an upstream model call.
+
+Direct Responses passthrough, native Chat input, Anthropic, Google, requests
+without a window ID, and routes without a selected Tool Profile do not use the
+window lock.

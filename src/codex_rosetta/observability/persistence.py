@@ -214,6 +214,7 @@ class PersistenceManager:
         self._redactor = SecretRedactor(token_values)
         self._mapping_cipher: Any | None = None
         self._tool_history_store: Any | None = None
+        self._chat_tool_surface_store: Any | None = None
         self._tool_mapping_lock = threading.RLock()
         self._compaction_mapping_lock = threading.RLock()
         self._tool_mapping_max_row_bytes = _positive_tool_mapping_limit(
@@ -493,6 +494,13 @@ class PersistenceManager:
             max_principal_bytes=self._tool_mapping_max_principal_bytes,
             max_global_rows=self._tool_mapping_max_global_rows,
             max_global_bytes=self._tool_mapping_max_global_bytes,
+        )
+        from .chat_tool_surface_store import ChatToolSurfaceStore
+
+        self._chat_tool_surface_store = ChatToolSurfaceStore(
+            connection=self._conn,
+            lock=self._tool_mapping_lock,
+            cipher_loader=lambda create: self._mapping_crypto(create=create),
         )
         self._validate_schema()
 
@@ -940,6 +948,52 @@ class PersistenceManager:
         """Return the total number of persistent object translations."""
         assert self._tool_history_store is not None
         return self._tool_history_store.count()
+
+    def load_or_create_chat_tool_surface(
+        self,
+        *,
+        principal_id: str,
+        scope: dict[str, Any],
+        initial_payload: dict[str, Any],
+        now: datetime | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Return the winning encrypted window tool-surface snapshot."""
+        assert self._chat_tool_surface_store is not None
+        return self._chat_tool_surface_store.load_or_create(
+            principal_id=principal_id,
+            scope=scope,
+            initial_payload=initial_payload,
+            now=now,
+        )
+
+    def replace_chat_tool_surface(
+        self,
+        *,
+        principal_id: str,
+        scope: dict[str, Any],
+        expected_epoch: int,
+        payload: dict[str, Any],
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Atomically replace an encrypted window tool-surface snapshot."""
+        assert self._chat_tool_surface_store is not None
+        return self._chat_tool_surface_store.replace(
+            principal_id=principal_id,
+            scope=scope,
+            expected_epoch=expected_epoch,
+            payload=payload,
+            now=now,
+        )
+
+    def cleanup_expired_chat_tool_surfaces(self, now: datetime | None = None) -> int:
+        """Delete expired window tool-surface snapshots."""
+        assert self._chat_tool_surface_store is not None
+        return self._chat_tool_surface_store.cleanup_expired(now)
+
+    def count_chat_tool_surfaces(self) -> int:
+        """Return the number of persistent window tool-surface snapshots."""
+        assert self._chat_tool_surface_store is not None
+        return self._chat_tool_surface_store.count()
 
     # ------------------------------------------------------------------
     # Codex remote-compaction mappings

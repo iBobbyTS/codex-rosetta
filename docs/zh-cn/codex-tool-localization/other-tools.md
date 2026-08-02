@@ -168,3 +168,44 @@ Function、Hosted 或 Namespace 目录项可以声明多组 `profile_inputs`。�
 内置的 **Chat Default** Profile 会禁用旧版 `multi_agent_v1` Namespace，同时保持 `collaboration` 启用。Collaboration 子工具会为 Chat 展开，并恢复为原生 Responses Namespace 调用；它们不会通过 Code Mode `exec` 转译。任何 Namespace 设为 Disabled 时，其所有子 Function 都会被强制设为 Disabled，并锁定状态选择器，直到重新启用该 Namespace。
 
 用户 Profile 在 `api_types` 中保存适用协议集合，并将用户填写的值保存到 `inputs.<function-item-id>.<input-id>`。从当前 Profile 创建副本时会复制当前协议集合和输入值；切换或重置 Profile 时会恢复已保存的值。打包的内置 Profile 协议集合和工具传递状态保持只读；可见 field 仍可显式保存到 `tool_profile_input_overrides.<profile-id>`，不会改写打包 JSON。输入项只有被对应运行时功能读取后才会生效；当前 Modified Function 使用目录中隐藏的 guidance，Hosted `web_search` 使用 Profile 凭据，`image_gen.imagegen` 使用 Base URL 和 Token。Modified `web.run` 则读取 `server.web_search`。
+
+## 全量目录与 deferred 运行时矩阵
+
+Tool Catalog schema v7 将具体工具项、源码注册点和运行时动态 family
+分开维护。打包目录绑定到已审查的 Codex 源码 commit。若静态、生成式、Hosted
+或 Hidden 注册没有映射，或者 MCP、plugin、app、connector、thread、Namespace
+或扩展动态入口没有且仅有一个 family，Gateway 会在启动时 fail closed。
+
+| Codex 源码工具面 | 普通模式 | Code Mode→Chat 交付 | 漂移行为 |
+|---|---|---|---|
+| 稳定的具体 Function/custom 工具 | Codex 提供时 eager | eager 或目录声明的投影 | 缺失或 opaque 变化开启新 epoch |
+| 条件式具体工具 | 仅在 Codex 条件成立时 eager | 窗口首请求 eager；之后可靠新增改为 deferred | 当前实时声明始终权威 |
+| Hidden 或 client-only 注册 | 不对模型可见 | 除非目录声明安全投影，否则保持 Hidden | 不会仅凭源码名称合成 |
+| MCP/plugin/app/connector/动态 Function 或 Namespace | 运行时定义 | 仅在 family 匹配且存在完整实时 adapter 时 deferred | 未知或有歧义的 wire shape 保持原形并换代 |
+| Rosetta 注入 | 不是 Codex 注册 | 只按所选 Profile 声明交付 | Profile、目录或 adapter 变化开启新 contract generation |
+
+固定 discovery 工具面是 `tool_search`、`tool_read` 和
+`invoke_deferred_tool`。成功的 `tool_read` 会返回 SHA-256
+`definition_hash`。调用必须同时具备当前请求内配对的 search/read call-result
+历史、完全一致的名称/hash/声明、相同的实时运行时定义，以及启用该能力的
+Profile adapter。持久窗口锁永远不会授予工具调用权限。
+
+## 窗口级 Chat 工具面稳定性
+
+对经过认证、从 Codex Responses 或 Responses Lite 转换到 Chat 的请求，有效的
+`x-codex-window-id` 会锁定该 contract generation 首次出现的最终有序 Chat
+工具数组。锁按 principal、Provider、model、源/目标 API、window、目录/源码
+身份、Profile 和 adapter contract 隔离。
+
+- 可靠的新工具或同名 schema 变化不会进入 eager 数组，而通过实时 deferred
+  路径提供。
+- 已移除的 eager 定义为提示稳定性继续可见，但不会恢复 executor；调用会以
+  unavailable 或 unsupported 失败。
+- 不完整、有歧义、不支持或被显式 `tool_choice` 选中的变化会使用当前原形开启
+  新 epoch。
+- 持久 snapshot 使用加密存储，成功读取时顺延 24 小时 TTL，并且不会为了其他
+  window 提前逐出仍有效的锁。存储、完整性或配额失败会在调用上游模型前返回
+  503。
+
+Direct Responses 透传、原生 Chat 输入、Anthropic、Google、没有 window ID 的
+请求，以及未选择 Tool Profile 的路由不使用窗口锁。
