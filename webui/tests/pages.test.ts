@@ -11,13 +11,15 @@ const apiMock = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn(),
 }));
 const downloadMock = vi.hoisted(() => vi.fn());
-vi.mock('../src/admin/lib/api', () => ({ api: apiMock, download: downloadMock }));
+const requestMock = vi.hoisted(() => vi.fn());
+vi.mock('../src/admin/lib/api', () => ({ api: apiMock, download: downloadMock, request: requestMock }));
 
 beforeEach(() => {
   vi.clearAllMocks();
   apiMock.post.mockResolvedValue({ ok: true });
   apiMock.put.mockResolvedValue({ ok: true });
   apiMock.del.mockResolvedValue({ ok: true });
+  requestMock.mockResolvedValue({ ok: true });
 });
 afterEach(() => vi.useRealTimers());
 
@@ -121,6 +123,37 @@ describe('NetworkSearchPage', () => {
         responses_provider: 'search',
       },
     });
+  });
+
+  it('runs the fixed query through the network search test endpoint and displays its response', async () => {
+    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
+      ? Promise.resolve({ server: { web_search: { provider: 'tavily', tavily_api_key: 'configured' } } })
+      : Promise.resolve({ configured: false }));
+    requestMock.mockResolvedValue({ result: 'Python 3.test' });
+    render(NetworkSearchPage);
+
+    expect(await screen.findByText('latest python release version')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    await waitFor(() => expect(requestMock).toHaveBeenCalledWith('/admin/api/network-search/test', {
+      method: 'POST',
+      responseEffects: 'local',
+    }));
+    expect(await screen.findByText(/Python 3\.test/)).toBeInTheDocument();
+  });
+
+  it('displays a readable network search test failure', async () => {
+    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
+      ? Promise.resolve({ server: { web_search: { provider: 'tavily', tavily_api_key: 'configured' } } })
+      : Promise.resolve({ configured: false }));
+    requestMock.mockRejectedValue(new Error('Upstream search failed'));
+    render(NetworkSearchPage);
+
+    await screen.findByText('latest python release version');
+    await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Upstream search failed');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('[object Object]');
   });
 });
 

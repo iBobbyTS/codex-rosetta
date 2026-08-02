@@ -19,7 +19,28 @@ export type RequestOptions = Omit<RequestInit, 'body'> & {
   timeoutMs?: number;
   signal?: AbortSignal;
   auth?: boolean;
+  responseEffects?: 'global' | 'local';
 };
+
+function errorMessage(payload: unknown, status: number): string {
+  if (!payload || typeof payload !== 'object' || !('error' in payload)) {
+    return `Request failed (${status})`;
+  }
+  const error = (payload as { error: unknown }).error;
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message: unknown }).message;
+    if (typeof message === 'string' && message) return message;
+  }
+  if (typeof error === 'string' && error) return error;
+  if (error !== undefined && error !== null && typeof error !== 'object') return String(error);
+  try {
+    const serialized = JSON.stringify(error);
+    if (serialized) return serialized;
+  } catch {
+    // Fall through to the status-based message for non-serializable envelopes.
+  }
+  return `Request failed (${status})`;
+}
 
 export function getAdminToken(): string {
   return localStorage.getItem(TOKEN_KEY) ?? '';
@@ -32,23 +53,24 @@ export function setAdminToken(token: string): void {
 
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (!path.startsWith('/admin/api/')) throw new Error('Admin API path required');
+  const { auth = true, body: requestBody, responseEffects = 'global', timeoutMs, ...fetchOptions } = options;
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_API_TIMEOUT_MS);
+  const timeout = window.setTimeout(() => controller.abort(), timeoutMs ?? DEFAULT_API_TIMEOUT_MS);
   const onAbort = () => controller.abort();
-  options.signal?.addEventListener('abort', onAbort, { once: true });
-  const headers = new Headers(options.headers);
-  if (options.auth !== false) {
+  fetchOptions.signal?.addEventListener('abort', onAbort, { once: true });
+  const headers = new Headers(fetchOptions.headers);
+  if (auth) {
     const token = getAdminToken();
     if (token) headers.set('X-Admin-Token', token);
   }
   let body: BodyInit | undefined;
-  if (options.body !== undefined) {
+  if (requestBody !== undefined) {
     headers.set('Content-Type', 'application/json');
-    body = JSON.stringify(options.body);
+    body = JSON.stringify(requestBody);
   }
   try {
     const response = await fetch(path, {
-      ...options,
+      ...fetchOptions,
       body,
       headers,
       signal: controller.signal,
@@ -64,25 +86,23 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       }
     }
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
+      if (responseEffects === 'global' && (response.status === 401 || response.status === 403)) {
         setAdminToken('');
         window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT));
       }
-      const detail = payload && typeof payload === 'object' && 'error' in payload
-        ? String((payload as { error: unknown }).error)
-        : `Request failed (${response.status})`;
+      const detail = errorMessage(payload, response.status);
       const code = payload && typeof payload === 'object' && 'code' in payload
         ? String((payload as { code: unknown }).code)
         : undefined;
       throw new ApiError(detail, response.status, code);
     }
-    if (response.headers.get('X-Codex-Restart-Required')?.toLowerCase() === 'true') {
+    if (responseEffects === 'global' && response.headers.get('X-Codex-Restart-Required')?.toLowerCase() === 'true') {
       window.dispatchEvent(new Event(RESTART_REQUIRED_EVENT));
     }
     return payload as T;
   } finally {
     window.clearTimeout(timeout);
-    options.signal?.removeEventListener('abort', onAbort);
+    fetchOptions.signal?.removeEventListener('abort', onAbort);
   }
 }
 
