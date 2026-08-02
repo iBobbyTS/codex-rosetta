@@ -11,6 +11,16 @@ from ..static import load_admin_asset, load_admin_html
 from ._shared import _parse_json_object
 
 
+async def redirect_to_admin(request: Any) -> Response:
+    """Redirect the Gateway root to the Admin panel."""
+    del request
+    return Response(
+        body=b"",
+        status_code=307,
+        headers={"Location": "/admin"},
+    )
+
+
 async def serve_admin_html(request: Any) -> Response:
     """Serve the admin panel SPA."""
     return Response(
