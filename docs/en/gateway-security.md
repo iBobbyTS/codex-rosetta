@@ -246,6 +246,10 @@ enabled configured Responses Provider; in that mode the Gateway sends the
 unchanged Codex Search body to the Provider's `alpha/search` endpoint with that
 Provider's existing credential, proxy, and redirect policy. Disabled and
 non-Responses Providers are rejected during configuration. The
+self-contained **Search Test** card sends the fixed query
+`latest python release version` through the same Gateway auxiliary handler as a
+real `POST /v1/alpha/search` request and displays its response; it does not call
+Tavily, the sidecar, or a Provider-specific search client directly. The
 self-hosted providers send no search API credential, but either engine may
 rate-limit, challenge, or change its result page; such
 failures are returned as bounded `502` search errors instead of silently falling

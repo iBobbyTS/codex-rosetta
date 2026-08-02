@@ -36,6 +36,31 @@ describe('admin API client', () => {
     expect(expired).toHaveBeenCalledOnce();
   });
 
+  it.each([401, 403])('keeps request-local authorization failures inside the caller (%s)', async (status) => {
+    setAdminToken('valid-admin-session');
+    const expired = vi.fn();
+    window.addEventListener(AUTH_EXPIRED_EVENT, expired, { once: true });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Provider rejected search' } }), { status }),
+    );
+
+    await expect(request('/admin/api/network-search/test', { responseEffects: 'local' })).rejects.toEqual(
+      expect.objectContaining({ status, message: 'Provider rejected search' }),
+    );
+    expect(localStorage.getItem('admin_token')).toBe('valid-admin-session');
+    expect(expired).not.toHaveBeenCalled();
+  });
+
+  it('renders an OpenAI-style nested error message instead of object coercion', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Upstream search failed', type: 'upstream_error' } }), { status: 502 }),
+    );
+
+    await expect(request('/admin/api/network-search/test')).rejects.toEqual(
+      expect.objectContaining({ status: 502, message: 'Upstream search failed' }),
+    );
+  });
+
   it('rejects paths outside the admin API boundary', async () => {
     await expect(request('/v1/responses')).rejects.toThrow('Admin API path required');
   });
@@ -45,5 +70,12 @@ describe('admin API client', () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'X-Codex-Restart-Required': 'true' } }));
     await expect(request('/admin/api/config/codex')).resolves.toEqual({ ok: true });
     expect(restart).toHaveBeenCalledOnce();
+  });
+
+  it('does not broadcast response headers for request-local effects', async () => {
+    const restart = vi.fn(); window.addEventListener(RESTART_REQUIRED_EVENT, restart, { once: true });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 200, headers: { 'X-Codex-Restart-Required': 'true' } }));
+    await expect(request('/admin/api/network-search/test', { responseEffects: 'local' })).resolves.toEqual({ ok: true });
+    expect(restart).not.toHaveBeenCalled();
   });
 });

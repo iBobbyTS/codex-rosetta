@@ -185,8 +185,15 @@ class TestWithApiKey:
         req = _make_request("/admin", method="GET")
         assert _run(hook(req)) is None
 
-    def test_admin_api_requires_auth(self, hook: Any):
-        req = _make_request("/admin/api/config", method="GET")
+    @pytest.mark.parametrize(
+        "path,method",
+        [
+            ("/admin/api/config", "GET"),
+            ("/admin/api/network-search/test", "POST"),
+        ],
+    )
+    def test_admin_api_requires_auth(self, hook: Any, path: str, method: str):
+        req = _make_request(path, method=method)
         resp = _run(hook(req))
         assert resp is not None
         assert resp.status_code == 401

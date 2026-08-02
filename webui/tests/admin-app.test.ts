@@ -44,4 +44,38 @@ describe('Admin application session', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
     expect(screen.queryByText(restartText)).not.toBeInTheDocument();
   });
+
+  it('keeps Search Test provider failures inside the result card', async () => {
+    history.replaceState({}, '', '/admin/network-search');
+    localStorage.setItem('admin_token', 'valid-token');
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/auth-check')) {
+        return new Response(JSON.stringify({ requires_auth: true }), { status: 200 });
+      }
+      if (path.endsWith('/network-search/test') && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: { message: 'Insufficient account balance' } }), { status: 403 });
+      }
+      if (path.endsWith('/network-search/status')) {
+        return new Response(JSON.stringify({ configured: true, service_online: true }), { status: 200 });
+      }
+      if (path.endsWith('/config')) {
+        return new Response(JSON.stringify({
+          config_path: '/tmp/config.jsonc',
+          providers: { TURNING: { api_type: 'responses' } },
+          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'TURNING' } },
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });
+    });
+
+    render(AdminApp);
+
+    await screen.findByRole('navigation', { name: 'Admin pages' });
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Insufficient account balance');
+    expect(screen.getByRole('navigation', { name: 'Admin pages' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Sign in|Login/ })).not.toBeInTheDocument();
+    expect(localStorage.getItem('admin_token')).toBe('valid-token');
+  });
 });
