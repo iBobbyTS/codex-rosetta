@@ -28,6 +28,7 @@ from ._shared import (  # noqa: F401  (re-exported for backward compat)
 from .auth import (
     admin_check,
     admin_login,
+    redirect_to_admin,
     serve_admin_asset,
     serve_admin_html,
 )
@@ -92,6 +93,7 @@ from .tools import (
 def register_admin_routes(app: Any) -> None:
     """Register all admin panel routes on the httpserver App."""
     # HTML
+    app.route("/", methods=["GET"])(redirect_to_admin)
     app.route("/admin", methods=["GET"])(serve_admin_html)
     app.route("/admin/", methods=["GET"])(serve_admin_html)
     app.route("/admin/assets/<path:asset_path>", methods=["GET"])(serve_admin_asset)

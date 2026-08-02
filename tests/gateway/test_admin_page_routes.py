@@ -59,6 +59,16 @@ def _request(app, path: str) -> Request:
     )
 
 
+def test_gateway_root_redirects_to_admin() -> None:
+    app = _make_app()
+
+    response = asyncio.run(app._dispatch(_request(app, "/")))
+
+    assert response.status_code == 307
+    assert response.headers["Location"] == "/admin"
+    assert response.body == b""
+
+
 @pytest.mark.parametrize(
     "path",
     [
