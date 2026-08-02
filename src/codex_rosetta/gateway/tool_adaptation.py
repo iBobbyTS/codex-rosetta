@@ -28,6 +28,7 @@ from .code_mode_projection import (
     build_exec_script,
     discovered_all_tools_search_names,
     discovered_deferred_exec_tools,
+    deferred_tool_definition_hash,
     exec_tool_section_names,
     exec_tool_projections_for_route,
     plan_exec_tool_definitions,
@@ -44,6 +45,7 @@ DEFAULT_ENABLE_PHASE_DETECTION = True
 LOCALIZATION_CAPABILITIES_KEY = "_codex_tool_localization_capabilities"
 READ_OUTPUT_CACHE_KEY = "_codex_read_output_cache"
 EXEC_PROJECTIONS_KEY = "_codex_exec_tool_projections"
+DEFERRED_CANDIDATES_KEY = "_codex_deferred_tool_candidates"
 
 
 def _catalog_names_by_adapter(adapter_id: str) -> frozenset[str]:
@@ -459,19 +461,23 @@ def localize_code_editing_chat_request(
                 existing_names.add(name)
             preserved_tools.append(tool)
 
-        projected_tools, active_projections, projection_sections = (
-            _project_exec_chat_tools(
-                preserved_tools,
-                existing_names,
-                native_capabilities,
-                requested_projections,
-                profile_route,
-            )
+        (
+            projected_tools,
+            active_projections,
+            projection_sections,
+            deferred_candidates,
+        ) = _project_exec_chat_tools(
+            preserved_tools,
+            existing_names,
+            native_capabilities,
+            requested_projections,
+            profile_route,
         )
         _configure_deferred_tool_projections(
             projected_tools,
             active_projections,
             discovered.projections,
+            discovered.definition_hashes,
             discovered_search_names,
             existing_names,
         )
@@ -551,6 +557,16 @@ def localize_code_editing_chat_request(
             adapted[LOCALIZATION_CAPABILITIES_KEY] = native_capabilities.to_metadata()
             if active_projections:
                 adapted[EXEC_PROJECTIONS_KEY] = active_projections
+            if deferred_candidates:
+                adapted[DEFERRED_CANDIDATES_KEY] = {
+                    name: {
+                        **candidate,
+                        "authorized_definition_hash": discovered.definition_hashes.get(
+                            name
+                        ),
+                    }
+                    for name, candidate in deferred_candidates.items()
+                }
 
     return adapted
 
@@ -583,6 +599,7 @@ def _configure_deferred_tool_projections(
     projected_tools: dict[str, dict[str, Any]],
     active_projections: dict[str, ExecToolProjection],
     discovered_projections: dict[str, ExecToolProjection],
+    discovered_definition_hashes: dict[str, str],
     discovered_search_names: tuple[str, ...],
     existing_names: set[str],
 ) -> None:
@@ -636,6 +653,10 @@ def _configure_deferred_tool_projections(
             active_projections[DEFERRED_TOOL_DISPATCH_CHAT_NAME] = replace(
                 dispatch_projection,
                 authorized_names=authorized_names,
+                authorized_definition_hashes=tuple(
+                    (name, discovered_definition_hashes[name])
+                    for name in authorized_names
+                ),
             )
 
 
@@ -711,21 +732,22 @@ def _project_exec_chat_tools(
     dict[str, dict[str, Any]],
     dict[str, ExecToolProjection],
     dict[str, ExecDescriptionSection],
+    dict[str, dict[str, Any]],
 ]:
     """Project parseable nested exec tools that do not conflict with direct tools."""
     if not capabilities.has_custom_exec or not projections:
-        return {}, {}, {}
+        return {}, {}, {}, {}
     exec_tool = next(
         (tool for tool in preserved_tools if _chat_tool_name(tool) == "exec"), None
     )
     if not isinstance(exec_tool, dict):
-        return {}, {}, {}
+        return {}, {}, {}, {}
     function = exec_tool.get("function")
     if not isinstance(function, dict):
-        return {}, {}, {}
+        return {}, {}, {}, {}
     description = function.get("description")
     if not isinstance(description, str):
-        return {}, {}, {}
+        return {}, {}, {}, {}
     plan = plan_exec_tool_definitions(
         description,
         projections,
@@ -746,7 +768,22 @@ def _project_exec_chat_tools(
     active_sections = {
         name: section for name, section in plan.sections.items() if name in active
     }
-    return visible_definitions, active, active_sections
+    deferred_candidates = {
+        name: {
+            "projection": projections[name],
+            "definition": definitions[name],
+            "definition_hash": deferred_tool_definition_hash(
+                name,
+                plan.sections[name].body,
+            ),
+        }
+        for name in definitions
+        if name in projections
+        and name in existing_names
+        and name in plan.sections
+        and projections[name].input_mode in {"args", "freeform"}
+    }
+    return visible_definitions, active, active_sections, deferred_candidates
 
 
 def restore_localized_history_from_mappings(

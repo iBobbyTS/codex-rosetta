@@ -1,5 +1,7 @@
 # Codex Compatibility Evidence
 
+- [`window_chat_tool_surface_stability.md`](window_chat_tool_surface_stability.md): recorded 29→30 DeepSeek cache break, controlled active-history overlay experiment, and CP-25 production boundary.
+
 This directory contains historical source research, captured runtime
 observations, and supporting protocol notes used by the maintained Codex
 compatibility ledger.

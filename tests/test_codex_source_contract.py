@@ -182,7 +182,7 @@ def test_checked_in_baseline_uses_canonical_serialization():
     baseline = json.loads(baseline_text)
 
     assert baseline_text == snapshot_json(baseline)
-    assert baseline["schema_version"] == 2
+    assert baseline["schema_version"] == 3
     assert baseline["codex_source_commit"]
 
 

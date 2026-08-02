@@ -1,6 +1,6 @@
 {
   "metadata": {
-    "schema_version": 6,
+    "schema_version": 7,
     "catalog_version": "codex-0.145.0",
     "codex_cli_version": "0.145.0",
     "codex_source_commit": "25af12f7e61572b0bc18ddb1008be543b91519b0",
@@ -10,7 +10,9 @@
   "builtin_profile": {
     "id": "builtin",
     "name": "Chat Default（适用于第三方仅提供chat api的模型）",
-    "api_types": ["chat"],
+    "api_types": [
+      "chat"
+    ],
     "tools": {
       "namespace.multi_agent_v1": "disabled",
       "namespace.image_gen.imagegen": "modified",
@@ -36,12 +38,12 @@
       "function.view_image": {
         "supported_details": "auto,low,high"
       },
-    "function.write_stdin": {
-      "chars_guidance": ""
-    },
-    "function.exec_command": {
-      "interactive_guidance": "When an interactive command returns a session_id, reuse that exact session_id instead of starting the command again. Use write_stdin for polling, raw character input, or complex multi-step interaction. Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
-    },
+      "function.write_stdin": {
+        "chars_guidance": ""
+      },
+      "function.exec_command": {
+        "interactive_guidance": "When an interactive command returns a session_id, reuse that exact session_id instead of starting the command again. Use write_stdin for polling, raw character input, or complex multi-step interaction. Boolean parameters such as tty must be JSON booleans true or false, not quoted strings."
+      },
       "custom.exec": {
         "guidance": "Pass raw JavaScript source in the input string. Do not serialize an exec call object or include input, yield_time_ms, or max_output_tokens as JavaScript object properties. Configure yielding only with the // @exec pragma. For nested tools, await tools.<name>(...) and call text(...), image(...), or audio(...) with the result when the user or task needs to inspect it. A Script completed result is final; call wait only when exec explicitly returns Script running with cell ID."
       },
@@ -63,7 +65,9 @@
     {
       "id": "web-run-injection",
       "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
-      "api_types": ["responses"],
+      "api_types": [
+        "responses"
+      ],
       "defaults": {
         "function": "passthrough",
         "custom": "passthrough",
@@ -78,7 +82,9 @@
     {
       "id": "responses-tool-mapping",
       "name": "工具映射（适用于第三方模型提供的Responses接口）",
-      "api_types": ["responses"],
+      "api_types": [
+        "responses"
+      ],
       "base": "builtin",
       "tools": {
         "hosted.tool_search": "passthrough"
@@ -210,14 +216,23 @@
       "name": "exec_command",
       "type": "function",
       "policy_id": "command_session_passthrough",
-      "delivery": {"localized_native_source": true},
+      "delivery": {
+        "localized_native_source": true
+      },
       "exec_projection": {
         "chat_name": "exec_command",
         "nested_name": "exec_command"
       },
-      "history_aliases": ["Bash"],
+      "history_aliases": [
+        "Bash"
+      ],
       "description_variants": [
-        {"when": {"dependency_effective": "injection.rosetta.send_line"}, "append": "Use send_line for simple single-line input; it appends exactly one newline."}
+        {
+          "when": {
+            "dependency_effective": "injection.rosetta.send_line"
+          },
+          "append": "Use send_line for simple single-line input; it appends exactly one newline."
+        }
       ],
       "profile_inputs": [
         {
@@ -236,16 +251,35 @@
           "target": "description",
           "input_id": "interactive_guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.exec_command"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "function.write_stdin",
       "name": "write_stdin",
       "type": "function",
       "policy_id": "command_session_passthrough",
-      "delivery": {"localized_native_source": true},
+      "delivery": {
+        "localized_native_source": true
+      },
       "description_variants": [
-        {"when": {"dependency_effective": "injection.rosetta.send_line"}, "target_parameter": "chars", "append": "For line-oriented input, use send_line instead of write_stdin."}
+        {
+          "when": {
+            "dependency_effective": "injection.rosetta.send_line"
+          },
+          "target_parameter": "chars",
+          "append": "For line-oriented input, use send_line instead of write_stdin."
+        }
       ],
       "exec_projection": {
         "chat_name": "write_stdin",
@@ -269,15 +303,39 @@
           "parameter": "chars",
           "input_id": "chars_guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.write_stdin"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "function.shell_command",
       "name": "shell_command",
       "type": "function",
       "policy_id": "legacy_shell_disabled",
-      "delivery": {"localized_native_source": true},
-      "description_i18n": "tools.description.shell_command_replaced"
+      "delivery": {
+        "localized_native_source": true
+      },
+      "description_i18n": "tools.description.shell_command_replaced",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.shell_command"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "direct_function"
+      }
     },
     {
       "id": "function.update_plan",
@@ -287,6 +345,17 @@
       "exec_projection": {
         "chat_name": "update_plan",
         "nested_name": "update_plan"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.update_plan"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -305,6 +374,17 @@
         "conditions_i18n": [
           "tools.condition.feature_deferred_executor"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.wait_for_environment"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -333,7 +413,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.request_user_input"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "direct_function"
+      }
     },
     {
       "id": "function.request_permissions",
@@ -352,6 +443,17 @@
           "tools.condition.execution_environment",
           "tools.condition.feature_request_permissions_tool"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.request_permissions"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -366,6 +468,17 @@
         "conditions_i18n": [
           "tools.condition.feature_token_budget"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.new_context"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "direct_function"
       }
     },
     {
@@ -384,6 +497,17 @@
         "conditions_i18n": [
           "tools.condition.feature_token_budget"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.get_context_remaining"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -402,6 +526,17 @@
           "tools.condition.plugin_discovery_features",
           "tools.condition.plugin_candidates_list_presentation"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.list_available_plugins_to_install"
+        ]
+      },
+      "surface_policy": {
+        "stability": "runtime_dynamic",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -420,6 +555,17 @@
           "tools.condition.plugin_discovery_features",
           "tools.condition.plugin_install_candidates"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.request_plugin_install"
+        ]
+      },
+      "surface_policy": {
+        "stability": "runtime_dynamic",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -427,17 +573,35 @@
       "name": "test_sync_tool",
       "type": "function",
       "policy_id": "passthrough",
-      "ui_hidden": true
+      "ui_hidden": true,
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.test_sync_tool"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "direct_function"
+      }
     },
     {
       "id": "function.view_image",
       "name": "view_image",
       "type": "function",
       "policy_id": "exec_projection",
-      "runtime_adapters": ["view_image"],
+      "runtime_adapters": [
+        "view_image"
+      ],
       "availability": {
         "any_of": [
-          {"model_modality": ["image", "unknown"]}
+          {
+            "model_modality": [
+              "image",
+              "unknown"
+            ]
+          }
         ]
       },
       "delivery": {
@@ -451,18 +615,43 @@
           "type": "checkbox_group",
           "default": "auto,low,high",
           "options": [
-            {"value": "auto", "label": "auto"},
-            {"value": "low", "label": "low"},
-            {"value": "high", "label": "high"},
-            {"value": "original", "label": "original"}
+            {
+              "value": "auto",
+              "label": "auto"
+            },
+            {
+              "value": "low",
+              "label": "low"
+            },
+            {
+              "value": "high",
+              "label": "high"
+            },
+            {
+              "value": "original",
+              "label": "original"
+            }
           ],
-          "visible_when": ["modified"]
+          "visible_when": [
+            "modified"
+          ]
         }
       ],
       "exec_projection": {
         "chat_name": "view_image",
         "nested_name": "view_image",
         "output_mode": "image"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.view_image"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -480,6 +669,17 @@
         "conditions_i18n": [
           "tools.condition.direct_mcp_tools"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.list_mcp_resources"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -497,6 +697,17 @@
         "conditions_i18n": [
           "tools.condition.direct_mcp_tools"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.list_mcp_resource_templates"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -514,6 +725,17 @@
         "conditions_i18n": [
           "tools.condition.direct_mcp_tools"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.read_mcp_resource"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -533,6 +755,17 @@
           "tools.condition.feature_enable_fanout",
           "tools.condition.collaboration_enabled"
         ]
+      },
+      "source_binding": {
+        "origin": "compatibility_contract",
+        "registration_ids": [
+          "item.function.spawn_agents_on_csv"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -553,13 +786,35 @@
           "tools.condition.collaboration_enabled",
           "tools.condition.agent_job_worker"
         ]
+      },
+      "source_binding": {
+        "origin": "compatibility_contract",
+        "registration_ids": [
+          "item.function.report_agent_job_result"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
       "id": "function.wait",
       "name": "wait",
       "type": "function",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.wait"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager",
+        "deferred_adapter": "direct_function"
+      }
     },
     {
       "id": "function.get_goal",
@@ -569,6 +824,17 @@
       "exec_projection": {
         "chat_name": "get_goal",
         "nested_name": "get_goal"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.get_goal"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -601,7 +867,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.create_goal"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "function.update_goal",
@@ -633,14 +910,27 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.function.update_goal"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "custom.apply_patch",
       "name": "apply_patch",
       "type": "custom",
       "policy_id": "native_apply_patch",
-      "delivery": {"localized_native_source": true},
+      "delivery": {
+        "localized_native_source": true
+      },
       "description_i18n": "tools.description.apply_patch_internal",
       "description_visible_when": [
         "disabled",
@@ -656,6 +946,16 @@
           "Edit",
           "Write"
         ]
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.custom.apply_patch"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager"
       }
     },
     {
@@ -665,7 +965,9 @@
       "policy_id": "internal_exec_container",
       "delivery": {
         "deferred_guidance_marker": "Some deferred nested tools may be omitted from this description.",
-        "description_projection_adapters": ["web_run"]
+        "description_projection_adapters": [
+          "web_run"
+        ]
       },
       "internal_container_when_disabled": true,
       "description_i18n": "tools.description.exec_disabled",
@@ -688,7 +990,17 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.custom.exec"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
+      }
     },
     {
       "id": "hosted.web_search",
@@ -747,7 +1059,17 @@
       ],
       "aliases": [
         "web_search_preview"
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.hosted.web_search"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager"
+      }
     },
     {
       "id": "hosted.tool_search",
@@ -755,16 +1077,33 @@
       "type": "hosted",
       "policy_id": "command_session_passthrough",
       "description_i18n": "tools.description.tool_search",
-      "runtime_adapters": ["tool_search_chat_bridge", "deferred_tool_search"],
+      "runtime_adapters": [
+        "tool_search_chat_bridge",
+        "deferred_tool_search"
+      ],
       "state_api_types": {
-        "disabled": ["chat", "responses", "anthropic", "google"],
-        "passthrough": ["chat", "responses"],
-        "modified": ["chat"]
+        "disabled": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ],
+        "passthrough": [
+          "chat",
+          "responses"
+        ],
+        "modified": [
+          "chat"
+        ]
       },
       "availability": {
         "any_of": [
-          {"source_tool_exists": "tool_search"},
-          {"deferred_exec_guidance_exists": true}
+          {
+            "source_tool_exists": "tool_search"
+          },
+          {
+            "deferred_exec_guidance_exists": true
+          }
         ]
       },
       "delivery": {
@@ -772,12 +1111,24 @@
         "modified_removes_source": true,
         "passthrough_chat_projects_live_definition": true,
         "direct_function_wins": true,
-        "exec_projection": {"chat_name": "tool_search", "nested_name": "", "input_mode": "all_tools_search"},
-        "passthrough_projection": {"chat_name": "tool_search", "nested_name": "", "input_mode": "responses_client_tool", "native_item_type": "tool_search_call", "execution": "client"}
+        "exec_projection": {
+          "chat_name": "tool_search",
+          "nested_name": "",
+          "input_mode": "all_tools_search"
+        },
+        "passthrough_projection": {
+          "chat_name": "tool_search",
+          "nested_name": "",
+          "input_mode": "responses_client_tool",
+          "native_item_type": "tool_search_call",
+          "execution": "client"
+        }
       },
       "description_variants": [
         {
-          "when": {"dependency_effective": "injection.rosetta.tool_read"},
+          "when": {
+            "dependency_effective": "injection.rosetta.tool_read"
+          },
           "replace_text": {
             "from": "Use raw exec and ALL_TOOLS to read the exact declaration before invoking a match.",
             "to": "Call tool_read with an exact returned name before invoking a match. Search results alone do not authorize invoke_deferred_tool."
@@ -792,14 +1143,45 @@
           "parameters": {
             "type": "object",
             "properties": {
-              "query": {"type": "string", "minLength": 1, "maxLength": 500, "description": "Capability, provider, tool name, or declaration text to find. Regex patterns are limited to 200 characters."},
-              "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8, "description": "Maximum number of matching tools to return."},
-              "search_mode": {"type": "string", "enum": ["natural_language", "regex"], "default": "natural_language", "description": "Natural-language token ranking or case-insensitive JavaScript regular-expression matching."}
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "description": "Capability, provider, tool name, or declaration text to find. Regex patterns are limited to 200 characters."
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 8,
+                "description": "Maximum number of matching tools to return."
+              },
+              "search_mode": {
+                "type": "string",
+                "enum": [
+                  "natural_language",
+                  "regex"
+                ],
+                "default": "natural_language",
+                "description": "Natural-language token ranking or case-insensitive JavaScript regular-expression matching."
+              }
             },
-            "required": ["query"],
+            "required": [
+              "query"
+            ],
             "additionalProperties": false
           }
         }
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.hosted.tool_search"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager"
       }
     },
     {
@@ -807,7 +1189,18 @@
       "name": "multi_agent_v1",
       "type": "namespace",
       "policy_id": "multi_agent_expansion",
-      "default_expanded": true
+      "default_expanded": true,
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "namespace_function"
+      }
     },
     {
       "id": "namespace.multi_agent_v2",
@@ -817,56 +1210,144 @@
       "stable_name": "multi_agent_v2",
       "default_namespace": "collaboration",
       "namespace_configurable": true,
-      "default_expanded": true
+      "default_expanded": true,
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "namespace_function"
+      }
     },
     {
       "id": "namespace.multi_agent_v1.close_agent",
       "name": "close_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1.close_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v1.resume_agent",
       "name": "resume_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1.resume_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v1.send_input",
       "name": "send_input",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1.send_input"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v1.spawn_agent",
       "name": "spawn_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1.spawn_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v1.wait_agent",
       "name": "wait_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v1.wait_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.followup_task",
       "name": "followup_task",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.followup_task"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.interrupt_agent",
       "name": "interrupt_agent",
       "type": "function",
       "namespace_id": "namespace.multi_agent_v2",
-      "policy_id": "passthrough"
+      "policy_id": "passthrough",
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.interrupt_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.list_agents",
@@ -895,7 +1376,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.list_agents"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.send_message",
@@ -924,7 +1416,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.send_message"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.spawn_agent",
@@ -953,7 +1456,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.spawn_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.multi_agent_v2.wait_agent",
@@ -982,7 +1496,18 @@
           "target": "description",
           "input_id": "guidance"
         }
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.multi_agent_v2.wait_agent"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.clock.curr_time",
@@ -992,6 +1517,17 @@
       "exec_projection": {
         "chat_name": "clock-curr_time",
         "nested_name": "clock__curr_time"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.clock.curr_time"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1002,6 +1538,17 @@
       "exec_projection": {
         "chat_name": "clock-sleep",
         "nested_name": "clock__sleep"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.clock.sleep"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1043,39 +1590,82 @@
         "image_gen",
         "imagegen",
         "image_gen__imagegen"
-      ]
+      ],
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.image_gen.imagegen"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
+      }
     },
     {
       "id": "namespace.web.run",
       "name": "web__run",
       "type": "function",
       "policy_id": "web_run_mapping",
-      "runtime_adapters": ["web_run"],
+      "runtime_adapters": [
+        "web_run"
+      ],
       "capability_projection": {
         "base": {
           "commands": {
-            "open": ["ref_id", "lineno"],
-            "time": ["utc_offset"]
+            "open": [
+              "ref_id",
+              "lineno"
+            ],
+            "time": [
+              "utc_offset"
+            ]
           },
-          "top_level_fields": ["response_length"]
+          "top_level_fields": [
+            "response_length"
+          ]
         },
         "web_run_basic_search": {
           "commands": {
-            "search_query": ["q", "domains"]
+            "search_query": [
+              "q",
+              "domains"
+            ]
           }
         },
         "web_run_sidecar": {
           "commands": {
-            "click": ["ref_id", "id"],
-            "find": ["ref_id", "pattern"],
-            "screenshot": ["ref_id", "pageno"]
+            "click": [
+              "ref_id",
+              "id"
+            ],
+            "find": [
+              "ref_id",
+              "pattern"
+            ],
+            "screenshot": [
+              "ref_id",
+              "pageno"
+            ]
           }
         },
-        "unsupported_commands": ["image_query", "finance", "weather", "sports"],
+        "unsupported_commands": [
+          "image_query",
+          "finance",
+          "weather",
+          "sports"
+        ],
         "description_rules": {
-          "drop_lines_containing": ["empty query"],
+          "drop_lines_containing": [
+            "empty query"
+          ],
           "replace_text": [
-            {"from": " (and optionally with a domain or recency filter)", "to": " (optionally by domain)", "case_insensitive": true}
+            {
+              "from": " (and optionally with a domain or recency filter)",
+              "to": " (optionally by domain)",
+              "case_insensitive": true
+            }
           ]
         }
       },
@@ -1086,6 +1676,17 @@
       "exec_projection": {
         "chat_name": "web-run",
         "nested_name": "web__run"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.web.run"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1096,6 +1697,17 @@
       "exec_projection": {
         "chat_name": "memories-add_ad_hoc_note",
         "nested_name": "memories__add_ad_hoc_note"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.memories.add_ad_hoc_note"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1106,6 +1718,17 @@
       "exec_projection": {
         "chat_name": "memories-list",
         "nested_name": "memories__list"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.memories.list"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1116,6 +1739,17 @@
       "exec_projection": {
         "chat_name": "memories-read",
         "nested_name": "memories__read"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.memories.read"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1126,6 +1760,17 @@
       "exec_projection": {
         "chat_name": "memories-search",
         "nested_name": "memories__search"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.memories.search"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1136,6 +1781,17 @@
       "exec_projection": {
         "chat_name": "skills-list",
         "nested_name": "skills__list"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.skills.list"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -1146,81 +1802,272 @@
       "exec_projection": {
         "chat_name": "skills-read",
         "nested_name": "skills__read"
+      },
+      "source_binding": {
+        "origin": "codex_source",
+        "registration_ids": [
+          "item.namespace.skills.read"
+        ]
+      },
+      "surface_policy": {
+        "stability": "conditional",
+        "initial_delivery": "eager",
+        "deferred_adapter": "nested_exec"
       }
     },
     {
       "id": "injection.claude_code.read",
       "name": "Read",
       "type": "custom_injection",
-      "runtime_adapters": ["localized_file_tool"],
+      "runtime_adapters": [
+        "localized_file_tool"
+      ],
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "Read",
           "description": "Read a UTF-8 text file. Use offset and limit for large files.",
-          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["file_path"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "limit": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "file_path"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.claude_code.read"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
       "id": "injection.claude_code.edit",
       "name": "Edit",
       "type": "custom_injection",
-      "runtime_adapters": ["localized_file_tool"],
+      "runtime_adapters": [
+        "localized_file_tool"
+      ],
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "Edit",
           "description": "Edit an existing file. For file changes, you must use Edit rather than Shell or Python. Replace exact text in a file. old_string must match the raw file text exactly. Prefer replacing complete lines or complete consecutive line blocks, including indentation and unchanged surrounding text within those lines, rather than substrings.",
-          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}, "replace_all": {"type": "boolean"}}, "required": ["file_path", "old_string", "new_string"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              },
+              "old_string": {
+                "type": "string"
+              },
+              "new_string": {
+                "type": "string"
+              },
+              "replace_all": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "file_path",
+              "old_string",
+              "new_string"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.claude_code.edit"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
       "id": "injection.claude_code.write",
       "name": "Write",
       "type": "custom_injection",
-      "runtime_adapters": ["localized_file_tool"],
+      "runtime_adapters": [
+        "localized_file_tool"
+      ],
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "Write",
           "description": "Create or overwrite a file. For file creation or replacement, you must use Write rather than Shell or Python. The content must be complete UTF-8 text.",
-          "parameters": {"type": "object", "properties": {"file_path": {"type": "string"}, "content": {"type": "string"}}, "required": ["file_path", "content"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "file_path": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "file_path",
+              "content"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.claude_code.write"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
       "id": "injection.claude_code.glob",
       "name": "Glob",
       "type": "custom_injection",
-      "runtime_adapters": ["localized_file_tool"],
+      "runtime_adapters": [
+        "localized_file_tool"
+      ],
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "Glob",
           "description": "Find files by glob pattern.",
-          "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}}, "required": ["pattern"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.claude_code.glob"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
       "id": "injection.claude_code.grep",
       "name": "Grep",
       "type": "custom_injection",
-      "runtime_adapters": ["localized_file_tool"],
+      "runtime_adapters": [
+        "localized_file_tool"
+      ],
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "Grep",
           "description": "Search file contents with ripgrep.",
-          "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "glob": {"type": "string"}, "type": {"type": "string"}, "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]}, "case_insensitive": {"type": "boolean"}, "line_numbers": {"type": "boolean"}, "before_context": {"type": "integer"}, "after_context": {"type": "integer"}, "context": {"type": "integer"}, "head_limit": {"type": "integer"}, "offset": {"type": "integer"}, "multiline": {"type": "boolean"}}, "required": ["pattern"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "pattern": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "glob": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string"
+              },
+              "output_mode": {
+                "type": "string",
+                "enum": [
+                  "content",
+                  "files_with_matches",
+                  "count"
+                ]
+              },
+              "case_insensitive": {
+                "type": "boolean"
+              },
+              "line_numbers": {
+                "type": "boolean"
+              },
+              "before_context": {
+                "type": "integer"
+              },
+              "after_context": {
+                "type": "integer"
+              },
+              "context": {
+                "type": "integer"
+              },
+              "head_limit": {
+                "type": "integer"
+              },
+              "offset": {
+                "type": "integer"
+              },
+              "multiline": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "pattern"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.claude_code.grep"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
@@ -1228,18 +2075,66 @@
       "name": "send_line",
       "type": "custom_injection",
       "description_i18n": "tools.description.send_line",
-      "runtime_adapters": ["send_line"],
-      "availability": {"dependency_effective": "function.write_stdin"},
-      "delivery": {"exec_projection": {"chat_name": "send_line", "nested_name": "write_stdin", "input_mode": "send_line"}},
-      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "runtime_adapters": [
+        "send_line"
+      ],
+      "availability": {
+        "dependency_effective": "function.write_stdin"
+      },
+      "delivery": {
+        "exec_projection": {
+          "chat_name": "send_line",
+          "nested_name": "write_stdin",
+          "input_mode": "send_line"
+        }
+      },
+      "state_api_types": {
+        "disabled": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ],
+        "injected": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ]
+      },
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "send_line",
           "description": "Send one complete line to an existing interactive command session. Use this instead of write_stdin when submitting line-oriented input; the gateway appends exactly one newline.",
-          "parameters": {"type": "object", "properties": {"session_id": {"type": "integer"}, "line": {"type": "string"}}, "required": ["session_id", "line"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "session_id": {
+                "type": "integer"
+              },
+              "line": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "session_id",
+              "line"
+            ],
+            "additionalProperties": false
+          }
         },
         "strict": false
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.rosetta.send_line"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
@@ -1247,26 +2142,82 @@
       "name": "tool_read",
       "type": "custom_injection",
       "description_i18n": "tools.description.tool_read",
-      "runtime_adapters": ["deferred_tool_read"],
-      "availability": {"all_of": [{"dependency_effective": "hosted.tool_search"}, {"deferred_exec_guidance_exists": true}]},
-      "delivery": {"exec_projection": {"chat_name": "tool_read", "nested_name": "", "input_mode": "all_tools_read"}},
+      "runtime_adapters": [
+        "deferred_tool_read"
+      ],
+      "availability": {
+        "all_of": [
+          {
+            "dependency_effective": "hosted.tool_search"
+          },
+          {
+            "deferred_exec_guidance_exists": true
+          }
+        ]
+      },
+      "delivery": {
+        "exec_projection": {
+          "chat_name": "tool_read",
+          "nested_name": "",
+          "input_mode": "all_tools_read"
+        }
+      },
       "description_variants": [
         {
-          "when": {"dependency_effective": "injection.rosetta.invoke_deferred_tool"},
+          "when": {
+            "dependency_effective": "injection.rosetta.invoke_deferred_tool"
+          },
           "replace_text": {
             "from": "Invoke declarations through raw exec as tools.<name>(...).",
             "to": "Declarations carrying invoke_deferred_tool instructions must be invoked with that dispatcher. Invoke all other declarations through raw exec as tools.<name>(...)."
           }
         }
       ],
-      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "state_api_types": {
+        "disabled": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ],
+        "injected": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ]
+      },
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "tool_read",
           "description": "Read the complete declaration for one deferred tool by exact name from Codex's live ALL_TOOLS runtime catalog. Search results are only summaries; read a declaration before invoking it. Invoke declarations through raw exec as tools.<name>(...).",
-          "parameters": {"type": "object", "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 512, "description": "Exact tool name returned by tool_search."}}, "required": ["name"], "additionalProperties": false}
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "description": "Exact tool name returned by tool_search."
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
         }
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.rosetta.tool_read"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     },
     {
@@ -1274,17 +2225,74 @@
       "name": "invoke_deferred_tool",
       "type": "custom_injection",
       "description_i18n": "tools.description.invoke_deferred_tool",
-      "runtime_adapters": ["deferred_tool_invoke"],
-      "availability": {"dependency_effective": "injection.rosetta.tool_read"},
-      "delivery": {"exec_projection": {"chat_name": "invoke_deferred_tool", "nested_name": "", "input_mode": "deferred_dispatch"}},
-      "state_api_types": {"disabled": ["chat", "responses", "anthropic", "google"], "injected": ["chat", "responses", "anthropic", "google"]},
+      "runtime_adapters": [
+        "deferred_tool_invoke"
+      ],
+      "availability": {
+        "dependency_effective": "injection.rosetta.tool_read"
+      },
+      "delivery": {
+        "exec_projection": {
+          "chat_name": "invoke_deferred_tool",
+          "nested_name": "",
+          "input_mode": "deferred_dispatch"
+        }
+      },
+      "state_api_types": {
+        "disabled": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ],
+        "injected": [
+          "chat",
+          "responses",
+          "anthropic",
+          "google"
+        ]
+      },
       "catalog_definition": {
         "type": "function",
         "function": {
           "name": "invoke_deferred_tool",
-          "description": "Invoke an MCP deferred tool whose complete declaration was returned by a paired tool_read call in this conversation.",
-          "parameters": {"type": "object", "properties": {"name": {"type": "string", "pattern": "^mcp__", "maxLength": 512}, "arguments": {"type": "object", "description": "Arguments matching the tool declaration returned by tool_read."}}, "required": ["name", "arguments"], "additionalProperties": false}
+          "description": "Invoke a deferred tool whose complete declaration and definition_hash were returned by a paired tool_read call in this conversation.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_.-]+$",
+              "maxLength": 512
+            },
+            "definition_hash": {
+              "type": "string",
+              "pattern": "^sha256:[0-9a-f]{64}$",
+              "description": "Exact definition_hash returned by the paired tool_read result."
+            },
+            "arguments": {
+                "type": "object",
+                "description": "Arguments matching the tool declaration returned by tool_read."
+              }
+            },
+            "required": [
+          "name",
+          "definition_hash",
+          "arguments"
+            ],
+            "additionalProperties": false
+          }
         }
+      },
+      "source_binding": {
+        "origin": "rosetta_runtime",
+        "registration_ids": [
+          "item.injection.rosetta.invoke_deferred_tool"
+        ]
+      },
+      "surface_policy": {
+        "stability": "stable",
+        "initial_delivery": "eager"
       }
     }
   ],
@@ -1391,5 +2399,699 @@
       "injection.rosetta.tool_read",
       "injection.rosetta.invoke_deferred_tool"
     ]
-  }
+  },
+  "source_registrations": [
+    {
+      "id": "item.function.exec_command",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_shell_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.exec_command"
+    },
+    {
+      "id": "item.function.write_stdin",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_shell_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.write_stdin"
+    },
+    {
+      "id": "item.function.shell_command",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_shell_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.shell_command"
+    },
+    {
+      "id": "item.function.update_plan",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.update_plan"
+    },
+    {
+      "id": "item.function.wait_for_environment",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.wait_for_environment"
+    },
+    {
+      "id": "item.function.request_user_input",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "DirectModelOnly",
+      "conditions": [],
+      "item_id": "function.request_user_input"
+    },
+    {
+      "id": "item.function.request_permissions",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.request_permissions"
+    },
+    {
+      "id": "item.function.new_context",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "DirectModelOnly",
+      "conditions": [],
+      "item_id": "function.new_context"
+    },
+    {
+      "id": "item.function.get_context_remaining",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.get_context_remaining"
+    },
+    {
+      "id": "item.function.list_available_plugins_to_install",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.list_available_plugins_to_install"
+    },
+    {
+      "id": "item.function.request_plugin_install",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.request_plugin_install"
+    },
+    {
+      "id": "item.function.test_sync_tool",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.test_sync_tool"
+    },
+    {
+      "id": "item.function.view_image",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.view_image"
+    },
+    {
+      "id": "item.function.list_mcp_resources",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_mcp_resource_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.list_mcp_resources"
+    },
+    {
+      "id": "item.function.list_mcp_resource_templates",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_mcp_resource_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.list_mcp_resource_templates"
+    },
+    {
+      "id": "item.function.read_mcp_resource",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_mcp_resource_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.read_mcp_resource"
+    },
+    {
+      "id": "item.function.spawn_agents_on_csv",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "function.spawn_agents_on_csv",
+      "registration_kind": "compatibility",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.spawn_agents_on_csv"
+    },
+    {
+      "id": "item.function.report_agent_job_result",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "function.report_agent_job_result",
+      "registration_kind": "compatibility",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.report_agent_job_result"
+    },
+    {
+      "id": "item.function.wait",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "prepend_code_mode_executors",
+      "registration_kind": "generated",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.wait"
+    },
+    {
+      "id": "item.function.get_goal",
+      "source_path": "codex-rs/ext/goal/src/extension.rs",
+      "source_symbol": "GoalExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.get_goal"
+    },
+    {
+      "id": "item.function.create_goal",
+      "source_path": "codex-rs/ext/goal/src/extension.rs",
+      "source_symbol": "GoalExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.create_goal"
+    },
+    {
+      "id": "item.function.update_goal",
+      "source_path": "codex-rs/ext/goal/src/extension.rs",
+      "source_symbol": "GoalExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "function.update_goal"
+    },
+    {
+      "id": "item.custom.apply_patch",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "custom",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "custom.apply_patch"
+    },
+    {
+      "id": "item.custom.exec",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "prepend_code_mode_executors",
+      "registration_kind": "generated",
+      "tool_spec_kind": "custom",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "custom.exec"
+    },
+    {
+      "id": "item.hosted.web_search",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "hosted_model_tool_specs",
+      "registration_kind": "hosted",
+      "tool_spec_kind": "hosted",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "hosted.web_search"
+    },
+    {
+      "id": "item.hosted.tool_search",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "append_tool_search_executor",
+      "registration_kind": "generated",
+      "tool_spec_kind": "hosted",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "hosted.tool_search"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "namespace",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "namespace",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1.close_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1.close_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1.resume_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1.resume_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1.send_input",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1.send_input"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1.spawn_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1.spawn_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v1.wait_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v1.wait_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.followup_task",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.followup_task"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.interrupt_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.interrupt_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.list_agents",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.list_agents"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.send_message",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.send_message"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.spawn_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.spawn_agent"
+    },
+    {
+      "id": "item.namespace.multi_agent_v2.wait_agent",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_collaboration_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.multi_agent_v2.wait_agent"
+    },
+    {
+      "id": "item.namespace.clock.curr_time",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.clock.curr_time"
+    },
+    {
+      "id": "item.namespace.clock.sleep",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_core_utility_tools",
+      "registration_kind": "static",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.clock.sleep"
+    },
+    {
+      "id": "item.namespace.image_gen.imagegen",
+      "source_path": "codex-rs/ext/image-generation/src/extension.rs",
+      "source_symbol": "ImageGenerationExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.image_gen.imagegen"
+    },
+    {
+      "id": "item.namespace.web.run",
+      "source_path": "codex-rs/ext/web-search/src/extension.rs",
+      "source_symbol": "WebSearchExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.web.run"
+    },
+    {
+      "id": "item.namespace.memories.add_ad_hoc_note",
+      "source_path": "codex-rs/ext/memories/src/extension.rs",
+      "source_symbol": "MemoriesExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.memories.add_ad_hoc_note"
+    },
+    {
+      "id": "item.namespace.memories.list",
+      "source_path": "codex-rs/ext/memories/src/extension.rs",
+      "source_symbol": "MemoriesExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.memories.list"
+    },
+    {
+      "id": "item.namespace.memories.read",
+      "source_path": "codex-rs/ext/memories/src/extension.rs",
+      "source_symbol": "MemoriesExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.memories.read"
+    },
+    {
+      "id": "item.namespace.memories.search",
+      "source_path": "codex-rs/ext/memories/src/extension.rs",
+      "source_symbol": "MemoriesExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.memories.search"
+    },
+    {
+      "id": "item.namespace.skills.list",
+      "source_path": "codex-rs/ext/skills/src/extension.rs",
+      "source_symbol": "SkillsExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.skills.list"
+    },
+    {
+      "id": "item.namespace.skills.read",
+      "source_path": "codex-rs/ext/skills/src/extension.rs",
+      "source_symbol": "SkillsExtension::tools",
+      "registration_kind": "extension",
+      "tool_spec_kind": "function",
+      "exposure": "Conditional",
+      "conditions": [],
+      "item_id": "namespace.skills.read"
+    },
+    {
+      "id": "item.injection.claude_code.read",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.claude_code.read",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.claude_code.read"
+    },
+    {
+      "id": "item.injection.claude_code.edit",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.claude_code.edit",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.claude_code.edit"
+    },
+    {
+      "id": "item.injection.claude_code.write",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.claude_code.write",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.claude_code.write"
+    },
+    {
+      "id": "item.injection.claude_code.glob",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.claude_code.glob",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.claude_code.glob"
+    },
+    {
+      "id": "item.injection.claude_code.grep",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.claude_code.grep",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.claude_code.grep"
+    },
+    {
+      "id": "item.injection.rosetta.send_line",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.rosetta.send_line",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.rosetta.send_line"
+    },
+    {
+      "id": "item.injection.rosetta.tool_read",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.rosetta.tool_read",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.rosetta.tool_read"
+    },
+    {
+      "id": "item.injection.rosetta.invoke_deferred_tool",
+      "source_path": "src/codex_rosetta/gateway/admin/tool_catalog.json",
+      "source_symbol": "injection.rosetta.invoke_deferred_tool",
+      "registration_kind": "rosetta_runtime",
+      "tool_spec_kind": "function",
+      "exposure": "Rosetta",
+      "conditions": [],
+      "item_id": "injection.rosetta.invoke_deferred_tool"
+    },
+    {
+      "id": "family.runtime.mcp",
+      "source_path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
+      "source_symbol": "McpToolContributor::tools",
+      "registration_kind": "dynamic",
+      "tool_spec_kind": "function",
+      "exposure": "Dynamic",
+      "conditions": [],
+      "family_id": "runtime.mcp"
+    },
+    {
+      "id": "family.runtime.apps_connectors",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "CoreToolPlanContext::tool_runtimes",
+      "registration_kind": "dynamic",
+      "tool_spec_kind": "function",
+      "exposure": "Dynamic",
+      "conditions": [],
+      "family_id": "runtime.apps_connectors"
+    },
+    {
+      "id": "family.runtime.thread_function",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_dynamic_tools::Function",
+      "registration_kind": "dynamic",
+      "tool_spec_kind": "dynamic_function",
+      "exposure": "Dynamic",
+      "conditions": [],
+      "family_id": "runtime.thread_function"
+    },
+    {
+      "id": "family.runtime.thread_namespace",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_dynamic_tools::Namespace",
+      "registration_kind": "dynamic",
+      "tool_spec_kind": "dynamic_namespace",
+      "exposure": "Dynamic",
+      "conditions": [],
+      "family_id": "runtime.thread_namespace"
+    },
+    {
+      "id": "family.runtime.extension_contributor",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_extension_tools",
+      "registration_kind": "dynamic",
+      "tool_spec_kind": "function",
+      "exposure": "Dynamic",
+      "conditions": [],
+      "family_id": "runtime.extension_contributor"
+    }
+  ],
+  "dynamic_families": [
+    {
+      "id": "runtime.mcp",
+      "source_path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
+      "source_symbol": "McpToolContributor::tools",
+      "tool_spec_kinds": [
+        "function"
+      ],
+      "exposure_rule": "search_tool_conditional",
+      "deferred_adapters": [
+        "nested_exec",
+        "direct_function"
+      ],
+      "name_pattern": "^mcp__[A-Za-z0-9_.-]+$"
+    },
+    {
+      "id": "runtime.apps_connectors",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "CoreToolPlanContext::tool_runtimes",
+      "tool_spec_kinds": [
+        "function",
+        "namespace"
+      ],
+      "exposure_rule": "source_declared",
+      "deferred_adapters": [
+        "nested_exec",
+        "direct_function",
+        "namespace_function"
+      ]
+    },
+    {
+      "id": "runtime.thread_function",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_dynamic_tools::Function",
+      "tool_spec_kinds": [
+        "dynamic_function"
+      ],
+      "exposure_rule": "source_declared",
+      "deferred_adapters": [
+        "nested_exec",
+        "direct_function"
+      ]
+    },
+    {
+      "id": "runtime.thread_namespace",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_dynamic_tools::Namespace",
+      "tool_spec_kinds": [
+        "dynamic_namespace"
+      ],
+      "exposure_rule": "source_declared",
+      "deferred_adapters": [
+        "nested_exec",
+        "namespace_function"
+      ]
+    },
+    {
+      "id": "runtime.extension_contributor",
+      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
+      "source_symbol": "add_extension_tools",
+      "tool_spec_kinds": [
+        "function",
+        "namespace"
+      ],
+      "exposure_rule": "extension_declared",
+      "deferred_adapters": [
+        "nested_exec",
+        "direct_function",
+        "namespace_function"
+      ]
+    }
+  ]
 }

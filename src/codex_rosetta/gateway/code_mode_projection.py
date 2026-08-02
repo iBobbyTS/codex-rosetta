@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -39,6 +40,7 @@ class ExecToolProjection:
     allowed_detail_values: tuple[str, ...] | None = None
     description_replaced_by: tuple[str, ...] = ()
     authorized_names: tuple[str, ...] = ()
+    authorized_definition_hashes: tuple[tuple[str, str], ...] = ()
     include_dispatch_guidance: bool = False
     dispatch_blocked_names: tuple[str, ...] = ()
     native_item_type: str | None = None
@@ -73,6 +75,7 @@ class DiscoveredExecToolPlan:
 
     definitions: dict[str, dict[str, Any]]
     projections: dict[str, ExecToolProjection]
+    definition_hashes: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -89,7 +92,10 @@ _TOKEN_RE = re.compile(
     r"|(?P<symbol>[{}:;?,|&<>\[\]()])"
 )
 _WHITESPACE_RE = re.compile(r"\s+")
-_EXEC_SECTION_HEADING_RE = re.compile(r"(?m)^### `([^`]+)`(?: \(`[^`]+`\))?[ \t]*$")
+_EXEC_SECTION_HEADING_RE = re.compile(
+    r"(?m)^### (?:`(?P<quoted>[^`]+)`|(?P<plain>[A-Za-z0-9_.-]{1,512}))"
+    r"(?: \(`[^`]+`\))?[ \t]*$"
+)
 _EXEC_DECLARATION_FENCE_RE = re.compile(r"(?m)^```ts[ \t]*$")
 _EXEC_CLOSING_FENCE_RE = re.compile(r"(?m)^```[ \t]*$")
 DEFERRED_EXEC_GUIDANCE = (
@@ -100,7 +106,7 @@ ALL_TOOLS_READ_CHAT_NAME = "tool_read"
 DEFERRED_TOOL_DISPATCH_CHAT_NAME = "invoke_deferred_tool"
 SEND_LINE_CHAT_NAME = "send_line"
 ALL_TOOLS_SEARCH_RESULT_PROTOCOL = "codex_rosetta.all_tools_search.v2"
-ALL_TOOLS_READ_RESULT_PROTOCOL = "codex_rosetta.all_tools_read.v1"
+ALL_TOOLS_READ_RESULT_PROTOCOL = "codex_rosetta.all_tools_read.v2"
 ALL_TOOLS_SEARCH_MAX_RESULT_CHARS = 24_000
 ALL_TOOLS_SEARCH_SUMMARY_CHARS = 240
 NODE_REPL_TOOL_NAMES = (
@@ -141,6 +147,12 @@ def _deferred_excluded_tool_names() -> frozenset[str]:
         for item in tool_catalog_lookups()["items"].values()
         if item.get("delivery", {}).get("eager_only") is True
     )
+
+
+def deferred_tool_definition_hash(name: str, description: str) -> str:
+    """Hash one exact live ALL_TOOLS declaration for deferred authorization."""
+    payload = f"{name}\0{description}".encode()
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
 
 
 def _tokenize_typescript(source: str) -> list[_Token]:
@@ -535,9 +547,12 @@ def _build_standard_exec_script(
         )
     if projection.input_mode == "deferred_dispatch":
         name = arguments.get("name")
+        definition_hash = arguments.get("definition_hash")
         nested_arguments = arguments.get("arguments")
-        if not isinstance(name, str) or not name.startswith("mcp__") or len(name) > 512:
-            raise ValueError("invoke_deferred_tool name must be an MCP deferred tool")
+        if not isinstance(name, str) or not re.fullmatch(
+            r"[A-Za-z0-9_.-]{1,512}", name
+        ):
+            raise ValueError("invoke_deferred_tool name must be a valid deferred tool")
         if name not in projection.authorized_names:
             raise ValueError(
                 f"invoke_deferred_tool has no valid paired tool_read authorization "
@@ -545,6 +560,12 @@ def _build_standard_exec_script(
             )
         if not isinstance(nested_arguments, dict):
             raise ValueError("invoke_deferred_tool arguments must be a JSON object")
+        expected_hash = dict(projection.authorized_definition_hashes).get(name)
+        if not isinstance(definition_hash, str) or definition_hash != expected_hash:
+            raise ValueError(
+                f"invoke_deferred_tool definition_hash does not match the live "
+                f"tool_read declaration for {name}"
+            )
         nested_projection = _NODE_REPL_EXEC_PROJECTIONS.get(name) or ExecToolProjection(
             item_id=f"deferred.{name}",
             chat_name=name,
@@ -640,7 +661,7 @@ def all_tools_read_definition(
 
 
 def deferred_tool_dispatch_definition() -> dict[str, Any]:
-    """Build the fixed history-authorized MCP dispatcher definition."""
+    """Build the fixed history-authorized deferred dispatcher definition."""
     return render_catalog_definition(
         _catalog_item_id_for_adapter("deferred_tool_invoke")
     )
@@ -843,22 +864,19 @@ if ({_javascript_json_literal(sorted(_deferred_excluded_tool_names()))}.includes
   }});
   exit();
 }}
-let description = String(entry.description ?? "");
-if (
-  includeDispatchGuidance &&
-  name.startsWith("mcp__") &&
-  !blockedDispatchNames.has(name)
-) {{
-  description += "\\n\\nInvoke this tool with `invoke_deferred_tool`: set `name` to\\n" +
-    JSON.stringify(name) +
-    " and set `arguments` to an object matching the `args`\\n" +
-    "declaration above. Do not call this tool directly or through raw `exec`.";
-}}
+const description = String(entry.description ?? "");
+const digestBytes = await crypto.subtle.digest(
+  "SHA-256",
+  new TextEncoder().encode(name + "\\0" + description),
+);
+const definitionHash = "sha256:" + Array.from(new Uint8Array(digestBytes))
+  .map((value) => value.toString(16).padStart(2, "0"))
+  .join("");
 const result = {{
   protocol: resultProtocol,
   name,
   found: true,
-  tool: {{ name, description }},
+  tool: {{ name, description, definition_hash: definitionHash }},
 }};
 if (JSON.stringify(result).length > maxResultChars) {{
   text({{
@@ -938,17 +956,18 @@ def _valid_all_tools_search_result(
 
 
 def discovered_deferred_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
-    """Recover validated deferred MCP definitions from paired search/read history."""
+    """Recover hash-bound deferred definitions from paired search/read history."""
     if not isinstance(messages, list):
-        return DiscoveredExecToolPlan(definitions={}, projections={})
+        return DiscoveredExecToolPlan(
+            definitions={}, projections={}, definition_hashes={}
+        )
 
     searched_names = frozenset(discovered_all_tools_search_names(messages))
     candidate_names = frozenset(
         name
         for name in searched_names
         if (
-            name.startswith("mcp__")
-            and len(name) <= 512
+            re.fullmatch(r"[A-Za-z0-9_.-]{1,512}", name) is not None
             and name not in _deferred_excluded_tool_names()
         )
     )
@@ -972,16 +991,19 @@ def discovered_deferred_exec_tools(messages: Any) -> DiscoveredExecToolPlan:
     )
     definitions: dict[str, dict[str, Any]] = {}
     projections: dict[str, ExecToolProjection] = {}
+    definition_hashes: dict[str, str] = {}
     for match in read_matches:
         projected = _project_discovered_node_repl_match(match, candidates)
         if projected is None:
             continue
-        name, definition, projection = projected
+        name, definition, projection, definition_hash = projected
         definitions[name] = definition
         projections[name] = projection
+        definition_hashes[name] = definition_hash
     return DiscoveredExecToolPlan(
         definitions=definitions,
         projections=projections,
+        definition_hashes=definition_hashes,
     )
 
 
@@ -1025,22 +1047,25 @@ def _latest_node_repl_read_matches(
 def _project_discovered_node_repl_match(
     match: Any,
     candidates: dict[str, ExecToolProjection],
-) -> tuple[str, dict[str, Any], ExecToolProjection] | None:
+) -> tuple[str, dict[str, Any], ExecToolProjection, str] | None:
     if not isinstance(match, dict):
         return None
     name = match.get("name")
     description = match.get("description")
+    definition_hash = match.get("definition_hash")
     projection = candidates.get(name) if isinstance(name, str) else None
     if (
         projection is None
         or not isinstance(description, str)
         or len(description) > _MAX_DISCOVERED_TOOL_DESCRIPTION_CHARS
+        or not isinstance(definition_hash, str)
+        or definition_hash != deferred_tool_definition_hash(name, description)
     ):
         return None
     definition = _project_one_definition(description, projection)
     if definition is None:
         return None
-    return name, definition, projection
+    return name, definition, projection, definition_hash
 
 
 def _all_tools_read_calls(messages: list[Any]) -> dict[str, str]:
@@ -1248,7 +1273,7 @@ def _exec_description_section_spans(description: str) -> list[ExecDescriptionSec
         end = declaration_end if declaration_end is not None else boundary
         sections.append(
             ExecDescriptionSection(
-                name=match.group(1),
+                name=_exec_section_heading_name(match),
                 heading_start=match.start(),
                 body_start=match.end(),
                 section_end=end,
@@ -1287,6 +1312,11 @@ def exec_tool_section_names(description: str) -> tuple[str, ...]:
     )
 
 
+def _exec_section_heading_name(match: re.Match[str]) -> str:
+    """Return one quoted or strictly bounded bare exec-section name."""
+    return match.group("quoted") or match.group("plain")
+
+
 def prune_exec_tool_description(
     description: str,
     sections: list[ExecDescriptionSection] | tuple[ExecDescriptionSection, ...],
@@ -1322,7 +1352,11 @@ def project_modified_exec_web_run_description(
     """Replace the live nested ``web__run`` section with supported capabilities."""
     matches = list(_EXEC_SECTION_HEADING_RE.finditer(exec_description))
     web_match_index = next(
-        (index for index, match in enumerate(matches) if match.group(1) == "web__run"),
+        (
+            index
+            for index, match in enumerate(matches)
+            if _exec_section_heading_name(match) == "web__run"
+        ),
         None,
     )
     if web_match_index is None:

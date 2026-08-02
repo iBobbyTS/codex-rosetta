@@ -697,6 +697,90 @@
     "stream_options_fields": [
       "reasoning_summary_delivery"
     ],
+    "tool_exposure_variants": [
+      "Deferred",
+      "Direct",
+      "DirectModelOnly",
+      "Hidden"
+    ],
+    "tool_registration_sites": {
+      "CoreToolPlanContext::tool_runtimes": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "5530cc07f49af8e71fe15af62bd5ccc9124b9ba27790068c14ca5418c157ea83"
+      },
+      "GoalExtension::tools": {
+        "path": "codex-rs/ext/goal/src/extension.rs",
+        "sha256": "78cdc0cd619094beed711e6282a38f86edd493725ac83191618a9d3aa636d7be"
+      },
+      "ImageGenerationExtension::tools": {
+        "path": "codex-rs/ext/image-generation/src/extension.rs",
+        "sha256": "1253344db291b6e919576ab65903deabf98977c884a597ad767d7f37acced74b"
+      },
+      "McpToolContributor::tools": {
+        "path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
+        "sha256": "53e3074af5c6e3c0deec4f6194b916ea62dffe04c5c6304451044583f3e18558"
+      },
+      "MemoriesExtension::tools": {
+        "path": "codex-rs/ext/memories/src/extension.rs",
+        "sha256": "7a0b3c14a864b16eea8a8035f08f64faaea4b6b2ee35d7c134b4f1e1511ef557"
+      },
+      "SkillsExtension::tools": {
+        "path": "codex-rs/ext/skills/src/extension.rs",
+        "sha256": "3bb43a84105f3021cd96376d6d2ce4919ac41ddc4d2c00c8845c08d26600dbf2"
+      },
+      "WebSearchExtension::tools": {
+        "path": "codex-rs/ext/web-search/src/extension.rs",
+        "sha256": "d299d49d0a8b2265d56295c59ee2e1415db8505f85fcdda8c9a61d401977009d"
+      },
+      "add_collaboration_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "747b42c8b21b1d55b9c57adab8008dd230e089c20fcc98ba1317a28395f579b0"
+      },
+      "add_core_utility_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "46ed621ad12e9a921dca0eccb4bae39d19fb4e3622335e0d59a27a50fa3d68e2"
+      },
+      "add_dynamic_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "8f886b35d23be18e3c35d9322f893151a965615f790beb75a88a1bd7bbb11153"
+      },
+      "add_dynamic_tools::Function": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "8f886b35d23be18e3c35d9322f893151a965615f790beb75a88a1bd7bbb11153"
+      },
+      "add_dynamic_tools::Namespace": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "8f886b35d23be18e3c35d9322f893151a965615f790beb75a88a1bd7bbb11153"
+      },
+      "add_extension_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "626c5b5a97bf4eef38166d8e198eddd1deb8323f383370bbbd02c347309f3670"
+      },
+      "add_mcp_resource_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "a93b154570fba84c5e3e998316ddb1268492761369243525a86dbad1cd90dd0d"
+      },
+      "add_shell_tools": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "21fa89e89089e2bdd9b454fb81855610a39f86294b46be0ad4308742431c0339"
+      },
+      "add_tool_sources": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "5530cc07f49af8e71fe15af62bd5ccc9124b9ba27790068c14ca5418c157ea83"
+      },
+      "append_tool_search_executor": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "de1bfa7468411f214d55f5a9227d3c9787e08ef17d4cffa64a831f6609c108b2"
+      },
+      "hosted_model_tool_specs": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "fc5f783f3e6931a9b053350673235b90a42a5364ea98916ba2eb51d334c98c01"
+      },
+      "prepend_code_mode_executors": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "abf1d78a6bb5869be0a01793d5f8a0ad218fec3d77e1548fd9ae0d28fae275fa"
+      }
+    },
     "tool_spec_web_search_fields": {
       "external_web_access": {
         "attributes": [
@@ -752,5 +836,5 @@
       "X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY": "x-codex-ws-stream-request-start-ms"
     }
   },
-  "schema_version": 2
+  "schema_version": 3
 }

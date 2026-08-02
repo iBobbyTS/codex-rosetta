@@ -24,6 +24,7 @@ KEY_ENV_VAR = "CODEX_ROSETTA_TOOL_MAPPING_KEY"
 KEY_FILENAME = "tool-mapping.key"
 PAYLOAD_VERSION = 1
 TOOL_HISTORY_PAYLOAD_VERSION = 2
+CHAT_TOOL_SURFACE_PAYLOAD_VERSION = 1
 _KEY_BYTES = 32
 _NONCE_BYTES = 12
 _KEY_FILE_PREFIX = "v1:"
@@ -58,6 +59,11 @@ class ToolMappingCipher:
         self._lookup_key = hmac.new(
             key,
             b"codex-rosetta-tool-history-lookup-key-v2",
+            hashlib.sha256,
+        ).digest()
+        self._surface_lookup_key = hmac.new(
+            key,
+            b"codex-rosetta-chat-tool-surface-lookup-key-v1",
             hashlib.sha256,
         ).digest()
         self.key_id = hashlib.sha256(key).hexdigest()
@@ -222,6 +228,76 @@ class ToolMappingCipher:
             )
         return source, target
 
+    def chat_tool_surface_scope_token(
+        self,
+        *,
+        principal_id: str,
+        canonical_scope: bytes,
+    ) -> bytes:
+        """Return a principal-scoped opaque lookup token for one window scope."""
+        envelope = json.dumps(
+            [
+                "codex-rosetta-chat-tool-surface-lookup",
+                CHAT_TOOL_SURFACE_PAYLOAD_VERSION,
+                principal_id,
+            ],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        return hmac.new(
+            self._surface_lookup_key,
+            envelope + b"\0" + canonical_scope,
+            hashlib.sha256,
+        ).digest()
+
+    def encrypt_chat_tool_surface(
+        self,
+        *,
+        payload: dict[str, Any],
+        aad: bytes,
+    ) -> tuple[bytes, bytes]:
+        """Encrypt one complete window-scoped Chat tool-surface snapshot."""
+        serialized = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode()
+        nonce = secrets.token_bytes(_NONCE_BYTES)
+        return nonce, self._aead.encrypt(nonce, serialized, aad)
+
+    def decrypt_chat_tool_surface(
+        self,
+        *,
+        key_id: str,
+        nonce: bytes,
+        encrypted_payload: bytes,
+        aad: bytes,
+    ) -> dict[str, Any]:
+        """Authenticate and deserialize one Chat tool-surface snapshot."""
+        if key_id != self.key_id:
+            raise ToolMappingKeyError(
+                "Configured tool-mapping key does not match encrypted database rows"
+            )
+        if len(nonce) != _NONCE_BYTES:
+            raise ToolMappingIntegrityError("Invalid Chat tool-surface nonce length")
+        try:
+            serialized = self._aead.decrypt(nonce, encrypted_payload, aad)
+        except Exception as exc:
+            raise ToolMappingIntegrityError(
+                "Chat tool-surface payload authentication failed"
+            ) from exc
+        try:
+            payload = json.loads(serialized)
+        except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as exc:
+            raise ToolMappingIntegrityError(
+                "Chat tool-surface payload is not valid authenticated JSON"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise ToolMappingIntegrityError(
+                "Chat tool-surface payload must be an object"
+            )
+        return payload
+
 
 def mapping_aad(
     *,
@@ -265,6 +341,20 @@ def tool_history_translation_aad(
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def chat_tool_surface_aad(*, principal_id: str, scope_token: bytes) -> bytes:
+    """Bind a window tool-surface ciphertext to its SQLite coordinates."""
+    return json.dumps(
+        [
+            "codex-rosetta-chat-tool-surface",
+            CHAT_TOOL_SURFACE_PAYLOAD_VERSION,
+            principal_id,
+            base64.urlsafe_b64encode(scope_token).decode("ascii"),
+        ],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode()
 
 
 def _decode_key(value: str, *, source: str) -> bytes:

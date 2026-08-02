@@ -78,6 +78,10 @@ from .proxy import (
     validate_model_id,
 )
 from .state_scope import GatewayStateScope
+from .chat_tool_surface import (
+    ChatToolSurfaceCoordinator,
+    InMemoryChatToolSurfaceStore,
+)
 from .tool_adaptation import CodexToolLocalizationStore
 from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
@@ -806,6 +810,9 @@ async def _proxy_handler(
                 transport=request.app.transport,
                 metadata_store=store,
                 codex_tool_store=codex_tool_store,
+                chat_tool_surface_coordinator=getattr(
+                    request.app, "chat_tool_surface_coordinator", None
+                ),
                 extra_headers=extra_headers,
                 entry_id=pre_entry_id,
                 request_log=request_log,
@@ -829,6 +836,9 @@ async def _proxy_handler(
                 transport=request.app.transport,
                 metadata_store=store,
                 codex_tool_store=codex_tool_store,
+                chat_tool_surface_coordinator=getattr(
+                    request.app, "chat_tool_surface_coordinator", None
+                ),
                 extra_headers=extra_headers,
                 persistence=persistence,
                 state_scope=state_scope,
@@ -1139,6 +1149,9 @@ def create_app(
 
     metadata_store = ProviderMetadataStore()
     codex_tool_store = CodexToolLocalizationStore()
+    chat_tool_surface_coordinator = ChatToolSurfaceCoordinator(
+        InMemoryChatToolSurfaceStore()
+    )
     codex_search_reference_store = CodexSearchReferenceStore()
     image_fetch_workers = ImageFetchWorkerPool()
     web_run_health_state = WebRunHealthState()
@@ -1254,6 +1267,7 @@ def create_app(
     app.transport = transport  # type: ignore
     app.metadata_store = metadata_store  # type: ignore
     app.codex_tool_store = codex_tool_store  # type: ignore
+    app.chat_tool_surface_coordinator = chat_tool_surface_coordinator  # type: ignore
     app.codex_search_reference_store = codex_search_reference_store  # type: ignore
     app.image_fetch_workers = image_fetch_workers  # type: ignore
     app.internal_token = internal_token  # type: ignore

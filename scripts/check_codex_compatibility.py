@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, cast
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULT_SOURCE = Path(__file__).resolve().parents[2] / "openai-codex-src"
 DEFAULT_BASELINE = (
     Path(__file__).resolve().parents[1]
@@ -44,6 +44,8 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "sse_event_names",
     "tool_spec_web_search_fields",
     "tool_spec_wire_types",
+    "tool_exposure_variants",
+    "tool_registration_sites",
     "transport_constants",
     "websocket_client_metadata_keys",
 }
@@ -90,6 +92,10 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
         "ToolSpec::WebSearch field names, Rust types, and attributes match"
     ),
     "tool_spec_wire_types": "tool spec serde wire type mapping matches",
+    "tool_exposure_variants": "ToolExposure variants match",
+    "tool_registration_sites": (
+        "core registration function bodies and extension contributor sources match"
+    ),
     "transport_constants": "extracted transport constants match",
     "websocket_client_metadata_keys": "WebSocket client metadata keys match",
 }
@@ -466,6 +472,20 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     config_types = _read(source_root, "codex-rs/protocol/src/config_types.rs")
     protocol = _read(source_root, "codex-rs/protocol/src/protocol.rs")
     tool_spec = _read(source_root, "codex-rs/tools/src/tool_spec.rs")
+    tool_executor = _read(source_root, "codex-rs/tools/src/tool_executor.rs")
+    spec_plan = _read(source_root, "codex-rs/core/src/tools/spec_plan.rs")
+    extension_sources = {
+        "GoalExtension::tools": "codex-rs/ext/goal/src/extension.rs",
+        "ImageGenerationExtension::tools": (
+            "codex-rs/ext/image-generation/src/extension.rs"
+        ),
+        "MemoriesExtension::tools": "codex-rs/ext/memories/src/extension.rs",
+        "SkillsExtension::tools": "codex-rs/ext/skills/src/extension.rs",
+        "WebSearchExtension::tools": "codex-rs/ext/web-search/src/extension.rs",
+        "McpToolContributor::tools": (
+            "codex-rs/ext/extension-api/src/contributors/mcp.rs"
+        ),
+    }
     model_catalog = _read(source_root, "codex-rs/models-manager/models.json")
     client = _read(source_root, "codex-rs/core/src/client.rs")
     responses_metadata = _read(source_root, "codex-rs/core/src/responses_metadata.rs")
@@ -665,6 +685,48 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
             tool_spec, "ToolSpec", "WebSearch"
         ),
         "tool_spec_wire_types": _serde_enum_wire_types(tool_spec, "ToolSpec"),
+        "tool_exposure_variants": _enum_variants(tool_executor, "ToolExposure"),
+        "tool_registration_sites": {
+            **{
+                name: {
+                    "path": "codex-rs/core/src/tools/spec_plan.rs",
+                    "sha256": _function_body_sha256(spec_plan, name),
+                }
+                for name in (
+                    "add_collaboration_tools",
+                    "add_core_utility_tools",
+                    "add_dynamic_tools",
+                    "add_extension_tools",
+                    "add_mcp_resource_tools",
+                    "add_shell_tools",
+                    "add_tool_sources",
+                    "append_tool_search_executor",
+                    "hosted_model_tool_specs",
+                    "prepend_code_mode_executors",
+                )
+            },
+            **{
+                name: {
+                    "path": relative_path,
+                    "sha256": hashlib.sha256(
+                        _read(source_root, relative_path).encode("utf-8")
+                    ).hexdigest(),
+                }
+                for name, relative_path in extension_sources.items()
+            },
+            "CoreToolPlanContext::tool_runtimes": {
+                "path": "codex-rs/core/src/tools/spec_plan.rs",
+                "sha256": _function_body_sha256(spec_plan, "add_tool_sources"),
+            },
+            "add_dynamic_tools::Function": {
+                "path": "codex-rs/core/src/tools/spec_plan.rs",
+                "sha256": _function_body_sha256(spec_plan, "add_dynamic_tools"),
+            },
+            "add_dynamic_tools::Namespace": {
+                "path": "codex-rs/core/src/tools/spec_plan.rs",
+                "sha256": _function_body_sha256(spec_plan, "add_dynamic_tools"),
+            },
+        },
         "transport_constants": _string_constants(
             client, r"RESPONSES_WEBSOCKETS_[A-Z0-9_]+_HEADER_VALUE"
         ),

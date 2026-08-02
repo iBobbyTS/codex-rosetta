@@ -370,7 +370,7 @@ def test_conditional_codex_placements_match_0_144_4_tool_assembly():
 def test_catalog_defaults_and_namespace_image_policy():
     catalog, items, policies, _groups, _namespaces = _catalog_maps()
 
-    assert catalog["metadata"]["schema_version"] == 6
+    assert catalog["metadata"]["schema_version"] == 7
     assert catalog["metadata"]["catalog_version"] == "codex-0.145.0"
     assert catalog["metadata"]["codex_cli_version"] == "0.145.0"
     assert catalog["metadata"]["codex_source_commit"] == CODEX_0145_SOURCE_COMMIT
