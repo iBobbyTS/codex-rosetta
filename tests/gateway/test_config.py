@@ -687,6 +687,7 @@ class TestWebSearchConfig:
 
         assert config.web_search == {
             "provider": "configured_responses_provider",
+            "responses_model": "gpt-5.6-sol",
             "responses_provider": "test",
             "tavily_api_key": "",
         }
@@ -726,6 +727,11 @@ class TestWebSearchConfig:
                 "responses_provider is required",
             ),
             ({"responses_provider": 42}, "responses_provider must be a string"),
+            ({"responses_model": 42}, "responses_model must be a string"),
+            (
+                {"responses_model": "gpt-6"},
+                "responses_model must be one of",
+            ),
             ({"token": "legacy"}, "unsupported fields"),
         ],
     )

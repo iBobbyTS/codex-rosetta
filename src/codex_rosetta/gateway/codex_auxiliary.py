@@ -95,10 +95,12 @@ def _apply_auxiliary_model_alias(
     route: ResolvedRoute,
     *,
     fixed_image_route_fallback: bool,
-    preserve_model: bool,
+    override_model: str | None,
 ) -> None:
     """Apply model routing only when the effective endpoint owns that alias."""
-    if route.upstream_model and not fixed_image_route_fallback and not preserve_model:
+    if override_model is not None:
+        body["model"] = override_model
+    elif route.upstream_model and not fixed_image_route_fallback:
         body["model"] = route.upstream_model
 
 
@@ -302,7 +304,11 @@ async def handle_codex_auxiliary(
         body,
         route,
         fixed_image_route_fallback=fixed_image_route_fallback,
-        preserve_model=use_configured_provider_search,
+        override_model=(
+            config.web_search["responses_model"]
+            if use_configured_provider_search
+            else None
+        ),
     )
 
     resolved_model = str(body.get("model") or route.upstream_model or model)

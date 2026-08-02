@@ -12,6 +12,8 @@ from codex_rosetta.shims.providers import builtin_provider_shims
 
 from ...config import (
     API_TYPE_ORDER,
+    CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+    DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL,
     GatewayConfig,
     default_tool_profile_for_provider,
     load_config_raw,
@@ -136,6 +138,7 @@ def _apply_web_search_settings(
         )
     unsupported = set(incoming) - {
         "provider",
+        "responses_model",
         "responses_provider",
         "tavily_api_key",
     }
@@ -148,6 +151,19 @@ def _apply_web_search_settings(
     current = dict(current) if isinstance(current, dict) else {}
     provider = incoming.get("provider", current.get("provider", "tavily"))
     next_value: dict[str, Any] = {"provider": provider}
+    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        responses_model = incoming.get(
+            "responses_model",
+            current.get(
+                "responses_model", DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL
+            ),
+        )
+        if not isinstance(responses_model, str):
+            return JSONResponse(
+                {"error": "'web_search.responses_model' must be a string"},
+                status_code=400,
+            )
+        next_value["responses_model"] = responses_model.strip()
     responses_provider = incoming.get(
         "responses_provider", current.get("responses_provider", "")
     )

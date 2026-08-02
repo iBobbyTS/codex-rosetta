@@ -72,6 +72,14 @@ SELF_HOSTED_WEB_SEARCH_PROVIDERS = frozenset(
     {"self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"}
 )
 CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER = "configured_responses_provider"
+CONFIGURED_RESPONSES_WEB_SEARCH_MODELS = (
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+)
+DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL = CONFIGURED_RESPONSES_WEB_SEARCH_MODELS[
+    0
+]
 WEB_SEARCH_PROVIDERS = frozenset(
     {
         CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
@@ -195,6 +203,7 @@ def normalize_web_search(value: Any) -> dict[str, str]:
         raise ValueError("config: server.web_search must be an object")
     unsupported = set(mapping) - {
         "provider",
+        "responses_model",
         "responses_provider",
         "tavily_api_key",
     }
@@ -203,6 +212,9 @@ def normalize_web_search(value: Any) -> dict[str, str]:
             f"config: server.web_search has unsupported fields: {sorted(unsupported)}"
         )
     provider = mapping.get("provider", "tavily")
+    responses_model = mapping.get(
+        "responses_model", DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL
+    )
     responses_provider = mapping.get("responses_provider", "")
     api_key = mapping.get("tavily_api_key", "")
     if not isinstance(provider, str) or provider not in WEB_SEARCH_PROVIDERS:
@@ -217,6 +229,14 @@ def normalize_web_search(value: Any) -> dict[str, str]:
             "config: server.web_search.responses_provider must be a string"
         )
     responses_provider = responses_provider.strip()
+    if not isinstance(responses_model, str):
+        raise ValueError("config: server.web_search.responses_model must be a string")
+    responses_model = responses_model.strip()
+    if responses_model not in CONFIGURED_RESPONSES_WEB_SEARCH_MODELS:
+        raise ValueError(
+            "config: server.web_search.responses_model must be one of "
+            f"{list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS)}"
+        )
     if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER and not responses_provider:
         raise ValueError(
             "config: server.web_search.responses_provider is required when "
@@ -225,6 +245,8 @@ def normalize_web_search(value: Any) -> dict[str, str]:
     normalized = {"provider": provider, "tavily_api_key": api_key.strip()}
     if responses_provider:
         normalized["responses_provider"] = responses_provider
+    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        normalized["responses_model"] = responses_model
     return normalized
 
 
