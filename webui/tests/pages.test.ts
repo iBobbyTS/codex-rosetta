@@ -103,10 +103,10 @@ describe('NetworkSearchPage', () => {
             disabled: { api_type: 'responses', enabled: false },
             search: { api_type: 'responses' },
           },
-          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search' } },
+          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' } },
         })
       : Promise.resolve({ configured: false }));
-    apiMock.put.mockResolvedValue({ server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search' } } });
+    apiMock.put.mockResolvedValue({ server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' } } });
     render(NetworkSearchPage);
 
     const providerSelect = await screen.findByLabelText('Search Provider');
@@ -116,10 +116,16 @@ describe('NetworkSearchPage', () => {
     expect(responsesSelect).toHaveTextContent('search');
     expect(responsesSelect).not.toHaveTextContent('chat');
     expect(responsesSelect).not.toHaveTextContent('disabled');
+    const modelSelect = await screen.findByLabelText('Search Model');
+    expect(modelSelect).toHaveValue('gpt-5.6-terra');
+    expect(modelSelect).toHaveTextContent('gpt-5.6-sol');
+    expect(modelSelect).toHaveTextContent('gpt-5.6-terra');
+    expect(modelSelect).toHaveTextContent('gpt-5.6-luna');
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
       web_search: {
         provider: 'configured_responses_provider',
+        responses_model: 'gpt-5.6-terra',
         responses_provider: 'search',
       },
     });

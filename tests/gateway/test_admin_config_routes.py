@@ -843,6 +843,7 @@ def test_put_server_settings_selects_configured_responses_provider(tmp_path):
         json=lambda: {
             "web_search": {
                 "provider": "configured_responses_provider",
+                "responses_model": "gpt-5.6-terra",
                 "responses_provider": "search",
             }
         },
@@ -855,9 +856,11 @@ def test_put_server_settings_selects_configured_responses_provider(tmp_path):
         "web_search"
     ] == {
         "provider": "configured_responses_provider",
+        "responses_model": "gpt-5.6-terra",
         "responses_provider": "search",
     }
     assert app.gateway_config.web_search["responses_provider"] == "search"
+    assert app.gateway_config.web_search["responses_model"] == "gpt-5.6-terra"
 
 
 def test_put_server_settings_rejects_configured_non_responses_provider(tmp_path):

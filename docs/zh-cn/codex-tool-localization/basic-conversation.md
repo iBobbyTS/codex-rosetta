@@ -71,9 +71,11 @@ API Key；**Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
 **Self-hosted (Bing Browser)** 则在现有 `web-run` 容器中运行，因此要求
 sidecar 健康。Bing RSS 读取 XML 结果表示，Bing Browser 加载并解析交互式
 HTML 结果页。**从已配置的 Provider 中选择**则要求再选择一个已启用且 API 类型为
-`responses` 的 Provider。由此产生的每个 `web.run` 请求都会原样转发到该 Provider
-的相对 `alpha/search` 端点，并使用其凭据和传输设置；当前模型路由及其 upstream
-model alias 不会覆盖这条显式搜索路由。所有本地搜索 Provider 都会被规范化为相同的 Codex 可见来源格式。
+`responses` 的 Provider，并选择固定搜索模型：默认 `gpt-5.6-sol`，或
+`gpt-5.6-terra`、`gpt-5.6-luna`。由此产生的每个 `web.run` 请求都会转发到该
+Provider 的相对 `alpha/search` 端点，使用其凭据和传输设置，并把最终上游请求的
+`model` 字段替换为所选搜索模型。因此当前会话模型路由及其 upstream model alias
+不会泄漏到这条显式搜索路由。所有本地搜索 Provider 都会被规范化为相同的 Codex 可见来源格式。
 直接 URL 的 `open` 获取公开静态 HTML 或纯文本，`time` 使用 Python 的固定
 UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持

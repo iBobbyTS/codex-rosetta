@@ -63,7 +63,7 @@ describe('Admin application session', () => {
         return new Response(JSON.stringify({
           config_path: '/tmp/config.jsonc',
           providers: { TURNING: { api_type: 'responses' } },
-          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'TURNING' } },
+          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'TURNING', responses_model: 'gpt-5.6-sol' } },
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });

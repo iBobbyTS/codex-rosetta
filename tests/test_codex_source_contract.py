@@ -7,6 +7,7 @@ import runpy
 from pathlib import Path
 
 from codex_rosetta.gateway.codex_compaction import COMPACT_PROMPT, SUMMARY_PREFIX
+from codex_rosetta.gateway.config import CONFIGURED_RESPONSES_WEB_SEARCH_MODELS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = (
@@ -25,6 +26,16 @@ compare_snapshots = SCRIPT["compare_snapshots"]
 classify_snapshots = SCRIPT["classify_snapshots"]
 render_classification = SCRIPT["render_classification"]
 snapshot_json = SCRIPT["snapshot_json"]
+
+
+def test_configured_responses_search_models_match_reviewed_codex_contract():
+    """Force an explicit search-routing review when Responses Lite models drift."""
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    source_models = baseline["contract"]["responses_lite_model_fields"]
+
+    assert {model["slug"] for model in source_models} == set(
+        CONFIGURED_RESPONSES_WEB_SEARCH_MODELS
+    )
 
 
 def test_rust_extractor_ignores_braces_in_comments_and_strings():

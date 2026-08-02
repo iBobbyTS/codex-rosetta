@@ -87,10 +87,13 @@ locally: `search_query` uses the global Provider configured under Admin
 therefore require that sidecar to be healthy. Bing RSS reads the XML result
 representation, while Bing Browser loads and parses the interactive HTML result
 page. **Configured Responses Provider** instead selects one enabled configured
-Provider whose API type is `responses`. Every resulting `web.run` request is
-forwarded unchanged to that Provider's relative `alpha/search` endpoint, using
-its credential and transport settings; the current model route and upstream
-model alias do not replace this explicit search route. All local providers are
+Provider whose API type is `responses` and one fixed Search Model:
+`gpt-5.6-sol` (default), `gpt-5.6-terra`, or `gpt-5.6-luna`. Every resulting
+`web.run` request is forwarded to that Provider's relative `alpha/search`
+endpoint using its credential and transport settings, and its final upstream
+`model` field is replaced with the selected Search Model. The current
+conversation model route and upstream model alias therefore cannot leak into
+this explicit search route. All local providers are
 normalized to the same Codex-visible source format. Direct-URL
 `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,

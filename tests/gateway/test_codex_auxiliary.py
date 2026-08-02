@@ -41,6 +41,7 @@ def _make_config(
     tavily_api_key: str | None = None,
     search_provider: str = "tavily",
     responses_search_provider: str | None = None,
+    responses_search_model: str = "gpt-5.6-sol",
     tool_profile: str | None = None,
     image_state: str | None = None,
     image_base_url: str = "https://images.example/v1",
@@ -186,6 +187,11 @@ def _make_config(
                     "tavily_api_key": tavily_api_key or "",
                     **(
                         {"responses_provider": responses_search_provider}
+                        if responses_search_provider is not None
+                        else {}
+                    ),
+                    **(
+                        {"responses_model": responses_search_model}
                         if responses_search_provider is not None
                         else {}
                     ),
@@ -546,6 +552,7 @@ def test_configured_responses_provider_routes_all_search_requests() -> None:
         upstream_model="deepseek-v4-flash",
         search_provider="configured_responses_provider",
         responses_search_provider="search-upstream",
+        responses_search_model="gpt-5.6-luna",
     )
     body = _search_body(
         {
@@ -564,7 +571,7 @@ def test_configured_responses_provider_routes_all_search_requests() -> None:
     assert provider_info.base_url == "https://search-provider.example/v1"
     assert provider_info.credential_values == ("search-provider-key",)
     assert url == "https://search-provider.example/v1/alpha/search"
-    assert forwarded_body == body
+    assert forwarded_body == {**body, "model": "gpt-5.6-luna"}
 
 
 def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:

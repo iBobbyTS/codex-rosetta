@@ -52,6 +52,7 @@ def _config() -> GatewayConfig:
                 ],
                 "web_search": {
                     "provider": "configured_responses_provider",
+                    "responses_model": "gpt-5.6-luna",
                     "responses_provider": "search-provider",
                 },
             },
@@ -127,6 +128,7 @@ def test_search_test_restores_principal_after_handler_failure(monkeypatch: Any) 
 
 def test_search_test_rejects_config_without_eligible_model() -> None:
     config = _config()
+    config.web_search = {"provider": "tavily", "tavily_api_key": "tvly-test"}
     config.models.clear()
 
     response = asyncio.run(
@@ -168,6 +170,7 @@ def test_search_test_reaches_selected_responses_alpha_search() -> None:
     assert body["commands"] == {
         "search_query": [{"q": network_search.SEARCH_TEST_QUERY}]
     }
+    assert body["model"] == "gpt-5.6-luna"
 
 
 def test_search_test_preserves_upstream_error_envelope() -> None:
