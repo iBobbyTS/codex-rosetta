@@ -31,6 +31,7 @@ from .search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
 )
+from .transport._base import UpstreamSafetyError
 from .web_search import (
     TavilyHTTPClient,
     TavilyRequestError,
@@ -385,6 +386,7 @@ async def _execute_search_queries(
                     SearchProviderBudgetExceeded,
                     CodexSearchInvalidRequest,
                     CodexRosettaBlockedError,
+                    UpstreamSafetyError,
                 ),
             ):
                 raise

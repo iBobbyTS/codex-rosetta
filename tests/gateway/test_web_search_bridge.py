@@ -15,12 +15,21 @@ import codex_rosetta.gateway.web_search as web_search_module
 from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
-from codex_rosetta.gateway.transport._base import UpstreamStream
+from codex_rosetta.gateway.transport._base import (
+    UpstreamContentEncodingError,
+    UpstreamCredentialCollisionError,
+    UpstreamResponseContractError,
+    UpstreamResponseTooLargeError,
+    UpstreamStream,
+)
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.gateway.web_search import (
     WEB_SEARCH_PROFILE_ITEM_ID,
+    PendingWebSearchCall,
+    TavilyCredentialCollisionError,
     TavilyHTTPClient,
     TavilyRequestError,
+    WebSearchRuntime,
     WebSearchSettings,
     profile_search_config,
 )
@@ -123,6 +132,63 @@ def test_tavily_request_boundary_propagates_memory_error(
         )
 
     assert caught.value is failure
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        UpstreamResponseTooLargeError("bounded response overflow"),
+        UpstreamContentEncodingError("compressed response blocked"),
+        UpstreamCredentialCollisionError("credential collision blocked"),
+        UpstreamResponseContractError("response contract blocked"),
+        MemoryError("allocation failed"),
+    ],
+)
+def test_hosted_runtime_propagates_transport_safety_without_failed_tool_result(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        raise failure
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    runtime = WebSearchRuntime(
+        client=TavilyHTTPClient("secret-key"),
+        settings=WebSearchSettings(),
+    )
+    call = PendingWebSearchCall("call-1", "query", {})
+
+    with pytest.raises(type(failure)) as caught:
+        asyncio.run(runtime.execute(call))
+
+    assert caught.value is failure
+
+
+def test_hosted_runtime_propagates_tavily_credential_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "reflected-tavily-secret"
+
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(
+            200,
+            {},
+            f'{{"results":[{{"content":"{token}"}}]}}'.encode(),
+        )
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    runtime = WebSearchRuntime(
+        client=TavilyHTTPClient(token),
+        settings=WebSearchSettings(),
+    )
+
+    with pytest.raises(TavilyCredentialCollisionError) as caught:
+        asyncio.run(runtime.execute(PendingWebSearchCall("call-1", "query", {})))
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
 
 
 def test_tavily_client_exit_failure_is_secret_safe(

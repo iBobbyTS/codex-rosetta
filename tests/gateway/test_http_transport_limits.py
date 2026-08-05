@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import logging
+import math
 import threading
 import time
 from collections.abc import Iterator
@@ -576,6 +577,76 @@ def test_passthrough_invalid_success_unicode_is_protocol_error(
     assert response.closed is True
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        b'\xef\xbb\xbf{"valid":"json"}',
+        '{"valid":"json"}'.encode("utf-16"),
+        '{"valid":"json"}'.encode("utf-16-le"),
+        '{"valid":"json"}'.encode("utf-32"),
+        '{"valid":"json"}'.encode("utf-32-be"),
+    ],
+    ids=["utf-8-bom", "utf-16-bom", "utf-16-le", "utf-32-bom", "utf-32-be"],
+)
+def test_passthrough_success_requires_strict_utf8_json(
+    monkeypatch: pytest.MonkeyPatch,
+    content: bytes,
+) -> None:
+    response = _FakeStreamingResponse(200, [content])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(UpstreamProtocolError) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_passthrough_success_rejects_non_standard_json_constants(
+    monkeypatch: pytest.MonkeyPatch,
+    constant: str,
+) -> None:
+    response = _FakeStreamingResponse(200, [f'{{"value":{constant}}}'.encode()])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(UpstreamProtocolError) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_passthrough_success_json_memory_error_propagates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failure = MemoryError("allocation failed")
+    response = _FakeStreamingResponse(200, [b"{}"])
+    transport, _client = _transport(monkeypatch, response)
+
+    def fail_parse(_raw_content: bytes) -> Any:
+        raise failure
+
+    monkeypatch.setattr(transport_module, "_parse_strict_utf8_json", fail_parse)
+
+    with pytest.raises(MemoryError) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert caught.value is failure
+
+
 def test_passthrough_redirect_preserves_valid_json_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -593,6 +664,47 @@ def test_passthrough_redirect_preserves_valid_json_body(
     assert result.body == {"redirect": "preserved"}
     assert result.raw_content == content
     assert response.closed is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '{"redirect":"preserved"}'.encode("utf-16"),
+        '{"redirect":"preserved"}'.encode("utf-32"),
+        b'\xef\xbb\xbf{"redirect":"preserved"}',
+    ],
+    ids=["utf-16", "utf-32", "utf-8-bom"],
+)
+def test_passthrough_redirect_keeps_json_bytes_autodetection(
+    monkeypatch: pytest.MonkeyPatch,
+    content: bytes,
+) -> None:
+    response = _FakeStreamingResponse(302, [content])
+    transport, _client = _transport(monkeypatch, response)
+
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
+        )
+    )
+
+    assert result.body == {"redirect": "preserved"}
+
+
+def test_passthrough_redirect_keeps_non_standard_json_constant_behavior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(302, [b'{"value":NaN}'])
+    transport, _client = _transport(monkeypatch, response)
+
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
+        )
+    )
+
+    assert result.body is not None
+    assert math.isnan(result.body["value"])
 
 
 def test_passthrough_redirect_preserves_invalid_json_error(

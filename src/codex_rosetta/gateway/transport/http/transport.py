@@ -98,6 +98,19 @@ class BoundedHttpResponse:
         return json.loads(self.content)
 
 
+def _reject_non_finite_json_constant(value: str) -> Any:
+    """Reject the non-standard numeric constants accepted by ``json.loads``."""
+    raise ValueError(f"Non-standard JSON constant: {value}")
+
+
+def _parse_strict_utf8_json(raw_content: bytes) -> Any:
+    """Parse standard JSON after strict UTF-8 decoding."""
+    return json.loads(
+        raw_content.decode("utf-8"),
+        parse_constant=_reject_non_finite_json_constant,
+    )
+
+
 def _stream_limit_error(kind: str, limit: int, actual: int) -> UpstreamStreamLimitError:
     """Build the stable Gateway error for an upstream stream overflow."""
     return UpstreamStreamLimitError(
@@ -659,8 +672,8 @@ class HttpTransport:
         if 200 <= resp.status_code < 300:
             invalid_json = False
             try:
-                parsed_body = json.loads(raw_content)
-            except json.JSONDecodeError, UnicodeDecodeError:
+                parsed_body = _parse_strict_utf8_json(raw_content)
+            except ValueError, UnicodeDecodeError:
                 invalid_json = True
                 parsed_body = None
             if invalid_json:

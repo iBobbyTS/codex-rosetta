@@ -12,6 +12,7 @@ from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.observability.redaction import SecretRedactor
 
 from .downstream_errors import CodexRosettaBlockedError
+from .transport._base import UpstreamSafetyError
 from .transport.http.transport import request_bounded_response
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
@@ -148,7 +149,9 @@ class TavilyHTTPClient:
                 )
         except MemoryError:
             raise
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, (CodexRosettaBlockedError, UpstreamSafetyError)):
+                raise
             request_failed = True
             response = None
         if request_failed:
@@ -196,7 +199,11 @@ class WebSearchRuntime:
     async def execute(self, call: PendingWebSearchCall) -> WebSearchExecutionResult:
         try:
             raw = await self.client.search(call.query, settings=self.settings)
+        except MemoryError:
+            raise
         except Exception as exc:
+            if isinstance(exc, (CodexRosettaBlockedError, UpstreamSafetyError)):
+                raise
             error = str(exc)
             return WebSearchExecutionResult(
                 call=call,

@@ -9,6 +9,12 @@ import pytest
 
 import codex_rosetta.gateway.web_run_sidecar as sidecar_module
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
+from codex_rosetta.gateway.transport._base import (
+    UpstreamContentEncodingError,
+    UpstreamCredentialCollisionError,
+    UpstreamResponseContractError,
+    UpstreamResponseTooLargeError,
+)
 from codex_rosetta.gateway.web_run_sidecar import (
     WebRunSidecarError,
     WebRunSidecarHTTPClient,
@@ -202,6 +208,35 @@ def test_sidecar_search_boundary_propagates_memory_error(
     monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
 
     with pytest.raises(MemoryError) as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "token").search(
+                "query", settings=WebSearchSettings()
+            )
+        )
+
+    assert caught.value is failure
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        UpstreamResponseTooLargeError("bounded response overflow"),
+        UpstreamContentEncodingError("compressed response blocked"),
+        UpstreamCredentialCollisionError("credential collision blocked"),
+        UpstreamResponseContractError("response contract blocked"),
+    ],
+)
+def test_sidecar_search_propagates_upstream_safety_error(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: Exception,
+) -> None:
+    async def fake_request(*args, **kwargs):
+        del args, kwargs
+        raise failure
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(type(failure)) as caught:
         asyncio.run(
             WebRunSidecarHTTPClient("http://web-run:8080", "token").search(
                 "query", settings=WebSearchSettings()

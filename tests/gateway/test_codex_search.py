@@ -23,6 +23,12 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
 )
+from codex_rosetta.gateway.transport._base import (
+    UpstreamContentEncodingError,
+    UpstreamCredentialCollisionError,
+    UpstreamResponseContractError,
+    UpstreamResponseTooLargeError,
+)
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.web_run_sidecar import (
     WebRunSidecarInvalidRequest,
@@ -327,6 +333,10 @@ def test_typed_provider_failure_preserves_safe_cause(failure: Exception) -> None
         asyncio.CancelledError(),
         TavilyCredentialCollisionError("blocked"),
         _OtherBlockedError("blocked by another policy owner"),
+        UpstreamResponseTooLargeError("bounded response overflow"),
+        UpstreamContentEncodingError("compressed response blocked"),
+        UpstreamCredentialCollisionError("credential collision blocked"),
+        UpstreamResponseContractError("response contract blocked"),
         MemoryError("allocation failed"),
         SystemExit("fatal"),
     ],

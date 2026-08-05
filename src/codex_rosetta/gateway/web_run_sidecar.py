@@ -10,6 +10,7 @@ from codex_rosetta.observability.redaction import SecretRedactor
 
 from .config import DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS
 from .downstream_errors import CodexRosettaBlockedError
+from .transport._base import UpstreamSafetyError
 from .transport.http.transport import request_bounded_response
 from .web_search import WebSearchSettings
 
@@ -200,7 +201,9 @@ class WebRunSidecarHTTPClient:
                 )
         except MemoryError:
             raise
-        except Exception:
+        except Exception as exc:
+            if isinstance(exc, (CodexRosettaBlockedError, UpstreamSafetyError)):
+                raise
             request_failed = True
             response = None
         if request_failed:
