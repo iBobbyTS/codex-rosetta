@@ -79,6 +79,86 @@ def test_tavily_accepts_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result == {"results": []}
 
 
+@pytest.mark.parametrize("failure_site", ["request", "client_exit", "response_json"])
+def test_tavily_request_boundary_propagates_memory_error(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    failure = MemoryError(f"memory failure in {failure_site}")
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            del args
+            if failure_site == "client_exit":
+                raise failure
+
+    async def fake_request(*args: Any, **kwargs: Any) -> Any:
+        del args, kwargs
+        if failure_site == "request":
+            raise failure
+        if failure_site == "response_json":
+
+            class MemoryResponse:
+                status_code = 200
+                content = b'{"results":[]}'
+
+                def json(self):
+                    raise failure
+
+            return MemoryResponse()
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(web_search_module, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(MemoryError) as caught:
+        asyncio.run(
+            TavilyHTTPClient("secret-key").search("query", settings=WebSearchSettings())
+        )
+
+    assert caught.value is failure
+
+
+def test_tavily_client_exit_failure_is_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "client-exit-secret"
+
+    class FailingAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            del kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            del args
+            raise RuntimeError(secret)
+
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(web_search_module, "AsyncClient", FailingAsyncClient)
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(TavilyRequestError) as caught:
+        asyncio.run(
+            TavilyHTTPClient("secret-key").search("query", settings=WebSearchSettings())
+        )
+
+    assert caught.value.category == "connection_error"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in "".join(traceback.format_exception(caught.value))
+
+
 class _ChatStream(UpstreamStream):
     def __init__(self, chunks: list[dict[str, Any]]) -> None:
         self.status_code = 200

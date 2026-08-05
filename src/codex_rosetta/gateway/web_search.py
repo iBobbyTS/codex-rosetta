@@ -137,8 +137,8 @@ class TavilyHTTPClient:
             "Content-Type": "application/json",
         }
         request_failed = False
-        async with AsyncClient(timeout=self.timeout) as client:
-            try:
+        try:
+            async with AsyncClient(timeout=self.timeout) as client:
                 response = await request_bounded_response(
                     client,
                     "POST",
@@ -146,9 +146,11 @@ class TavilyHTTPClient:
                     json=payload,
                     headers=headers,
                 )
-            except Exception:
-                request_failed = True
-                response = None
+        except MemoryError:
+            raise
+        except Exception:
+            request_failed = True
+            response = None
         if request_failed:
             raise TavilyRequestError(
                 TavilyRequestErrorCategory.CONNECTION_ERROR
@@ -167,6 +169,8 @@ class TavilyHTTPClient:
         invalid_json = False
         try:
             parsed = response.json()
+        except MemoryError:
+            raise
         except Exception:
             invalid_json = True
             parsed = None

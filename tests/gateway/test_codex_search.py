@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import traceback
 from datetime import datetime, timezone
 from typing import Any
 
@@ -17,16 +18,44 @@ from codex_rosetta.gateway.codex_search import (
     execute_local_codex_search,
     should_use_local_codex_search,
 )
+from codex_rosetta.gateway.downstream_errors import CodexRosettaBlockedError
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
 )
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
-from codex_rosetta.gateway.web_run_sidecar import WebRunSidecarInvalidRequest
+from codex_rosetta.gateway.web_run_sidecar import (
+    WebRunSidecarInvalidRequest,
+    WebRunSidecarSearchError,
+    WebRunSidecarSearchErrorCategory,
+)
 from codex_rosetta.gateway.web_search import (
     TavilyCredentialCollisionError,
+    TavilyRequestError,
+    TavilyRequestErrorCategory,
     WebSearchSettings,
 )
+
+
+class _OtherBlockedError(CodexRosettaBlockedError, RuntimeError):
+    """A blocked subtype not known to the search bridge."""
+
+
+def _exception_graph(root: BaseException) -> list[BaseException]:
+    pending = [root]
+    seen: set[int] = set()
+    graph: list[BaseException] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        graph.append(current)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return graph
 
 
 class _FakeTavilyClient:
@@ -237,10 +266,18 @@ def test_each_query_uses_budget_and_second_failure_is_atomic() -> None:
 
 
 def test_provider_failure_has_only_a_safe_typed_cause() -> None:
+    secret = "provider-secret-detail"
+    raw_failures: list[BaseException] = []
+
     class FailingClient:
         async def search(self, query: str, *, settings: WebSearchSettings):
             del query, settings
-            raise RuntimeError("provider-secret-detail")
+            try:
+                raise ValueError(secret)
+            except ValueError as cause:
+                raw_failure = RuntimeError(secret)
+                raw_failures.extend((cause, raw_failure))
+                raise raw_failure from cause
 
     with pytest.raises(CodexSearchProviderExecutionError) as caught:
         asyncio.run(
@@ -251,13 +288,48 @@ def test_provider_failure_has_only_a_safe_typed_cause() -> None:
             )
         )
 
+    graph = _exception_graph(caught.value)
     assert isinstance(caught.value.__cause__, RuntimeError)
-    assert "provider-secret-detail" not in repr(caught.value.__cause__)
+    assert not {id(error) for error in graph} & {id(error) for error in raw_failures}
+    assert secret not in "".join(repr(error) for error in graph)
+    assert secret not in "".join(traceback.format_exception(caught.value))
 
 
 @pytest.mark.parametrize(
     "failure",
-    [asyncio.CancelledError(), TavilyCredentialCollisionError("blocked")],
+    [
+        TavilyRequestError(TavilyRequestErrorCategory.CONNECTION_ERROR),
+        WebRunSidecarSearchError(WebRunSidecarSearchErrorCategory.CONNECTION_ERROR),
+    ],
+)
+def test_typed_provider_failure_preserves_safe_cause(failure: Exception) -> None:
+    class FailingClient:
+        async def search(self, query: str, *, settings: WebSearchSettings):
+            del query, settings
+            raise failure
+
+    with pytest.raises(CodexSearchProviderExecutionError) as caught:
+        asyncio.run(
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "one"}]}),
+                {"tavily_api_key": "key"},
+                client=FailingClient(),
+            )
+        )
+
+    assert caught.value.__cause__ is failure
+    assert set(_exception_graph(caught.value)) == {caught.value, failure}
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        asyncio.CancelledError(),
+        TavilyCredentialCollisionError("blocked"),
+        _OtherBlockedError("blocked by another policy owner"),
+        MemoryError("allocation failed"),
+        SystemExit("fatal"),
+    ],
 )
 def test_local_search_propagates_cancel_and_safety_failures(
     failure: BaseException,

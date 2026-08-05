@@ -26,12 +26,12 @@ from .codex_search_references import (
     StoredSearchBatch,
     StoredSearchResult,
 )
+from .downstream_errors import CodexRosettaBlockedError
 from .search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
 )
 from .web_search import (
-    TavilyCredentialCollisionError,
     TavilyHTTPClient,
     TavilyRequestError,
     WebSearchClient,
@@ -44,7 +44,6 @@ from .web_run_capabilities import (
 )
 from .web_run_sidecar import (
     WebRunBrowserClient,
-    WebRunSidecarCredentialCollisionError,
     WebRunSidecarError,
     WebRunSidecarInvalidRequest,
     WebRunSidecarNotImplemented,
@@ -377,19 +376,26 @@ async def _execute_search_queries(
             raw = await request_budget.run_external_call(
                 lambda: search_client.search(query, settings=settings)
             )
-        except (
-            SearchProviderBudgetExceeded,
-            CodexSearchInvalidRequest,
-            TavilyCredentialCollisionError,
-            WebRunSidecarCredentialCollisionError,
-        ):
+        except MemoryError:
             raise
-        except (TavilyRequestError, WebRunSidecarSearchError) as exc:
-            raise CodexSearchProviderExecutionError(
-                "Search provider execution failed"
-            ) from exc
         except Exception as exc:
-            del exc
+            if isinstance(
+                exc,
+                (
+                    SearchProviderBudgetExceeded,
+                    CodexSearchInvalidRequest,
+                    CodexRosettaBlockedError,
+                ),
+            ):
+                raise
+            if isinstance(exc, (TavilyRequestError, WebRunSidecarSearchError)):
+                raise CodexSearchProviderExecutionError(
+                    "Search provider execution failed"
+                ) from exc
+            unexpected_provider_error = True
+        else:
+            unexpected_provider_error = False
+        if unexpected_provider_error:
             safe_cause = _UnexpectedSearchProviderError("unexpected_provider_error")
             raise CodexSearchProviderExecutionError(
                 "Search provider execution failed"

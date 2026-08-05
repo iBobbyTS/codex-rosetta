@@ -187,8 +187,8 @@ class WebRunSidecarHTTPClient:
             "Content-Type": "application/json",
         }
         request_failed = False
-        async with AsyncClient(timeout=self._timeout) as client:
-            try:
+        try:
+            async with AsyncClient(timeout=self._timeout) as client:
                 response = await request_bounded_response(
                     client,
                     "POST",
@@ -198,9 +198,11 @@ class WebRunSidecarHTTPClient:
                     max_success_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
                     max_error_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
                 )
-            except Exception:
-                request_failed = True
-                response = None
+        except MemoryError:
+            raise
+        except Exception:
+            request_failed = True
+            response = None
         if request_failed:
             raise WebRunSidecarSearchError(
                 WebRunSidecarSearchErrorCategory.CONNECTION_ERROR
@@ -223,6 +225,8 @@ class WebRunSidecarHTTPClient:
         invalid_json = False
         try:
             body = response.json()
+        except MemoryError:
+            raise
         except Exception:
             invalid_json = True
             body = None

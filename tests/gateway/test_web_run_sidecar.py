@@ -163,6 +163,88 @@ def test_sidecar_search_failures_are_typed_and_secret_safe(
     assert caught.value.__context__ is None
 
 
+@pytest.mark.parametrize("failure_site", ["request", "client_exit", "response_json"])
+def test_sidecar_search_boundary_propagates_memory_error(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_site: str,
+) -> None:
+    failure = MemoryError(f"memory failure in {failure_site}")
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            del args
+            if failure_site == "client_exit":
+                raise failure
+
+    async def fake_request(*args, **kwargs):
+        del args, kwargs
+        if failure_site == "request":
+            raise failure
+        if failure_site == "response_json":
+
+            class MemoryResponse:
+                status_code = 200
+                content = b'{"results":[]}'
+
+                def json(self):
+                    raise failure
+
+            return MemoryResponse()
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(sidecar_module, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(MemoryError) as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "token").search(
+                "query", settings=WebSearchSettings()
+            )
+        )
+
+    assert caught.value is failure
+
+
+def test_sidecar_search_client_exit_failure_is_secret_safe(monkeypatch) -> None:
+    secret = "sidecar-client-exit-secret"
+
+    class FailingAsyncClient:
+        def __init__(self, **kwargs) -> None:
+            del kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args) -> None:
+            del args
+            raise RuntimeError(secret)
+
+    async def fake_request(*args, **kwargs):
+        del args, kwargs
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(sidecar_module, "AsyncClient", FailingAsyncClient)
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(WebRunSidecarSearchError) as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "token").search(
+                "query", settings=WebSearchSettings()
+            )
+        )
+
+    assert caught.value.category == "connection_error"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in "".join(traceback.format_exception(caught.value))
+
+
 @pytest.mark.parametrize("status_code", [200, 400, 500])
 def test_sidecar_execute_blocks_credential_in_success_and_http_errors(
     monkeypatch,

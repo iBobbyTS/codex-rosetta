@@ -556,6 +556,80 @@ def test_passthrough_invalid_success_json_is_protocol_error(
     assert response.closed is True
 
 
+def test_passthrough_invalid_success_unicode_is_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(204, [b'"\xff"'])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(
+        UpstreamProtocolError, match="^Upstream response is not valid JSON$"
+    ) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert response.closed is True
+
+
+def test_passthrough_redirect_preserves_valid_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b'{"redirect":"preserved"}'
+    response = _FakeStreamingResponse(302, [content])
+    transport, _client = _transport(monkeypatch, response)
+
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
+        )
+    )
+
+    assert result.status_code == 302
+    assert result.body == {"redirect": "preserved"}
+    assert result.raw_content == content
+    assert response.closed is True
+
+
+def test_passthrough_redirect_preserves_invalid_json_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(302, [b"not-json"])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(json.JSONDecodeError):
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert response.closed is True
+
+
+def test_passthrough_http_error_preserves_non_json_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    content = b"upstream-error-body"
+    response = _FakeStreamingResponse(429, [content])
+    transport, _client = _transport(monkeypatch, response)
+
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
+        )
+    )
+
+    assert result.status_code == 429
+    assert result.body is None
+    assert result.raw_content == content
+    assert response.closed is True
+
+
 def test_compressed_response_is_rejected_without_decompression(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
