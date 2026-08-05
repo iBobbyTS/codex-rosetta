@@ -18,6 +18,10 @@ _ReasonT = TypeVar("_ReasonT", bound=StrEnum)
 _AsyncOperation = Callable[[], Awaitable[_ResultT]]
 
 
+async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
+    return await operation()
+
+
 def _observe_future(future: asyncio.Future[_ResultT]) -> None:
     with suppress(asyncio.CancelledError):
         future.exception()
@@ -193,7 +197,7 @@ class SearchProviderRequestBudget:
     async def _run_with_timeout(
         self, operation: _AsyncOperation[_ResultT], remaining: float
     ) -> _ResultT:
-        operation_future = asyncio.ensure_future(operation())
+        operation_future = asyncio.ensure_future(_invoke_operation(operation))
         try:
             done, _ = await asyncio.wait({operation_future}, timeout=remaining)
         except asyncio.CancelledError:

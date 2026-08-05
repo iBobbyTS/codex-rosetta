@@ -148,6 +148,120 @@ def test_budget_rejects_result_after_event_loop_starvation() -> None:
     assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
 
 
+@pytest.mark.parametrize(
+    ("completed_at", "deadline_wins"),
+    [(104.0, False), (105.0, True), (105.001, True), (math.nan, True), (99.0, True)],
+)
+@pytest.mark.parametrize(
+    "factory_failure",
+    [
+        None,
+        RuntimeError("factory-secret"),
+        TimeoutError("factory-timeout"),
+        asyncio.CancelledError("factory-cancel"),
+    ],
+)
+def test_sync_factory_completion_uses_absolute_deadline_owner(
+    completed_at: float,
+    deadline_wins: bool,
+    factory_failure: BaseException | None,
+) -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+    factory_calls = 0
+    body_calls = 0
+
+    async def body() -> str:
+        nonlocal body_calls
+        body_calls += 1
+        return "ok"
+
+    def operation() -> Awaitable[str]:
+        nonlocal factory_calls
+        factory_calls += 1
+        clock.value = completed_at
+        if factory_failure is not None:
+            raise factory_failure
+        return body()
+
+    if deadline_wins:
+        with pytest.raises(SearchProviderBudgetExceeded) as caught:
+            run(budget.run(operation))
+        assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+    elif factory_failure is not None:
+        with pytest.raises(type(factory_failure)) as caught:
+            run(budget.run(operation))
+        assert caught.value is factory_failure
+    else:
+        assert run(budget.run(operation)) == "ok"
+
+    assert factory_calls == 1
+    assert body_calls == (0 if factory_failure is not None else 1)
+
+
+@pytest.mark.parametrize(
+    "factory_failure",
+    [
+        None,
+        RuntimeError("factory-secret"),
+        TimeoutError("factory-timeout"),
+        asyncio.CancelledError("factory-cancel"),
+    ],
+)
+def test_sync_factory_real_deadline_owns_late_completion(
+    factory_failure: BaseException | None,
+) -> None:
+    async def body() -> str:
+        return "late"
+
+    def operation() -> Awaitable[str]:
+        time.sleep(0.01)
+        if factory_failure is not None:
+            raise factory_failure
+        return body()
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(SearchProviderRequestBudget(timeout_seconds=0.001).run(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+
+
+def test_sync_factory_external_call_stays_charged_when_deadline_wins() -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+    failure = RuntimeError("factory-secret")
+
+    def operation() -> Awaitable[None]:
+        clock.value = budget.deadline
+        raise failure
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(budget.run_external_call(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+    assert budget.external_calls == 1
+
+
+@pytest.mark.parametrize("completed_at", [104.0, 105.0])
+def test_sync_factory_non_awaitable_respects_deadline_owner(
+    completed_at: float,
+) -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+
+    def operation() -> Any:
+        clock.value = completed_at
+        return object()
+
+    expected_error = (
+        TypeError if completed_at < budget.deadline else SearchProviderBudgetExceeded
+    )
+    with pytest.raises(expected_error) as caught:
+        run(budget.run(operation))
+    if isinstance(caught.value, SearchProviderBudgetExceeded):
+        assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+
+
 def test_external_call_limit_allows_exactly_32_operations() -> None:
     budget = SearchProviderRequestBudget()
     calls = 0
@@ -166,6 +280,80 @@ def test_external_call_limit_allows_exactly_32_operations() -> None:
     )
     assert calls == MAX_SEARCH_PROVIDER_EXTERNAL_CALLS
     assert budget.external_calls == MAX_SEARCH_PROVIDER_EXTERNAL_CALLS
+
+
+def test_sync_factory_and_returned_body_run_once_per_admitted_call() -> None:
+    budget = SearchProviderRequestBudget()
+    factory_calls = 0
+    body_calls = 0
+
+    async def body() -> None:
+        nonlocal body_calls
+        body_calls += 1
+
+    def operation() -> Awaitable[None]:
+        nonlocal factory_calls
+        factory_calls += 1
+        return body()
+
+    for _ in range(MAX_SEARCH_PROVIDER_EXTERNAL_CALLS):
+        run(budget.run_external_call(operation))
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(budget.run_external_call(operation))
+
+    assert (
+        caught.value.reason is SearchProviderBudgetReason.EXTERNAL_CALL_LIMIT_EXCEEDED
+    )
+    assert factory_calls == MAX_SEARCH_PROVIDER_EXTERNAL_CALLS
+    assert body_calls == MAX_SEARCH_PROVIDER_EXTERNAL_CALLS
+
+
+def test_sync_factory_and_returned_body_share_budget_owned_child() -> None:
+    async def scenario() -> None:
+        caller = asyncio.current_task()
+        factory_task: asyncio.Task[Any] | None = None
+        body_task: asyncio.Task[Any] | None = None
+
+        async def body() -> None:
+            nonlocal body_task
+            body_task = asyncio.current_task()
+
+        def operation() -> Awaitable[None]:
+            nonlocal factory_task
+            factory_task = asyncio.current_task()
+            return body()
+
+        await SearchProviderRequestBudget().run(operation)
+
+        assert factory_task is not caller
+        assert factory_task is body_task
+
+    run(scenario())
+
+
+def test_preexpired_budget_does_not_invoke_sync_factory_or_body() -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=1, clock=clock)
+    clock.value = budget.deadline
+    factory_calls = 0
+    body_calls = 0
+
+    async def body() -> None:
+        nonlocal body_calls
+        body_calls += 1
+
+    def operation() -> Awaitable[None]:
+        nonlocal factory_calls
+        factory_calls += 1
+        return body()
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(budget.run_external_call(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+    assert budget.external_calls == 0
+    assert factory_calls == 0
+    assert body_calls == 0
 
 
 def test_budget_times_out_operation_but_propagates_cancel_and_unknown_errors() -> None:
