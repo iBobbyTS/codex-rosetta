@@ -959,7 +959,11 @@ class GatewayConfig:
         self.local_mode, self.local_mode_confirmed = normalize_local_mode_settings(
             _server
         )
-        self.web_search = normalize_web_search(_server.get("web_search"))
+        raw_web_search = _server.get("web_search")
+        legacy_web_search = not (
+            isinstance(raw_web_search, dict) and "providers" in raw_web_search
+        )
+        self.web_search = normalize_web_search(raw_web_search)
         for provider in self.web_search.providers:
             if provider["provider"] == "tavily":
                 tavily = cast(TavilyWebSearchProvider, provider)
@@ -1049,6 +1053,25 @@ class GatewayConfig:
         }
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
+        if legacy_web_search:
+            self._validate_legacy_web_search_provider()
+
+    def _validate_legacy_web_search_provider(self) -> None:
+        """Require a legacy configured search upstream to support Responses."""
+        if self.web_search["provider"] != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+            return
+        provider_name = self.web_search["responses_provider"]
+        provider = self._raw_providers.get(provider_name)
+        if provider is None:
+            raise ValueError(
+                "config: server.web_search.responses_provider must name an enabled "
+                f"provider; got {provider_name!r}"
+            )
+        if provider.get("api_type") != "responses":
+            raise ValueError(
+                "config: server.web_search.responses_provider must name a provider "
+                f"with api_type 'responses'; got {provider_name!r}"
+            )
 
     def _validate(self) -> None:
         if not isinstance(self.admin_password, str) or not self.admin_password.strip():

@@ -828,20 +828,6 @@ class TestWebSearchConfig:
                 [{"id": "legacy-0", "provider": "tavily", "tavily_api_key": "key"}],
             ),
             (
-                {
-                    "provider": "configured_responses_provider",
-                    "responses_provider": "upstream",
-                },
-                [
-                    {
-                        "id": "legacy-0",
-                        "provider": "configured_responses_provider",
-                        "responses_provider": "upstream",
-                        "responses_model": "gpt-5.6-sol",
-                    }
-                ],
-            ),
-            (
                 {"provider": "self_hosted_google"},
                 [{"id": "legacy-0", "provider": "self_hosted_google"}],
             ),
@@ -859,6 +845,63 @@ class TestWebSearchConfig:
         config = GatewayConfig(_minimal_raw(web_search=legacy))
 
         assert config.web_search == {"providers": expected}
+
+    def test_accepts_legacy_configured_responses_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+        raw["providers"]["test"]["api_type"] = "responses"
+
+        config = GatewayConfig(raw)
+
+        assert config.web_search == {
+            "providers": [
+                {
+                    "id": "legacy-0",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "test",
+                    "responses_model": "gpt-5.6-sol",
+                }
+            ]
+        }
+
+    def test_rejects_legacy_missing_responses_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "missing",
+            }
+        )
+
+        with pytest.raises(ValueError, match="must name an enabled provider"):
+            GatewayConfig(raw)
+
+    def test_rejects_legacy_disabled_responses_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+        raw["providers"]["test"]["api_type"] = "responses"
+        raw["providers"]["test"]["enabled"] = False
+
+        with pytest.raises(ValueError, match="must name an enabled provider"):
+            GatewayConfig(raw)
+
+    def test_rejects_legacy_non_responses_provider(self):
+        raw = _minimal_raw(
+            web_search={
+                "provider": "configured_responses_provider",
+                "responses_provider": "test",
+            }
+        )
+
+        with pytest.raises(ValueError, match="api_type 'responses'"):
+            GatewayConfig(raw)
 
     def test_does_not_validate_responses_provider_registry_in_section_one(self):
         config = GatewayConfig(
