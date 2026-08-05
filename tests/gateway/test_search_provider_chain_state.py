@@ -324,6 +324,78 @@ def test_coordinator_settlement_base_exception_preserves_identity_and_cleans_sta
 
 
 @pytest.mark.parametrize(
+    "settlement_failure_type",
+    [MemoryError, asyncio.CancelledError, KeyboardInterrupt],
+)
+def test_settlement_failure_owns_cleanup_after_all_waiter_notifications(
+    settlement_failure_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        item = candidate("active", "settlement-notification-identity")
+        clock = RecoverableSettlementClock()
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        state = coordinator._state
+        settlement_failure = settlement_failure_type("primary-settlement-failure")
+        notification_failure = MemoryError("secondary-notification-failure")
+        live_loop = asyncio.get_running_loop()
+        failed_future = live_loop.create_future()
+        notified_future = live_loop.create_future()
+
+        class FailingLoop:
+            calls = 0
+
+            def call_soon_threadsafe(self, *_args: Any) -> None:
+                self.calls += 1
+                raise notification_failure
+
+        failing_loop: Any = FailingLoop()
+
+        async def runner(_item: TavilySearchProviderCandidate) -> None:
+            with state._lock:
+                for loop, future in (
+                    (failing_loop, failed_future),
+                    (live_loop, notified_future),
+                ):
+                    state._next_waiter += 1
+                    waiter = search_provider_chain_state_module._CapacityWaiter(
+                        state._next_waiter,
+                        loop,
+                        future,
+                    )
+                    state._waiters[waiter.token] = waiter
+            clock.failure = settlement_failure
+            raise RuntimeError("runner-failure")
+
+        observed: BaseException | None = None
+        try:
+            await coordinator.run((item,), runner)
+        except BaseException as error:
+            observed = error
+        await asyncio.sleep(0)
+
+        assert observed is settlement_failure
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        assert failing_loop.calls == 1
+        assert notified_future.done() is True
+        assert notified_future.result() is None
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        assert state._waiters == {}
+        for formatted in (
+            "".join(traceback.format_exception(observed)),
+            format_traceback_with_locals(observed),
+        ):
+            assert "secondary-notification-failure" not in formatted
+
+        failed_future.cancel()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
     "terminal",
     ["success", "attempt", "request", "unknown", "budget", "cancel"],
 )
@@ -656,6 +728,82 @@ def test_closed_waiter_loop_does_not_override_release_result() -> None:
     assert state._entries == {}
     assert state._reservations == {}
     assert state._waiters == {}
+
+
+@pytest.mark.parametrize("operation", ["mark_failed", "settle"])
+@pytest.mark.parametrize(
+    "notification_failure_type",
+    [MemoryError, asyncio.CancelledError, KeyboardInterrupt],
+)
+def test_normal_state_change_propagates_first_notification_failure_after_all_waiters(
+    operation: str,
+    notification_failure_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        item = candidate("active", f"notification-{operation}")
+        reservation = None
+        if operation == "settle":
+            reservation, cooling_reason = await state.reserve(item)
+            assert reservation is not None
+            assert cooling_reason is None
+
+        notification_failure = notification_failure_type("primary-notification-failure")
+        live_loop = asyncio.get_running_loop()
+        failed_future = live_loop.create_future()
+        notified_future = live_loop.create_future()
+
+        class FailingLoop:
+            calls = 0
+
+            def call_soon_threadsafe(self, *_args: Any) -> None:
+                self.calls += 1
+                raise notification_failure
+
+        failing_loop: Any = FailingLoop()
+        with state._lock:
+            for loop, future in (
+                (failing_loop, failed_future),
+                (live_loop, notified_future),
+            ):
+                state._next_waiter += 1
+                waiter = search_provider_chain_state_module._CapacityWaiter(
+                    state._next_waiter,
+                    loop,
+                    future,
+                )
+                state._waiters[waiter.token] = waiter
+
+        observed: BaseException | None = None
+        try:
+            if operation == "mark_failed":
+                state.mark_failed(item, SearchProviderAttemptCategory.HTTP_ERROR)
+            else:
+                assert reservation is not None
+                state.record_success(reservation)
+        except BaseException as error:
+            observed = error
+        await asyncio.sleep(0)
+
+        assert observed is notification_failure
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        assert failing_loop.calls == 1
+        assert notified_future.done() is True
+        assert notified_future.result() is None
+        assert state._waiters == {}
+        assert state._reservations == {}
+        if operation == "mark_failed":
+            entry = state._entries[state.key(item)]
+            assert entry.cooldown_reason is SearchProviderAttemptCategory.HTTP_ERROR
+            assert entry.inflight == 0
+        else:
+            assert state._entries == {}
+
+        failed_future.cancel()
+
+    run(scenario())
 
 
 def test_active_chain_protection_is_reference_counted_and_release_wakes_waiter() -> (

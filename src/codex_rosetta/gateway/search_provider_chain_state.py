@@ -146,15 +146,23 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._last_clock = now
         return now
 
-    def _notify_waiters_locked(self) -> None:
+    def _notify_waiters_locked(
+        self, *, primary_error: BaseException | None = None
+    ) -> None:
         waiters = tuple(self._waiters.values())
         self._waiters.clear()
+        first_notification_error: BaseException | None = None
         for waiter in waiters:
             try:
                 waiter.loop.call_soon_threadsafe(_wake_waiter, waiter.future)
             except RuntimeError:
                 # A waiter's loop may close concurrently with a state change.
                 continue
+            except BaseException as error:
+                if first_notification_error is None:
+                    first_notification_error = error
+        if first_notification_error is not None and primary_error is None:
+            raise first_notification_error
 
     def protect(
         self, candidates: Iterable[SearchProviderCandidate]
@@ -442,7 +450,12 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._notify_waiters_locked()
         return published_reason
 
-    def _discard_without_publication_locked(self, reservation: _Reservation) -> None:
+    def _discard_without_publication_locked(
+        self,
+        reservation: _Reservation,
+        *,
+        primary_error: BaseException,
+    ) -> None:
         if self._reservations.pop(reservation.token, None) != reservation:
             return
         entry = self._entries[reservation.key]
@@ -456,7 +469,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._prune_success_order_locked(entry)
         if entry.inflight == 0 and entry.cooldown_until is None:
             del self._entries[reservation.key]
-        self._notify_waiters_locked()
+        self._notify_waiters_locked(primary_error=primary_error)
 
     def _settle(
         self,
@@ -476,8 +489,11 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     success=success,
                     failure_reason=failure_reason,
                 )
-            except BaseException:
-                self._discard_without_publication_locked(reservation)
+            except BaseException as error:
+                self._discard_without_publication_locked(
+                    reservation,
+                    primary_error=error,
+                )
                 raise
             self._prune_expired_locked(now)
             return self._settle_locked(
