@@ -314,7 +314,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     len(self._entries) >= self._capacity
                     and not self._evict_oldest_cooldown_locked()
                 ):
-                    raise SearchProviderStateCapacityUnavailable
+                    raise SearchProviderStateCapacityUnavailable from None
                 entry = _CandidateState()
                 self._entries[key] = entry
             self._next_cooldown_order += 1

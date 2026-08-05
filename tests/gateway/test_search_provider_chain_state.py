@@ -556,14 +556,14 @@ def test_external_mark_failed_cannot_reclaim_active_chain_cooldown() -> None:
     async def scenario() -> None:
         clock = Clock()
         coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=2)
+        state = coordinator._state
         protected = candidate("protected", "protected-identity")
         active = candidate("active", "active-identity")
         external_identity = "synthetic-external-private-identity"
-        external_key = "synthetic-external-private-key"
+        external_api_key = "synthetic-external-private-key"
         raw_error = "synthetic-external-raw-provider-error"
-        external = candidate("external", external_identity, api_key=external_key)
+        external = candidate("external", external_identity, api_key=external_api_key)
         failure = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
-        failure.__cause__ = RuntimeError(raw_error)
         coordinator.mark_failed(protected, failure)
         active_started = asyncio.Event()
         release_active = asyncio.Event()
@@ -577,14 +577,39 @@ def test_external_mark_failed_cannot_reclaim_active_chain_cooldown() -> None:
         task = asyncio.create_task(coordinator.run((protected, active), runner))
         await active_started.wait()
 
-        with pytest.raises(SearchProviderStateCapacityUnavailable) as caught:
-            coordinator.mark_failed(external, failure)
-        assert str(caught.value) == "Search provider state capacity unavailable"
+        try:
+            raise RuntimeError(raw_error)
+        except RuntimeError as raw_cause:
+            try:
+                raise failure from raw_cause
+            except SearchProviderAttemptError as active_failure:
+                with pytest.raises(SearchProviderStateCapacityUnavailable) as caught:
+                    coordinator.mark_failed(external, active_failure)
+
+        capacity_error = caught.value
+        assert str(capacity_error) == "Search provider state capacity unavailable"
+        assert capacity_error.__context__ is failure
+        assert capacity_error.__suppress_context__ is True
+        protected_key = state.key(protected)
+        active_key = state.key(active)
+        assert set(state._entries) == {protected_key, active_key}
+        assert state._entries[protected_key].cooldown_reason == (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert state._entries[protected_key].inflight == 0
+        assert state._entries[active_key].cooldown_reason is None
+        assert state._entries[active_key].inflight == 1
+        assert state.key(external) not in state._entries
+        assert tuple(state._reservations.values()) == (active_key,)
+        assert state._protection_counts == {protected_key: 1, active_key: 1}
         assert coordinator.is_cooling(protected) is True
         assert coordinator.is_cooling(external) is False
-        formatted = format_traceback_with_locals(caught.value)
-        for secret in (external_identity, external_key, raw_error):
-            assert secret not in formatted
+        default_traceback = "".join(traceback.format_exception(capacity_error))
+        locals_traceback = format_traceback_with_locals(capacity_error)
+        for formatted in (default_traceback, locals_traceback):
+            assert str(capacity_error) in formatted
+            for secret in (external_identity, external_api_key, raw_error):
+                assert secret not in formatted
 
         release_active.set()
         assert await task == "ok"
