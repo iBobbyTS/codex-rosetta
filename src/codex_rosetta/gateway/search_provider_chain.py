@@ -8,7 +8,7 @@ import time
 from collections.abc import Awaitable, Callable
 from contextlib import suppress
 from enum import StrEnum
-from typing import Generic, TypeVar
+from typing import Any, Generic, TypeVar
 
 SEARCH_PROVIDER_REQUEST_TIMEOUT_SECONDS = 300.0
 MAX_SEARCH_PROVIDER_EXTERNAL_CALLS = 32
@@ -16,6 +16,7 @@ MAX_SEARCH_PROVIDER_EXTERNAL_CALLS = 32
 _ResultT = TypeVar("_ResultT")
 _ReasonT = TypeVar("_ReasonT", bound=StrEnum)
 _AsyncOperation = Callable[[], Awaitable[_ResultT]]
+_DETACHED_OPERATION_FUTURES: set[asyncio.Future[Any]] = set()
 
 
 async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
@@ -25,6 +26,18 @@ async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
 def _observe_future(future: asyncio.Future[_ResultT]) -> None:
     with suppress(asyncio.CancelledError):
         future.exception()
+
+
+def _observe_detached_future(future: asyncio.Future[Any]) -> None:
+    try:
+        _observe_future(future)
+    finally:
+        _DETACHED_OPERATION_FUTURES.discard(future)
+
+
+def _detach_future(future: asyncio.Future[_ResultT]) -> None:
+    _DETACHED_OPERATION_FUTURES.add(future)
+    future.add_done_callback(_observe_detached_future)
 
 
 class SearchProviderBudgetReason(StrEnum):
@@ -202,7 +215,7 @@ class SearchProviderRequestBudget:
             done, _ = await asyncio.wait({operation_future}, timeout=remaining)
         except asyncio.CancelledError:
             operation_future.cancel()
-            operation_future.add_done_callback(_observe_future)
+            _detach_future(operation_future)
             raise
         if operation_future in done:
             try:
@@ -212,7 +225,7 @@ class SearchProviderRequestBudget:
                 raise
             return operation_future.result()
         operation_future.cancel()
-        operation_future.add_done_callback(_observe_future)
+        _detach_future(operation_future)
         raise SearchProviderBudgetExceeded(SearchProviderBudgetReason.DEADLINE_EXCEEDED)
 
     async def run(self, operation: _AsyncOperation[_ResultT]) -> _ResultT:

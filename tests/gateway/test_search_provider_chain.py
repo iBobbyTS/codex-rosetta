@@ -1,11 +1,14 @@
 import asyncio
+import gc
 import math
 import time
+import weakref
 from collections.abc import Awaitable
 from typing import Any
 
 import pytest
 
+from codex_rosetta.gateway import search_provider_chain as search_provider_chain_module
 from codex_rosetta.gateway.search_provider_chain import (
     MAX_SEARCH_PROVIDER_EXTERNAL_CALLS,
     SEARCH_PROVIDER_REQUEST_TIMEOUT_SECONDS,
@@ -446,6 +449,105 @@ def test_external_cancellation_cancels_operation_and_remains_external() -> None:
             await caller
         assert caught.value.args == ("external-cancel",)
         await cancelled.wait()
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("terminal_owner", ["budget", "outer"])
+@pytest.mark.parametrize("late_outcome", ["success", "error", "cancel"])
+def test_detached_cancellation_resistant_operation_is_retained_until_observed(
+    terminal_owner: str,
+    late_outcome: str,
+) -> None:
+    async def scenario() -> None:
+        assert search_provider_chain_module._DETACHED_OPERATION_FUTURES == set()
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict[str, object]] = []
+        original_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+        operation_started = asyncio.Event()
+        cancellation_resisted = asyncio.Event()
+        child_refs: list[weakref.ReferenceType[asyncio.Task[Any]]] = []
+        release_refs: list[weakref.ReferenceType[asyncio.Event]] = []
+
+        async def operation() -> str:
+            child = asyncio.current_task()
+            assert child is not None
+            release = asyncio.Event()
+            child_refs.append(weakref.ref(child))
+            release_refs.append(weakref.ref(release))
+            operation_started.set()
+            try:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+            except asyncio.CancelledError:
+                cancellation_resisted.set()
+                await release.wait()
+            if late_outcome == "error":
+                raise RuntimeError("late-private-detail")
+            if late_outcome == "cancel":
+                raise asyncio.CancelledError("late-private-cancel")
+            return "late-private-success"
+
+        try:
+            if terminal_owner == "budget":
+                try:
+                    await SearchProviderRequestBudget(timeout_seconds=0.001).run(
+                        operation
+                    )
+                except SearchProviderBudgetExceeded as error:
+                    assert error.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+                else:
+                    pytest.fail("budget deadline did not own the terminal result")
+            else:
+                caller = asyncio.create_task(
+                    SearchProviderRequestBudget().run(operation)
+                )
+                await operation_started.wait()
+                caller.cancel("outer-owner")
+                try:
+                    await caller
+                except asyncio.CancelledError as error:
+                    assert error.args == ("outer-owner",)
+                else:
+                    pytest.fail("outer cancellation did not own the terminal result")
+                del caller
+
+            await cancellation_resisted.wait()
+            assert len(child_refs) == 1
+            assert len(release_refs) == 1
+            child_ref = child_refs[0]
+            release_ref = release_refs[0]
+            assert (
+                child_ref() in search_provider_chain_module._DETACHED_OPERATION_FUTURES
+            )
+
+            gc.collect()
+            await asyncio.sleep(0)
+
+            assert child_ref() is not None
+            assert (
+                child_ref() in search_provider_chain_module._DETACHED_OPERATION_FUTURES
+            )
+            assert unhandled == []
+
+            release = release_ref()
+            assert release is not None
+            release.set()
+            del release
+            for _ in range(3):
+                await asyncio.sleep(0)
+
+            assert search_provider_chain_module._DETACHED_OPERATION_FUTURES == set()
+            assert unhandled == []
+            gc.collect()
+            assert child_ref() is None
+        finally:
+            release = release_refs[0]() if release_refs else None
+            if release is not None:
+                release.set()
+            await asyncio.sleep(0)
+            loop.set_exception_handler(original_handler)
 
     run(scenario())
 
