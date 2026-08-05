@@ -1241,3 +1241,60 @@ def test_typed_attempt_clock_failures_do_not_retain_provider_error_chain(
     assert upstream_secret not in locals_formatted
     assert identity not in locals_formatted
     assert api_key not in locals_formatted
+
+
+@pytest.mark.parametrize(
+    ("failure_clock", "cooldown_seconds"),
+    [
+        (1e20, DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS),
+        (100.0, math.ulp(100.0) / 4),
+    ],
+)
+def test_cooldown_deadline_must_strictly_advance_before_chain_side_effects(
+    failure_clock: float,
+    cooldown_seconds: float,
+) -> None:
+    clock = Clock(0.0)
+    events: list[dict[str, str | int]] = []
+    coordinator = SearchProviderChainCoordinator(
+        clock=clock,
+        cooldown_seconds=cooldown_seconds,
+        observer=events.append,
+    )
+    retained = candidate("retained", "retained-identity")
+    coordinator.mark_failed(
+        retained,
+        SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR),
+    )
+    old_cooldowns = dict(coordinator._cooldowns)
+
+    identity = "synthetic-non-advancing-deadline-identity"
+    api_key = "synthetic-non-advancing-deadline-api-key"
+    raw_error = "synthetic-non-advancing-deadline-provider-error"
+    failed = candidate("failed", identity, api_key=api_key)
+    following = candidate("following", "following-identity")
+    calls: list[str] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item is failed:
+            clock.value = failure_clock
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR
+            ) from RuntimeError(raw_error)
+        return "unexpected"
+
+    with pytest.raises(ValueError) as caught:
+        run(coordinator.run((failed, following), runner))
+
+    assert str(caught.value) == "cooldown deadline must be later than current time"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert coordinator._cooldowns == old_cooldowns
+    assert coordinator._key(failed) not in coordinator._cooldowns
+    assert events == []
+    assert calls == ["failed"]
+    formatted = format_traceback_with_locals(caught.value)
+    assert identity not in formatted
+    assert api_key not in formatted
+    assert raw_error not in formatted

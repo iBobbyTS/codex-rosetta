@@ -218,6 +218,8 @@ class SearchProviderChainCoordinator:
         until = now + self._cooldown_seconds
         if not math.isfinite(until):
             raise ValueError("cooldown deadline must be finite")
+        if until <= now:
+            raise ValueError("cooldown deadline must be later than current time")
         self._prune(now)
         self._cooldowns[self._key(candidate)] = (until, reason)
         return reason
