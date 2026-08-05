@@ -260,8 +260,16 @@ class SearchProviderChainCoordinator:
             }
         )
 
-    def _release_neutrally(self, reservation: _Reservation) -> None:
-        published_reason = self._state.release(reservation)
+    def _release_neutrally(
+        self,
+        reservation: _Reservation,
+        *,
+        primary_error: object | None = None,
+    ) -> None:
+        published_reason = self._state.release(
+            reservation,
+            primary_error=primary_error,
+        )
         self._observe_delayed_cooldown(published_reason)
 
     async def _run_admitted(
@@ -294,7 +302,10 @@ class SearchProviderChainCoordinator:
 
             if captured_runner_error is not None:
                 try:
-                    self._release_neutrally(reservation)
+                    self._release_neutrally(
+                        reservation,
+                        primary_error=captured_runner_error,
+                    )
                 except BaseException as settlement_error:
                     raise settlement_error from None
                 settled = True

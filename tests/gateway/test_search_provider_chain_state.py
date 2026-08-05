@@ -102,6 +102,45 @@ class RuntimeThenClosedStateLoop:
         callback(*args)
 
 
+class BlockingRetryLoop:
+    def __init__(
+        self,
+        real_loop: asyncio.AbstractEventLoop,
+        *,
+        retry_outcome: str,
+    ) -> None:
+        self.real_loop = real_loop
+        self.retry_outcome = retry_outcome
+        self.first_failure = MemoryError("initial-schedule-failure")
+        self.retry_failure = MemoryError("retry-schedule-failure")
+        self.first_entered = threading.Event()
+        self.allow_first_failure = threading.Event()
+        self.retry_entered = threading.Event()
+        self.allow_retry = threading.Event()
+        self._calls_lock = threading.Lock()
+        self.calls = 0
+
+    def is_closed(self) -> bool:
+        return False
+
+    def call_soon_threadsafe(self, callback: Callable[..., None], *args: Any) -> None:
+        with self._calls_lock:
+            self.calls += 1
+            call = self.calls
+        if call == 1:
+            self.first_entered.set()
+            if not self.allow_first_failure.wait(1):
+                raise AssertionError("initial schedule was not released")
+            raise self.first_failure
+        if call == 2 and self.retry_outcome == "failure":
+            raise self.retry_failure
+        if call == 2 and self.retry_outcome == "blocked_success":
+            self.retry_entered.set()
+            if not self.allow_retry.wait(1):
+                raise AssertionError("bounded retry was not released")
+        self.real_loop.call_soon_threadsafe(callback, *args)
+
+
 def candidate(
     row_id: str, identity: str, *, api_key: str | None = None
 ) -> TavilySearchProviderCandidate:
@@ -955,6 +994,189 @@ def test_release_protection_uses_only_explicit_primary_error_ownership() -> None
     run(scenario())
 
 
+@pytest.mark.parametrize("retry_outcome", ["success", "failure"])
+def test_failed_notification_retries_once_after_missing_a_state_revision(
+    retry_outcome: str,
+) -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator(state_capacity=1)
+        state = coordinator._state
+        item = candidate("active", f"revision-race-{retry_outcome}")
+        reservation, cooling_reason = await state.reserve(item)
+        assert reservation is not None
+        assert cooling_reason is None
+
+        real_loop = asyncio.get_running_loop()
+        blocking_loop: Any = BlockingRetryLoop(
+            real_loop,
+            retry_outcome=retry_outcome,
+        )
+        future = real_loop.create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                blocking_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        release_errors: list[BaseException] = []
+
+        def release_capacity() -> None:
+            try:
+                state.release(reservation)
+            except BaseException as error:
+                release_errors.append(error)
+
+        release_thread = threading.Thread(target=release_capacity)
+        release_thread.start()
+        assert await asyncio.to_thread(blocking_loop.first_entered.wait, 1)
+
+        revision_before = state._notification_revision
+        protection = state.protect(())
+        state.release_protection(protection)
+        assert state._notification_revision == revision_before + 1
+        blocking_loop.allow_first_failure.set()
+        await asyncio.to_thread(release_thread.join, 1)
+
+        assert release_thread.is_alive() is False
+        assert release_errors == [blocking_loop.first_failure]
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert blocking_loop.calls == 2
+        if retry_outcome == "success":
+            async with asyncio.timeout(1):
+                await future
+            assert state._waiters == {}
+            return
+
+        assert future.done() is False
+        assert state._waiters == {waiter.token: waiter}
+        later_change = state.protect(())
+        state.release_protection(later_change)
+        async with asyncio.timeout(1):
+            await future
+        assert blocking_loop.calls == 3
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+def test_bounded_retry_and_concurrent_take_keep_one_registry_owner() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator(state_capacity=1)
+        state = coordinator._state
+        item = candidate("active", "revision-concurrent-take")
+        reservation, cooling_reason = await state.reserve(item)
+        assert reservation is not None
+        assert cooling_reason is None
+
+        real_loop = asyncio.get_running_loop()
+        blocking_loop: Any = BlockingRetryLoop(
+            real_loop,
+            retry_outcome="blocked_success",
+        )
+        future = real_loop.create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                blocking_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        release_errors: list[BaseException] = []
+
+        def release_capacity() -> None:
+            try:
+                state.release(reservation)
+            except BaseException as error:
+                release_errors.append(error)
+
+        release_thread = threading.Thread(target=release_capacity)
+        release_thread.start()
+        assert await asyncio.to_thread(blocking_loop.first_entered.wait, 1)
+        missed_change = state.protect(())
+        state.release_protection(missed_change)
+        blocking_loop.allow_first_failure.set()
+        assert await asyncio.to_thread(blocking_loop.retry_entered.wait, 1)
+
+        concurrent_take = state.protect(())
+        state.release_protection(concurrent_take)
+        assert state._waiters == {}
+        blocking_loop.allow_retry.set()
+        await asyncio.to_thread(release_thread.join, 1)
+        async with asyncio.timeout(1):
+            await future
+
+        assert release_thread.is_alive() is False
+        assert release_errors == [blocking_loop.first_failure]
+        assert blocking_loop.calls == 3
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._waiters == {}
+        assert state._retrying_waiters == set()
+
+    run(scenario())
+
+
+def test_reentrant_failure_during_bounded_retry_does_not_recurse() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator(state_capacity=1)
+        state = coordinator._state
+        item = candidate("active", "revision-reentrant-retry")
+        reservation, cooling_reason = await state.reserve(item)
+        assert reservation is not None
+        assert cooling_reason is None
+
+        real_loop = asyncio.get_running_loop()
+        future = real_loop.create_future()
+        notification_failure = MemoryError("reentrant-schedule-failure")
+
+        class ReentrantFailingLoop:
+            calls = 0
+
+            def call_soon_threadsafe(
+                self, callback: Callable[..., None], *args: Any
+            ) -> None:
+                self.calls += 1
+                if self.calls <= 3:
+                    nested = state.protect(())
+                    state.release_protection(nested)
+                    raise notification_failure
+                real_loop.call_soon_threadsafe(callback, *args)
+
+        failing_loop: Any = ReentrantFailingLoop()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                failing_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        with pytest.raises(MemoryError) as caught:
+            state.release(reservation)
+
+        assert caught.value is notification_failure
+        assert failing_loop.calls == 3
+        assert future.done() is False
+        assert state._waiters == {waiter.token: waiter}
+        assert state._retrying_waiters == set()
+        later_change = state.protect(())
+        state.release_protection(later_change)
+        async with asyncio.timeout(1):
+            await future
+        assert failing_loop.calls == 4
+        assert state._waiters == {}
+        assert state._retrying_waiters == set()
+
+    run(scenario())
+
+
 @pytest.mark.parametrize(
     "closed_state_type",
     [True, False, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
@@ -1217,13 +1439,13 @@ def test_every_notification_boundary_calls_external_loop_only_after_unlock(
             )
             clock.value += 1
 
-        calls: list[BaseException | None] = []
+        calls: list[object | None] = []
         original_notify = state._notify_waiters
 
         def checked_notify(
-            waiters: tuple[Any, ...],
+            waiters: Any,
             *,
-            primary_error: BaseException | None = None,
+            primary_error: object | None = None,
         ) -> None:
             assert state._lock.locked() is False
             calls.append(primary_error)

@@ -53,6 +53,14 @@ class _CapacityWaiter:
 
 
 @dataclass(frozen=True, slots=True)
+class _NotificationBatch:
+    """One waiter batch frozen at a notification-state revision."""
+
+    revision: int
+    waiters: tuple[_CapacityWaiter, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class _ReserveInstruction(Generic[_ReasonT]):
     """One lock-owned admission, cooldown, or capacity-wait instruction."""
 
@@ -126,11 +134,13 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._protections: dict[int, frozenset[_CandidateKey]] = {}
         self._protection_counts: dict[_CandidateKey, int] = {}
         self._waiters: dict[int, _CapacityWaiter] = {}
+        self._retrying_waiters: set[int] = set()
         self._next_reservation = 0
         self._next_generation = 0
         self._next_protection = 0
         self._next_waiter = 0
         self._next_cooldown_order = 0
+        self._notification_revision = 0
 
     @staticmethod
     def key(candidate: SearchProviderCandidate) -> _CandidateKey:
@@ -146,40 +156,79 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._last_clock = now
         return now
 
-    def _take_waiters_locked(self) -> tuple[_CapacityWaiter, ...]:
+    def _take_waiters_locked(self) -> _NotificationBatch:
+        self._notification_revision += 1
         waiters = tuple(self._waiters.values())
         self._waiters.clear()
-        return waiters
+        return _NotificationBatch(self._notification_revision, waiters)
+
+    @staticmethod
+    def _schedule_waiter(waiter: _CapacityWaiter) -> BaseException | None:
+        try:
+            waiter.loop.call_soon_threadsafe(_wake_waiter, waiter.future)
+        except BaseException as error:
+            if isinstance(error, RuntimeError):
+                try:
+                    if waiter.loop.is_closed():
+                        return None
+                except BaseException as closed_error:
+                    return closed_error
+            return error
+        return None
+
+    def _restore_failed_waiters(
+        self,
+        batch: _NotificationBatch,
+        failed_waiters: list[_CapacityWaiter],
+    ) -> tuple[_CapacityWaiter, ...]:
+        retry_waiters: list[_CapacityWaiter] = []
+        with self._lock:
+            missed_change = self._notification_revision > batch.revision
+            for waiter in failed_waiters:
+                if waiter.future.done():
+                    continue
+                registered = self._waiters.setdefault(waiter.token, waiter)
+                if (
+                    missed_change
+                    and registered is waiter
+                    and waiter.token not in self._retrying_waiters
+                ):
+                    self._retrying_waiters.add(waiter.token)
+                    retry_waiters.append(waiter)
+        return tuple(retry_waiters)
+
+    def _retry_waiters_once(self, waiters: tuple[_CapacityWaiter, ...]) -> None:
+        scheduled_waiters: list[_CapacityWaiter] = []
+        try:
+            for waiter in waiters:
+                if self._schedule_waiter(waiter) is None:
+                    scheduled_waiters.append(waiter)
+        finally:
+            with self._lock:
+                self._retrying_waiters.difference_update(
+                    waiter.token for waiter in waiters
+                )
+                for waiter in scheduled_waiters:
+                    if self._waiters.get(waiter.token) is waiter:
+                        del self._waiters[waiter.token]
 
     def _notify_waiters(
         self,
-        waiters: tuple[_CapacityWaiter, ...],
+        batch: _NotificationBatch,
         *,
-        primary_error: BaseException | None = None,
+        primary_error: object | None = None,
     ) -> None:
         first_notification_error: BaseException | None = None
         failed_waiters: list[_CapacityWaiter] = []
-        for waiter in waiters:
-            try:
-                waiter.loop.call_soon_threadsafe(_wake_waiter, waiter.future)
-            except BaseException as error:
-                notification_error = error
-                if isinstance(error, RuntimeError):
-                    try:
-                        closed = waiter.loop.is_closed()
-                    except BaseException as closed_error:
-                        notification_error = closed_error
-                    else:
-                        if closed:
-                            continue
+        for waiter in batch.waiters:
+            notification_error = self._schedule_waiter(waiter)
+            if notification_error is not None:
                 failed_waiters.append(waiter)
                 if first_notification_error is None:
                     first_notification_error = notification_error
         if failed_waiters:
-            with self._lock:
-                for waiter in failed_waiters:
-                    if not waiter.future.done():
-                        self._waiters.setdefault(waiter.token, waiter)
+            retry_waiters = self._restore_failed_waiters(batch, failed_waiters)
+            self._retry_waiters_once(retry_waiters)
         if first_notification_error is not None and primary_error is None:
             raise first_notification_error from None
 
@@ -279,7 +328,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         loop: asyncio.AbstractEventLoop,
     ) -> tuple[
         _ReserveInstruction[_ReasonT] | None,
-        tuple[_CapacityWaiter, ...],
+        _NotificationBatch,
     ]:
         now = self._read_clock_locked()
         if self._prune_expired_locked(now):
@@ -287,10 +336,14 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         entry = self._entries.get(key)
         if entry is not None and entry.cooldown_until is not None:
             assert entry.cooldown_reason is not None
-            return _ReserveInstruction(cooling_reason=entry.cooldown_reason), ()
+            return _ReserveInstruction(cooling_reason=entry.cooldown_reason), (
+                _NotificationBatch(self._notification_revision)
+            )
         if entry is not None and entry.inflight < MAX_ACTIVE_ATTEMPTS_PER_CANDIDATE:
             reservation = self._reserve_locked(key, entry)
-            return _ReserveInstruction(reservation=reservation), ()
+            return _ReserveInstruction(reservation=reservation), _NotificationBatch(
+                self._notification_revision
+            )
         if entry is None and len(self._entries) >= self._capacity:
             if self._evict_oldest_cooldown_locked():
                 return None, self._take_waiters_locked()
@@ -298,11 +351,15 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             entry = _CandidateState()
             self._entries[key] = entry
             reservation = self._reserve_locked(key, entry)
-            return _ReserveInstruction(reservation=reservation), ()
+            return _ReserveInstruction(reservation=reservation), _NotificationBatch(
+                self._notification_revision
+            )
         waiter = self._register_waiter_locked(loop)
         cooldown_deadline = self._nearest_releasable_cooldown_locked()
         timeout = None if cooldown_deadline is None else cooldown_deadline - now
-        return _ReserveInstruction(waiter=waiter, timeout=timeout), ()
+        return _ReserveInstruction(waiter=waiter, timeout=timeout), _NotificationBatch(
+            self._notification_revision
+        )
 
     async def reserve(
         self,
@@ -506,8 +563,9 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         *,
         success: bool = False,
         failure_reason: _ReasonT | None = None,
+        primary_error: object | None = None,
     ) -> _ReasonT | None:
-        primary_error: BaseException | None = None
+        settlement_error: BaseException | None = None
         published_reason: _ReasonT | None = None
         with self._lock:
             if self._reservations.get(reservation.token) != reservation:
@@ -522,7 +580,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 )
             except BaseException as error:
                 self._discard_without_publication_locked(reservation)
-                primary_error = error
+                settlement_error = error
             else:
                 self._prune_expired_locked(now)
                 published_reason = self._settle_locked(
@@ -532,14 +590,22 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     failure_reason=failure_reason,
                 )
             waiters = self._take_waiters_locked()
-        self._notify_waiters(waiters, primary_error=primary_error)
-        if primary_error is not None:
-            raise primary_error from None
+        notification_primary = (
+            settlement_error if settlement_error is not None else primary_error
+        )
+        self._notify_waiters(waiters, primary_error=notification_primary)
+        if settlement_error is not None:
+            raise settlement_error from None
         return published_reason
 
-    def release(self, reservation: _Reservation) -> _ReasonT | None:
+    def release(
+        self,
+        reservation: _Reservation,
+        *,
+        primary_error: object | None = None,
+    ) -> _ReasonT | None:
         """Neutrally release once and return any delayed cooldown publication."""
-        return self._settle(reservation)
+        return self._settle(reservation, primary_error=primary_error)
 
     def record_success(self, reservation: _Reservation) -> _ReasonT | None:
         """Atomically record health success and settle its reservation once."""
@@ -559,7 +625,11 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             changed = self._prune_expired_locked(now)
             entry = self._entries.get(key)
             reason = entry.cooldown_reason if entry is not None else None
-            waiters = self._take_waiters_locked() if changed else ()
+            waiters = (
+                self._take_waiters_locked()
+                if changed
+                else _NotificationBatch(self._notification_revision)
+            )
         self._notify_waiters(waiters)
         return reason
 
@@ -646,6 +716,10 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 if entry.inflight == 0:
                     del self._entries[key]
                 changed = True
-            waiters = self._take_waiters_locked() if changed else ()
+            waiters = (
+                self._take_waiters_locked()
+                if changed
+                else _NotificationBatch(self._notification_revision)
+            )
         self._notify_waiters(waiters)
         return cleared

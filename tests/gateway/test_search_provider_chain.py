@@ -4,7 +4,7 @@ import math
 import time
 import traceback
 import weakref
-from collections.abc import Awaitable
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 import pytest
@@ -996,6 +996,85 @@ def test_untyped_budget_cancel_and_fatal_errors_propagate_without_cooldown(
     assert api_key not in formatted
 
 
+@pytest.mark.parametrize(
+    "primary_type",
+    [RuntimeError, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
+)
+def test_runner_primary_owns_neutral_release_notification_failure(
+    primary_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        item = candidate("row", f"neutral-primary-{primary_type.__name__}")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        primary = primary_type("runner-private-primary")
+        notification_failure = MemoryError("neutral-release-secondary")
+        real_loop = asyncio.get_running_loop()
+        future = real_loop.create_future()
+        runner_traceback: Any = None
+
+        class OneShotNotificationFailure:
+            calls = 0
+
+            def is_closed(self) -> bool:
+                return False
+
+            def call_soon_threadsafe(
+                self, callback: Callable[..., None], *args: Any
+            ) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    raise notification_failure
+                real_loop.call_soon_threadsafe(callback, *args)
+
+        failing_loop: Any = OneShotNotificationFailure()
+
+        async def runner(_item: TavilySearchProviderCandidate) -> None:
+            nonlocal runner_traceback
+            with state._lock:
+                state._next_waiter += 1
+                waiter = search_provider_chain_state_module._CapacityWaiter(
+                    state._next_waiter,
+                    failing_loop,
+                    future,
+                )
+                state._waiters[waiter.token] = waiter
+            try:
+                raise primary
+            except BaseException as error:
+                runner_traceback = error.__traceback__
+                raise
+
+        observed: BaseException | None = None
+        try:
+            await coordinator.run((item,), runner)
+        except BaseException as error:
+            observed = error
+
+        assert observed is primary
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        traceback_cursor = observed.__traceback__
+        while traceback_cursor is not None and traceback_cursor is not runner_traceback:
+            traceback_cursor = traceback_cursor.tb_next
+        assert traceback_cursor is runner_traceback
+        async with asyncio.timeout(1):
+            await future
+        assert failing_loop.calls == 2
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        assert state._waiters == {}
+        for formatted in (
+            "".join(traceback.format_exception(observed)),
+            format_traceback_with_locals(observed),
+        ):
+            assert "neutral-release-secondary" not in formatted
+
+    run(scenario())
+
+
 def test_quota_attempt_uses_bounded_quota_cooldown_reason() -> None:
     item = candidate("row", "identity")
     coordinator = SearchProviderChainCoordinator()
@@ -1292,6 +1371,69 @@ def test_unknown_runner_clock_failure_suppresses_sensitive_exception_context() -
 
 
 @pytest.mark.parametrize(
+    "runner_type",
+    [asyncio.CancelledError, MemoryError, KeyboardInterrupt],
+)
+def test_runner_error_is_replaced_by_original_clock_preflight_failure(
+    runner_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        clock_failure = MemoryError("clock-preflight-primary")
+
+        class FailingClock:
+            def __init__(self) -> None:
+                self.failure: BaseException | None = None
+                self.failure_traceback: Any = None
+
+            def __call__(self) -> float:
+                if self.failure is not None:
+                    try:
+                        raise self.failure
+                    except BaseException as error:
+                        self.failure_traceback = error.__traceback__
+                        raise
+                return 100.0
+
+        clock = FailingClock()
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        item = candidate("row", f"clock-primary-{runner_type.__name__}")
+        runner_error = runner_type("runner-private-error")
+
+        async def runner(_item: TavilySearchProviderCandidate) -> None:
+            clock.failure = clock_failure
+            raise runner_error
+
+        observed: BaseException | None = None
+        try:
+            await coordinator.run((item,), runner)
+        except BaseException as error:
+            observed = error
+
+        assert observed is clock_failure
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        assert observed.__suppress_context__ is True
+        traceback_cursor = observed.__traceback__
+        while (
+            traceback_cursor is not None
+            and traceback_cursor is not clock.failure_traceback
+        ):
+            traceback_cursor = traceback_cursor.tb_next
+        assert traceback_cursor is clock.failure_traceback
+        assert coordinator._state._entries == {}
+        assert coordinator._state._reservations == {}
+        assert coordinator._state._protections == {}
+        assert coordinator._state._protection_counts == {}
+        for formatted in (
+            "".join(traceback.format_exception(observed)),
+            format_traceback_with_locals(observed),
+        ):
+            assert "runner-private-error" not in formatted
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
     "terminal_kind",
     ["unknown", "budget", "cancel", "memory", "exit", "interrupt"],
 )
@@ -1496,7 +1638,13 @@ def test_delayed_cooldown_publication_is_bounded_and_advisory() -> None:
     run(scenario())
 
 
-def test_unknown_runner_delayed_fatal_observer_suppresses_sensitive_context() -> None:
+@pytest.mark.parametrize(
+    "runner_type",
+    [RuntimeError, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
+)
+def test_runner_delayed_fatal_observer_suppresses_sensitive_context(
+    runner_type: type[BaseException],
+) -> None:
     async def scenario() -> None:
         raw_error = "synthetic-delayed-unknown-private-body"
         identity = "synthetic-delayed-fatal-identity"
@@ -1522,7 +1670,7 @@ def test_unknown_runner_delayed_fatal_observer_suppresses_sensitive_context() ->
         async def unknown(_item: TavilySearchProviderCandidate) -> None:
             unknown_started.set()
             await release_unknown.wait()
-            raise RuntimeError(raw_error)
+            raise runner_type(raw_error)
 
         failure_task = asyncio.create_task(coordinator.run((item,), pending_failure))
         unknown_task = asyncio.create_task(coordinator.run((item,), unknown))
