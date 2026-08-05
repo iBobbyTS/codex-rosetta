@@ -13,6 +13,7 @@ from typing import Any, Generic, TypeVar
 from .search_provider_candidates import SearchProviderCandidate
 from .search_provider_chain_state import (
     DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
+    SearchProviderStateCapacityUnavailable as SearchProviderStateCapacityUnavailable,
     _SearchProviderChainState,
 )
 
@@ -224,74 +225,77 @@ class SearchProviderChainCoordinator:
             self._observe({"final_reason": reason.value})
             raise SearchProviderChainUnavailable(reason)
 
-        attempted = False
-        protected_keys = self._state.keys_for(candidates)
-        seen: set[object] = set()
-        for attempt_index, candidate in enumerate(candidates):
-            key = self._state.key(candidate)
-            if key in seen:
-                continue
-            seen.add(key)
-            reservation, cooling_reason = await self._state.reserve(
-                candidate, protected_keys
-            )
-            if cooling_reason is not None:
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    "cooling",
-                    cooldown_reason=cooling_reason,
+        protection = self._state.protect(candidates)
+        try:
+            attempted = False
+            seen: set[object] = set()
+            for attempt_index, candidate in enumerate(candidates):
+                key = self._state.key(candidate)
+                if key in seen:
+                    continue
+                seen.add(key)
+                reservation, cooling_reason = await self._state.reserve(candidate)
+                if cooling_reason is not None:
+                    self._observe_candidate(
+                        candidate,
+                        attempt_index,
+                        "cooling",
+                        cooldown_reason=cooling_reason,
+                    )
+                    continue
+                assert reservation is not None
+                attempted = True
+                attempt_category: SearchProviderAttemptCategory | None = None
+                quota_exhausted = False
+                request_failover_reason: SearchProviderRequestFailoverReason | None = (
+                    None
                 )
-                continue
-            assert reservation is not None
-            attempted = True
-            attempt_category: SearchProviderAttemptCategory | None = None
-            quota_exhausted = False
-            request_failover_reason: SearchProviderRequestFailoverReason | None = None
-            try:
                 try:
-                    result = await runner(candidate)
-                except SearchProviderAttemptError as error:
-                    attempt_category = error.category
-                    quota_exhausted = error.quota_exhausted
-                except SearchProviderRequestFailover as error:
-                    request_failover_reason = error.reason
-                else:
-                    self._observe_candidate(candidate, attempt_index, "success")
-                    return result
+                    try:
+                        result = await runner(candidate)
+                    except SearchProviderAttemptError as error:
+                        attempt_category = error.category
+                        quota_exhausted = error.quota_exhausted
+                    except SearchProviderRequestFailover as error:
+                        request_failover_reason = error.reason
+                    else:
+                        self._observe_candidate(candidate, attempt_index, "success")
+                        return result
 
-                if attempt_category is not None:
-                    cooldown_reason = (
-                        SearchProviderAttemptCategory.QUOTA_EXHAUSTED
-                        if quota_exhausted
-                        else attempt_category
-                    )
-                    self._state.mark_failed(
-                        candidate, cooldown_reason, reservation=reservation
-                    )
-                    self._observe_candidate(
-                        candidate,
-                        attempt_index,
-                        attempt_category,
-                        cooldown_reason=cooldown_reason,
-                    )
-                else:
-                    assert request_failover_reason is not None
-                    self._observe_candidate(
-                        candidate,
-                        attempt_index,
-                        request_failover_reason,
-                    )
-            finally:
-                self._state.release(reservation)
+                    if attempt_category is not None:
+                        cooldown_reason = (
+                            SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+                            if quota_exhausted
+                            else attempt_category
+                        )
+                        self._state.mark_failed(
+                            candidate, cooldown_reason, reservation=reservation
+                        )
+                        self._observe_candidate(
+                            candidate,
+                            attempt_index,
+                            attempt_category,
+                            cooldown_reason=cooldown_reason,
+                        )
+                    else:
+                        assert request_failover_reason is not None
+                        self._observe_candidate(
+                            candidate,
+                            attempt_index,
+                            request_failover_reason,
+                        )
+                finally:
+                    self._state.release(reservation)
 
-        reason = (
-            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
-            if attempted
-            else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
-        )
-        self._observe({"final_reason": reason.value})
-        raise SearchProviderChainUnavailable(reason)
+            reason = (
+                SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+                if attempted
+                else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+            )
+            self._observe({"final_reason": reason.value})
+            raise SearchProviderChainUnavailable(reason)
+        finally:
+            self._state.release_protection(protection)
 
 
 class SearchProviderRequestBudget:
