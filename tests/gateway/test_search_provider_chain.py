@@ -9,7 +9,11 @@ from typing import Any
 import pytest
 
 from codex_rosetta.gateway import search_provider_chain as search_provider_chain_module
+from codex_rosetta.gateway.search_provider_candidates import (
+    TavilySearchProviderCandidate,
+)
 from codex_rosetta.gateway.search_provider_chain import (
+    DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS,
     MAX_SEARCH_PROVIDER_EXTERNAL_CALLS,
     SEARCH_PROVIDER_REQUEST_TIMEOUT_SECONDS,
     SearchProviderAttemptCategory,
@@ -18,6 +22,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetReason,
     SearchProviderChainUnavailable,
     SearchProviderChainUnavailableReason,
+    SearchProviderChainCoordinator,
     SearchProviderRequestBudget,
     SearchProviderRequestFailover,
     SearchProviderRequestFailoverReason,
@@ -719,3 +724,243 @@ def test_typed_errors_expose_only_bounded_reasons_and_generic_messages(
         assert error.quota_exhausted is False
     with pytest.raises(AttributeError):
         setattr(error, "reason", reason)
+
+
+def candidate(
+    row_id: str, identity: str, *, api_key: str = "tvly-private-key"
+) -> TavilySearchProviderCandidate:
+    return TavilySearchProviderCandidate(
+        row_id=row_id,
+        api_key=api_key,
+        identity=identity,
+    )
+
+
+def test_chain_defaults_to_one_hour_cooldown() -> None:
+    assert DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS == 3600.0
+
+
+def test_chain_runs_in_order_once_and_short_circuits_on_success() -> None:
+    candidates = (candidate("first", "a"), candidate("second", "b"))
+    calls: list[str] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item.row_id == "first":
+            raise SearchProviderRequestFailover(
+                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            )
+        return "ok"
+
+    coordinator = SearchProviderChainCoordinator()
+    assert run(coordinator.run(candidates, runner)) == "ok"
+    assert calls == ["first", "second"]
+    assert coordinator.is_cooling(candidates[0]) is False
+
+
+def test_chain_does_not_retry_duplicate_candidate_identity_in_one_request() -> None:
+    item = candidate("only", "same")
+    calls = 0
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        nonlocal calls
+        calls += 1
+        raise SearchProviderRequestFailover(
+            SearchProviderRequestFailoverReason.REQUEST_REJECTED
+        )
+
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(SearchProviderChainCoordinator().run((item, item), runner))
+
+    assert (
+        caught.value.reason is SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+    )
+    assert calls == 1
+
+
+@pytest.mark.parametrize(
+    ("candidates", "reason"),
+    [
+        ((), SearchProviderChainUnavailableReason.EMPTY_CHAIN),
+        (
+            (candidate("single", "identity"),),
+            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED,
+        ),
+    ],
+)
+def test_chain_has_bounded_terminal_reasons_for_empty_and_failed_chain(
+    candidates: tuple[TavilySearchProviderCandidate, ...],
+    reason: SearchProviderChainUnavailableReason,
+) -> None:
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        raise SearchProviderRequestFailover(
+            SearchProviderRequestFailoverReason.REQUEST_REJECTED
+        )
+
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(SearchProviderChainCoordinator().run(candidates, runner))
+
+    assert caught.value.reason is reason
+
+
+def test_attempt_error_cools_candidate_and_fails_over() -> None:
+    clock = Clock()
+    first = candidate("first", "a")
+    second = candidate("second", "b")
+    calls: list[str] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item is first:
+            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+        return "ok"
+
+    coordinator = SearchProviderChainCoordinator(clock=clock)
+    assert run(coordinator.run((first, second), runner)) == "ok"
+    assert calls == ["first", "second"]
+    assert coordinator.is_cooling(first) is True
+    assert (
+        coordinator.cooldown_reason(first) is SearchProviderAttemptCategory.HTTP_ERROR
+    )
+    assert coordinator.is_cooling(second) is False
+
+
+def test_all_cooling_is_distinct_and_cooldown_expires_lazily() -> None:
+    clock = Clock()
+    item = candidate("only", "a")
+    coordinator = SearchProviderChainCoordinator(clock=clock)
+    coordinator.mark_failed(
+        item, SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR)
+    )
+    calls = 0
+
+    async def runner(_item: TavilySearchProviderCandidate) -> str:
+        nonlocal calls
+        calls += 1
+        return "recovered"
+
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(coordinator.run((item,), runner))
+    assert (
+        caught.value.reason
+        is SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+    )
+    assert calls == 0
+
+    clock.value += DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+    assert coordinator.is_cooling(item) is False
+    assert coordinator.cooldown_reason(item) is None
+    assert run(coordinator.run((item,), runner)) == "recovered"
+    assert calls == 1
+
+
+def test_cooldown_survives_reorder_but_identity_change_is_fresh() -> None:
+    first = candidate("first", "a")
+    second = candidate("second", "b")
+    changed = candidate("first", "new-a")
+    calls: list[str] = []
+
+    async def fail_first(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.identity)
+        if item is first:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.UPSTREAM_FAILURE
+            )
+        return item.identity
+
+    coordinator = SearchProviderChainCoordinator()
+    assert run(coordinator.run((first, second), fail_first)) == "b"
+    calls.clear()
+    assert run(coordinator.run((second, first), fail_first)) == "b"
+    assert calls == ["b"]
+    calls.clear()
+    assert run(coordinator.run((changed, second), fail_first)) == "new-a"
+    assert calls == ["new-a"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        RuntimeError("upstream-secret-detail"),
+        asyncio.CancelledError("cancel-now"),
+        SearchProviderBudgetExceeded(SearchProviderBudgetReason.DEADLINE_EXCEEDED),
+    ],
+)
+def test_untyped_cancel_and_budget_errors_propagate_without_cooldown(
+    failure: BaseException,
+) -> None:
+    item = candidate("row", "private-fingerprint")
+    coordinator = SearchProviderChainCoordinator()
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        raise failure
+
+    with pytest.raises(type(failure)) as caught:
+        run(coordinator.run((item,), runner))
+    assert caught.value is failure
+    assert coordinator.is_cooling(item) is False
+
+
+def test_quota_attempt_uses_bounded_quota_cooldown_reason() -> None:
+    item = candidate("row", "identity")
+    coordinator = SearchProviderChainCoordinator()
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            quota_exhausted=True,
+        )
+
+    with pytest.raises(SearchProviderChainUnavailable):
+        run(coordinator.run((item,), runner))
+
+    assert (
+        coordinator.cooldown_reason(item)
+        is SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+    )
+
+
+def test_observer_receives_only_bounded_safe_events() -> None:
+    private_key = "tvly-super-secret"
+    private_identity = "private-fingerprint"
+    raw_error = "raw-upstream-error"
+    first = candidate("first", private_identity, api_key=private_key)
+    second = candidate("second", "safe-identity", api_key="another-secret")
+    events: list[dict[str, str | int]] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        if item is first:
+            error = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+            error.__cause__ = RuntimeError(raw_error)
+            raise error
+        raise SearchProviderRequestFailover(
+            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+        )
+
+    coordinator = SearchProviderChainCoordinator(observer=events.append)
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(coordinator.run((first, second), runner))
+    assert (
+        caught.value.reason is SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+    )
+
+    assert events == [
+        {
+            "row_id": "first",
+            "provider": "tavily",
+            "attempt_index": 0,
+            "outcome_category": "http_error",
+            "cooldown_reason": "http_error",
+        },
+        {
+            "row_id": "second",
+            "provider": "tavily",
+            "attempt_index": 1,
+            "outcome_category": "local_unavailable",
+        },
+        {"final_reason": "all_attempts_failed"},
+    ]
+    serialized = repr(events)
+    assert private_key not in serialized
+    assert private_identity not in serialized
+    assert raw_error not in serialized
