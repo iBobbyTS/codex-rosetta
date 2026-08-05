@@ -1857,6 +1857,50 @@ def test_cross_generation_health_ordering(
     run(scenario())
 
 
+def test_newer_success_clears_published_older_attempt_cooldown() -> None:
+    async def scenario() -> None:
+        item = candidate("shared", "published-older-cooldown")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        older_failure, _ = await state.reserve(item)
+        older_neutral, _ = await state.reserve(item)
+        assert older_failure is not None and older_neutral is not None
+        assert older_failure.generation == older_neutral.generation
+
+        assert (
+            state.record_failure(
+                older_failure, SearchProviderAttemptCategory.HTTP_ERROR
+            )
+            is None
+        )
+        key = state.key(item)
+        entry = state._entries[key]
+        older_cohort = entry.cohorts[older_failure.generation]
+        assert older_cohort.active == 1
+        assert older_cohort.pending_failure_reason is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert entry.cooldown_generation is None
+
+        newer, _ = await state.reserve(item)
+        assert newer is not None and newer.generation > older_failure.generation
+        assert state.release(older_neutral) is SearchProviderAttemptCategory.HTTP_ERROR
+        assert entry.cooldown_generation == older_failure.generation
+        assert entry.cooldown_reason is SearchProviderAttemptCategory.HTTP_ERROR
+
+        assert state.record_success(newer) is None
+        assert entry.cooldown_generation is None
+        assert entry.cooldown_reason is None
+        assert entry.cohorts == {}
+        assert entry.open_generation is None
+        assert entry.latest_success_generation is None
+        assert entry.suppressed_pending_generations == set()
+        assert state._entries == {}
+        assert state._reservations == {}
+
+    run(scenario())
+
+
 def test_newer_attempt_failure_replaces_older_attempt_cooldown() -> None:
     async def scenario() -> None:
         item = candidate("shared", "replacement-order")
