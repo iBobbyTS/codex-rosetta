@@ -7,11 +7,14 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
-from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
 from .search_provider_candidates import SearchProviderCandidate
+from .search_provider_chain_state import (
+    DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
+    _SearchProviderChainState,
+)
 
 SEARCH_PROVIDER_REQUEST_TIMEOUT_SECONDS = 300.0
 MAX_SEARCH_PROVIDER_EXTERNAL_CALLS = 32
@@ -138,14 +141,6 @@ class SearchProviderChainUnavailable(
         super().__init__(reason, "Search provider chain unavailable")
 
 
-@dataclass(frozen=True, slots=True)
-class _CandidateKey:
-    """Exact candidate identity key with a traceback-safe representation."""
-
-    row_id: str
-    identity: str = field(repr=False)
-
-
 class SearchProviderChainCoordinator:
     """Run candidates in order and retain process-local candidate cooldowns."""
 
@@ -153,55 +148,26 @@ class SearchProviderChainCoordinator:
         self,
         *,
         cooldown_seconds: float = DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS,
+        state_capacity: int = DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
         clock: Callable[[], float] = time.monotonic,
         observer: _Observer | None = None,
     ) -> None:
-        cooldown_seconds = float(cooldown_seconds)
-        if not math.isfinite(cooldown_seconds) or cooldown_seconds <= 0:
-            raise ValueError("cooldown_seconds must be positive")
-        self._clock = clock
-        self._cooldown_seconds = cooldown_seconds
         self._observer = observer
-        self._last_clock = self._read_clock()
-        self._cooldowns: dict[
-            _CandidateKey, tuple[float, SearchProviderAttemptCategory]
-        ] = {}
-
-    def _read_clock(self) -> float:
-        now = float(self._clock())
-        if not math.isfinite(now):
-            raise ValueError("clock must return a finite value")
-        last_clock = getattr(self, "_last_clock", now)
-        if now < last_clock:
-            raise ValueError("clock must be monotonic")
-        self._last_clock = now
-        return now
-
-    @staticmethod
-    def _key(candidate: SearchProviderCandidate) -> _CandidateKey:
-        return _CandidateKey(candidate.row_id, candidate.identity)
-
-    def _prune(self, now: float) -> None:
-        expired = [key for key, (until, _) in self._cooldowns.items() if until <= now]
-        for key in expired:
-            del self._cooldowns[key]
-
-    def _cooldown_reason_at(
-        self, candidate: SearchProviderCandidate, now: float
-    ) -> SearchProviderAttemptCategory | None:
-        self._prune(now)
-        state = self._cooldowns.get(self._key(candidate))
-        return state[1] if state is not None else None
+        self._state = _SearchProviderChainState[SearchProviderAttemptCategory](
+            cooldown_seconds=cooldown_seconds,
+            capacity=state_capacity,
+            clock=clock,
+        )
 
     def is_cooling(self, candidate: SearchProviderCandidate) -> bool:
         """Return whether the candidate's current identity is cooling."""
-        return self._cooldown_reason_at(candidate, self._read_clock()) is not None
+        return self._state.cooldown_reason(candidate) is not None
 
     def cooldown_reason(
         self, candidate: SearchProviderCandidate
     ) -> SearchProviderAttemptCategory | None:
         """Return the bounded active cooldown reason, if any."""
-        return self._cooldown_reason_at(candidate, self._read_clock())
+        return self._state.cooldown_reason(candidate)
 
     def mark_failed(
         self,
@@ -209,20 +175,12 @@ class SearchProviderChainCoordinator:
         failure: SearchProviderAttemptError,
     ) -> SearchProviderAttemptCategory:
         """Start a cooldown for one stable row and process-local identity."""
-        now = self._read_clock()
         reason = (
             SearchProviderAttemptCategory.QUOTA_EXHAUSTED
             if failure.quota_exhausted
             else failure.category
         )
-        until = now + self._cooldown_seconds
-        if not math.isfinite(until):
-            raise ValueError("cooldown deadline must be finite")
-        if until <= now:
-            raise ValueError("cooldown deadline must be later than current time")
-        self._prune(now)
-        self._cooldowns[self._key(candidate)] = (until, reason)
-        return reason
+        return self._state.mark_failed(candidate, reason)
 
     def _observe(self, event: _ObserverEvent) -> None:
         """Notify the advisory observer without surrendering chain ownership."""
@@ -267,13 +225,16 @@ class SearchProviderChainCoordinator:
             raise SearchProviderChainUnavailable(reason)
 
         attempted = False
-        seen: set[_CandidateKey] = set()
+        protected_keys = self._state.keys_for(candidates)
+        seen: set[object] = set()
         for attempt_index, candidate in enumerate(candidates):
-            key = self._key(candidate)
+            key = self._state.key(candidate)
             if key in seen:
                 continue
             seen.add(key)
-            cooling_reason = self._cooldown_reason_at(candidate, self._read_clock())
+            reservation, cooling_reason = await self._state.reserve(
+                candidate, protected_keys
+            )
             if cooling_reason is not None:
                 self._observe_candidate(
                     candidate,
@@ -282,40 +243,47 @@ class SearchProviderChainCoordinator:
                     cooldown_reason=cooling_reason,
                 )
                 continue
+            assert reservation is not None
             attempted = True
             attempt_category: SearchProviderAttemptCategory | None = None
             quota_exhausted = False
             request_failover_reason: SearchProviderRequestFailoverReason | None = None
             try:
-                result = await runner(candidate)
-            except SearchProviderAttemptError as error:
-                attempt_category = error.category
-                quota_exhausted = error.quota_exhausted
-            except SearchProviderRequestFailover as error:
-                request_failover_reason = error.reason
-            else:
-                self._observe_candidate(candidate, attempt_index, "success")
-                return result
+                try:
+                    result = await runner(candidate)
+                except SearchProviderAttemptError as error:
+                    attempt_category = error.category
+                    quota_exhausted = error.quota_exhausted
+                except SearchProviderRequestFailover as error:
+                    request_failover_reason = error.reason
+                else:
+                    self._observe_candidate(candidate, attempt_index, "success")
+                    return result
 
-            if attempt_category is not None:
-                failure = SearchProviderAttemptError(
-                    attempt_category,
-                    quota_exhausted=quota_exhausted,
-                )
-                cooling_reason = self.mark_failed(candidate, failure)
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    attempt_category,
-                    cooldown_reason=cooling_reason,
-                )
-            else:
-                assert request_failover_reason is not None
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    request_failover_reason,
-                )
+                if attempt_category is not None:
+                    cooldown_reason = (
+                        SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+                        if quota_exhausted
+                        else attempt_category
+                    )
+                    self._state.mark_failed(
+                        candidate, cooldown_reason, reservation=reservation
+                    )
+                    self._observe_candidate(
+                        candidate,
+                        attempt_index,
+                        attempt_category,
+                        cooldown_reason=cooldown_reason,
+                    )
+                else:
+                    assert request_failover_reason is not None
+                    self._observe_candidate(
+                        candidate,
+                        attempt_index,
+                        request_failover_reason,
+                    )
+            finally:
+                self._state.release(reservation)
 
         reason = (
             SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED

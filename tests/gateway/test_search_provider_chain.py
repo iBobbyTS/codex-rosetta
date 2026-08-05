@@ -10,6 +10,9 @@ from typing import Any
 import pytest
 
 from codex_rosetta.gateway import search_provider_chain as search_provider_chain_module
+from codex_rosetta.gateway import (
+    search_provider_chain_state as search_provider_chain_state_module,
+)
 from codex_rosetta.gateway.search_provider_candidates import (
     TavilySearchProviderCandidate,
 )
@@ -759,10 +762,12 @@ def test_chain_defaults_to_one_hour_cooldown() -> None:
 
 
 def test_candidate_key_has_exact_equality_hash_and_secret_safe_repr() -> None:
-    first = search_provider_chain_module._CandidateKey("row", "private-identity")
-    same = search_provider_chain_module._CandidateKey("row", "private-identity")
-    changed_identity = search_provider_chain_module._CandidateKey("row", "changed")
-    changed_row = search_provider_chain_module._CandidateKey(
+    first = search_provider_chain_state_module._CandidateKey("row", "private-identity")
+    same = search_provider_chain_state_module._CandidateKey("row", "private-identity")
+    changed_identity = search_provider_chain_state_module._CandidateKey(
+        "row", "changed"
+    )
+    changed_row = search_provider_chain_state_module._CandidateKey(
         "changed-row", "private-identity"
     )
 
@@ -1266,7 +1271,7 @@ def test_cooldown_deadline_must_strictly_advance_before_chain_side_effects(
         retained,
         SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR),
     )
-    old_cooldowns = dict(coordinator._cooldowns)
+    assert coordinator.is_cooling(retained) is True
 
     identity = "synthetic-non-advancing-deadline-identity"
     api_key = "synthetic-non-advancing-deadline-api-key"
@@ -1290,8 +1295,9 @@ def test_cooldown_deadline_must_strictly_advance_before_chain_side_effects(
     assert str(caught.value) == "cooldown deadline must be later than current time"
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
-    assert coordinator._cooldowns == old_cooldowns
-    assert coordinator._key(failed) not in coordinator._cooldowns
+    retained_key = coordinator._state.key(retained)
+    assert retained_key in coordinator._state._entries
+    assert coordinator.is_cooling(failed) is False
     assert events == []
     assert calls == ["failed"]
     formatted = format_traceback_with_locals(caught.value)
