@@ -68,6 +68,17 @@ def _mask_web_search_config(value: Any) -> dict[str, Any]:
     masked = dict(value)
     if "tavily_api_key" in masked:
         masked["tavily_api_key"] = _mask_api_key(str(masked["tavily_api_key"]))
+    providers = masked.get("providers")
+    if isinstance(providers, list):
+        masked["providers"] = [
+            {
+                **entry,
+                "tavily_api_key": _mask_api_key(str(entry["tavily_api_key"])),
+            }
+            if isinstance(entry, dict) and "tavily_api_key" in entry
+            else entry
+            for entry in providers
+        ]
     return masked
 
 

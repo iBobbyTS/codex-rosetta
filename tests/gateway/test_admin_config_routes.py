@@ -712,6 +712,65 @@ def test_get_config_masks_tavily_api_key(tmp_path):
     assert body["server"]["request_body_limit_mb"] == 128
 
 
+def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
+    """Admin config response masks canonical Tavily rows without reordering."""
+    raw_keys = ["tvly-primary-1234567890", "tvly-fallback-0987654321"]
+    config = _config_data()
+    config["server"]["web_search"] = {
+        "providers": [
+            {
+                "id": "primary",
+                "provider": "tavily",
+                "tavily_api_key": raw_keys[0],
+            },
+            {
+                "id": "responses",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-terra",
+            },
+            {"id": "local", "provider": "self_hosted_google"},
+            {
+                "id": "fallback",
+                "provider": "tavily",
+                "tavily_api_key": raw_keys[1],
+            },
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+
+    response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    serialized = response.body.decode("utf-8")
+    assert all(raw_key not in serialized for raw_key in raw_keys)
+    body = json.loads(serialized)
+    assert body["server"]["web_search"]["providers"] == [
+        {
+            "id": "primary",
+            "provider": "tavily",
+            "tavily_api_key": "tvly***7890",
+        },
+        {
+            "id": "responses",
+            "provider": "configured_responses_provider",
+            "responses_provider": "search-upstream",
+            "responses_model": "gpt-5.6-terra",
+        },
+        {"id": "local", "provider": "self_hosted_google"},
+        {
+            "id": "fallback",
+            "provider": "tavily",
+            "tavily_api_key": "tvly***4321",
+        },
+    ]
+
+
 def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(
     tmp_path,
 ):

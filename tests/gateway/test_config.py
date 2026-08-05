@@ -767,6 +767,50 @@ class TestWebSearchConfig:
         with pytest.raises(ValueError, match=message):
             GatewayConfig(_minimal_raw(web_search=value))
 
+    @pytest.mark.parametrize(
+        ("value", "message"),
+        [
+            ("tavily", "config: server.web_search must be an object"),
+            (
+                {"provider": "other"},
+                "config: server.web_search.provider must be one of "
+                "['configured_responses_provider', 'self_hosted_bing', "
+                "'self_hosted_bing_browser', 'self_hosted_google', 'tavily']",
+            ),
+            (
+                {"tavily_api_key": 42},
+                "config: server.web_search.tavily_api_key must be a string",
+            ),
+            (
+                {"provider": "configured_responses_provider"},
+                "config: server.web_search.responses_provider is required when "
+                "provider is 'configured_responses_provider'",
+            ),
+            (
+                {"responses_provider": 42},
+                "config: server.web_search.responses_provider must be a string",
+            ),
+            (
+                {"responses_model": 42},
+                "config: server.web_search.responses_model must be a string",
+            ),
+            (
+                {"responses_model": "gpt-6"},
+                "config: server.web_search.responses_model must be one of "
+                "['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']",
+            ),
+            (
+                {"token": "legacy"},
+                "config: server.web_search has unsupported fields: ['token']",
+            ),
+        ],
+    )
+    def test_rejects_invalid_legacy_values(self, value, message):
+        with pytest.raises(ValueError) as exc_info:
+            GatewayConfig(_minimal_raw(web_search=value))
+
+        assert str(exc_info.value) == message
+
     @pytest.mark.parametrize("provider_id", ["", "has space", "dot.id", "a" * 65, 42])
     def test_rejects_invalid_provider_ids(self, provider_id):
         value = {
