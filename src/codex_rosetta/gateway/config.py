@@ -27,6 +27,7 @@ from .provider_profiles import (
     resolve_soft_interrupt,
 )
 from .stream_trace import StreamTraceConfig
+from .search_provider_candidates import build_search_provider_candidates
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
     TOOL_PROFILE_API_TYPES,
@@ -1055,6 +1056,12 @@ class GatewayConfig:
             self.token_values.update(provider.credential_values)
         if legacy_web_search:
             self._validate_legacy_web_search_provider()
+        self.web_search_candidates = build_search_provider_candidates(
+            self.web_search.providers,
+            self.providers,
+            {name: cfg["api_type"] for name, cfg in self._raw_providers.items()},
+            allowed_responses_models=CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
+        )
 
     def _validate_legacy_web_search_provider(self) -> None:
         """Require a legacy configured search upstream to support Responses."""

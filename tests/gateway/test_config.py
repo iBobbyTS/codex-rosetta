@@ -642,26 +642,27 @@ class TestWebSearchConfig:
         assert config.web_search.get("tavily_api_key") == ""
 
     def test_canonical_providers_are_normalized_redacted_and_ordered(self):
-        config = GatewayConfig(
-            _minimal_raw(
-                web_search={
-                    "providers": [
-                        {
-                            "id": "primary_tavily",
-                            "provider": "tavily",
-                            "tavily_api_key": " tvly-primary ",
-                        },
-                        {
-                            "id": "responses-2",
-                            "provider": "configured_responses_provider",
-                            "responses_provider": " search-upstream ",
-                            "responses_model": " gpt-5.6-terra ",
-                        },
-                        {"id": "local", "provider": "self_hosted_google"},
-                    ]
-                }
-            )
+        raw = _minimal_raw(
+            web_search={
+                "providers": [
+                    {
+                        "id": "primary_tavily",
+                        "provider": "tavily",
+                        "tavily_api_key": " tvly-primary ",
+                    },
+                    {
+                        "id": "responses-2",
+                        "provider": "configured_responses_provider",
+                        "responses_provider": " test ",
+                        "responses_model": " gpt-5.6-terra ",
+                    },
+                    {"id": "local", "provider": "self_hosted_google"},
+                ]
+            }
         )
+        raw["providers"]["test"]["api_type"] = "responses"
+
+        config = GatewayConfig(raw)
 
         assert config.web_search == {
             "providers": [
@@ -673,7 +674,7 @@ class TestWebSearchConfig:
                 {
                     "id": "responses-2",
                     "provider": "configured_responses_provider",
-                    "responses_provider": "search-upstream",
+                    "responses_provider": "test",
                     "responses_model": "gpt-5.6-terra",
                 },
                 {"id": "local", "provider": "self_hosted_google"},
@@ -947,23 +948,22 @@ class TestWebSearchConfig:
         with pytest.raises(ValueError, match="api_type 'responses'"):
             GatewayConfig(raw)
 
-    def test_does_not_validate_responses_provider_registry_in_section_one(self):
-        config = GatewayConfig(
-            _minimal_raw(
-                web_search={
-                    "providers": [
-                        {
-                            "id": "responses",
-                            "provider": "configured_responses_provider",
-                            "responses_provider": "not-yet-resolved",
-                            "responses_model": "gpt-5.6-luna",
-                        }
-                    ]
-                }
+    def test_canonical_responses_provider_requires_enabled_registry_entry(self):
+        with pytest.raises(ValueError, match="responses.*enabled Responses provider"):
+            GatewayConfig(
+                _minimal_raw(
+                    web_search={
+                        "providers": [
+                            {
+                                "id": "responses",
+                                "provider": "configured_responses_provider",
+                                "responses_provider": "not-yet-resolved",
+                                "responses_model": "gpt-5.6-luna",
+                            }
+                        ]
+                    }
+                )
             )
-        )
-
-        assert config.web_search["responses_provider"] == "not-yet-resolved"
 
 
 class TestStreamTraceConfig:

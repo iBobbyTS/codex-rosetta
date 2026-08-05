@@ -8,7 +8,39 @@ from codex_rosetta.observability.redaction import (
     REDACTED,
     SecretRedactor,
     collect_token_values,
+    secret_fingerprint,
 )
+
+
+def test_secret_fingerprint_is_stable_normalized_and_domain_separated():
+    first = secret_fingerprint("candidate", ["beta", "alpha", "beta", ""])
+
+    assert first == secret_fingerprint("candidate", ["alpha", "beta"])
+    assert first != secret_fingerprint("other-candidate", ["alpha", "beta"])
+    assert first != secret_fingerprint("candidate", ["alpha", "gamma"])
+    assert "alpha" not in first
+    assert "beta" not in first
+    assert first.startswith("hmac-sha256:")
+
+
+def test_secret_fingerprint_uses_unambiguous_length_prefixes():
+    assert secret_fingerprint("ab", ["c"]) != secret_fingerprint("a", ["bc"])
+    assert secret_fingerprint("domain", ["a", "bc"]) != secret_fingerprint(
+        "domain", ["ab", "c"]
+    )
+
+
+@pytest.mark.parametrize("domain", ["", None, 42])
+def test_secret_fingerprint_rejects_invalid_domains(domain):
+    error_type = ValueError if domain == "" else TypeError
+    with pytest.raises(error_type):
+        secret_fingerprint(domain, ["secret"])
+
+
+def test_secret_fingerprint_ignores_empty_values_and_rejects_non_strings():
+    assert secret_fingerprint("candidate", [""]) == secret_fingerprint("candidate", [])
+    with pytest.raises(TypeError, match="values must be strings"):
+        secret_fingerprint("candidate", ["secret", None])
 
 
 def test_collects_only_configured_api_tokens():

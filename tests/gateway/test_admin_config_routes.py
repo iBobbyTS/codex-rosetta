@@ -716,6 +716,12 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
     """Admin config response masks canonical Tavily rows without reordering."""
     raw_keys = ["tvly-primary-1234567890", "tvly-fallback-0987654321"]
     config = _config_data()
+    config["providers"]["search-upstream"] = {
+        "provider": "openai",
+        "api_type": "responses",
+        "base_url": "https://search.example.com/v1",
+        "api_key": "search-provider-key",
+    }
     config["server"]["web_search"] = {
         "providers": [
             {

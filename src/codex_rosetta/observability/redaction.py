@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import re
+import secrets
+import struct
 from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import dataclass
@@ -19,6 +23,48 @@ _TOKEN_ASSIGNMENT_RE = re.compile(
     r"(?:(['\"])(.*?)\2|([^,;\r\n]+))"
 )
 _DIAGNOSTIC_TEXT_KEYS = {"errordetail", "responsetext", "streamerror"}
+_SECRET_FINGERPRINT_KEY = secrets.token_bytes(32)
+
+
+def secret_fingerprint(domain: str, secret_values: Iterable[str]) -> str:
+    """Return a process-local, domain-separated fingerprint for secret values.
+
+    Values are deduplicated and sorted before length-prefixed encoding, so their
+    input order and repetition do not affect the result. Empty strings are
+    ignored; non-string values and an empty domain are rejected.
+
+    Args:
+        domain: Non-empty owner-specific identity domain.
+        secret_values: Secret strings to bind without exposing them.
+
+    Returns:
+        An opaque HMAC-SHA256 identity stable only within this process.
+
+    Raises:
+        TypeError: If the domain or any secret is not a string.
+        ValueError: If the domain is empty.
+    """
+    if not isinstance(domain, str):
+        raise TypeError("secret fingerprint domain must be a string")
+    if not domain:
+        raise ValueError("secret fingerprint domain must not be empty")
+    normalized: set[str] = set()
+    for value in secret_values:
+        if not isinstance(value, str):
+            raise TypeError("secret fingerprint values must be strings")
+        if value:
+            normalized.add(value)
+
+    fingerprint = hmac.new(_SECRET_FINGERPRINT_KEY, digestmod=hashlib.sha256)
+    domain_bytes = domain.encode("utf-8")
+    fingerprint.update(struct.pack(">Q", len(domain_bytes)))
+    fingerprint.update(domain_bytes)
+    fingerprint.update(struct.pack(">Q", len(normalized)))
+    for value in sorted(normalized):
+        encoded = value.encode("utf-8")
+        fingerprint.update(struct.pack(">Q", len(encoded)))
+        fingerprint.update(encoded)
+    return f"hmac-sha256:{fingerprint.hexdigest()}"
 
 
 @dataclass(frozen=True)
