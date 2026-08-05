@@ -214,8 +214,17 @@ class SearchProviderChainCoordinator:
         return reason
 
     def _observe(self, event: _ObserverEvent) -> None:
-        if self._observer is not None:
+        """Notify the advisory observer without surrendering chain ownership."""
+        if self._observer is None:
+            return
+        try:
             self._observer(event)
+        except asyncio.CancelledError:
+            return
+        except MemoryError:
+            raise
+        except Exception:
+            return
 
     def _observe_candidate(
         self,
@@ -263,21 +272,39 @@ class SearchProviderChainCoordinator:
                 )
                 continue
             attempted = True
+            attempt_category: SearchProviderAttemptCategory | None = None
+            quota_exhausted = False
+            request_failover_reason: SearchProviderRequestFailoverReason | None = None
             try:
                 result = await runner(candidate)
             except SearchProviderAttemptError as error:
-                cooling_reason = self.mark_failed(candidate, error)
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    error.category,
-                    cooldown_reason=cooling_reason,
-                )
+                attempt_category = error.category
+                quota_exhausted = error.quota_exhausted
             except SearchProviderRequestFailover as error:
-                self._observe_candidate(candidate, attempt_index, error.reason)
+                request_failover_reason = error.reason
             else:
                 self._observe_candidate(candidate, attempt_index, "success")
                 return result
+
+            if attempt_category is not None:
+                failure = SearchProviderAttemptError(
+                    attempt_category,
+                    quota_exhausted=quota_exhausted,
+                )
+                cooling_reason = self.mark_failed(candidate, failure)
+                self._observe_candidate(
+                    candidate,
+                    attempt_index,
+                    attempt_category,
+                    cooldown_reason=cooling_reason,
+                )
+            else:
+                assert request_failover_reason is not None
+                self._observe_candidate(
+                    candidate,
+                    attempt_index,
+                    request_failover_reason,
+                )
 
         reason = (
             SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED

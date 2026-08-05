@@ -2,6 +2,7 @@ import asyncio
 import gc
 import math
 import time
+import traceback
 import weakref
 from collections.abc import Awaitable
 from typing import Any
@@ -964,3 +965,188 @@ def test_observer_receives_only_bounded_safe_events() -> None:
     assert private_key not in serialized
     assert private_identity not in serialized
     assert raw_error not in serialized
+
+
+@pytest.mark.parametrize(
+    "observer_failure_type",
+    [RuntimeError, asyncio.CancelledError],
+)
+@pytest.mark.parametrize(
+    ("scenario", "expected_calls", "expected_events", "terminal_reason"),
+    [
+        ("success", ["first"], ["success"], None),
+        (
+            "cooldown_failover",
+            ["first", "second"],
+            ["http_error", "success"],
+            None,
+        ),
+        (
+            "request_local_failover",
+            ["first", "second"],
+            ["local_unavailable", "success"],
+            None,
+        ),
+        (
+            "empty",
+            [],
+            ["empty_chain"],
+            SearchProviderChainUnavailableReason.EMPTY_CHAIN,
+        ),
+        (
+            "all_cooling",
+            [],
+            ["cooling", "all_candidates_cooling"],
+            SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING,
+        ),
+        (
+            "all_failed",
+            ["first", "second"],
+            ["http_error", "local_unavailable", "all_attempts_failed"],
+            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED,
+        ),
+    ],
+)
+def test_observer_failures_are_advisory_for_every_chain_outcome(
+    observer_failure_type: type[BaseException],
+    scenario: str,
+    expected_calls: list[str],
+    expected_events: list[str],
+    terminal_reason: SearchProviderChainUnavailableReason | None,
+) -> None:
+    upstream_secret = "synthetic-upstream-secret"
+    observer_secret = "synthetic-observer-secret"
+    first = candidate("first", "a")
+    second = candidate("second", "b")
+    calls: list[str] = []
+    events: list[str] = []
+
+    def observer(event: dict[str, str | int]) -> None:
+        events.append(str(event.get("outcome_category", event.get("final_reason"))))
+        raise observer_failure_type(observer_secret)
+
+    coordinator = SearchProviderChainCoordinator(observer=observer)
+    if scenario == "all_cooling":
+        coordinator.mark_failed(
+            first,
+            SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR),
+        )
+
+    candidates = () if scenario == "empty" else (first,)
+    if scenario in {"cooldown_failover", "request_local_failover", "all_failed"}:
+        candidates = (first, second)
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item is first and scenario in {"cooldown_failover", "all_failed"}:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR
+            ) from RuntimeError(upstream_secret)
+        if item is first and scenario == "request_local_failover":
+            raise SearchProviderRequestFailover(
+                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            ) from RuntimeError(upstream_secret)
+        if scenario == "all_failed":
+            raise SearchProviderRequestFailover(
+                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            ) from RuntimeError(upstream_secret)
+        return "ok"
+
+    if terminal_reason is None:
+        assert run(coordinator.run(candidates, runner)) == "ok"
+    else:
+        with pytest.raises(SearchProviderChainUnavailable) as caught:
+            run(coordinator.run(candidates, runner))
+        assert caught.value.reason is terminal_reason
+        formatted = "".join(
+            traceback.format_exception(
+                type(caught.value), caught.value, caught.value.__traceback__
+            )
+        )
+        assert upstream_secret not in formatted
+        assert observer_secret not in formatted
+
+    assert calls == expected_calls
+    assert events == expected_events
+    if scenario in {"cooldown_failover", "all_failed"}:
+        assert coordinator.is_cooling(first) is True
+    elif scenario == "request_local_failover":
+        assert coordinator.is_cooling(first) is False
+
+
+@pytest.mark.parametrize("failure_type", [SystemExit, KeyboardInterrupt, MemoryError])
+def test_observer_process_and_resource_failures_propagate_without_provider_error_chain(
+    failure_type: type[BaseException],
+) -> None:
+    upstream_secret = "synthetic-fatal-observer-upstream-secret"
+    failure = failure_type("fatal-observer")
+    first = candidate("first", "a")
+    second = candidate("second", "b")
+    calls: list[str] = []
+
+    def observer(_event: dict[str, str | int]) -> None:
+        raise failure
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item is first:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR
+            ) from RuntimeError(upstream_secret)
+        return "unreachable"
+
+    coordinator = SearchProviderChainCoordinator(observer=observer)
+    with pytest.raises(failure_type) as caught:
+        run(coordinator.run((first, second), runner))
+
+    assert caught.value is failure
+    assert calls == ["first"]
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert upstream_secret not in formatted
+
+
+@pytest.mark.parametrize(
+    ("clock_failure", "initial_clock", "cooldown_seconds", "expected_message"),
+    [
+        (99.0, 100.0, 3600.0, "clock must be monotonic"),
+        (math.nan, 100.0, 3600.0, "clock must return a finite value"),
+        (math.inf, 100.0, 3600.0, "clock must return a finite value"),
+        (-math.inf, 100.0, 3600.0, "clock must return a finite value"),
+        (1e308, 1e308, 1e308, "cooldown deadline must be finite"),
+    ],
+)
+def test_typed_attempt_clock_failures_do_not_retain_provider_error_chain(
+    clock_failure: float,
+    initial_clock: float,
+    cooldown_seconds: float,
+    expected_message: str,
+) -> None:
+    upstream_secret = "synthetic-clock-path-secret"
+    clock = Clock(initial_clock)
+    coordinator = SearchProviderChainCoordinator(
+        clock=clock,
+        cooldown_seconds=cooldown_seconds,
+    )
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        clock.value = clock_failure
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.HTTP_ERROR
+        ) from RuntimeError(upstream_secret)
+
+    with pytest.raises(ValueError, match=expected_message) as caught:
+        run(coordinator.run((candidate("row", "identity"),), runner))
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    assert upstream_secret not in formatted
+    assert "SearchProviderAttemptError" not in formatted
