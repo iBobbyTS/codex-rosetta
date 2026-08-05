@@ -665,6 +665,48 @@ def test_mutable_chain_append_cannot_escape_active_protection_snapshot() -> None
     run(scenario())
 
 
+def test_mutable_chain_replace_cannot_change_entry_snapshot() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator(state_capacity=2)
+        late = candidate("late", "late-identity")
+        active = candidate("active", "active-identity")
+        pending = candidate("pending", "pending-identity")
+        external = candidate("external", "external-identity")
+        failure = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+        coordinator.mark_failed(late, failure)
+        active_started = asyncio.Event()
+        release_active = asyncio.Event()
+        calls: list[str] = []
+
+        async def runner(item: TavilySearchProviderCandidate) -> str:
+            calls.append(item.row_id)
+            if item is active:
+                active_started.set()
+                await release_active.wait()
+                raise SearchProviderRequestFailover(
+                    SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+                )
+            assert item is pending
+            return "snapshot-result"
+
+        chain = [late, active, pending]
+        task = asyncio.create_task(coordinator.run(chain, runner))
+        await active_started.wait()
+        chain[2] = late
+
+        with pytest.raises(SearchProviderStateCapacityUnavailable):
+            coordinator.mark_failed(external, failure)
+        assert coordinator.is_cooling(late) is True
+
+        release_active.set()
+        assert await task == "snapshot-result"
+        assert calls == ["active", "pending"]
+        assert coordinator.is_cooling(late) is True
+        assert coordinator.is_cooling(external) is False
+
+    run(scenario())
+
+
 def test_synchronous_mark_failed_fails_closed_when_inflight_owns_capacity() -> None:
     async def scenario() -> None:
         coordinator = SearchProviderChainCoordinator(state_capacity=1)
