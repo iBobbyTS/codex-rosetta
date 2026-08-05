@@ -1,6 +1,7 @@
 """Tests for targeted diagnostic secret redaction."""
 
 import json
+from typing import Any, cast
 
 import pytest
 
@@ -40,7 +41,7 @@ def test_secret_fingerprint_rejects_invalid_domains(domain):
 def test_secret_fingerprint_ignores_empty_values_and_rejects_non_strings():
     assert secret_fingerprint("candidate", [""]) == secret_fingerprint("candidate", [])
     with pytest.raises(TypeError, match="values must be strings"):
-        secret_fingerprint("candidate", ["secret", None])
+        secret_fingerprint("candidate", cast(Any, ["secret", None]))
 
 
 def test_collects_only_configured_api_tokens():

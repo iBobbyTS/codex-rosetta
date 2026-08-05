@@ -10,7 +10,11 @@ from codex_rosetta.gateway.search_provider_candidates import (
     TavilySearchProviderCandidate,
     build_search_provider_candidates,
 )
-from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
+from codex_rosetta.gateway.transport.provider_info import (
+    KeyRing,
+    ProviderInfo,
+    openai_auth,
+)
 
 ALLOWED_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 
@@ -177,8 +181,18 @@ def test_rejects_every_remote_credential_overlap_without_leaking_secret(
     assert "hmac-sha256" not in message
 
 
-def test_deduplicates_one_provider_key_ring_without_advancing_or_expanding_rows():
+def test_deduplicates_one_provider_key_ring_without_advancing_or_expanding_rows(
+    monkeypatch: pytest.MonkeyPatch,
+):
     upstream = _provider("responses", "first,second,first")
+    selected_rings: list[KeyRing] = []
+    original_next = KeyRing.next
+
+    def tracked_next(key_ring: KeyRing) -> str:
+        selected_rings.append(key_ring)
+        return original_next(key_ring)
+
+    monkeypatch.setattr(KeyRing, "next", tracked_next)
     row = {
         "id": "responses",
         "provider": "configured_responses_provider",
@@ -189,10 +203,13 @@ def test_deduplicates_one_provider_key_ring_without_advancing_or_expanding_rows(
     candidates = _build([row], {"upstream": upstream}, {"upstream": "responses"})
 
     assert len(candidates) == 1
+    assert selected_rings == []
     assert upstream.auth_headers() == {"Authorization": "Bearer first"}
     assert upstream.auth_headers() == {"Authorization": "Bearer second"}
+    assert selected_rings == [upstream.key_ring, upstream.key_ring]
     deduplicated = _provider("responses", "first,second")
     rebuilt = _build([row], {"upstream": deduplicated}, {"upstream": "responses"})
+    assert selected_rings == [upstream.key_ring, upstream.key_ring]
     assert candidates[0].identity == rebuilt[0].identity
 
 
