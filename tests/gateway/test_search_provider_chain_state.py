@@ -42,6 +42,18 @@ class Clock:
         return self.value
 
 
+class RecoverableSettlementClock(Clock):
+    def __init__(self, value: float = 100.0) -> None:
+        super().__init__(value)
+        self.failure: BaseException | None = None
+
+    def __call__(self) -> float:
+        self.calls += 1
+        if self.failure is not None:
+            raise self.failure
+        return self.value
+
+
 class NaturalClock:
     def __init__(self) -> None:
         self.calls = 0
@@ -86,6 +98,17 @@ async def wait_until(predicate: Callable[[], bool]) -> None:
     async with asyncio.timeout(1):
         while not predicate():
             await asyncio.sleep(0)
+
+
+SETTLEMENT_FAILURE_TYPES: tuple[type[BaseException], ...] = (
+    ValueError,
+    TypeError,
+    RuntimeError,
+    asyncio.CancelledError,
+    MemoryError,
+    SystemExit,
+    KeyboardInterrupt,
+)
 
 
 @pytest.mark.parametrize("state_capacity", [0, -1, True, 1.5])
@@ -188,6 +211,114 @@ def test_reservation_release_is_idempotent_and_never_leaves_negative_inflight() 
 
         assert state._entries == {}
         assert state._reservations == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("failure_type", SETTLEMENT_FAILURE_TYPES)
+def test_settlement_base_exception_discards_only_current_reservation_and_wakes_capacity(
+    failure_type: type[BaseException],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        clock = RecoverableSettlementClock()
+        coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=1)
+        state = coordinator._state
+        shared = candidate("shared", "same-cohort-private-identity")
+        waiting = candidate("waiting", "capacity-waiter-private-identity")
+        first, _ = await state.reserve(shared)
+        second, _ = await state.reserve(shared)
+        assert first is not None and second is not None
+        assert first.generation == second.generation
+
+        waiter_registered = asyncio.Event()
+        register_waiter = state._register_waiter_locked
+
+        def register_and_signal(loop: asyncio.AbstractEventLoop) -> Any:
+            waiter = register_waiter(loop)
+            waiter_registered.set()
+            return waiter
+
+        monkeypatch.setattr(state, "_register_waiter_locked", register_and_signal)
+        waiter_task = asyncio.create_task(state.reserve(waiting))
+        await waiter_registered.wait()
+        assert len(state._waiters) == 1
+
+        failure = failure_type("replacement-settlement-failure")
+        clock.failure = failure
+        observed: BaseException | None = None
+        try:
+            state.record_failure(first, SearchProviderAttemptCategory.HTTP_ERROR)
+        except BaseException as error:
+            observed = error
+
+        assert observed is failure
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        key = state.key(shared)
+        entry = state._entries[key]
+        cohort = entry.cohorts[first.generation]
+        assert state._reservations == {second.token: second}
+        assert entry.inflight == 1
+        assert entry.open_generation == first.generation
+        assert cohort.active == 1
+        assert cohort.succeeded is False
+        assert cohort.pending_failure_reason is None
+        assert entry.cooldown_until is None
+        assert entry.cooldown_reason is None
+        assert state._waiters == {}
+
+        clock.failure = None
+        assert state.record_success(second) is None
+        waiting_reservation, cooling_reason = await waiter_task
+        assert waiting_reservation is not None
+        assert cooling_reason is None
+        state.release(waiting_reservation)
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("failure_type", SETTLEMENT_FAILURE_TYPES)
+def test_coordinator_settlement_base_exception_preserves_identity_and_cleans_state(
+    failure_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        runner_secret = "synthetic-replaced-runner-private-body"
+        identity = "synthetic-replaced-candidate-private-identity"
+        api_key = "synthetic-replaced-candidate-private-key"
+        item = candidate("row", identity, api_key=api_key)
+        clock = RecoverableSettlementClock()
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        failure = failure_type("replacement-settlement-failure")
+
+        async def runner(_item: TavilySearchProviderCandidate) -> None:
+            clock.failure = failure
+            raise RuntimeError(runner_secret)
+
+        observed: BaseException | None = None
+        try:
+            await coordinator.run((item,), runner)
+        except BaseException as error:
+            observed = error
+
+        assert observed is failure
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        assert observed.__suppress_context__ is True
+        default_formatted = "".join(traceback.format_exception(observed))
+        locals_formatted = format_traceback_with_locals(observed)
+        for secret in (runner_secret, identity, api_key):
+            assert secret not in default_formatted
+            assert secret not in locals_formatted
+        state = coordinator._state
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        assert state._waiters == {}
 
     run(scenario())
 

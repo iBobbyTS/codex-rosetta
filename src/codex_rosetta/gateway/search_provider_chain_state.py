@@ -476,7 +476,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     success=success,
                     failure_reason=failure_reason,
                 )
-            except ValueError:
+            except BaseException:
                 self._discard_without_publication_locked(reservation)
                 raise
             self._prune_expired_locked(now)
