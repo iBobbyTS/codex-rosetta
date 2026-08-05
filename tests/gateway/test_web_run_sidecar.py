@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 
 import pytest
 
@@ -12,6 +13,7 @@ from codex_rosetta.gateway.web_run_sidecar import (
     WebRunSidecarError,
     WebRunSidecarHTTPClient,
     WebRunSidecarInvalidRequest,
+    WebRunSidecarSearchError,
 )
 from codex_rosetta.gateway.web_search import WebSearchSettings
 
@@ -120,6 +122,45 @@ def test_sidecar_client_sends_bounded_self_hosted_search(
         "include_domains": ["python.org"],
     }
     assert captured["max_success_bytes"] == 1_000_000
+    assert captured["max_error_bytes"] == 1_000_000
+
+
+@pytest.mark.parametrize(
+    ("status_code", "content", "category"),
+    [
+        (400, b'{"detail":"private detail"}', "http_error"),
+        (422, b'{"detail":"private detail"}', "http_error"),
+        (500, b'{"detail":"private detail"}', "http_error"),
+        (501, b'{"detail":"private detail"}', "unavailable"),
+        (200, b"not-json", "invalid_json"),
+        (200, b"[]", "invalid_shape"),
+        (200, b"{}", "invalid_shape"),
+    ],
+)
+def test_sidecar_search_failures_are_typed_and_secret_safe(
+    monkeypatch, status_code: int, content: bytes, category: str
+) -> None:
+    token = "sidecar-" + "secret"
+
+    async def fake_request(*args, **kwargs):
+        del args, kwargs
+        return BoundedHttpResponse(status_code, {}, content)
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+    with pytest.raises(WebRunSidecarSearchError) as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", token).search(
+                "query", settings=WebSearchSettings()
+            )
+        )
+
+    assert caught.value.category == category
+    assert caught.value.status_code == (status_code if status_code != 200 else None)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert content.decode() not in rendered
+    assert token not in rendered
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
 
 
 @pytest.mark.parametrize("status_code", [200, 400, 500])

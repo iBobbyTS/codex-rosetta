@@ -26,8 +26,14 @@ from .codex_search_references import (
     StoredSearchBatch,
     StoredSearchResult,
 )
+from .search_provider_chain import (
+    SearchProviderBudgetExceeded,
+    SearchProviderRequestBudget,
+)
 from .web_search import (
+    TavilyCredentialCollisionError,
     TavilyHTTPClient,
+    TavilyRequestError,
     WebSearchClient,
     WebSearchSettings,
     format_web_search_result_for_model,
@@ -38,9 +44,11 @@ from .web_run_capabilities import (
 )
 from .web_run_sidecar import (
     WebRunBrowserClient,
+    WebRunSidecarCredentialCollisionError,
     WebRunSidecarError,
     WebRunSidecarInvalidRequest,
     WebRunSidecarNotImplemented,
+    WebRunSidecarSearchError,
 )
 
 _SUPPORTED_SETTINGS = frozenset(
@@ -71,6 +79,14 @@ class CodexSearchNotImplemented(CodexSearchError):
 
 class CodexSearchExecutionError(RuntimeError):
     """A supported operation failed in its external executor."""
+
+
+class CodexSearchProviderExecutionError(CodexSearchExecutionError):
+    """The selected search provider failed with a safe typed cause."""
+
+
+class _UnexpectedSearchProviderError(RuntimeError):
+    """A safe cause replacing an untyped provider exception."""
 
 
 @dataclass(frozen=True)
@@ -183,6 +199,7 @@ async def execute_local_codex_search(
     now: Callable[[], datetime] | None = None,
     reference_store: CodexSearchReferenceStore | None = None,
     principal_id: str | None = None,
+    request_budget: SearchProviderRequestBudget | None = None,
 ) -> CodexSearchBridgeResult:
     """Execute the deterministic local subset of Codex ``SearchRequest``."""
     _validate_request_identity(body)
@@ -259,6 +276,7 @@ async def execute_local_codex_search(
         search_provider=provider,
         reference_store=reference_store,
         scope=scope,
+        request_budget=request_budget or SearchProviderRequestBudget(),
     )
     sections = list(search_execution.sections)
     open_sections, stored_reference_open_count = await _execute_open_operations(
@@ -341,6 +359,7 @@ async def _execute_search_queries(
     search_provider: str,
     reference_store: CodexSearchReferenceStore | None,
     scope: CodexSearchReferenceScope | None,
+    request_budget: SearchProviderRequestBudget,
 ) -> _SearchExecution:
     if not queries:
         return _SearchExecution((), 0, 0, False, None)
@@ -355,12 +374,26 @@ async def _execute_search_queries(
     for query, settings in queries:
         assert search_client is not None
         try:
-            raw = await search_client.search(query, settings=settings)
-        except Exception as exc:
-            raise CodexSearchExecutionError(
-                f"{_search_provider_label(search_provider)} search failed for "
-                f"query {query!r}: {exc}"
+            raw = await request_budget.run_external_call(
+                lambda: search_client.search(query, settings=settings)
+            )
+        except (
+            SearchProviderBudgetExceeded,
+            CodexSearchInvalidRequest,
+            TavilyCredentialCollisionError,
+            WebRunSidecarCredentialCollisionError,
+        ):
+            raise
+        except (TavilyRequestError, WebRunSidecarSearchError) as exc:
+            raise CodexSearchProviderExecutionError(
+                "Search provider execution failed"
             ) from exc
+        except Exception as exc:
+            del exc
+            safe_cause = _UnexpectedSearchProviderError("unexpected_provider_error")
+            raise CodexSearchProviderExecutionError(
+                "Search provider execution failed"
+            ) from safe_cause
         query_drafts.append(_search_query_draft(query, raw))
 
     if reference_store is not None and scope is not None:

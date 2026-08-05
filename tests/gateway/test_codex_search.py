@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 from datetime import datetime, timezone
 from typing import Any
 
@@ -10,14 +11,22 @@ import pytest
 
 from codex_rosetta.gateway.codex_page import OpenedPage
 from codex_rosetta.gateway.codex_search import (
+    CodexSearchProviderExecutionError,
     CodexSearchInvalidRequest,
     CodexSearchNotImplemented,
     execute_local_codex_search,
     should_use_local_codex_search,
 )
+from codex_rosetta.gateway.search_provider_chain import (
+    SearchProviderBudgetExceeded,
+    SearchProviderRequestBudget,
+)
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.web_run_sidecar import WebRunSidecarInvalidRequest
-from codex_rosetta.gateway.web_search import WebSearchSettings
+from codex_rosetta.gateway.web_search import (
+    TavilyCredentialCollisionError,
+    WebSearchSettings,
+)
 
 
 class _FakeTavilyClient:
@@ -204,6 +213,70 @@ def test_search_query_preserves_explicit_empty_structured_results() -> None:
     )
 
     assert result.response_body() == {"output": result.output, "results": []}
+
+
+def test_each_query_uses_budget_and_second_failure_is_atomic() -> None:
+    body = _body({"search_query": [{"q": "one"}, {"q": "two"}]})
+    original = copy.deepcopy(body)
+    client = _FakeTavilyClient()
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+
+    with pytest.raises(SearchProviderBudgetExceeded):
+        asyncio.run(
+            execute_local_codex_search(
+                body,
+                {"tavily_api_key": "key"},
+                client=client,
+                request_budget=budget,
+            )
+        )
+
+    assert [query for query, _settings in client.calls] == ["one"]
+    assert budget.external_calls == 1
+    assert body == original
+
+
+def test_provider_failure_has_only_a_safe_typed_cause() -> None:
+    class FailingClient:
+        async def search(self, query: str, *, settings: WebSearchSettings):
+            del query, settings
+            raise RuntimeError("provider-secret-detail")
+
+    with pytest.raises(CodexSearchProviderExecutionError) as caught:
+        asyncio.run(
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "one"}]}),
+                {"tavily_api_key": "key"},
+                client=FailingClient(),
+            )
+        )
+
+    assert isinstance(caught.value.__cause__, RuntimeError)
+    assert "provider-secret-detail" not in repr(caught.value.__cause__)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [asyncio.CancelledError(), TavilyCredentialCollisionError("blocked")],
+)
+def test_local_search_propagates_cancel_and_safety_failures(
+    failure: BaseException,
+) -> None:
+    class FailingClient:
+        async def search(self, query: str, *, settings: WebSearchSettings):
+            del query, settings
+            raise failure
+
+    with pytest.raises(type(failure)) as caught:
+        asyncio.run(
+            execute_local_codex_search(
+                _body({"search_query": [{"q": "one"}]}),
+                {"tavily_api_key": "key"},
+                client=FailingClient(),
+            )
+        )
+
+    assert caught.value is failure
 
 
 def test_open_direct_url_returns_line_addressable_static_page() -> None:

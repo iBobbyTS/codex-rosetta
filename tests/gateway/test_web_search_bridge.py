@@ -4,20 +4,79 @@ from __future__ import annotations
 
 import asyncio
 import json
+import traceback
 from collections.abc import AsyncIterator
 from typing import Any
 from unittest.mock import MagicMock
 
+import pytest
+
+import codex_rosetta.gateway.web_search as web_search_module
 from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.proxy import handle_streaming
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamStream
+from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.gateway.web_search import (
     WEB_SEARCH_PROFILE_ITEM_ID,
+    TavilyHTTPClient,
+    TavilyRequestError,
     WebSearchSettings,
     profile_search_config,
 )
 from codex_rosetta.routing import ResolvedRoute
+
+
+@pytest.mark.parametrize(
+    ("status_code", "content", "category"),
+    [
+        (432, b'{"private":"quota body"}', "http_error"),
+        (433, b'{"private":"quota body"}', "http_error"),
+        (400, b'{"private":"request body"}', "http_error"),
+        (422, b'{"private":"request body"}', "http_error"),
+        (503, b'{"private":"server body"}', "http_error"),
+        (200, b"not-json", "invalid_json"),
+        (200, b"[]", "invalid_shape"),
+        (200, b"{}", "invalid_shape"),
+    ],
+)
+def test_tavily_typed_failures_are_bounded_and_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    content: bytes,
+    category: str,
+) -> None:
+    token = "secret-" + "key"
+
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(status_code, {}, content)
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    with pytest.raises(TavilyRequestError) as caught:
+        asyncio.run(
+            TavilyHTTPClient(token).search("query", settings=WebSearchSettings())
+        )
+
+    assert caught.value.category == category
+    assert caught.value.status_code == (status_code if status_code != 200 else None)
+    rendered = "".join(traceback.format_exception(caught.value))
+    assert content.decode() not in rendered
+    assert token not in rendered
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_tavily_accepts_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    result = asyncio.run(
+        TavilyHTTPClient("secret-key").search("query", settings=WebSearchSettings())
+    )
+    assert result == {"results": []}
 
 
 class _ChatStream(UpstreamStream):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, Protocol
 
 from codex_rosetta._vendor.httpclient import AsyncClient
@@ -21,6 +22,29 @@ WEB_SEARCH_PROFILE_ITEM_ID = "hosted.web_search"
 
 class TavilyCredentialCollisionError(CodexRosettaBlockedError, RuntimeError):
     """A Tavily response reflected the active outbound credential."""
+
+
+class TavilyRequestErrorCategory(StrEnum):
+    """Bounded Tavily failure categories consumed by the provider executor."""
+
+    CONNECTION_ERROR = "connection_error"
+    HTTP_ERROR = "http_error"
+    INVALID_JSON = "invalid_json"
+    INVALID_SHAPE = "invalid_shape"
+
+
+class TavilyRequestError(RuntimeError):
+    """A bounded, secret-safe Tavily execution failure."""
+
+    def __init__(
+        self,
+        category: TavilyRequestErrorCategory,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        self.category = category
+        self.status_code = status_code
+        super().__init__(category)
 
 
 def profile_search_config(route: Any, item_id: str) -> dict[str, str]:
@@ -112,6 +136,7 @@ class TavilyHTTPClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        request_failed = False
         async with AsyncClient(timeout=self.timeout) as client:
             try:
                 response = await request_bounded_response(
@@ -121,22 +146,35 @@ class TavilyHTTPClient:
                     json=payload,
                     headers=headers,
                 )
-            except Exception as exc:
-                safe_error = self._redactor.redact(str(exc))
-                raise RuntimeError(f"Tavily request failed: {safe_error}") from None
+            except Exception:
+                request_failed = True
+                response = None
+        if request_failed:
+            raise TavilyRequestError(
+                TavilyRequestErrorCategory.CONNECTION_ERROR
+            ) from None
+        assert response is not None
 
         if self._redactor.contains_json_semantic(response.content):
             raise TavilyCredentialCollisionError(
                 "Tavily response contains a configured credential; response blocked"
             )
-        if response.status_code >= 400:
-            body = response.text[:500]
-            raise RuntimeError(f"Tavily returned HTTP {response.status_code}: {body}")
+        if not 200 <= response.status_code < 300:
+            raise TavilyRequestError(
+                TavilyRequestErrorCategory.HTTP_ERROR,
+                status_code=response.status_code,
+            )
+        invalid_json = False
         try:
             parsed = response.json()
-        except Exception as exc:
-            raise RuntimeError("Tavily returned invalid JSON") from exc
-        return parsed if isinstance(parsed, dict) else {"result": parsed}
+        except Exception:
+            invalid_json = True
+            parsed = None
+        if invalid_json:
+            raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_JSON) from None
+        if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+            raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_SHAPE)
+        return parsed
 
 
 class WebSearchRuntime:

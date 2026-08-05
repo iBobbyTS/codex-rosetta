@@ -656,9 +656,17 @@ class HttpTransport:
             else MAX_UPSTREAM_SUCCESS_BODY_BYTES
         )
         raw_content = await _read_bounded_body(resp, max_bytes)
+        invalid_json = False
+        try:
+            parsed_body = json.loads(raw_content) if resp.status_code < 400 else None
+        except json.JSONDecodeError, UnicodeDecodeError:
+            invalid_json = True
+            parsed_body = None
+        if invalid_json:
+            raise UpstreamProtocolError("Upstream response is not valid JSON") from None
         return UpstreamResponse(
             status_code=resp.status_code,
-            body=json.loads(raw_content) if resp.status_code < 400 else None,
+            body=parsed_body,
             raw_content=raw_content,
         )
 

@@ -235,7 +235,7 @@ class _LocalUpstreamHandler(BaseHTTPRequestHandler):
             )
             self.wfile.write(b"2\r\n{}\r\n0\r\n" + trailers + b"\r\n")
         else:
-            payload = b'{"ok":true}'
+            payload = b'{"results":[]}' if "query" in body else b'{"ok":true}'
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -532,6 +532,27 @@ def test_unknown_or_chunked_body_is_bounded_incrementally(
         )
 
     assert response.iterated is True
+    assert response.closed is True
+
+
+def test_passthrough_invalid_success_json_is_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(200, [b'{"private":"detail"'])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(
+        UpstreamProtocolError, match="^Upstream response is not valid JSON$"
+    ) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert "private" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
     assert response.closed is True
 
 
@@ -1301,7 +1322,7 @@ def test_tavily_real_loopback_normal_json_forces_identity(
         )
     )
 
-    assert result == {"ok": True}
+    assert result == {"results": []}
     assert server.accept_encoding == "identity"
 
 
@@ -1399,7 +1420,7 @@ def test_tavily_detaches_transport_error_that_reflects_token(
         )
 
     assert token not in str(exc_info.value)
-    assert "[REDACTED]" in str(exc_info.value)
+    assert str(exc_info.value) == "connection_error"
     assert exc_info.value.__cause__ is None
 
 
@@ -1418,11 +1439,12 @@ def test_tavily_real_loopback_bounds_all_body_framings(
     limit_name: str,
     error_match: str,
 ) -> None:
+    del error_match
     _server, base_url = local_upstream
     monkeypatch.setattr(transport_module, limit_name, 5)
     monkeypatch.setattr(web_search_module, "TAVILY_SEARCH_URL", f"{base_url}/{case}")
 
-    with pytest.raises(RuntimeError, match=error_match):
+    with pytest.raises(RuntimeError, match="connection_error"):
         asyncio.run(
             TavilyHTTPClient("tvly-test").search(
                 "query",
@@ -1438,7 +1460,7 @@ def test_tavily_real_loopback_rejects_compressed_response(
     _server, base_url = local_upstream
     monkeypatch.setattr(web_search_module, "TAVILY_SEARCH_URL", f"{base_url}/gzip")
 
-    with pytest.raises(RuntimeError, match="identity required"):
+    with pytest.raises(RuntimeError, match="connection_error"):
         asyncio.run(
             TavilyHTTPClient("tvly-test").search(
                 "query",
@@ -1454,7 +1476,7 @@ def test_tavily_real_loopback_timeout(
     _server, base_url = local_upstream
     monkeypatch.setattr(web_search_module, "TAVILY_SEARCH_URL", f"{base_url}/slow")
 
-    with pytest.raises(RuntimeError, match="Tavily request failed"):
+    with pytest.raises(RuntimeError, match="connection_error"):
         asyncio.run(
             TavilyHTTPClient("tvly-test", timeout=0.02).search(
                 "query",

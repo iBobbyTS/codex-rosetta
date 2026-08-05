@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Any, Protocol
 
 from codex_rosetta._vendor.httpclient import AsyncClient
@@ -21,6 +22,30 @@ class WebRunSidecarError(RuntimeError):
 
 class WebRunSidecarInvalidRequest(WebRunSidecarError):
     """The browser operation or reference is invalid."""
+
+
+class WebRunSidecarSearchErrorCategory(StrEnum):
+    """Bounded failure categories for sidecar search only."""
+
+    CONNECTION_ERROR = "connection_error"
+    HTTP_ERROR = "http_error"
+    INVALID_JSON = "invalid_json"
+    INVALID_SHAPE = "invalid_shape"
+    UNAVAILABLE = "unavailable"
+
+
+class WebRunSidecarSearchError(WebRunSidecarError):
+    """A bounded, secret-safe sidecar search failure."""
+
+    def __init__(
+        self,
+        category: WebRunSidecarSearchErrorCategory,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        self.category = category
+        self.status_code = status_code
+        super().__init__(category)
 
 
 class WebRunSidecarNotImplemented(WebRunSidecarError):
@@ -161,7 +186,7 @@ class WebRunSidecarHTTPClient:
             "Authorization": f"Bearer {self._token}",
             "Content-Type": "application/json",
         }
-        request_error: str | None = None
+        request_failed = False
         async with AsyncClient(timeout=self._timeout) as client:
             try:
                 response = await request_bounded_response(
@@ -173,12 +198,12 @@ class WebRunSidecarHTTPClient:
                     max_success_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
                     max_error_bytes=_MAX_SIDECAR_RESPONSE_BYTES,
                 )
-            except Exception as exc:
-                request_error = self._redactor.redact_exact(str(exc))
+            except Exception:
+                request_failed = True
                 response = None
-        if request_error is not None:
-            raise WebRunSidecarError(
-                f"web-run sidecar search failed: {request_error}"
+        if request_failed:
+            raise WebRunSidecarSearchError(
+                WebRunSidecarSearchErrorCategory.CONNECTION_ERROR
             ) from None
         assert response is not None
 
@@ -188,6 +213,13 @@ class WebRunSidecarHTTPClient:
                 "response blocked"
             )
 
+        if not 200 <= response.status_code < 300:
+            category = (
+                WebRunSidecarSearchErrorCategory.UNAVAILABLE
+                if response.status_code == 501
+                else WebRunSidecarSearchErrorCategory.HTTP_ERROR
+            )
+            raise WebRunSidecarSearchError(category, status_code=response.status_code)
         invalid_json = False
         try:
             body = response.json()
@@ -195,20 +227,17 @@ class WebRunSidecarHTTPClient:
             invalid_json = True
             body = None
         if invalid_json:
-            raise WebRunSidecarError("web-run sidecar returned invalid JSON") from None
+            raise WebRunSidecarSearchError(
+                WebRunSidecarSearchErrorCategory.INVALID_JSON
+            ) from None
         if not isinstance(body, dict):
-            raise WebRunSidecarError("web-run sidecar returned a non-object response")
-        if response.status_code >= 400:
-            message = _sidecar_error_message(body, response.status_code)
-            if response.status_code in {400, 404, 422}:
-                raise WebRunSidecarInvalidRequest(message)
-            if response.status_code == 501:
-                raise WebRunSidecarNotImplemented(message)
-            raise WebRunSidecarError(message)
+            raise WebRunSidecarSearchError(
+                WebRunSidecarSearchErrorCategory.INVALID_SHAPE
+            )
         results = body.get("results")
         if not isinstance(results, list):
-            raise WebRunSidecarError(
-                "web-run sidecar search response is missing array 'results'"
+            raise WebRunSidecarSearchError(
+                WebRunSidecarSearchErrorCategory.INVALID_SHAPE
             )
         return body
 
@@ -231,4 +260,6 @@ __all__ = [
     "WebRunSidecarHTTPClient",
     "WebRunSidecarInvalidRequest",
     "WebRunSidecarNotImplemented",
+    "WebRunSidecarSearchError",
+    "WebRunSidecarSearchErrorCategory",
 ]
