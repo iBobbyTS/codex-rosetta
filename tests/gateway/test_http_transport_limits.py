@@ -625,6 +625,47 @@ def test_passthrough_success_rejects_non_standard_json_constants(
     assert caught.value.__context__ is None
 
 
+def test_strict_utf8_json_preserves_finite_standard_numbers() -> None:
+    parsed = transport_module._parse_strict_utf8_json(
+        b'{"integer":42,"fraction":-1.25,"exponent":1e2}'
+    )
+
+    assert parsed == {"integer": 42, "fraction": -1.25, "exponent": 100.0}
+    assert isinstance(parsed["integer"], int)
+    assert isinstance(parsed["fraction"], float)
+    assert isinstance(parsed["exponent"], float)
+    assert math.isfinite(parsed["fraction"])
+    assert math.isfinite(parsed["exponent"])
+
+
+@pytest.mark.parametrize("number", ["1e10000", "-1e10000"])
+def test_strict_utf8_json_rejects_exponent_overflow(number: str) -> None:
+    with pytest.raises(ValueError, match="JSON number is not finite"):
+        transport_module._parse_strict_utf8_json(f'{{"value":{number}}}'.encode())
+
+
+@pytest.mark.parametrize("number", ["1e10000", "-1e10000"])
+def test_passthrough_success_rejects_exponent_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+    number: str,
+) -> None:
+    response = _FakeStreamingResponse(200, [f'{{"value":{number}}}'.encode()])
+    transport, _client = _transport(monkeypatch, response)
+
+    with pytest.raises(
+        UpstreamProtocolError, match="^Upstream response is not valid JSON$"
+    ) as caught:
+        asyncio.run(
+            transport.send_passthrough(
+                _provider(), "https://upstream.example/v1/alpha/search", {}
+            )
+        )
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert response.closed is True
+
+
 def test_passthrough_success_json_memory_error_propagates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1625,12 +1666,11 @@ def test_tavily_real_loopback_bounds_all_body_framings(
     limit_name: str,
     error_match: str,
 ) -> None:
-    del error_match
     _server, base_url = local_upstream
     monkeypatch.setattr(transport_module, limit_name, 5)
     monkeypatch.setattr(web_search_module, "TAVILY_SEARCH_URL", f"{base_url}/{case}")
 
-    with pytest.raises(RuntimeError, match="connection_error"):
+    with pytest.raises(UpstreamResponseTooLargeError, match=error_match):
         asyncio.run(
             TavilyHTTPClient("tvly-test").search(
                 "query",
@@ -1646,7 +1686,7 @@ def test_tavily_real_loopback_rejects_compressed_response(
     _server, base_url = local_upstream
     monkeypatch.setattr(web_search_module, "TAVILY_SEARCH_URL", f"{base_url}/gzip")
 
-    with pytest.raises(RuntimeError, match="connection_error"):
+    with pytest.raises(UpstreamContentEncodingError, match="identity required"):
         asyncio.run(
             TavilyHTTPClient("tvly-test").search(
                 "query",

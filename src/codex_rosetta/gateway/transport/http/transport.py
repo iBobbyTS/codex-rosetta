@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any
@@ -103,11 +104,20 @@ def _reject_non_finite_json_constant(value: str) -> Any:
     raise ValueError(f"Non-standard JSON constant: {value}")
 
 
+def _parse_finite_json_float(value: str) -> float:
+    """Parse one standard JSON float without permitting overflow to infinity."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("JSON number is not finite")
+    return parsed
+
+
 def _parse_strict_utf8_json(raw_content: bytes) -> Any:
     """Parse standard JSON after strict UTF-8 decoding."""
     return json.loads(
         raw_content.decode("utf-8"),
         parse_constant=_reject_non_finite_json_constant,
+        parse_float=_parse_finite_json_float,
     )
 
 
