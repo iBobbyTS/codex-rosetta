@@ -10,7 +10,7 @@ import re
 import sys
 import tempfile
 from collections.abc import Callable, Mapping
-from typing import Any, cast
+from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit
 
 from codex_rosetta.auto_detect import ProviderType
@@ -87,7 +87,87 @@ WEB_SEARCH_PROVIDERS = frozenset(
         *SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     }
 )
+MAX_WEB_SEARCH_PROVIDERS = 32
+WEB_SEARCH_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
+
+
+class TavilyWebSearchProvider(TypedDict):
+    """Canonical Tavily search-provider configuration."""
+
+    id: str
+    provider: Literal["tavily"]
+    tavily_api_key: str
+
+
+class ConfiguredResponsesWebSearchProvider(TypedDict):
+    """Canonical configured Responses search-provider configuration."""
+
+    id: str
+    provider: Literal["configured_responses_provider"]
+    responses_provider: str
+    responses_model: str
+
+
+class SelfHostedWebSearchProvider(TypedDict):
+    """Canonical self-hosted search-provider configuration."""
+
+    id: str
+    provider: Literal[
+        "self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"
+    ]
+
+
+WebSearchProvider = (
+    TavilyWebSearchProvider
+    | ConfiguredResponsesWebSearchProvider
+    | SelfHostedWebSearchProvider
+)
+
+
+class WebSearchConfig(dict[str, Any]):
+    """Canonical providers plus a narrow, phased legacy-read adapter.
+
+    Synthetic legacy keys are resolved only by ``__getitem__`` and ``get``;
+    iteration and serialization expose only the canonical ``providers`` key.
+    """
+
+    def __init__(self, providers: list[WebSearchProvider]) -> None:
+        super().__init__({"providers": providers})
+
+    @property
+    def providers(self) -> list[WebSearchProvider]:
+        """Return canonical providers in configured order."""
+        return dict.__getitem__(self, "providers")
+
+    def _legacy_primary(self) -> dict[str, Any]:
+        if not self.providers:
+            return {"provider": "tavily", "tavily_api_key": ""}
+        row = dict(self.providers[0])
+        row.pop("id")
+        row.setdefault("tavily_api_key", "")
+        return row
+
+    def __getitem__(self, key: str) -> Any:
+        if key == "providers":
+            return super().__getitem__(key)
+        if key in {
+            "provider",
+            "responses_model",
+            "responses_provider",
+            "tavily_api_key",
+        }:
+            return self._legacy_primary()[key]
+        return super().__getitem__(key)
+
+    def get(self, key: object, default: Any = None) -> Any:
+        """Read canonical keys or the first provider through the legacy shape."""
+        if not isinstance(key, str):
+            return default
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
 
 def resolve_provider_api_type(
@@ -193,14 +273,81 @@ def normalize_request_body_limit_mb(value: Any) -> int | None:
     return value
 
 
-def normalize_web_search(value: Any) -> dict[str, str]:
-    """Validate the global Rosetta search-service configuration."""
-    if value is None:
-        mapping: dict[str, Any] = {}
-    elif isinstance(value, dict):
-        mapping = value
-    else:
-        raise ValueError("config: server.web_search must be an object")
+def _normalize_web_search_provider(
+    value: Any,
+    *,
+    field: str,
+) -> WebSearchProvider:
+    """Validate one canonical provider row."""
+    if not isinstance(value, dict):
+        raise ValueError(f"config: {field} must be an object")
+    provider_id = value.get("id")
+    if not isinstance(provider_id, str) or not WEB_SEARCH_PROVIDER_ID_RE.fullmatch(
+        provider_id
+    ):
+        raise ValueError(f"config: {field}.id must match [A-Za-z0-9_-]{{1,64}}")
+    provider = value.get("provider")
+    if not isinstance(provider, str) or provider not in WEB_SEARCH_PROVIDERS:
+        raise ValueError(
+            f"config: {field}.provider must be one of {sorted(WEB_SEARCH_PROVIDERS)}"
+        )
+
+    required_fields = {"id", "provider"}
+    if provider == "tavily":
+        required_fields.add("tavily_api_key")
+    elif provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        required_fields.update({"responses_provider", "responses_model"})
+    unsupported = set(value) - required_fields
+    missing = required_fields - set(value)
+    if unsupported:
+        raise ValueError(
+            f"config: {field} has unsupported fields: {sorted(unsupported)}"
+        )
+    if missing:
+        raise ValueError(f"config: {field} is missing fields: {sorted(missing)}")
+
+    if provider == "tavily":
+        api_key = value["tavily_api_key"]
+        if not isinstance(api_key, str) or not api_key.strip():
+            raise ValueError(
+                f"config: {field}.tavily_api_key must be a non-empty string"
+            )
+        return {
+            "id": provider_id,
+            "provider": "tavily",
+            "tavily_api_key": api_key.strip(),
+        }
+    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        responses_provider = value["responses_provider"]
+        responses_model = value["responses_model"]
+        if not isinstance(responses_provider, str) or not responses_provider.strip():
+            raise ValueError(
+                f"config: {field}.responses_provider must be a non-empty string"
+            )
+        if not isinstance(responses_model, str) or not responses_model.strip():
+            raise ValueError(
+                f"config: {field}.responses_model must be a non-empty string"
+            )
+        responses_model = responses_model.strip()
+        if responses_model not in CONFIGURED_RESPONSES_WEB_SEARCH_MODELS:
+            raise ValueError(
+                f"config: {field}.responses_model must be one of "
+                f"{list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS)}"
+            )
+        return {
+            "id": provider_id,
+            "provider": CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+            "responses_provider": responses_provider.strip(),
+            "responses_model": responses_model,
+        }
+    return cast(
+        SelfHostedWebSearchProvider,
+        {"id": provider_id, "provider": provider},
+    )
+
+
+def _normalize_legacy_web_search(mapping: dict[str, Any]) -> list[WebSearchProvider]:
+    """Normalize the former single-provider shape into the canonical list."""
     unsupported = set(mapping) - {
         "provider",
         "responses_model",
@@ -242,12 +389,66 @@ def normalize_web_search(value: Any) -> dict[str, str]:
             "config: server.web_search.responses_provider is required when "
             "provider is 'configured_responses_provider'"
         )
-    normalized = {"provider": provider, "tavily_api_key": api_key.strip()}
-    if responses_provider:
-        normalized["responses_provider"] = responses_provider
+    api_key = api_key.strip()
+    if provider == "tavily":
+        if not api_key:
+            return []
+        return [{"id": "legacy-0", "provider": "tavily", "tavily_api_key": api_key}]
     if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
-        normalized["responses_model"] = responses_model
-    return normalized
+        return [
+            {
+                "id": "legacy-0",
+                "provider": CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+                "responses_provider": responses_provider,
+                "responses_model": responses_model,
+            }
+        ]
+    return [
+        cast(
+            SelfHostedWebSearchProvider,
+            {"id": "legacy-0", "provider": provider},
+        )
+    ]
+
+
+def normalize_web_search(value: Any) -> WebSearchConfig:
+    """Validate and canonicalize the global Rosetta search configuration."""
+    if value is None:
+        mapping: dict[str, Any] = {}
+    elif isinstance(value, dict):
+        mapping = value
+    else:
+        raise ValueError("config: server.web_search must be an object")
+    if "providers" not in mapping:
+        return WebSearchConfig(_normalize_legacy_web_search(mapping))
+    unsupported = set(mapping) - {"providers"}
+    if unsupported:
+        raise ValueError(
+            f"config: server.web_search has unsupported fields: {sorted(unsupported)}"
+        )
+    providers = mapping["providers"]
+    if not isinstance(providers, list):
+        raise ValueError("config: server.web_search.providers must be a list")
+    if len(providers) > MAX_WEB_SEARCH_PROVIDERS:
+        raise ValueError(
+            "config: server.web_search.providers must contain at most "
+            f"{MAX_WEB_SEARCH_PROVIDERS} entries"
+        )
+    normalized: list[WebSearchProvider] = []
+    seen_ids: set[str] = set()
+    for index, row in enumerate(providers):
+        provider = _normalize_web_search_provider(
+            row,
+            field=f"server.web_search.providers[{index}]",
+        )
+        provider_id = provider["id"]
+        if provider_id in seen_ids:
+            raise ValueError(
+                f"config: duplicate server.web_search.providers[].id {provider_id!r}"
+            )
+        seen_ids.add(provider_id)
+        normalized.append(provider)
+    return WebSearchConfig(normalized)
 
 
 def normalize_web_run_sidecar(
@@ -759,8 +960,10 @@ class GatewayConfig:
             _server
         )
         self.web_search = normalize_web_search(_server.get("web_search"))
-        if self.web_search["tavily_api_key"]:
-            self.token_values.add(self.web_search["tavily_api_key"])
+        for provider in self.web_search.providers:
+            if provider["provider"] == "tavily":
+                tavily = cast(TavilyWebSearchProvider, provider)
+                self.token_values.add(tavily["tavily_api_key"])
         (
             self.web_run_sidecar_url,
             self.web_run_sidecar_token,
@@ -846,25 +1049,6 @@ class GatewayConfig:
         }
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
-
-        self._validate_web_search_provider()
-
-    def _validate_web_search_provider(self) -> None:
-        """Require the selected search provider to be an enabled Responses provider."""
-        if self.web_search["provider"] != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
-            return
-        provider_name = self.web_search["responses_provider"]
-        provider = self._raw_providers.get(provider_name)
-        if provider is None:
-            raise ValueError(
-                "config: server.web_search.responses_provider must name an enabled "
-                f"provider; got {provider_name!r}"
-            )
-        if provider.get("api_type") != "responses":
-            raise ValueError(
-                "config: server.web_search.responses_provider must name a provider "
-                f"with api_type 'responses'; got {provider_name!r}"
-            )
 
     def _validate(self) -> None:
         if not isinstance(self.admin_password, str) or not self.admin_password.strip():

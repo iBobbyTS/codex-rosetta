@@ -634,110 +634,249 @@ class TestRequestBodyLimit:
 class TestWebSearchConfig:
     """Global Rosetta web search settings are validated and redacted."""
 
-    def test_defaults_to_unconfigured_tavily(self):
+    def test_defaults_to_empty_provider_list(self):
         config = GatewayConfig(_minimal_raw())
 
-        assert config.web_search == {
-            "provider": "tavily",
-            "tavily_api_key": "",
-        }
+        assert config.web_search == {"providers": []}
+        assert config.web_search["provider"] == "tavily"
+        assert config.web_search.get("tavily_api_key") == ""
 
-    def test_configured_key_is_available_and_redacted(self):
+    def test_canonical_providers_are_normalized_redacted_and_ordered(self):
         config = GatewayConfig(
             _minimal_raw(
                 web_search={
-                    "provider": "tavily",
-                    "tavily_api_key": " tvly-secret ",
+                    "providers": [
+                        {
+                            "id": "primary_tavily",
+                            "provider": "tavily",
+                            "tavily_api_key": " tvly-primary ",
+                        },
+                        {
+                            "id": "responses-2",
+                            "provider": "configured_responses_provider",
+                            "responses_provider": " search-upstream ",
+                            "responses_model": " gpt-5.6-terra ",
+                        },
+                        {"id": "local", "provider": "self_hosted_google"},
+                    ]
                 }
             )
         )
 
         assert config.web_search == {
-            "provider": "tavily",
-            "tavily_api_key": "tvly-secret",
+            "providers": [
+                {
+                    "id": "primary_tavily",
+                    "provider": "tavily",
+                    "tavily_api_key": "tvly-primary",
+                },
+                {
+                    "id": "responses-2",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "search-upstream",
+                    "responses_model": "gpt-5.6-terra",
+                },
+                {"id": "local", "provider": "self_hosted_google"},
+            ]
         }
-        assert "tvly-secret" in config.token_values
+        assert "tvly-primary" in config.token_values
+        assert list(config.web_search) == ["providers"]
+        assert json.loads(json.dumps(config.web_search)) == config.web_search
 
     @pytest.mark.parametrize(
         "provider",
         ["self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"],
     )
-    def test_self_hosted_search_requires_request_time_sidecar_readiness(self, provider):
-        config = GatewayConfig(_minimal_raw(web_search={"provider": provider}))
-
-        route, _provider = config.resolve("openai_responses", "gpt-test")
-
+    def test_accepts_each_self_hosted_provider(self, provider):
+        config = GatewayConfig(
+            _minimal_raw(
+                web_search={"providers": [{"id": "local", "provider": provider}]}
+            )
+        )
         assert config.web_search == {
-            "provider": provider,
-            "tavily_api_key": "",
+            "providers": [{"id": "local", "provider": provider}]
         }
-        assert WEB_RUN_BASIC_SEARCH_CAPABILITY not in route.tool_runtime_capabilities
-
-    def test_configured_responses_provider_enables_basic_search(self):
-        raw = _minimal_raw(
-            web_search={
-                "provider": "configured_responses_provider",
-                "responses_provider": "test",
-            }
-        )
-        raw["providers"]["test"]["api_type"] = "responses"
-        config = GatewayConfig(raw)
-
-        route, _provider = config.resolve("openai_responses", "gpt-test")
-
-        assert config.web_search == {
-            "provider": "configured_responses_provider",
-            "responses_model": "gpt-5.6-sol",
-            "responses_provider": "test",
-            "tavily_api_key": "",
-        }
-        assert WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
-
-    def test_configured_search_rejects_non_responses_provider(self):
-        raw = _minimal_raw(
-            web_search={
-                "provider": "configured_responses_provider",
-                "responses_provider": "test",
-            }
-        )
-
-        with pytest.raises(ValueError, match="api_type 'responses'"):
-            GatewayConfig(raw)
-
-    def test_configured_search_rejects_missing_or_disabled_provider(self):
-        raw = _minimal_raw(
-            web_search={
-                "provider": "configured_responses_provider",
-                "responses_provider": "test",
-            }
-        )
-        raw["providers"]["test"]["enabled"] = False
-
-        with pytest.raises(ValueError, match="must name an enabled provider"):
-            GatewayConfig(raw)
+        assert config.web_search["provider"] == provider
+        assert config.web_search.get("tavily_api_key") == ""
 
     @pytest.mark.parametrize(
         ("value", "message"),
         [
             ("tavily", "must be an object"),
-            ({"provider": "other"}, "provider must be one of"),
-            ({"tavily_api_key": 42}, "tavily_api_key must be a string"),
+            ({"providers": {}}, "providers must be a list"),
+            ({"providers": [], "provider": "tavily"}, "unsupported fields"),
+            ({"providers": ["tavily"]}, r"providers\[0\] must be an object"),
+            ({"providers": [{"id": "one"}]}, "provider must be one of"),
             (
-                {"provider": "configured_responses_provider"},
-                "responses_provider is required",
+                {"providers": [{"id": "one", "provider": "other"}]},
+                "provider must be one of",
             ),
-            ({"responses_provider": 42}, "responses_provider must be a string"),
-            ({"responses_model": 42}, "responses_model must be a string"),
             (
-                {"responses_model": "gpt-6"},
+                {"providers": [{"id": "one", "provider": "tavily"}]},
+                "missing fields",
+            ),
+            (
+                {
+                    "providers": [
+                        {
+                            "id": "one",
+                            "provider": "tavily",
+                            "tavily_api_key": "key",
+                            "responses_model": "gpt-5.6-sol",
+                        }
+                    ]
+                },
+                "unsupported fields",
+            ),
+            (
+                {
+                    "providers": [
+                        {
+                            "id": "one",
+                            "provider": "configured_responses_provider",
+                            "responses_provider": "upstream",
+                        }
+                    ]
+                },
+                "missing fields",
+            ),
+            (
+                {
+                    "providers": [
+                        {
+                            "id": "one",
+                            "provider": "configured_responses_provider",
+                            "responses_provider": "upstream",
+                            "responses_model": "gpt-6",
+                        }
+                    ]
+                },
                 "responses_model must be one of",
             ),
-            ({"token": "legacy"}, "unsupported fields"),
+            (
+                {
+                    "providers": [
+                        {"id": "one", "provider": "self_hosted_google", "token": "x"}
+                    ]
+                },
+                "unsupported fields",
+            ),
         ],
     )
-    def test_rejects_invalid_values(self, value, message):
+    def test_rejects_invalid_shapes_and_field_combinations(self, value, message):
         with pytest.raises(ValueError, match=message):
             GatewayConfig(_minimal_raw(web_search=value))
+
+    @pytest.mark.parametrize("provider_id", ["", "has space", "dot.id", "a" * 65, 42])
+    def test_rejects_invalid_provider_ids(self, provider_id):
+        value = {
+            "providers": [
+                {
+                    "id": provider_id,
+                    "provider": "tavily",
+                    "tavily_api_key": "key",
+                }
+            ]
+        }
+        with pytest.raises(ValueError, match="id must match"):
+            GatewayConfig(_minimal_raw(web_search=value))
+
+    def test_rejects_duplicate_ids_and_more_than_32_providers(self):
+        duplicate = [
+            {"id": "same", "provider": "self_hosted_google"},
+            {"id": "same", "provider": "self_hosted_bing"},
+        ]
+        with pytest.raises(ValueError, match="duplicate.*id"):
+            GatewayConfig(_minimal_raw(web_search={"providers": duplicate}))
+
+        too_many = [
+            {"id": f"provider-{index}", "provider": "self_hosted_google"}
+            for index in range(33)
+        ]
+        with pytest.raises(ValueError, match="at most 32"):
+            GatewayConfig(_minimal_raw(web_search={"providers": too_many}))
+
+    @pytest.mark.parametrize(
+        "row",
+        [
+            {"id": "one", "provider": "tavily", "tavily_api_key": "   "},
+            {
+                "id": "one",
+                "provider": "configured_responses_provider",
+                "responses_provider": "",
+                "responses_model": "gpt-5.6-sol",
+            },
+            {
+                "id": "one",
+                "provider": "configured_responses_provider",
+                "responses_provider": "upstream",
+                "responses_model": " ",
+            },
+        ],
+    )
+    def test_rejects_empty_provider_values(self, row):
+        with pytest.raises(ValueError, match="must be a non-empty string"):
+            GatewayConfig(_minimal_raw(web_search={"providers": [row]}))
+
+    @pytest.mark.parametrize(
+        ("legacy", "expected"),
+        [
+            ({}, []),
+            ({"provider": "tavily", "tavily_api_key": ""}, []),
+            (
+                {"provider": "tavily", "tavily_api_key": " key "},
+                [{"id": "legacy-0", "provider": "tavily", "tavily_api_key": "key"}],
+            ),
+            (
+                {
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "upstream",
+                },
+                [
+                    {
+                        "id": "legacy-0",
+                        "provider": "configured_responses_provider",
+                        "responses_provider": "upstream",
+                        "responses_model": "gpt-5.6-sol",
+                    }
+                ],
+            ),
+            (
+                {"provider": "self_hosted_google"},
+                [{"id": "legacy-0", "provider": "self_hosted_google"}],
+            ),
+            (
+                {"provider": "self_hosted_bing"},
+                [{"id": "legacy-0", "provider": "self_hosted_bing"}],
+            ),
+            (
+                {"provider": "self_hosted_bing_browser"},
+                [{"id": "legacy-0", "provider": "self_hosted_bing_browser"}],
+            ),
+        ],
+    )
+    def test_normalizes_legacy_single_provider_shape(self, legacy, expected):
+        config = GatewayConfig(_minimal_raw(web_search=legacy))
+
+        assert config.web_search == {"providers": expected}
+
+    def test_does_not_validate_responses_provider_registry_in_section_one(self):
+        config = GatewayConfig(
+            _minimal_raw(
+                web_search={
+                    "providers": [
+                        {
+                            "id": "responses",
+                            "provider": "configured_responses_provider",
+                            "responses_provider": "not-yet-resolved",
+                            "responses_model": "gpt-5.6-luna",
+                        }
+                    ]
+                }
+            )
+        )
+
+        assert config.web_search["responses_provider"] == "not-yet-resolved"
 
 
 class TestStreamTraceConfig:
