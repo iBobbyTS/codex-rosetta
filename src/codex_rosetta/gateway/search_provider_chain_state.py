@@ -146,23 +146,42 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._last_clock = now
         return now
 
-    def _notify_waiters_locked(
-        self, *, primary_error: BaseException | None = None
-    ) -> None:
+    def _take_waiters_locked(self) -> tuple[_CapacityWaiter, ...]:
         waiters = tuple(self._waiters.values())
         self._waiters.clear()
+        return waiters
+
+    def _notify_waiters(
+        self,
+        waiters: tuple[_CapacityWaiter, ...],
+        *,
+        primary_error: BaseException | None = None,
+    ) -> None:
         first_notification_error: BaseException | None = None
+        failed_waiters: list[_CapacityWaiter] = []
         for waiter in waiters:
             try:
                 waiter.loop.call_soon_threadsafe(_wake_waiter, waiter.future)
-            except RuntimeError:
-                # A waiter's loop may close concurrently with a state change.
-                continue
             except BaseException as error:
+                notification_error = error
+                if isinstance(error, RuntimeError):
+                    try:
+                        closed = waiter.loop.is_closed()
+                    except BaseException as closed_error:
+                        notification_error = closed_error
+                    else:
+                        if closed:
+                            continue
+                failed_waiters.append(waiter)
                 if first_notification_error is None:
-                    first_notification_error = error
+                    first_notification_error = notification_error
+        if failed_waiters:
+            with self._lock:
+                for waiter in failed_waiters:
+                    if not waiter.future.done():
+                        self._waiters.setdefault(waiter.token, waiter)
         if first_notification_error is not None and primary_error is None:
-            raise first_notification_error
+            raise first_notification_error from None
 
     def protect(
         self, candidates: Iterable[SearchProviderCandidate]
@@ -177,7 +196,12 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 self._protection_counts[key] = self._protection_counts.get(key, 0) + 1
             return protection
 
-    def release_protection(self, protection: _ChainProtection) -> None:
+    def release_protection(
+        self,
+        protection: _ChainProtection,
+        *,
+        primary_error: BaseException | None = None,
+    ) -> None:
         """Release one active chain's protection and notify capacity waiters."""
         with self._lock:
             keys = self._protections.pop(protection.token, None)
@@ -189,9 +213,10 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     del self._protection_counts[key]
                 else:
                     self._protection_counts[key] = remaining
-            self._notify_waiters_locked()
+            waiters = self._take_waiters_locked()
+        self._notify_waiters(waiters, primary_error=primary_error)
 
-    def _prune_expired_locked(self, now: float) -> None:
+    def _prune_expired_locked(self, now: float) -> bool:
         removed = False
         for key, entry in tuple(self._entries.items()):
             until = entry.cooldown_until
@@ -205,8 +230,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             if entry.inflight == 0:
                 del self._entries[key]
                 removed = True
-        if removed:
-            self._notify_waiters_locked()
+        return removed
 
     def _evict_oldest_cooldown_locked(self) -> bool:
         eligible = (
@@ -220,7 +244,6 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         if oldest is None:
             return False
         del self._entries[oldest[1]]
-        self._notify_waiters_locked()
         return True
 
     def _nearest_releasable_cooldown_locked(self) -> float | None:
@@ -254,25 +277,32 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self,
         key: _CandidateKey,
         loop: asyncio.AbstractEventLoop,
-    ) -> _ReserveInstruction[_ReasonT]:
+    ) -> tuple[
+        _ReserveInstruction[_ReasonT] | None,
+        tuple[_CapacityWaiter, ...],
+    ]:
         now = self._read_clock_locked()
-        self._prune_expired_locked(now)
+        if self._prune_expired_locked(now):
+            return None, self._take_waiters_locked()
         entry = self._entries.get(key)
         if entry is not None and entry.cooldown_until is not None:
             assert entry.cooldown_reason is not None
-            return _ReserveInstruction(cooling_reason=entry.cooldown_reason)
+            return _ReserveInstruction(cooling_reason=entry.cooldown_reason), ()
         if entry is not None and entry.inflight < MAX_ACTIVE_ATTEMPTS_PER_CANDIDATE:
-            return _ReserveInstruction(reservation=self._reserve_locked(key, entry))
-        if entry is None and (
-            len(self._entries) < self._capacity or self._evict_oldest_cooldown_locked()
-        ):
+            reservation = self._reserve_locked(key, entry)
+            return _ReserveInstruction(reservation=reservation), ()
+        if entry is None and len(self._entries) >= self._capacity:
+            if self._evict_oldest_cooldown_locked():
+                return None, self._take_waiters_locked()
+        if entry is None and len(self._entries) < self._capacity:
             entry = _CandidateState()
             self._entries[key] = entry
-            return _ReserveInstruction(reservation=self._reserve_locked(key, entry))
+            reservation = self._reserve_locked(key, entry)
+            return _ReserveInstruction(reservation=reservation), ()
         waiter = self._register_waiter_locked(loop)
         cooldown_deadline = self._nearest_releasable_cooldown_locked()
         timeout = None if cooldown_deadline is None else cooldown_deadline - now
-        return _ReserveInstruction(waiter=waiter, timeout=timeout)
+        return _ReserveInstruction(waiter=waiter, timeout=timeout), ()
 
     async def reserve(
         self,
@@ -283,7 +313,10 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         loop = asyncio.get_running_loop()
         while True:
             with self._lock:
-                instruction = self._reserve_instruction_locked(key, loop)
+                instruction, waiters = self._reserve_instruction_locked(key, loop)
+            self._notify_waiters(waiters)
+            if instruction is None:
+                continue
             if instruction.reservation is not None:
                 return instruction.reservation, None
             if instruction.cooling_reason is not None:
@@ -447,14 +480,11 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._prune_success_order_locked(entry)
         if entry.inflight == 0 and entry.cooldown_until is None:
             del self._entries[reservation.key]
-        self._notify_waiters_locked()
         return published_reason
 
     def _discard_without_publication_locked(
         self,
         reservation: _Reservation,
-        *,
-        primary_error: BaseException,
     ) -> None:
         if self._reservations.pop(reservation.token, None) != reservation:
             return
@@ -469,7 +499,6 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._prune_success_order_locked(entry)
         if entry.inflight == 0 and entry.cooldown_until is None:
             del self._entries[reservation.key]
-        self._notify_waiters_locked(primary_error=primary_error)
 
     def _settle(
         self,
@@ -478,6 +507,8 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         success: bool = False,
         failure_reason: _ReasonT | None = None,
     ) -> _ReasonT | None:
+        primary_error: BaseException | None = None
+        published_reason: _ReasonT | None = None
         with self._lock:
             if self._reservations.get(reservation.token) != reservation:
                 return None
@@ -490,18 +521,21 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                     failure_reason=failure_reason,
                 )
             except BaseException as error:
-                self._discard_without_publication_locked(
+                self._discard_without_publication_locked(reservation)
+                primary_error = error
+            else:
+                self._prune_expired_locked(now)
+                published_reason = self._settle_locked(
                     reservation,
-                    primary_error=error,
+                    now=now,
+                    success=success,
+                    failure_reason=failure_reason,
                 )
-                raise
-            self._prune_expired_locked(now)
-            return self._settle_locked(
-                reservation,
-                now=now,
-                success=success,
-                failure_reason=failure_reason,
-            )
+            waiters = self._take_waiters_locked()
+        self._notify_waiters(waiters, primary_error=primary_error)
+        if primary_error is not None:
+            raise primary_error from None
+        return published_reason
 
     def release(self, reservation: _Reservation) -> _ReasonT | None:
         """Neutrally release once and return any delayed cooldown publication."""
@@ -522,9 +556,12 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         key = self.key(candidate)
         with self._lock:
             now = self._read_clock_locked()
-            self._prune_expired_locked(now)
+            changed = self._prune_expired_locked(now)
             entry = self._entries.get(key)
-            return entry.cooldown_reason if entry is not None else None
+            reason = entry.cooldown_reason if entry is not None else None
+            waiters = self._take_waiters_locked() if changed else ()
+        self._notify_waiters(waiters)
+        return reason
 
     def mark_failed(
         self,
@@ -556,8 +593,9 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             entry.cooldown_reason = reason
             entry.cooldown_generation = None
             entry.cooldown_order = self._next_cooldown_order
-            self._notify_waiters_locked()
-            return reason
+            waiters = self._take_waiters_locked()
+        self._notify_waiters(waiters)
+        return reason
 
     def clear_cooldown_from_health_evidence(
         self,
@@ -583,30 +621,31 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         key = self.key(candidate)
         with self._lock:
             now = self._read_clock_locked()
-            self._prune_expired_locked(now)
+            changed = self._prune_expired_locked(now)
             entry = self._entries.get(key)
-            if entry is None or entry.cooldown_reason is not quota_reason:
-                return False
-            if reason is not quota_reason:
-                return False
-            started_at = entry.cooldown_started_at
-            if (
-                started_at is None
-                or evidence_value <= started_at
-                or evidence_value > now
-            ):
-                return False
-            entry.suppressed_pending_generations.update(
-                generation
-                for generation, cohort in entry.cohorts.items()
-                if cohort.pending_failure_reason is not None
+            cleared = (
+                entry is not None
+                and entry.cooldown_reason is quota_reason
+                and reason is quota_reason
+                and entry.cooldown_started_at is not None
+                and evidence_value > entry.cooldown_started_at
+                and evidence_value <= now
             )
-            entry.cooldown_until = None
-            entry.cooldown_started_at = None
-            entry.cooldown_reason = None
-            entry.cooldown_generation = None
-            entry.cooldown_order = 0
-            if entry.inflight == 0:
-                del self._entries[key]
-            self._notify_waiters_locked()
-            return True
+            if cleared:
+                assert entry is not None
+                entry.suppressed_pending_generations.update(
+                    generation
+                    for generation, cohort in entry.cohorts.items()
+                    if cohort.pending_failure_reason is not None
+                )
+                entry.cooldown_until = None
+                entry.cooldown_started_at = None
+                entry.cooldown_reason = None
+                entry.cooldown_generation = None
+                entry.cooldown_order = 0
+                if entry.inflight == 0:
+                    del self._entries[key]
+                changed = True
+            waiters = self._take_waiters_locked() if changed else ()
+        self._notify_waiters(waiters)
+        return cleared

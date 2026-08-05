@@ -336,40 +336,48 @@ class SearchProviderChainCoordinator:
             raise SearchProviderChainUnavailable(reason)
 
         protection = self._state.protect(candidate_snapshot)
+        primary_error: BaseException | None = None
         try:
-            attempted = False
-            seen: set[object] = set()
-            for attempt_index, candidate in enumerate(candidate_snapshot):
-                key = self._state.key(candidate)
-                if key in seen:
-                    continue
-                seen.add(key)
-                reservation, cooling_reason = await self._state.reserve(candidate)
-                if cooling_reason is not None:
-                    self._observe_candidate(
-                        candidate,
-                        attempt_index,
-                        "cooling",
-                        cooldown_reason=cooling_reason,
+            try:
+                attempted = False
+                seen: set[object] = set()
+                for attempt_index, candidate in enumerate(candidate_snapshot):
+                    key = self._state.key(candidate)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    reservation, cooling_reason = await self._state.reserve(candidate)
+                    if cooling_reason is not None:
+                        self._observe_candidate(
+                            candidate,
+                            attempt_index,
+                            "cooling",
+                            cooldown_reason=cooling_reason,
+                        )
+                        continue
+                    assert reservation is not None
+                    attempted = True
+                    succeeded, result = await self._run_admitted(
+                        candidate, attempt_index, runner, reservation
                     )
-                    continue
-                assert reservation is not None
-                attempted = True
-                succeeded, result = await self._run_admitted(
-                    candidate, attempt_index, runner, reservation
-                )
-                if succeeded:
-                    return cast(_ResultT, result)
+                    if succeeded:
+                        return cast(_ResultT, result)
 
-            reason = (
-                SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
-                if attempted
-                else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
-            )
-            self._observe({"final_reason": reason.value})
-            raise SearchProviderChainUnavailable(reason)
+                reason = (
+                    SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+                    if attempted
+                    else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+                )
+                self._observe({"final_reason": reason.value})
+                raise SearchProviderChainUnavailable(reason)
+            except BaseException as error:
+                primary_error = error
+                raise
         finally:
-            self._state.release_protection(protection)
+            self._state.release_protection(
+                protection,
+                primary_error=primary_error,
+            )
 
 
 class SearchProviderRequestBudget:

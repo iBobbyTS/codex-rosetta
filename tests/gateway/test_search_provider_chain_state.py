@@ -63,6 +63,45 @@ class NaturalClock:
         return time.monotonic()
 
 
+class OneShotFailingLoop:
+    def __init__(self, failure: BaseException) -> None:
+        self.failure = failure
+        self.calls = 0
+
+    def is_closed(self) -> bool:
+        return False
+
+    def call_soon_threadsafe(self, callback: Callable[..., None], *args: Any) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise self.failure
+        callback(*args)
+
+
+class RuntimeThenClosedStateLoop:
+    def __init__(
+        self,
+        runtime_failure: RuntimeError,
+        closed_state: bool | BaseException,
+    ) -> None:
+        self.runtime_failure = runtime_failure
+        self.closed_state = closed_state
+        self.calls = 0
+        self.is_closed_calls = 0
+
+    def is_closed(self) -> bool:
+        self.is_closed_calls += 1
+        if isinstance(self.closed_state, BaseException):
+            raise self.closed_state
+        return self.closed_state
+
+    def call_soon_threadsafe(self, callback: Callable[..., None], *args: Any) -> None:
+        self.calls += 1
+        if self.calls == 1:
+            raise self.runtime_failure
+        callback(*args)
+
+
 def candidate(
     row_id: str, identity: str, *, api_key: str | None = None
 ) -> TavilySearchProviderCandidate:
@@ -215,6 +254,59 @@ def test_reservation_release_is_idempotent_and_never_leaves_negative_inflight() 
     run(scenario())
 
 
+def test_notification_fatal_cannot_interrupt_prune_before_success_settlement() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=2)
+        state = coordinator._state
+        shared = candidate("shared", "same-cohort")
+        expired = candidate("expired", "expired-cooldown")
+        failed, successful = await asyncio.gather(
+            state.reserve(shared), state.reserve(shared)
+        )
+        failed_reservation, _ = failed
+        successful_reservation, _ = successful
+        assert failed_reservation is not None and successful_reservation is not None
+        coordinator.mark_failed(
+            expired,
+            SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR),
+        )
+        assert (
+            state.record_failure(
+                failed_reservation, SearchProviderAttemptCategory.HTTP_ERROR
+            )
+            is None
+        )
+        clock.value += DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+
+        notification_failure = MemoryError("notification-fatal")
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
+        future = asyncio.get_running_loop().create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                failing_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        with pytest.raises(MemoryError) as caught:
+            state.record_success(successful_reservation)
+
+        assert caught.value is notification_failure
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._waiters == {waiter.token: waiter}
+
+        protection = state.protect(())
+        state.release_protection(protection)
+        assert future.done() is True
+        assert state._waiters == {}
+
+    run(scenario())
+
+
 @pytest.mark.parametrize("failure_type", SETTLEMENT_FAILURE_TYPES)
 def test_settlement_base_exception_discards_only_current_reservation_and_wakes_capacity(
     failure_type: type[BaseException],
@@ -341,14 +433,7 @@ def test_settlement_failure_owns_cleanup_after_all_waiter_notifications(
         failed_future = live_loop.create_future()
         notified_future = live_loop.create_future()
 
-        class FailingLoop:
-            calls = 0
-
-            def call_soon_threadsafe(self, *_args: Any) -> None:
-                self.calls += 1
-                raise notification_failure
-
-        failing_loop: Any = FailingLoop()
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
 
         async def runner(_item: TavilySearchProviderCandidate) -> None:
             with state._lock:
@@ -376,7 +461,7 @@ def test_settlement_failure_owns_cleanup_after_all_waiter_notifications(
         assert observed is settlement_failure
         assert observed.__cause__ is None
         assert observed.__context__ is None
-        assert failing_loop.calls == 1
+        assert failing_loop.calls == 2
         assert notified_future.done() is True
         assert notified_future.result() is None
         assert state._entries == {}
@@ -733,7 +818,7 @@ def test_closed_waiter_loop_does_not_override_release_result() -> None:
 @pytest.mark.parametrize("operation", ["mark_failed", "settle"])
 @pytest.mark.parametrize(
     "notification_failure_type",
-    [MemoryError, asyncio.CancelledError, KeyboardInterrupt],
+    [RuntimeError, MemoryError, asyncio.CancelledError, KeyboardInterrupt],
 )
 def test_normal_state_change_propagates_first_notification_failure_after_all_waiters(
     operation: str,
@@ -754,14 +839,7 @@ def test_normal_state_change_propagates_first_notification_failure_after_all_wai
         failed_future = live_loop.create_future()
         notified_future = live_loop.create_future()
 
-        class FailingLoop:
-            calls = 0
-
-            def call_soon_threadsafe(self, *_args: Any) -> None:
-                self.calls += 1
-                raise notification_failure
-
-        failing_loop: Any = FailingLoop()
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
         with state._lock:
             for loop, future in (
                 (failing_loop, failed_future),
@@ -792,7 +870,8 @@ def test_normal_state_change_propagates_first_notification_failure_after_all_wai
         assert failing_loop.calls == 1
         assert notified_future.done() is True
         assert notified_future.result() is None
-        assert state._waiters == {}
+        assert len(state._waiters) == 1
+        assert next(iter(state._waiters.values())).future is failed_future
         assert state._reservations == {}
         if operation == "mark_failed":
             entry = state._entries[state.key(item)]
@@ -801,7 +880,430 @@ def test_normal_state_change_propagates_first_notification_failure_after_all_wai
         else:
             assert state._entries == {}
 
-        failed_future.cancel()
+        protection = state.protect(())
+        state.release_protection(protection)
+        assert failing_loop.calls == 2
+        assert failed_future.done() is True
+        assert failed_future.result() is None
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+def test_release_protection_without_primary_propagates_notification_fatal() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        protection = state.protect(())
+        notification_failure = MemoryError("release-protection-notification-fatal")
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
+        future = asyncio.get_running_loop().create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                failing_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        with pytest.raises(MemoryError) as caught:
+            state.release_protection(protection)
+
+        assert caught.value is notification_failure
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        assert state._waiters == {waiter.token: waiter}
+
+        retry = state.protect(())
+        state.release_protection(retry)
+        assert future.done() is True
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+def test_release_protection_uses_only_explicit_primary_error_ownership() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        assert "sys" not in state.release_protection.__code__.co_names
+        protection = state.protect(())
+        primary = KeyboardInterrupt("explicit-primary")
+        notification_failure = MemoryError("secondary-notification-fatal")
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
+        future = asyncio.get_running_loop().create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                failing_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        state.release_protection(protection, primary_error=primary)
+
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        assert state._waiters == {waiter.token: waiter}
+        retry = state.protect(())
+        state.release_protection(retry)
+        assert future.done() is True
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "closed_state_type",
+    [True, False, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
+)
+def test_runtime_notification_failure_checks_closed_state_without_swallowing_fatal(
+    closed_state_type: bool | type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        runtime_failure = RuntimeError("call-soon-runtime")
+        closed_state: bool | BaseException
+        if isinstance(closed_state_type, bool):
+            closed_state = closed_state_type
+        else:
+            closed_state = closed_state_type("is-closed-fatal")
+        failing_loop: Any = RuntimeThenClosedStateLoop(
+            runtime_failure,
+            closed_state,
+        )
+        live_loop = asyncio.get_running_loop()
+        failed_future = live_loop.create_future()
+        notified_future = live_loop.create_future()
+        protection = state.protect(())
+        with state._lock:
+            for loop, future in (
+                (failing_loop, failed_future),
+                (live_loop, notified_future),
+            ):
+                state._next_waiter += 1
+                waiter = search_provider_chain_state_module._CapacityWaiter(
+                    state._next_waiter,
+                    loop,
+                    future,
+                )
+                state._waiters[waiter.token] = waiter
+
+        observed: BaseException | None = None
+        try:
+            state.release_protection(protection)
+        except BaseException as error:
+            observed = error
+        await asyncio.sleep(0)
+
+        assert failing_loop.calls == 1
+        assert failing_loop.is_closed_calls == 1
+        assert notified_future.done() is True
+        assert notified_future.result() is None
+        if closed_state is True:
+            assert observed is None
+            assert state._waiters == {}
+            failed_future.cancel()
+            return
+
+        expected = runtime_failure if closed_state is False else closed_state
+        assert observed is expected
+        assert len(state._waiters) == 1
+        assert next(iter(state._waiters.values())).future is failed_future
+
+        retry = state.protect(())
+        state.release_protection(retry)
+        assert failing_loop.calls == 2
+        assert failed_future.done() is True
+        assert failed_future.result() is None
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "primary_type",
+    [RuntimeError, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
+)
+def test_coordinator_primary_owns_release_protection_notification_failure(
+    primary_type: type[BaseException],
+) -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        item = candidate("row", f"explicit-primary-{primary_type.__name__}")
+        primary = primary_type("runner-primary")
+        notification_failure = MemoryError("release-protection-secondary")
+        live_loop = asyncio.get_running_loop()
+        first_future = live_loop.create_future()
+        release_future = live_loop.create_future()
+        runner_traceback: Any = None
+
+        class FailOnReleaseProtectionLoop:
+            calls = 0
+
+            def is_closed(self) -> bool:
+                return False
+
+            def call_soon_threadsafe(
+                self, callback: Callable[..., None], *args: Any
+            ) -> None:
+                self.calls += 1
+                if self.calls == 1:
+                    loop: Any = self
+                    with state._lock:
+                        state._next_waiter += 1
+                        waiter = search_provider_chain_state_module._CapacityWaiter(
+                            state._next_waiter,
+                            loop,
+                            release_future,
+                        )
+                        state._waiters[waiter.token] = waiter
+                    callback(*args)
+                    return
+                if self.calls == 2:
+                    raise notification_failure
+                callback(*args)
+
+        failing_loop: Any = FailOnReleaseProtectionLoop()
+
+        async def runner(_item: TavilySearchProviderCandidate) -> None:
+            nonlocal runner_traceback
+            with state._lock:
+                state._next_waiter += 1
+                waiter = search_provider_chain_state_module._CapacityWaiter(
+                    state._next_waiter,
+                    failing_loop,
+                    first_future,
+                )
+                state._waiters[waiter.token] = waiter
+            try:
+                raise primary
+            except BaseException as error:
+                runner_traceback = error.__traceback__
+                raise
+
+        observed: BaseException | None = None
+        try:
+            await coordinator.run((item,), runner)
+        except BaseException as error:
+            observed = error
+
+        assert observed is primary
+        assert observed.__cause__ is None
+        assert observed.__context__ is None
+        traceback_cursor = observed.__traceback__
+        while traceback_cursor is not None and traceback_cursor is not runner_traceback:
+            traceback_cursor = traceback_cursor.tb_next
+        assert traceback_cursor is runner_traceback
+        assert first_future.done() is True
+        assert failing_loop.calls == 2
+        assert len(state._waiters) == 1
+        assert next(iter(state._waiters.values())).future is release_future
+        assert state._reservations == {}
+        assert state._protections == {}
+        assert state._protection_counts == {}
+        for formatted in (
+            "".join(traceback.format_exception(observed)),
+            format_traceback_with_locals(observed),
+        ):
+            assert "release-protection-secondary" not in formatted
+
+        retry = state.protect(())
+        state.release_protection(retry)
+        assert failing_loop.calls == 3
+        assert release_future.done() is True
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("reclamation", ["prune", "evict"])
+def test_reserve_notification_fatal_never_leaks_new_reservation(
+    reclamation: str,
+) -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=1)
+        state = coordinator._state
+        retained = candidate("retained", f"reserve-{reclamation}-retained")
+        newcomer = candidate("new", f"reserve-{reclamation}-new")
+        coordinator.mark_failed(
+            retained,
+            SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR),
+        )
+        if reclamation == "prune":
+            clock.value += DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+
+        notification_failure = MemoryError(f"reserve-{reclamation}-fatal")
+        failing_loop: Any = OneShotFailingLoop(notification_failure)
+        future = asyncio.get_running_loop().create_future()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                failing_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        with pytest.raises(MemoryError) as caught:
+            await state.reserve(newcomer)
+
+        assert caught.value is notification_failure
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._waiters == {waiter.token: waiter}
+
+        protection = state.protect(())
+        state.release_protection(protection)
+        reservation, cooling_reason = await state.reserve(newcomer)
+        assert reservation is not None
+        assert cooling_reason is None
+        assert state._reservations == {reservation.token: reservation}
+        state.release(reservation)
+        assert state._entries == {}
+        assert state._reservations == {}
+        assert state._waiters == {}
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "release_protection",
+        "prune_expiry",
+        "evict",
+        "settle",
+        "discard",
+        "mark_failed",
+        "health_clear",
+    ],
+)
+def test_every_notification_boundary_calls_external_loop_only_after_unlock(
+    operation: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        clock = RecoverableSettlementClock()
+        coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=1)
+        state = coordinator._state
+        first = candidate("first", f"boundary-{operation}-first")
+        second = candidate("second", f"boundary-{operation}-second")
+        failure = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+        reservation = None
+        protection = None
+
+        if operation == "release_protection":
+            protection = state.protect((first,))
+        elif operation in {"prune_expiry", "evict"}:
+            coordinator.mark_failed(first, failure)
+            if operation == "prune_expiry":
+                clock.value += DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+        elif operation in {"settle", "discard"}:
+            reservation, _ = await state.reserve(first)
+            assert reservation is not None
+        elif operation == "health_clear":
+            coordinator.mark_failed(
+                first,
+                SearchProviderAttemptError(
+                    SearchProviderAttemptCategory.HTTP_ERROR,
+                    quota_exhausted=True,
+                ),
+            )
+            clock.value += 1
+
+        calls: list[BaseException | None] = []
+        original_notify = state._notify_waiters
+
+        def checked_notify(
+            waiters: tuple[Any, ...],
+            *,
+            primary_error: BaseException | None = None,
+        ) -> None:
+            assert state._lock.locked() is False
+            calls.append(primary_error)
+            original_notify(waiters, primary_error=primary_error)
+
+        monkeypatch.setattr(state, "_notify_waiters", checked_notify)
+
+        if operation == "release_protection":
+            assert protection is not None
+            state.release_protection(protection)
+        elif operation == "prune_expiry":
+            assert state.cooldown_reason(first) is None
+        elif operation == "evict":
+            coordinator.mark_failed(second, failure)
+        elif operation == "settle":
+            assert reservation is not None
+            state.record_success(reservation)
+        elif operation == "discard":
+            assert reservation is not None
+            primary = MemoryError("settlement-primary")
+            clock.failure = primary
+            with pytest.raises(MemoryError) as caught:
+                state.release(reservation)
+            assert caught.value is primary
+        elif operation == "mark_failed":
+            coordinator.mark_failed(first, failure)
+        else:
+            assert coordinator.clear_cooldown_from_health_evidence(
+                first,
+                reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                evidence_started_at=100.5,
+            )
+
+        assert len(calls) == 1
+        if operation == "discard":
+            assert isinstance(calls[0], MemoryError)
+        else:
+            assert calls == [None]
+
+    run(scenario())
+
+
+def test_synchronous_reentrant_notification_runs_outside_state_lock() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        item = candidate("row", "reentrant-loop")
+        future = asyncio.get_running_loop().create_future()
+        observed: list[SearchProviderAttemptCategory | None] = []
+
+        class ReentrantLoop:
+            def call_soon_threadsafe(
+                self, callback: Callable[..., None], *args: Any
+            ) -> None:
+                assert state._lock.locked() is False
+                observed.append(state.cooldown_reason(item))
+                nested = state.protect(())
+                state.release_protection(nested)
+                callback(*args)
+
+        reentrant_loop: Any = ReentrantLoop()
+        with state._lock:
+            state._next_waiter += 1
+            waiter = search_provider_chain_state_module._CapacityWaiter(
+                state._next_waiter,
+                reentrant_loop,
+                future,
+            )
+            state._waiters[waiter.token] = waiter
+
+        coordinator.mark_failed(
+            item,
+            SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR),
+        )
+
+        assert observed == [SearchProviderAttemptCategory.HTTP_ERROR]
+        assert future.done() is True
+        assert state._waiters == {}
+        assert state._protections == {}
+        assert state._protection_counts == {}
 
     run(scenario())
 
