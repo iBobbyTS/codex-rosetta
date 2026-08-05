@@ -7,6 +7,7 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Generic, TypeVar
 
@@ -137,6 +138,14 @@ class SearchProviderChainUnavailable(
         super().__init__(reason, "Search provider chain unavailable")
 
 
+@dataclass(frozen=True, slots=True)
+class _CandidateKey:
+    """Exact candidate identity key with a traceback-safe representation."""
+
+    row_id: str
+    identity: str = field(repr=False)
+
+
 class SearchProviderChainCoordinator:
     """Run candidates in order and retain process-local candidate cooldowns."""
 
@@ -155,7 +164,7 @@ class SearchProviderChainCoordinator:
         self._observer = observer
         self._last_clock = self._read_clock()
         self._cooldowns: dict[
-            tuple[str, str], tuple[float, SearchProviderAttemptCategory]
+            _CandidateKey, tuple[float, SearchProviderAttemptCategory]
         ] = {}
 
     def _read_clock(self) -> float:
@@ -169,8 +178,8 @@ class SearchProviderChainCoordinator:
         return now
 
     @staticmethod
-    def _key(candidate: SearchProviderCandidate) -> tuple[str, str]:
-        return candidate.row_id, candidate.identity
+    def _key(candidate: SearchProviderCandidate) -> _CandidateKey:
+        return _CandidateKey(candidate.row_id, candidate.identity)
 
     def _prune(self, now: float) -> None:
         expired = [key for key, (until, _) in self._cooldowns.items() if until <= now]
@@ -256,7 +265,7 @@ class SearchProviderChainCoordinator:
             raise SearchProviderChainUnavailable(reason)
 
         attempted = False
-        seen: set[tuple[str, str]] = set()
+        seen: set[_CandidateKey] = set()
         for attempt_index, candidate in enumerate(candidates):
             key = self._key(candidate)
             if key in seen:

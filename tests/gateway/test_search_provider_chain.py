@@ -44,6 +44,23 @@ def run(coro: Awaitable[Any]) -> Any:
     return asyncio.run(coro)
 
 
+def format_traceback_with_locals(error: BaseException) -> str:
+    traceback_frame = error.__traceback__
+    while (
+        traceback_frame is not None
+        and traceback_frame.tb_frame.f_code.co_filename == __file__
+    ):
+        traceback_frame = traceback_frame.tb_next
+    return "".join(
+        traceback.TracebackException(
+            type(error),
+            error,
+            traceback_frame,
+            capture_locals=True,
+        ).format()
+    )
+
+
 def test_budget_defaults_are_fixed() -> None:
     assert SEARCH_PROVIDER_REQUEST_TIMEOUT_SECONDS == 300.0
     assert MAX_SEARCH_PROVIDER_EXTERNAL_CALLS == 32
@@ -741,6 +758,23 @@ def test_chain_defaults_to_one_hour_cooldown() -> None:
     assert DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS == 3600.0
 
 
+def test_candidate_key_has_exact_equality_hash_and_secret_safe_repr() -> None:
+    first = search_provider_chain_module._CandidateKey("row", "private-identity")
+    same = search_provider_chain_module._CandidateKey("row", "private-identity")
+    changed_identity = search_provider_chain_module._CandidateKey("row", "changed")
+    changed_row = search_provider_chain_module._CandidateKey(
+        "changed-row", "private-identity"
+    )
+
+    assert first == same
+    assert hash(first) == hash(same)
+    assert first != changed_identity
+    assert first != changed_row
+    assert {first: "stored"}[same] == "stored"
+    assert repr(first) == "_CandidateKey(row_id='row')"
+    assert "private-identity" not in repr(first)
+
+
 def test_chain_runs_in_order_once_and_short_circuits_on_success() -> None:
     candidates = (candidate("first", "a"), candidate("second", "b"))
     calls: list[str] = []
@@ -804,6 +838,45 @@ def test_chain_has_bounded_terminal_reasons_for_empty_and_failed_chain(
     assert caught.value.reason is reason
 
 
+def test_all_attempts_failed_locals_aware_traceback_excludes_candidate_secrets() -> (
+    None
+):
+    first_identity = "synthetic-private-identity-a"
+    second_identity = "synthetic-private-identity-b"
+    first_key = "synthetic-api-key-a"
+    second_key = "synthetic-api-key-b"
+    raw_error = "synthetic-raw-provider-error"
+    first = candidate("first", first_identity, api_key=first_key)
+    second = candidate("second", second_identity, api_key=second_key)
+
+    async def runner(item: TavilySearchProviderCandidate) -> None:
+        if item is first:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR
+            ) from RuntimeError(raw_error)
+        raise SearchProviderRequestFailover(
+            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+        ) from RuntimeError(raw_error)
+
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(SearchProviderChainCoordinator().run((first, second), runner))
+
+    assert (
+        caught.value.reason is SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+    )
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    formatted = format_traceback_with_locals(caught.value)
+    for secret in (
+        first_identity,
+        second_identity,
+        first_key,
+        second_key,
+        raw_error,
+    ):
+        assert secret not in formatted
+
+
 def test_attempt_error_cools_candidate_and_fails_over() -> None:
     clock = Clock()
     first = candidate("first", "a")
@@ -828,11 +901,14 @@ def test_attempt_error_cools_candidate_and_fails_over() -> None:
 
 def test_all_cooling_is_distinct_and_cooldown_expires_lazily() -> None:
     clock = Clock()
-    item = candidate("only", "a")
+    identity = "synthetic-all-cooling-identity"
+    api_key = "synthetic-all-cooling-api-key"
+    raw_error = "synthetic-all-cooling-raw-error"
+    item = candidate("only", identity, api_key=api_key)
     coordinator = SearchProviderChainCoordinator(clock=clock)
-    coordinator.mark_failed(
-        item, SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR)
-    )
+    failure = SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR)
+    failure.__cause__ = RuntimeError(raw_error)
+    coordinator.mark_failed(item, failure)
     calls = 0
 
     async def runner(_item: TavilySearchProviderCandidate) -> str:
@@ -847,6 +923,10 @@ def test_all_cooling_is_distinct_and_cooldown_expires_lazily() -> None:
         is SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
     )
     assert calls == 0
+    formatted = format_traceback_with_locals(caught.value)
+    assert identity not in formatted
+    assert api_key not in formatted
+    assert raw_error not in formatted
 
     clock.value += DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
     assert coordinator.is_cooling(item) is False
@@ -890,7 +970,9 @@ def test_cooldown_survives_reorder_but_identity_change_is_fresh() -> None:
 def test_untyped_cancel_and_budget_errors_propagate_without_cooldown(
     failure: BaseException,
 ) -> None:
-    item = candidate("row", "private-fingerprint")
+    identity = "synthetic-propagated-path-identity"
+    api_key = "synthetic-propagated-path-api-key"
+    item = candidate("row", identity, api_key=api_key)
     coordinator = SearchProviderChainCoordinator()
 
     async def runner(_item: TavilySearchProviderCandidate) -> None:
@@ -900,6 +982,9 @@ def test_untyped_cancel_and_budget_errors_propagate_without_cooldown(
         run(coordinator.run((item,), runner))
     assert caught.value is failure
     assert coordinator.is_cooling(item) is False
+    formatted = format_traceback_with_locals(caught.value)
+    assert identity not in formatted
+    assert api_key not in formatted
 
 
 def test_quota_attempt_uses_bounded_quota_cooldown_reason() -> None:
@@ -1080,7 +1165,9 @@ def test_observer_process_and_resource_failures_propagate_without_provider_error
 ) -> None:
     upstream_secret = "synthetic-fatal-observer-upstream-secret"
     failure = failure_type("fatal-observer")
-    first = candidate("first", "a")
+    identity = "synthetic-fatal-observer-identity"
+    api_key = "synthetic-fatal-observer-api-key"
+    first = candidate("first", identity, api_key=api_key)
     second = candidate("second", "b")
     calls: list[str] = []
 
@@ -1101,12 +1188,10 @@ def test_observer_process_and_resource_failures_propagate_without_provider_error
 
     assert caught.value is failure
     assert calls == ["first"]
-    formatted = "".join(
-        traceback.format_exception(
-            type(caught.value), caught.value, caught.value.__traceback__
-        )
-    )
+    formatted = format_traceback_with_locals(caught.value)
     assert upstream_secret not in formatted
+    assert identity not in formatted
+    assert api_key not in formatted
 
 
 @pytest.mark.parametrize(
@@ -1138,15 +1223,21 @@ def test_typed_attempt_clock_failures_do_not_retain_provider_error_chain(
             SearchProviderAttemptCategory.HTTP_ERROR
         ) from RuntimeError(upstream_secret)
 
+    identity = "synthetic-clock-path-identity"
+    api_key = "synthetic-clock-path-api-key"
     with pytest.raises(ValueError, match=expected_message) as caught:
-        run(coordinator.run((candidate("row", "identity"),), runner))
+        run(coordinator.run((candidate("row", identity, api_key=api_key),), runner))
 
     assert caught.value.__cause__ is None
     assert caught.value.__context__ is None
-    formatted = "".join(
+    default_formatted = "".join(
         traceback.format_exception(
             type(caught.value), caught.value, caught.value.__traceback__
         )
     )
-    assert upstream_secret not in formatted
-    assert "SearchProviderAttemptError" not in formatted
+    assert upstream_secret not in default_formatted
+    assert "SearchProviderAttemptError" not in default_formatted
+    locals_formatted = format_traceback_with_locals(caught.value)
+    assert upstream_secret not in locals_formatted
+    assert identity not in locals_formatted
+    assert api_key not in locals_formatted
