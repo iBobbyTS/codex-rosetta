@@ -1,4 +1,5 @@
 import asyncio
+import math
 from collections.abc import Awaitable
 from typing import Any
 
@@ -48,6 +49,26 @@ def test_budget_rejects_non_positive_limits(
         SearchProviderRequestBudget(
             timeout_seconds=timeout_seconds, max_external_calls=max_external_calls
         )
+
+
+@pytest.mark.parametrize("timeout_seconds", [math.nan, math.inf, -math.inf])
+def test_budget_rejects_non_finite_timeout(timeout_seconds: float) -> None:
+    with pytest.raises(ValueError):
+        SearchProviderRequestBudget(timeout_seconds=timeout_seconds)
+
+
+@pytest.mark.parametrize("max_external_calls", [True, 1.5, math.nan, math.inf])
+def test_budget_rejects_non_integer_external_call_limit(
+    max_external_calls: Any,
+) -> None:
+    with pytest.raises(ValueError):
+        SearchProviderRequestBudget(max_external_calls=max_external_calls)
+
+
+@pytest.mark.parametrize("initial_clock", [math.nan, math.inf, -math.inf])
+def test_budget_rejects_non_finite_initial_clock(initial_clock: float) -> None:
+    with pytest.raises(ValueError):
+        SearchProviderRequestBudget(clock=lambda: initial_clock)
 
 
 def test_budget_deadline_is_frozen_and_run_does_not_count_calls() -> None:
@@ -114,6 +135,78 @@ def test_budget_times_out_operation_but_propagates_cancel_and_unknown_errors() -
         assert propagated.value is failure
 
 
+def test_budget_deadline_rejects_result_from_cancellation_resistant_operation() -> None:
+    async def scenario() -> None:
+        release = asyncio.Event()
+        finished = asyncio.Event()
+
+        async def operation() -> str:
+            try:
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+            except asyncio.CancelledError:
+                await release.wait()
+                finished.set()
+                return "returned-after-budget-cancel"
+
+        async with asyncio.timeout(0.1):
+            with pytest.raises(SearchProviderBudgetExceeded) as caught:
+                await SearchProviderRequestBudget(timeout_seconds=0.001).run(operation)
+            assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+            release.set()
+            await finished.wait()
+
+    run(scenario())
+
+
+def test_budget_observes_replacement_error_after_deadline_cancellation() -> None:
+    async def scenario() -> None:
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict[str, object]] = []
+        original_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+        async def operation() -> None:
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                raise RuntimeError("replacement-detail")
+
+        try:
+            with pytest.raises(SearchProviderBudgetExceeded) as caught:
+                await SearchProviderRequestBudget(timeout_seconds=0.001).run(operation)
+            assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+            await asyncio.sleep(0)
+            assert unhandled == []
+        finally:
+            loop.set_exception_handler(original_handler)
+
+    run(scenario())
+
+
+def test_external_cancellation_cancels_operation_and_remains_external() -> None:
+    async def scenario() -> None:
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def operation() -> None:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+        caller = asyncio.create_task(SearchProviderRequestBudget().run(operation))
+        await started.wait()
+        caller.cancel("external-cancel")
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await caller
+        assert caught.value.args == ("external-cancel",)
+        await cancelled.wait()
+
+    run(scenario())
+
+
 def test_external_call_checks_deadline_before_charging_or_starting() -> None:
     clock = Clock()
     budget = SearchProviderRequestBudget(timeout_seconds=1, clock=clock)
@@ -130,6 +223,30 @@ def test_external_call_checks_deadline_before_charging_or_starting() -> None:
     assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
     assert budget.external_calls == 0
     assert started is False
+
+
+@pytest.mark.parametrize("bad_clock", [math.nan, math.inf, -math.inf, 99.0])
+def test_invalid_runtime_clock_fails_before_operation_or_count(
+    bad_clock: float,
+) -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+    clock.value = bad_clock
+    started = False
+
+    async def operation() -> None:
+        nonlocal started
+        started = True
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(budget.run_external_call(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+    assert budget.external_calls == 0
+    assert started is False
+    summary = budget.summary()
+    assert summary["elapsed_seconds"] == 0.0
+    assert summary["deadline_seconds"] == 5.0
 
 
 def test_external_call_starts_after_single_successful_deadline_admission() -> None:
@@ -194,6 +311,13 @@ def test_budget_summary_is_bounded_and_secret_safe() -> None:
         forbidden not in safe_summary
         for forbidden in ("secret", "error", "candidate", "provider", "identity")
     )
+
+    extreme_clock = Clock(-1e308)
+    extreme_budget = SearchProviderRequestBudget(
+        timeout_seconds=10, clock=extreme_clock
+    )
+    extreme_clock.value = 1e308
+    assert extreme_budget.summary()["elapsed_seconds"] == 10.0
 
 
 @pytest.mark.parametrize(

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable
+from contextlib import suppress
 from enum import StrEnum
 from typing import Generic, TypeVar
 
@@ -14,6 +16,11 @@ MAX_SEARCH_PROVIDER_EXTERNAL_CALLS = 32
 _ResultT = TypeVar("_ResultT")
 _ReasonT = TypeVar("_ReasonT", bound=StrEnum)
 _AsyncOperation = Callable[[], Awaitable[_ResultT]]
+
+
+def _observe_future(future: asyncio.Future[object]) -> None:
+    with suppress(asyncio.CancelledError):
+        future.exception()
 
 
 class SearchProviderBudgetReason(StrEnum):
@@ -117,15 +124,24 @@ class SearchProviderRequestBudget:
         max_external_calls: int = MAX_SEARCH_PROVIDER_EXTERNAL_CALLS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if timeout_seconds <= 0:
+        timeout_seconds = float(timeout_seconds)
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
             raise ValueError("timeout_seconds must be positive")
-        if max_external_calls <= 0:
-            raise ValueError("max_external_calls must be positive")
+        valid_limit = isinstance(max_external_calls, int) and not isinstance(
+            max_external_calls, bool
+        )
+        if not valid_limit or max_external_calls <= 0:
+            raise ValueError("max_external_calls must be a positive integer")
         self._clock = clock
-        self._timeout_seconds = float(timeout_seconds)
+        self._timeout_seconds = timeout_seconds
         self._max_external_calls = max_external_calls
-        self._started_at = clock()
+        self._started_at = float(clock())
+        if not math.isfinite(self._started_at):
+            raise ValueError("clock must return a finite value")
+        self._last_clock = self._started_at
         self._deadline = self._started_at + self._timeout_seconds
+        if not math.isfinite(self._deadline):
+            raise ValueError("deadline must be finite")
         self._external_calls = 0
 
     @property
@@ -142,16 +158,32 @@ class SearchProviderRequestBudget:
         self, reason: SearchProviderBudgetReason | None = None
     ) -> dict[str, str | int | float | None]:
         """Return bounded, identity-free request budget diagnostics."""
+        try:
+            now = self._read_clock()
+        except SearchProviderBudgetExceeded:
+            now = self._last_clock
+        elapsed = now - self._started_at
+        if not math.isfinite(elapsed):
+            elapsed = self._timeout_seconds
         return {
             "reason": reason.value if reason is not None else None,
             "external_calls": self._external_calls,
             "external_call_limit": self._max_external_calls,
-            "elapsed_seconds": max(0.0, self._clock() - self._started_at),
+            "elapsed_seconds": max(0.0, elapsed),
             "deadline_seconds": self._timeout_seconds,
         }
 
+    def _read_clock(self) -> float:
+        now = float(self._clock())
+        if not math.isfinite(now) or now < self._last_clock:
+            raise SearchProviderBudgetExceeded(
+                SearchProviderBudgetReason.DEADLINE_EXCEEDED
+            )
+        self._last_clock = now
+        return now
+
     def _remaining(self) -> float:
-        remaining = self._deadline - self._clock()
+        remaining = self._deadline - self._read_clock()
         if remaining <= 0:
             raise SearchProviderBudgetExceeded(
                 SearchProviderBudgetReason.DEADLINE_EXCEEDED
@@ -161,16 +193,18 @@ class SearchProviderRequestBudget:
     async def _run_with_timeout(
         self, operation: _AsyncOperation[_ResultT], remaining: float
     ) -> _ResultT:
-        timeout = asyncio.timeout(remaining)
+        operation_future = asyncio.ensure_future(operation())
         try:
-            async with timeout:
-                return await operation()
-        except TimeoutError:
-            if timeout.expired():
-                raise SearchProviderBudgetExceeded(
-                    SearchProviderBudgetReason.DEADLINE_EXCEEDED
-                ) from None
+            done, _ = await asyncio.wait({operation_future}, timeout=remaining)
+        except asyncio.CancelledError:
+            operation_future.cancel()
+            operation_future.add_done_callback(_observe_future)
             raise
+        if operation_future in done:
+            return operation_future.result()
+        operation_future.cancel()
+        operation_future.add_done_callback(_observe_future)
+        raise SearchProviderBudgetExceeded(SearchProviderBudgetReason.DEADLINE_EXCEEDED)
 
     async def run(self, operation: _AsyncOperation[_ResultT]) -> _ResultT:
         """Run an operation within the shared deadline without charging a call."""
