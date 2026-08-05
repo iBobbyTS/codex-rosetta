@@ -51,6 +51,16 @@ class _CapacityWaiter:
     future: asyncio.Future[None] = field(repr=False)
 
 
+@dataclass(frozen=True, slots=True)
+class _ReserveInstruction(Generic[_ReasonT]):
+    """One lock-owned admission, cooldown, or capacity-wait instruction."""
+
+    reservation: _Reservation | None = None
+    cooling_reason: _ReasonT | None = None
+    waiter: _CapacityWaiter | None = None
+    timeout: float | None = None
+
+
 @dataclass(slots=True)
 class _CandidateState(Generic[_ReasonT]):
     cooldown_until: float | None = None
@@ -215,6 +225,30 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             if self._waiters.get(waiter.token) is waiter:
                 del self._waiters[waiter.token]
 
+    def _reserve_instruction_locked(
+        self,
+        key: _CandidateKey,
+        loop: asyncio.AbstractEventLoop,
+    ) -> _ReserveInstruction[_ReasonT]:
+        now = self._read_clock_locked()
+        self._prune_expired_locked(now)
+        entry = self._entries.get(key)
+        if entry is not None and entry.cooldown_until is not None:
+            assert entry.cooldown_reason is not None
+            return _ReserveInstruction(cooling_reason=entry.cooldown_reason)
+        if entry is not None and entry.inflight < MAX_ACTIVE_ATTEMPTS_PER_CANDIDATE:
+            return _ReserveInstruction(reservation=self._reserve_locked(key, entry))
+        if entry is None and (
+            len(self._entries) < self._capacity or self._evict_oldest_cooldown_locked()
+        ):
+            entry = _CandidateState()
+            self._entries[key] = entry
+            return _ReserveInstruction(reservation=self._reserve_locked(key, entry))
+        waiter = self._register_waiter_locked(loop)
+        cooldown_deadline = self._nearest_releasable_cooldown_locked()
+        timeout = None if cooldown_deadline is None else cooldown_deadline - now
+        return _ReserveInstruction(waiter=waiter, timeout=timeout)
+
     async def reserve(
         self,
         candidate: SearchProviderCandidate,
@@ -224,34 +258,21 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         loop = asyncio.get_running_loop()
         while True:
             with self._lock:
-                now = self._read_clock_locked()
-                self._prune_expired_locked(now)
-                entry = self._entries.get(key)
-                if entry is not None and entry.cooldown_until is not None:
-                    return None, entry.cooldown_reason
-                if (
-                    entry is not None
-                    and entry.inflight < MAX_ACTIVE_ATTEMPTS_PER_CANDIDATE
-                ):
-                    return self._reserve_locked(key, entry), None
-                if entry is None:
-                    if len(self._entries) < self._capacity:
-                        entry = _CandidateState()
-                        self._entries[key] = entry
-                        return self._reserve_locked(key, entry), None
-                    if self._evict_oldest_cooldown_locked():
-                        entry = _CandidateState()
-                        self._entries[key] = entry
-                        return self._reserve_locked(key, entry), None
-                waiter = self._register_waiter_locked(loop)
-                cooldown_deadline = self._nearest_releasable_cooldown_locked()
-                timeout = None if cooldown_deadline is None else cooldown_deadline - now
+                instruction = self._reserve_instruction_locked(key, loop)
+            if instruction.reservation is not None:
+                return instruction.reservation, None
+            if instruction.cooling_reason is not None:
+                return None, instruction.cooling_reason
+            waiter = instruction.waiter
+            assert waiter is not None
             try:
-                if timeout is None:
+                if instruction.timeout is None:
                     await waiter.future
                 else:
                     try:
-                        await asyncio.wait_for(waiter.future, timeout=timeout)
+                        await asyncio.wait_for(
+                            waiter.future, timeout=instruction.timeout
+                        )
                     except TimeoutError:
                         pass
             finally:

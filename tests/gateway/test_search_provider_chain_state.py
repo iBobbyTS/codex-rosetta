@@ -21,6 +21,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetReason,
     SearchProviderChainCoordinator,
     SearchProviderChainUnavailable,
+    SearchProviderChainUnavailableReason,
     SearchProviderRequestFailover,
     SearchProviderRequestFailoverReason,
     SearchProviderStateCapacityUnavailable,
@@ -614,6 +615,52 @@ def test_external_mark_failed_cannot_reclaim_active_chain_cooldown() -> None:
         release_active.set()
         assert await task == "ok"
         assert coordinator.is_cooling(protected) is True
+
+    run(scenario())
+
+
+def test_mutable_chain_append_cannot_escape_active_protection_snapshot() -> None:
+    async def scenario() -> None:
+        coordinator = SearchProviderChainCoordinator(state_capacity=2)
+        protected = candidate("protected", "protected-identity")
+        active = candidate("active", "active-identity")
+        late = candidate("late", "late-identity")
+        external = candidate("external", "external-identity")
+        failure = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+        coordinator.mark_failed(protected, failure)
+        active_started = asyncio.Event()
+        release_active = asyncio.Event()
+        calls: list[str] = []
+
+        async def runner(item: TavilySearchProviderCandidate) -> str:
+            calls.append(item.row_id)
+            if item is active:
+                active_started.set()
+                await release_active.wait()
+                raise SearchProviderRequestFailover(
+                    SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+                )
+            return "late-result"
+
+        chain = [protected, active]
+        task = asyncio.create_task(coordinator.run(chain, runner))
+        await active_started.wait()
+        chain.append(late)
+
+        with pytest.raises(SearchProviderStateCapacityUnavailable):
+            coordinator.mark_failed(external, failure)
+        assert coordinator.is_cooling(protected) is True
+
+        release_active.set()
+        with pytest.raises(SearchProviderChainUnavailable) as caught:
+            await task
+        assert (
+            caught.value.reason
+            is SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+        )
+        assert calls == ["active"]
+        assert coordinator.is_cooling(protected) is True
+        assert coordinator.is_cooling(late) is False
 
     run(scenario())
 

@@ -220,16 +220,17 @@ class SearchProviderChainCoordinator:
         runner: Callable[[_CandidateT], Awaitable[_ResultT]],
     ) -> _ResultT:
         """Try each non-cooling candidate once and return the first success."""
-        if not candidates:
+        candidate_snapshot = tuple(candidates)
+        if not candidate_snapshot:
             reason = SearchProviderChainUnavailableReason.EMPTY_CHAIN
             self._observe({"final_reason": reason.value})
             raise SearchProviderChainUnavailable(reason)
 
-        protection = self._state.protect(candidates)
+        protection = self._state.protect(candidate_snapshot)
         try:
             attempted = False
             seen: set[object] = set()
-            for attempt_index, candidate in enumerate(candidates):
+            for attempt_index, candidate in enumerate(candidate_snapshot):
                 key = self._state.key(candidate)
                 if key in seen:
                     continue
