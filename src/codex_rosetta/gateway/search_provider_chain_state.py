@@ -33,6 +33,7 @@ class _Reservation:
 
     token: int
     key: _CandidateKey
+    generation: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,11 +63,23 @@ class _ReserveInstruction(Generic[_ReasonT]):
 
 
 @dataclass(slots=True)
+class _AttemptCohort(Generic[_ReasonT]):
+    active: int = 0
+    succeeded: bool = False
+    pending_failure_reason: _ReasonT | None = None
+
+
+@dataclass(slots=True)
 class _CandidateState(Generic[_ReasonT]):
     cooldown_until: float | None = None
+    cooldown_started_at: float | None = None
     cooldown_reason: _ReasonT | None = None
+    cooldown_generation: int | None = None
     cooldown_order: int = 0
     inflight: int = 0
+    open_generation: int | None = None
+    latest_success_generation: int | None = None
+    cohorts: dict[int, _AttemptCohort[_ReasonT]] = field(default_factory=dict)
 
 
 class SearchProviderStateCapacityUnavailable(RuntimeError):
@@ -108,11 +121,12 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self._last_clock = started_at
         self._lock = threading.Lock()
         self._entries: dict[_CandidateKey, _CandidateState[_ReasonT]] = {}
-        self._reservations: dict[int, _CandidateKey] = {}
+        self._reservations: dict[int, _Reservation] = {}
         self._protections: dict[int, frozenset[_CandidateKey]] = {}
         self._protection_counts: dict[_CandidateKey, int] = {}
         self._waiters: dict[int, _CapacityWaiter] = {}
         self._next_reservation = 0
+        self._next_generation = 0
         self._next_protection = 0
         self._next_waiter = 0
         self._next_cooldown_order = 0
@@ -175,7 +189,9 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             if until is None or until > now:
                 continue
             entry.cooldown_until = None
+            entry.cooldown_started_at = None
             entry.cooldown_reason = None
+            entry.cooldown_generation = None
             entry.cooldown_order = 0
             if entry.inflight == 0:
                 del self._entries[key]
@@ -281,23 +297,201 @@ class _SearchProviderChainState(Generic[_ReasonT]):
     def _reserve_locked(
         self, key: _CandidateKey, entry: _CandidateState[_ReasonT]
     ) -> _Reservation:
+        generation = entry.open_generation
+        if generation is None:
+            self._next_generation += 1
+            generation = self._next_generation
+            entry.open_generation = generation
+            entry.cohorts[generation] = _AttemptCohort()
         self._next_reservation += 1
-        reservation = _Reservation(self._next_reservation, key)
-        self._reservations[reservation.token] = key
+        reservation = _Reservation(self._next_reservation, key, generation)
+        self._reservations[reservation.token] = reservation
+        entry.cohorts[generation].active += 1
         entry.inflight += 1
         return reservation
 
-    def release(self, reservation: _Reservation) -> None:
-        """Release an admission token once and notify every capacity waiter."""
+    def _close_cohort_locked(
+        self, entry: _CandidateState[_ReasonT], generation: int
+    ) -> None:
+        if entry.open_generation == generation:
+            entry.open_generation = None
+
+    def _publish_cohort_failure_locked(
+        self,
+        entry: _CandidateState[_ReasonT],
+        generation: int,
+        cohort: _AttemptCohort[_ReasonT],
+        now: float,
+    ) -> _ReasonT | None:
+        reason = cohort.pending_failure_reason
+        latest_success = entry.latest_success_generation
+        if cohort.succeeded or reason is None:
+            return None
+        if latest_success is not None and latest_success >= generation:
+            return None
+        if entry.cooldown_until is not None and (
+            entry.cooldown_generation is None or entry.cooldown_generation > generation
+        ):
+            return None
+        self._next_cooldown_order += 1
+        entry.cooldown_until = now + self._cooldown_seconds
+        entry.cooldown_started_at = now
+        entry.cooldown_reason = reason
+        entry.cooldown_generation = generation
+        entry.cooldown_order = self._next_cooldown_order
+        return reason
+
+    @staticmethod
+    def _prune_success_order_locked(entry: _CandidateState[_ReasonT]) -> None:
+        latest = entry.latest_success_generation
+        if latest is None:
+            return
+        if any(generation < latest for generation in entry.cohorts):
+            return
+        entry.latest_success_generation = None
+
+    def _validate_settlement_deadline_locked(
+        self,
+        reservation: _Reservation,
+        *,
+        now: float,
+        success: bool,
+        failure_reason: _ReasonT | None,
+    ) -> None:
+        if self._reservations.get(reservation.token) != reservation or success:
+            return
+        entry = self._entries[reservation.key]
+        cohort = entry.cohorts[reservation.generation]
+        pending_reason = failure_reason or cohort.pending_failure_reason
+        latest_success = entry.latest_success_generation
+        active_cooldown = (
+            entry.cooldown_until is not None and entry.cooldown_until > now
+        )
+        cooldown_blocks = active_cooldown and (
+            entry.cooldown_generation is None
+            or entry.cooldown_generation > reservation.generation
+        )
+        eligible = (
+            cohort.active == 1
+            and not cohort.succeeded
+            and pending_reason is not None
+            and (latest_success is None or latest_success < reservation.generation)
+            and not cooldown_blocks
+        )
+        if not eligible:
+            return
+        until = now + self._cooldown_seconds
+        if not math.isfinite(until):
+            raise ValueError("cooldown deadline must be finite")
+        if until <= now:
+            raise ValueError("cooldown deadline must be later than current time")
+
+    def _settle_locked(
+        self,
+        reservation: _Reservation,
+        *,
+        now: float,
+        success: bool = False,
+        failure_reason: _ReasonT | None = None,
+    ) -> _ReasonT | None:
+        stored = self._reservations.get(reservation.token)
+        if stored != reservation:
+            return None
+        entry = self._entries[reservation.key]
+        cohort = entry.cohorts[reservation.generation]
+        self._reservations.pop(reservation.token)
+        if success or failure_reason is not None:
+            self._close_cohort_locked(entry, reservation.generation)
+        if success:
+            cohort.succeeded = True
+            latest = entry.latest_success_generation
+            if latest is None or reservation.generation > latest:
+                entry.latest_success_generation = reservation.generation
+            cooldown_generation = entry.cooldown_generation
+            if (
+                entry.cooldown_until is not None
+                and cooldown_generation is not None
+                and cooldown_generation <= reservation.generation
+            ):
+                entry.cooldown_until = None
+                entry.cooldown_started_at = None
+                entry.cooldown_reason = None
+                entry.cooldown_generation = None
+                entry.cooldown_order = 0
+        elif failure_reason is not None:
+            cohort.pending_failure_reason = failure_reason
+        cohort.active -= 1
+        entry.inflight -= 1
+        published_reason = None
+        if cohort.active == 0:
+            published_reason = self._publish_cohort_failure_locked(
+                entry, reservation.generation, cohort, now
+            )
+            del entry.cohorts[reservation.generation]
+            self._close_cohort_locked(entry, reservation.generation)
+        self._prune_success_order_locked(entry)
+        if entry.inflight == 0 and entry.cooldown_until is None:
+            del self._entries[reservation.key]
+        self._notify_waiters_locked()
+        return published_reason
+
+    def _discard_without_publication_locked(self, reservation: _Reservation) -> None:
+        if self._reservations.pop(reservation.token, None) != reservation:
+            return
+        entry = self._entries[reservation.key]
+        cohort = entry.cohorts[reservation.generation]
+        cohort.active -= 1
+        entry.inflight -= 1
+        if cohort.active == 0:
+            del entry.cohorts[reservation.generation]
+            self._close_cohort_locked(entry, reservation.generation)
+        self._prune_success_order_locked(entry)
+        if entry.inflight == 0 and entry.cooldown_until is None:
+            del self._entries[reservation.key]
+        self._notify_waiters_locked()
+
+    def _settle(
+        self,
+        reservation: _Reservation,
+        *,
+        success: bool = False,
+        failure_reason: _ReasonT | None = None,
+    ) -> _ReasonT | None:
         with self._lock:
-            key = self._reservations.pop(reservation.token, None)
-            if key is None or key != reservation.key:
-                return
-            entry = self._entries[key]
-            entry.inflight -= 1
-            if entry.inflight == 0 and entry.cooldown_until is None:
-                del self._entries[key]
-            self._notify_waiters_locked()
+            if self._reservations.get(reservation.token) != reservation:
+                return None
+            try:
+                now = self._read_clock_locked()
+                self._validate_settlement_deadline_locked(
+                    reservation,
+                    now=now,
+                    success=success,
+                    failure_reason=failure_reason,
+                )
+            except ValueError:
+                self._discard_without_publication_locked(reservation)
+                raise
+            self._prune_expired_locked(now)
+            return self._settle_locked(
+                reservation,
+                now=now,
+                success=success,
+                failure_reason=failure_reason,
+            )
+
+    def release(self, reservation: _Reservation) -> _ReasonT | None:
+        """Neutrally release once and return any delayed cooldown publication."""
+        return self._settle(reservation)
+
+    def record_success(self, reservation: _Reservation) -> _ReasonT | None:
+        """Atomically record health success and settle its reservation once."""
+        return self._settle(reservation, success=True)
+
+    def record_failure(
+        self, reservation: _Reservation, reason: _ReasonT
+    ) -> _ReasonT | None:
+        """Atomically record health failure and settle its reservation once."""
+        return self._settle(reservation, failure_reason=reason)
 
     def cooldown_reason(self, candidate: SearchProviderCandidate) -> _ReasonT | None:
         """Return the bounded active cooldown reason, if any."""
@@ -312,7 +506,6 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         self,
         candidate: SearchProviderCandidate,
         reason: _ReasonT,
-        reservation: _Reservation | None = None,
     ) -> _ReasonT:
         """Start a cooldown without exposing candidate or provider failure details."""
         key = self.key(candidate)
@@ -324,11 +517,6 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             if until <= now:
                 raise ValueError("cooldown deadline must be later than current time")
             self._prune_expired_locked(now)
-            if (
-                reservation is not None
-                and self._reservations.get(reservation.token) != key
-            ):
-                return reason
             entry = self._entries.get(key)
             if entry is None:
                 if (
@@ -340,7 +528,46 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 self._entries[key] = entry
             self._next_cooldown_order += 1
             entry.cooldown_until = until
+            entry.cooldown_started_at = now
             entry.cooldown_reason = reason
+            entry.cooldown_generation = None
             entry.cooldown_order = self._next_cooldown_order
             self._notify_waiters_locked()
             return reason
+
+    def clear_cooldown_from_health_evidence(
+        self,
+        candidate: SearchProviderCandidate,
+        *,
+        reason: _ReasonT,
+        evidence_started_at: float | None,
+        quota_reason: _ReasonT,
+    ) -> bool:
+        """Clear only a matching quota cooldown with fresh monotonic evidence."""
+        key = self.key(candidate)
+        with self._lock:
+            now = self._read_clock_locked()
+            self._prune_expired_locked(now)
+            entry = self._entries.get(key)
+            if entry is None or entry.cooldown_reason is not quota_reason:
+                return False
+            if reason is not quota_reason or evidence_started_at is None:
+                return False
+            evidence_started_at = float(evidence_started_at)
+            started_at = entry.cooldown_started_at
+            if (
+                not math.isfinite(evidence_started_at)
+                or started_at is None
+                or evidence_started_at <= started_at
+                or evidence_started_at > now
+            ):
+                return False
+            entry.cooldown_until = None
+            entry.cooldown_started_at = None
+            entry.cooldown_reason = None
+            entry.cooldown_generation = None
+            entry.cooldown_order = 0
+            if entry.inflight == 0:
+                del self._entries[key]
+            self._notify_waiters_locked()
+            return True

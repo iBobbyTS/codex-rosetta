@@ -1,4 +1,5 @@
 import asyncio
+import math
 import threading
 import time
 import traceback
@@ -243,6 +244,11 @@ def test_every_runner_terminal_path_releases_reservation(terminal: str) -> None:
         )
         assert coordinator._state._protections == {}
         assert coordinator._state._protection_counts == {}
+        assert coordinator._state._reservations == {}
+        for entry in coordinator._state._entries.values():
+            assert entry.cohorts == {}
+            assert entry.open_generation is None
+            assert entry.latest_success_generation is None
 
     run(scenario())
 
@@ -601,7 +607,8 @@ def test_external_mark_failed_cannot_reclaim_active_chain_cooldown() -> None:
         assert state._entries[active_key].cooldown_reason is None
         assert state._entries[active_key].inflight == 1
         assert state.key(external) not in state._entries
-        assert tuple(state._reservations.values()) == (active_key,)
+        active_reservation = next(iter(state._reservations.values()))
+        assert active_reservation.key == active_key
         assert state._protection_counts == {protected_key: 1, active_key: 1}
         assert coordinator.is_cooling(protected) is True
         assert coordinator.is_cooling(external) is False
@@ -735,5 +742,250 @@ def test_synchronous_mark_failed_fails_closed_when_inflight_owns_capacity() -> N
 
         release_active.set()
         assert await task == "ok"
+
+    run(scenario())
+
+
+@pytest.mark.parametrize("success_first", [False, True])
+def test_same_cohort_success_always_suppresses_failure(success_first: bool) -> None:
+    async def scenario() -> None:
+        item = candidate("shared", "same-cohort")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        first, _ = await state.reserve(item)
+        second, _ = await state.reserve(item)
+        assert first is not None and second is not None
+        assert first.generation == second.generation
+
+        if success_first:
+            assert state.record_success(first) is None
+            assert (
+                state.record_failure(second, SearchProviderAttemptCategory.HTTP_ERROR)
+                is None
+            )
+        else:
+            assert (
+                state.record_failure(first, SearchProviderAttemptCategory.HTTP_ERROR)
+                is None
+            )
+            assert state.record_success(second) is None
+
+        assert coordinator.is_cooling(item) is False
+        assert state._entries == {}
+        assert state._reservations == {}
+
+    run(scenario())
+
+
+def test_multiple_failures_publish_last_reason_only_on_neutral_last_release() -> None:
+    async def scenario() -> None:
+        item = candidate("shared", "pending-failure")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        first, _ = await state.reserve(item)
+        second, _ = await state.reserve(item)
+        neutral, _ = await state.reserve(item)
+        assert first is not None and second is not None and neutral is not None
+
+        assert (
+            state.record_failure(first, SearchProviderAttemptCategory.HTTP_ERROR)
+            is None
+        )
+        assert (
+            state.record_failure(second, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+            is None
+        )
+        assert state.release(neutral) is SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        )
+        entry = state._entries[state.key(item)]
+        assert entry.cohorts == {}
+        assert entry.open_generation is None
+        assert entry.latest_success_generation is None
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("ordering", "expected_reason"),
+    [
+        ("older_failure_newer_success", None),
+        ("older_success_newer_failure", SearchProviderAttemptCategory.HTTP_ERROR),
+        ("newer_failure_older_success", SearchProviderAttemptCategory.HTTP_ERROR),
+    ],
+)
+def test_cross_generation_health_ordering(
+    ordering: str,
+    expected_reason: SearchProviderAttemptCategory | None,
+) -> None:
+    async def scenario() -> None:
+        item = candidate("shared", ordering)
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        older_first, _ = await state.reserve(item)
+        older_late, _ = await state.reserve(item)
+        assert older_first is not None and older_late is not None
+
+        if ordering == "older_failure_newer_success":
+            state.record_failure(older_first, SearchProviderAttemptCategory.HTTP_ERROR)
+        else:
+            state.record_success(older_first)
+        newer, _ = await state.reserve(item)
+        assert newer is not None and newer.generation > older_first.generation
+
+        if ordering == "older_failure_newer_success":
+            state.record_success(newer)
+            state.release(older_late)
+        elif ordering == "older_success_newer_failure":
+            state.record_failure(newer, SearchProviderAttemptCategory.HTTP_ERROR)
+            state.release(older_late)
+        else:
+            state.record_failure(newer, SearchProviderAttemptCategory.HTTP_ERROR)
+            state.record_success(older_late)
+
+        assert coordinator.cooldown_reason(item) is expected_reason
+        entry = state._entries.get(state.key(item))
+        if entry is not None:
+            assert entry.cohorts == {}
+            assert entry.open_generation is None
+            assert entry.latest_success_generation is None
+
+    run(scenario())
+
+
+def test_newer_attempt_failure_replaces_older_attempt_cooldown() -> None:
+    async def scenario() -> None:
+        item = candidate("shared", "replacement-order")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        first, _ = await state.reserve(item)
+        older_late, _ = await state.reserve(item)
+        assert first is not None and older_late is not None
+        state.record_failure(first, SearchProviderAttemptCategory.CONNECTION_ERROR)
+        newer, _ = await state.reserve(item)
+        assert newer is not None
+        assert (
+            state.release(older_late) is SearchProviderAttemptCategory.CONNECTION_ERROR
+        )
+        assert (
+            state.record_failure(newer, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+            is SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        )
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        )
+
+    run(scenario())
+
+
+def test_attempt_success_does_not_clear_external_cooldown() -> None:
+    async def scenario() -> None:
+        item = candidate("shared", "external-cooldown")
+        coordinator = SearchProviderChainCoordinator()
+        state = coordinator._state
+        reservation, _ = await state.reserve(item)
+        assert reservation is not None
+        coordinator.mark_failed(
+            item,
+            SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR,
+                quota_exhausted=True,
+            ),
+        )
+        state.record_success(reservation)
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        )
+        assert state._entries[state.key(item)].cooldown_generation is None
+
+    run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("current_reason", "evidence_reason", "evidence_time", "different_identity"),
+    [
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (100.0, False),
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (99.0, False),
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (102.0, False),
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (math.nan, False),
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (None, False),
+        (
+            SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            100.5,
+            False,
+        ),
+        (SearchProviderAttemptCategory.HTTP_ERROR,) * 2 + (100.5, False),
+        (SearchProviderAttemptCategory.QUOTA_EXHAUSTED,) * 2 + (100.5, True),
+    ],
+)
+def test_health_evidence_rejects_stale_future_mismatch_and_non_quota(
+    current_reason: SearchProviderAttemptCategory,
+    evidence_reason: SearchProviderAttemptCategory,
+    evidence_time: float | None,
+    different_identity: bool,
+) -> None:
+    clock = Clock()
+    item = candidate("row", "identity")
+    target = candidate("row", "different" if different_identity else "identity")
+    coordinator = SearchProviderChainCoordinator(clock=clock)
+    coordinator.mark_failed(item, SearchProviderAttemptError(current_reason))
+    clock.value = 101.0
+
+    assert (
+        coordinator.clear_cooldown_from_health_evidence(
+            target,
+            reason=evidence_reason,
+            evidence_started_at=evidence_time,
+        )
+        is False
+    )
+    assert coordinator.cooldown_reason(item) is current_reason
+
+
+def test_fresh_matching_quota_health_evidence_clears_and_wakes_capacity() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        coordinator = SearchProviderChainCoordinator(clock=clock, state_capacity=1)
+        cooling = candidate("cooling", "quota")
+        waiting = candidate("waiting", "new")
+        coordinator.mark_failed(
+            cooling,
+            SearchProviderAttemptError(
+                SearchProviderAttemptCategory.HTTP_ERROR,
+                quota_exhausted=True,
+            ),
+        )
+        started = asyncio.Event()
+
+        async def runner(item: TavilySearchProviderCandidate) -> str:
+            assert item is waiting
+            started.set()
+            return "ok"
+
+        task = asyncio.create_task(coordinator.run((cooling, waiting), runner))
+        await wait_until(lambda: bool(coordinator._state._waiters))
+        clock.value = 101.0
+        assert (
+            coordinator.clear_cooldown_from_health_evidence(
+                cooling,
+                reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                evidence_started_at=100.5,
+            )
+            is True
+        )
+        assert (
+            coordinator.clear_cooldown_from_health_evidence(
+                cooling,
+                reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                evidence_started_at=100.5,
+            )
+            is False
+        )
+        assert await task == "ok"
+        assert started.is_set()
+        assert coordinator._state._entries == {}
+        assert coordinator._state._waiters == {}
 
     run(scenario())

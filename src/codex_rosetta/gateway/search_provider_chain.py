@@ -8,12 +8,13 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from enum import StrEnum
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, TypeVar, cast
 
 from .search_provider_candidates import SearchProviderCandidate
 from .search_provider_chain_state import (
     DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
     SearchProviderStateCapacityUnavailable as SearchProviderStateCapacityUnavailable,
+    _Reservation,
     _SearchProviderChainState,
 )
 
@@ -183,6 +184,21 @@ class SearchProviderChainCoordinator:
         )
         return self._state.mark_failed(candidate, reason)
 
+    def clear_cooldown_from_health_evidence(
+        self,
+        candidate: SearchProviderCandidate,
+        *,
+        reason: SearchProviderAttemptCategory,
+        evidence_started_at: float | None,
+    ) -> bool:
+        """Clear a matching quota cooldown using newer monotonic evidence."""
+        return self._state.clear_cooldown_from_health_evidence(
+            candidate,
+            reason=reason,
+            evidence_started_at=evidence_started_at,
+            quota_reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+        )
+
     def _observe(self, event: _ObserverEvent) -> None:
         """Notify the advisory observer without surrendering chain ownership."""
         if self._observer is None:
@@ -213,6 +229,71 @@ class SearchProviderChainCoordinator:
         if cooldown_reason is not None:
             event["cooldown_reason"] = cooldown_reason.value
         self._observe(event)
+
+    def _observe_delayed_cooldown(
+        self, reason: SearchProviderAttemptCategory | None
+    ) -> None:
+        if reason is None:
+            return
+        self._observe(
+            {
+                "outcome_category": "cooldown_published",
+                "cooldown_reason": reason.value,
+            }
+        )
+
+    def _release_neutrally(self, reservation: _Reservation) -> None:
+        published_reason = self._state.release(reservation)
+        self._observe_delayed_cooldown(published_reason)
+
+    async def _run_admitted(
+        self,
+        candidate: _CandidateT,
+        attempt_index: int,
+        runner: Callable[[_CandidateT], Awaitable[_ResultT]],
+        reservation: _Reservation,
+    ) -> tuple[bool, _ResultT | None]:
+        settled = False
+        try:
+            attempt_category: SearchProviderAttemptCategory | None = None
+            quota_exhausted = False
+            failover_reason: SearchProviderRequestFailoverReason | None = None
+            try:
+                result = await runner(candidate)
+            except SearchProviderAttemptError as error:
+                attempt_category = error.category
+                quota_exhausted = error.quota_exhausted
+            except SearchProviderRequestFailover as error:
+                failover_reason = error.reason
+            else:
+                self._state.record_success(reservation)
+                settled = True
+                self._observe_candidate(candidate, attempt_index, "success")
+                return True, result
+
+            if attempt_category is None:
+                assert failover_reason is not None
+                self._release_neutrally(reservation)
+                settled = True
+                self._observe_candidate(candidate, attempt_index, failover_reason)
+                return False, None
+            reason = (
+                SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+                if quota_exhausted
+                else attempt_category
+            )
+            published = self._state.record_failure(reservation, reason)
+            settled = True
+            self._observe_candidate(
+                candidate,
+                attempt_index,
+                attempt_category,
+                cooldown_reason=published,
+            )
+            return False, None
+        finally:
+            if not settled:
+                self._release_neutrally(reservation)
 
     async def run(
         self,
@@ -246,47 +327,11 @@ class SearchProviderChainCoordinator:
                     continue
                 assert reservation is not None
                 attempted = True
-                attempt_category: SearchProviderAttemptCategory | None = None
-                quota_exhausted = False
-                request_failover_reason: SearchProviderRequestFailoverReason | None = (
-                    None
+                succeeded, result = await self._run_admitted(
+                    candidate, attempt_index, runner, reservation
                 )
-                try:
-                    try:
-                        result = await runner(candidate)
-                    except SearchProviderAttemptError as error:
-                        attempt_category = error.category
-                        quota_exhausted = error.quota_exhausted
-                    except SearchProviderRequestFailover as error:
-                        request_failover_reason = error.reason
-                    else:
-                        self._observe_candidate(candidate, attempt_index, "success")
-                        return result
-
-                    if attempt_category is not None:
-                        cooldown_reason = (
-                            SearchProviderAttemptCategory.QUOTA_EXHAUSTED
-                            if quota_exhausted
-                            else attempt_category
-                        )
-                        self._state.mark_failed(
-                            candidate, cooldown_reason, reservation=reservation
-                        )
-                        self._observe_candidate(
-                            candidate,
-                            attempt_index,
-                            attempt_category,
-                            cooldown_reason=cooldown_reason,
-                        )
-                    else:
-                        assert request_failover_reason is not None
-                        self._observe_candidate(
-                            candidate,
-                            attempt_index,
-                            request_failover_reason,
-                        )
-                finally:
-                    self._state.release(reservation)
+                if succeeded:
+                    return cast(_ResultT, result)
 
             reason = (
                 SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED

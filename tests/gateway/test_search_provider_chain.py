@@ -1197,6 +1197,12 @@ def test_observer_process_and_resource_failures_propagate_without_provider_error
     assert upstream_secret not in formatted
     assert identity not in formatted
     assert api_key not in formatted
+    assert coordinator._state._reservations == {}
+    assert coordinator._state._protections == {}
+    entry = coordinator._state._entries[coordinator._state.key(first)]
+    assert entry.cohorts == {}
+    assert entry.open_generation is None
+    assert entry.latest_success_generation is None
 
 
 @pytest.mark.parametrize(
@@ -1304,3 +1310,70 @@ def test_cooldown_deadline_must_strictly_advance_before_chain_side_effects(
     assert identity not in formatted
     assert api_key not in formatted
     assert raw_error not in formatted
+
+
+def test_delayed_cooldown_publication_is_bounded_and_advisory() -> None:
+    async def scenario() -> None:
+        item = candidate("private-row", "private-identity", api_key="private-key")
+        failure_started = asyncio.Event()
+        neutral_started = asyncio.Event()
+        release_failure = asyncio.Event()
+        release_neutral = asyncio.Event()
+        events: list[dict[str, str | int]] = []
+
+        def observer(event: dict[str, str | int]) -> None:
+            events.append(event)
+            if event.get("outcome_category") == "cooldown_published":
+                raise RuntimeError("advisory-observer-failure")
+
+        coordinator = SearchProviderChainCoordinator(observer=observer)
+
+        async def fail(_item: TavilySearchProviderCandidate) -> None:
+            failure_started.set()
+            await release_failure.wait()
+            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+
+        async def failover(_item: TavilySearchProviderCandidate) -> None:
+            neutral_started.set()
+            await release_neutral.wait()
+            raise SearchProviderRequestFailover(
+                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            )
+
+        failure_task = asyncio.create_task(coordinator.run((item,), fail))
+        neutral_task = asyncio.create_task(coordinator.run((item,), failover))
+        await asyncio.gather(failure_started.wait(), neutral_started.wait())
+        release_failure.set()
+        with pytest.raises(SearchProviderChainUnavailable):
+            await failure_task
+        assert coordinator.is_cooling(item) is False
+        assert "cooldown_reason" not in events[0]
+
+        release_neutral.set()
+        with pytest.raises(SearchProviderChainUnavailable):
+            await neutral_task
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        cooldown_events = [
+            event
+            for event in events
+            if event.get("outcome_category") == "cooldown_published"
+        ]
+        assert cooldown_events == [
+            {
+                "outcome_category": "cooldown_published",
+                "cooldown_reason": "http_error",
+            }
+        ]
+        serialized = repr(cooldown_events[0])
+        assert item.row_id not in serialized
+        assert item.identity not in serialized
+        assert item.api_key not in serialized
+        assert coordinator._state._reservations == {}
+        entry = coordinator._state._entries[coordinator._state.key(item)]
+        assert entry.cohorts == {}
+        assert entry.open_generation is None
+        assert entry.latest_success_generation is None
+
+    run(scenario())
