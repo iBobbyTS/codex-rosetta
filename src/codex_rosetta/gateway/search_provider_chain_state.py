@@ -80,6 +80,7 @@ class _CandidateState(Generic[_ReasonT]):
     open_generation: int | None = None
     latest_success_generation: int | None = None
     cohorts: dict[int, _AttemptCohort[_ReasonT]] = field(default_factory=dict)
+    suppressed_pending_generations: set[int] = field(default_factory=set)
 
 
 class SearchProviderStateCapacityUnavailable(RuntimeError):
@@ -327,6 +328,8 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         latest_success = entry.latest_success_generation
         if cohort.succeeded or reason is None:
             return None
+        if generation in entry.suppressed_pending_generations:
+            return None
         if latest_success is not None and latest_success >= generation:
             return None
         if entry.cooldown_until is not None and (
@@ -364,6 +367,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         cohort = entry.cohorts[reservation.generation]
         pending_reason = failure_reason or cohort.pending_failure_reason
         latest_success = entry.latest_success_generation
+        suppressed = reservation.generation in entry.suppressed_pending_generations
         active_cooldown = (
             entry.cooldown_until is not None and entry.cooldown_until > now
         )
@@ -375,6 +379,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             cohort.active == 1
             and not cohort.succeeded
             and pending_reason is not None
+            and (failure_reason is not None or not suppressed)
             and (latest_success is None or latest_success < reservation.generation)
             and not cooldown_blocks
         )
@@ -419,6 +424,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 entry.cooldown_generation = None
                 entry.cooldown_order = 0
         elif failure_reason is not None:
+            entry.suppressed_pending_generations.discard(reservation.generation)
             cohort.pending_failure_reason = failure_reason
         cohort.active -= 1
         entry.inflight -= 1
@@ -428,6 +434,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
                 entry, reservation.generation, cohort, now
             )
             del entry.cohorts[reservation.generation]
+            entry.suppressed_pending_generations.discard(reservation.generation)
             self._close_cohort_locked(entry, reservation.generation)
         self._prune_success_order_locked(entry)
         if entry.inflight == 0 and entry.cooldown_until is None:
@@ -444,6 +451,7 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         entry.inflight -= 1
         if cohort.active == 0:
             del entry.cohorts[reservation.generation]
+            entry.suppressed_pending_generations.discard(reservation.generation)
             self._close_cohort_locked(entry, reservation.generation)
         self._prune_success_order_locked(entry)
         if entry.inflight == 0 and entry.cooldown_until is None:
@@ -544,6 +552,18 @@ class _SearchProviderChainState(Generic[_ReasonT]):
         quota_reason: _ReasonT,
     ) -> bool:
         """Clear only a matching quota cooldown with fresh monotonic evidence."""
+        if isinstance(evidence_started_at, bool) or not isinstance(
+            evidence_started_at, (int, float)
+        ):
+            return False
+        if type(evidence_started_at) not in (int, float):
+            return False
+        try:
+            evidence_value = float(evidence_started_at)
+        except OverflowError:
+            return False
+        if not math.isfinite(evidence_value):
+            return False
         key = self.key(candidate)
         with self._lock:
             now = self._read_clock_locked()
@@ -551,17 +571,20 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             entry = self._entries.get(key)
             if entry is None or entry.cooldown_reason is not quota_reason:
                 return False
-            if reason is not quota_reason or evidence_started_at is None:
+            if reason is not quota_reason:
                 return False
-            evidence_started_at = float(evidence_started_at)
             started_at = entry.cooldown_started_at
             if (
-                not math.isfinite(evidence_started_at)
-                or started_at is None
-                or evidence_started_at <= started_at
-                or evidence_started_at > now
+                started_at is None
+                or evidence_value <= started_at
+                or evidence_value > now
             ):
                 return False
+            entry.suppressed_pending_generations.update(
+                generation
+                for generation, cohort in entry.cohorts.items()
+                if cohort.pending_failure_reason is not None
+            )
             entry.cooldown_until = None
             entry.cooldown_started_at = None
             entry.cooldown_reason = None

@@ -970,9 +970,12 @@ def test_cooldown_survives_reorder_but_identity_change_is_fresh() -> None:
         RuntimeError("upstream-secret-detail"),
         asyncio.CancelledError("cancel-now"),
         SearchProviderBudgetExceeded(SearchProviderBudgetReason.DEADLINE_EXCEEDED),
+        MemoryError("memory-pressure"),
+        SystemExit("process-exit"),
+        KeyboardInterrupt("operator-interrupt"),
     ],
 )
-def test_untyped_cancel_and_budget_errors_propagate_without_cooldown(
+def test_untyped_budget_cancel_and_fatal_errors_propagate_without_cooldown(
     failure: BaseException,
 ) -> None:
     identity = "synthetic-propagated-path-identity"
@@ -986,6 +989,7 @@ def test_untyped_cancel_and_budget_errors_propagate_without_cooldown(
     with pytest.raises(type(failure)) as caught:
         run(coordinator.run((item,), runner))
     assert caught.value is failure
+    assert caught.value.args == failure.args
     assert coordinator.is_cooling(item) is False
     formatted = format_traceback_with_locals(caught.value)
     assert identity not in formatted
@@ -1254,6 +1258,119 @@ def test_typed_attempt_clock_failures_do_not_retain_provider_error_chain(
     assert api_key not in locals_formatted
 
 
+def test_unknown_runner_clock_failure_suppresses_sensitive_exception_context() -> None:
+    raw_error = "synthetic-unknown-runner-private-body"
+    identity = "synthetic-unknown-clock-identity"
+    api_key = "synthetic-unknown-clock-api-key"
+    clock = Clock()
+    coordinator = SearchProviderChainCoordinator(clock=clock)
+    item = candidate("row", identity, api_key=api_key)
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        clock.value = 99.0
+        raise RuntimeError(raw_error)
+
+    with pytest.raises(ValueError, match="clock must be monotonic") as caught:
+        run(coordinator.run((item,), runner))
+
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert caught.value.__suppress_context__ is True
+    default_formatted = "".join(
+        traceback.format_exception(
+            type(caught.value), caught.value, caught.value.__traceback__
+        )
+    )
+    locals_formatted = format_traceback_with_locals(caught.value)
+    for secret in (raw_error, identity, api_key):
+        assert secret not in default_formatted
+        assert secret not in locals_formatted
+    assert coordinator._state._entries == {}
+    assert coordinator._state._reservations == {}
+    assert coordinator._state._protections == {}
+    assert coordinator._state._protection_counts == {}
+
+
+@pytest.mark.parametrize(
+    "terminal_kind",
+    ["unknown", "budget", "cancel", "memory", "exit", "interrupt"],
+)
+def test_neutral_deadline_failure_suppresses_all_runner_exception_contexts(
+    terminal_kind: str,
+) -> None:
+    async def scenario() -> None:
+        raw_error = f"synthetic-{terminal_kind}-runner-private-body"
+        identity = "synthetic-neutral-deadline-identity"
+        api_key = "synthetic-neutral-deadline-api-key"
+        item = candidate("row", identity, api_key=api_key)
+        clock = Clock(0.0)
+        coordinator = SearchProviderChainCoordinator(
+            clock=clock,
+            cooldown_seconds=math.ulp(100.0) / 4,
+        )
+        failure_started = asyncio.Event()
+        terminal_started = asyncio.Event()
+        release_failure = asyncio.Event()
+        release_terminal = asyncio.Event()
+
+        async def pending_failure(_item: TavilySearchProviderCandidate) -> None:
+            failure_started.set()
+            await release_failure.wait()
+            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+
+        async def terminal(_item: TavilySearchProviderCandidate) -> None:
+            terminal_started.set()
+            await release_terminal.wait()
+            if terminal_kind == "unknown":
+                raise RuntimeError(raw_error)
+            if terminal_kind == "budget":
+                error: BaseException = SearchProviderBudgetExceeded(
+                    SearchProviderBudgetReason.DEADLINE_EXCEEDED
+                )
+                error.__cause__ = RuntimeError(raw_error)
+                raise error
+            if terminal_kind == "cancel":
+                raise asyncio.CancelledError(raw_error)
+            if terminal_kind == "memory":
+                raise MemoryError(raw_error)
+            if terminal_kind == "exit":
+                raise SystemExit(raw_error)
+            raise KeyboardInterrupt(raw_error)
+
+        failure_task = asyncio.create_task(coordinator.run((item,), pending_failure))
+        terminal_task = asyncio.create_task(coordinator.run((item,), terminal))
+        await asyncio.gather(failure_started.wait(), terminal_started.wait())
+        clock.value = 100.0
+        release_failure.set()
+        with pytest.raises(SearchProviderChainUnavailable):
+            await failure_task
+        release_terminal.set()
+        with pytest.raises(
+            ValueError,
+            match="cooldown deadline must be later than current time",
+        ) as caught:
+            await terminal_task
+
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert caught.value.__suppress_context__ is True
+        default_formatted = "".join(
+            traceback.format_exception(
+                type(caught.value), caught.value, caught.value.__traceback__
+            )
+        )
+        locals_formatted = format_traceback_with_locals(caught.value)
+        for secret in (raw_error, identity, api_key):
+            assert secret not in default_formatted
+            assert secret not in locals_formatted
+        assert coordinator._state._entries == {}
+        assert coordinator._state._reservations == {}
+        assert coordinator._state._protections == {}
+        assert coordinator._state._protection_counts == {}
+
+    run(scenario())
+
+
 @pytest.mark.parametrize(
     ("failure_clock", "cooldown_seconds"),
     [
@@ -1373,6 +1490,72 @@ def test_delayed_cooldown_publication_is_bounded_and_advisory() -> None:
         assert coordinator._state._reservations == {}
         entry = coordinator._state._entries[coordinator._state.key(item)]
         assert entry.cohorts == {}
+        assert entry.open_generation is None
+        assert entry.latest_success_generation is None
+
+    run(scenario())
+
+
+def test_unknown_runner_delayed_fatal_observer_suppresses_sensitive_context() -> None:
+    async def scenario() -> None:
+        raw_error = "synthetic-delayed-unknown-private-body"
+        identity = "synthetic-delayed-fatal-identity"
+        api_key = "synthetic-delayed-fatal-api-key"
+        item = candidate("row", identity, api_key=api_key)
+        failure_started = asyncio.Event()
+        unknown_started = asyncio.Event()
+        release_failure = asyncio.Event()
+        release_unknown = asyncio.Event()
+        fatal_observer = MemoryError("fatal-delayed-observer")
+
+        def observer(event: dict[str, str | int]) -> None:
+            if event.get("outcome_category") == "cooldown_published":
+                raise fatal_observer
+
+        coordinator = SearchProviderChainCoordinator(observer=observer)
+
+        async def pending_failure(_item: TavilySearchProviderCandidate) -> None:
+            failure_started.set()
+            await release_failure.wait()
+            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+
+        async def unknown(_item: TavilySearchProviderCandidate) -> None:
+            unknown_started.set()
+            await release_unknown.wait()
+            raise RuntimeError(raw_error)
+
+        failure_task = asyncio.create_task(coordinator.run((item,), pending_failure))
+        unknown_task = asyncio.create_task(coordinator.run((item,), unknown))
+        await asyncio.gather(failure_started.wait(), unknown_started.wait())
+        release_failure.set()
+        with pytest.raises(SearchProviderChainUnavailable):
+            await failure_task
+        release_unknown.set()
+        with pytest.raises(MemoryError) as caught:
+            await unknown_task
+
+        assert caught.value is fatal_observer
+        assert caught.value.__cause__ is None
+        assert caught.value.__context__ is None
+        assert caught.value.__suppress_context__ is True
+        default_formatted = "".join(
+            traceback.format_exception(
+                type(caught.value), caught.value, caught.value.__traceback__
+            )
+        )
+        locals_formatted = format_traceback_with_locals(caught.value)
+        for secret in (raw_error, identity, api_key):
+            assert secret not in default_formatted
+            assert secret not in locals_formatted
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert coordinator._state._reservations == {}
+        assert coordinator._state._protections == {}
+        assert coordinator._state._protection_counts == {}
+        entry = coordinator._state._entries[coordinator._state.key(item)]
+        assert entry.cohorts == {}
+        assert entry.suppressed_pending_generations == set()
         assert entry.open_generation is None
         assert entry.latest_success_generation is None
 

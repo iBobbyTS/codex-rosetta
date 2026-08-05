@@ -944,6 +944,190 @@ def test_health_evidence_rejects_stale_future_mismatch_and_non_quota(
     assert coordinator.cooldown_reason(item) is current_reason
 
 
+@pytest.mark.parametrize(
+    "invalid_evidence",
+    ["100.5", [100.5], True, object()],
+)
+def test_health_evidence_rejects_non_numeric_types_without_state_mutation(
+    invalid_evidence: Any,
+) -> None:
+    class FloatLike:
+        def __float__(self) -> float:
+            raise AssertionError("custom float coercion must not run")
+
+    evidence: Any = (
+        FloatLike() if type(invalid_evidence) is object else invalid_evidence
+    )
+    clock = Clock()
+    item = candidate("row", "identity")
+    coordinator = SearchProviderChainCoordinator(clock=clock)
+    coordinator.mark_failed(
+        item,
+        SearchProviderAttemptError(
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            quota_exhausted=True,
+        ),
+    )
+    state = coordinator._state
+    key = state.key(item)
+    entry = state._entries[key]
+    state_before = (
+        entry.cooldown_until,
+        entry.cooldown_started_at,
+        entry.cooldown_reason,
+        entry.cooldown_generation,
+        entry.cooldown_order,
+        entry.inflight,
+        entry.open_generation,
+        entry.latest_success_generation,
+        dict(entry.cohorts),
+        set(entry.suppressed_pending_generations),
+    )
+    clock_calls = clock.calls
+
+    assert (
+        coordinator.clear_cooldown_from_health_evidence(
+            item,
+            reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            evidence_started_at=evidence,
+        )
+        is False
+    )
+
+    assert clock.calls == clock_calls
+    assert state._entries[key] is entry
+    assert (
+        entry.cooldown_until,
+        entry.cooldown_started_at,
+        entry.cooldown_reason,
+        entry.cooldown_generation,
+        entry.cooldown_order,
+        entry.inflight,
+        entry.open_generation,
+        entry.latest_success_generation,
+        dict(entry.cohorts),
+        set(entry.suppressed_pending_generations),
+    ) == state_before
+
+
+def test_health_evidence_suppresses_old_pending_neutral_publication() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        item = candidate("shared", "suppressed-pending")
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        state = coordinator._state
+        failed, _ = await state.reserve(item)
+        neutral, _ = await state.reserve(item)
+        assert failed is not None and neutral is not None
+        assert (
+            state.record_failure(failed, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+            is None
+        )
+        publisher, _ = await state.reserve(item)
+        assert publisher is not None and publisher.generation > failed.generation
+        assert (
+            state.record_failure(
+                publisher, SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+            )
+            is SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+        )
+
+        clock.value = 101.0
+        assert (
+            coordinator.clear_cooldown_from_health_evidence(
+                item,
+                reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                evidence_started_at=100.5,
+            )
+            is True
+        )
+        entry = state._entries[state.key(item)]
+        assert entry.suppressed_pending_generations == {failed.generation}
+        assert state.release(neutral) is None
+        assert coordinator.is_cooling(item) is False
+        assert state._entries == {}
+        assert state._reservations == {}
+
+    run(scenario())
+
+
+def test_new_same_generation_failure_removes_health_evidence_suppression() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        item = candidate("shared", "same-generation-after-clear")
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        state = coordinator._state
+        old_failure, _ = await state.reserve(item)
+        new_failure, _ = await state.reserve(item)
+        assert old_failure is not None and new_failure is not None
+        state.record_failure(old_failure, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+        publisher, _ = await state.reserve(item)
+        assert publisher is not None
+        state.record_failure(publisher, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+
+        clock.value = 101.0
+        assert coordinator.clear_cooldown_from_health_evidence(
+            item,
+            reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            evidence_started_at=100.5,
+        )
+        assert state._entries[state.key(item)].suppressed_pending_generations == {
+            old_failure.generation
+        }
+        assert (
+            state.record_failure(new_failure, SearchProviderAttemptCategory.HTTP_ERROR)
+            is SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        entry = state._entries[state.key(item)]
+        assert entry.suppressed_pending_generations == set()
+        assert entry.cohorts == {}
+
+    run(scenario())
+
+
+def test_future_generation_failure_is_not_suppressed_by_health_evidence() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        item = candidate("shared", "future-generation-after-clear")
+        coordinator = SearchProviderChainCoordinator(clock=clock)
+        state = coordinator._state
+        old_failure, _ = await state.reserve(item)
+        old_neutral, _ = await state.reserve(item)
+        assert old_failure is not None and old_neutral is not None
+        state.record_failure(old_failure, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+        publisher, _ = await state.reserve(item)
+        assert publisher is not None
+        state.record_failure(publisher, SearchProviderAttemptCategory.QUOTA_EXHAUSTED)
+
+        clock.value = 101.0
+        assert coordinator.clear_cooldown_from_health_evidence(
+            item,
+            reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            evidence_started_at=100.5,
+        )
+        future, _ = await state.reserve(item)
+        assert future is not None and future.generation > publisher.generation
+        assert (
+            state.record_failure(future, SearchProviderAttemptCategory.HTTP_ERROR)
+            is SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert state.release(old_neutral) is None
+        assert coordinator.cooldown_reason(item) is (
+            SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        entry = state._entries[state.key(item)]
+        assert entry.suppressed_pending_generations == set()
+        assert entry.cohorts == {}
+
+    run(scenario())
+
+
 def test_fresh_matching_quota_health_evidence_clears_and_wakes_capacity() -> None:
     async def scenario() -> None:
         clock = Clock()

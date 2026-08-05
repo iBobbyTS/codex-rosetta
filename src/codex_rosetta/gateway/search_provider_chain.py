@@ -8,7 +8,8 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from enum import StrEnum
-from typing import Any, Generic, TypeVar, cast
+from types import TracebackType
+from typing import Any, Generic, NoReturn, TypeVar, cast
 
 from .search_provider_candidates import SearchProviderCandidate
 from .search_provider_chain_state import (
@@ -29,6 +30,23 @@ _AsyncOperation = Callable[[], Awaitable[_ResultT]]
 _ObserverEvent = dict[str, str | int]
 _Observer = Callable[[_ObserverEvent], None]
 _DETACHED_OPERATION_FUTURES: set[asyncio.Future[Any]] = set()
+
+
+class _CapturedRunnerException:
+    """Retain one runner failure without exposing it through traceback locals."""
+
+    __slots__ = ("_error", "_traceback")
+
+    def __init__(self, error: BaseException) -> None:
+        self._error = error
+        self._traceback: TracebackType | None = error.__traceback__
+
+    def __repr__(self) -> str:
+        return "<captured runner exception>"
+
+    def reraise(self) -> NoReturn:
+        """Re-raise the original failure with its useful runner traceback."""
+        raise self._error.with_traceback(self._traceback)
 
 
 async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
@@ -258,6 +276,7 @@ class SearchProviderChainCoordinator:
             attempt_category: SearchProviderAttemptCategory | None = None
             quota_exhausted = False
             failover_reason: SearchProviderRequestFailoverReason | None = None
+            captured_runner_error: _CapturedRunnerException | None = None
             try:
                 result = await runner(candidate)
             except SearchProviderAttemptError as error:
@@ -265,12 +284,21 @@ class SearchProviderChainCoordinator:
                 quota_exhausted = error.quota_exhausted
             except SearchProviderRequestFailover as error:
                 failover_reason = error.reason
+            except BaseException as error:
+                captured_runner_error = _CapturedRunnerException(error)
             else:
                 self._state.record_success(reservation)
                 settled = True
                 self._observe_candidate(candidate, attempt_index, "success")
                 return True, result
 
+            if captured_runner_error is not None:
+                try:
+                    self._release_neutrally(reservation)
+                except BaseException as settlement_error:
+                    raise settlement_error from None
+                settled = True
+                captured_runner_error.reraise()
             if attempt_category is None:
                 assert failover_reason is not None
                 self._release_neutrally(reservation)
