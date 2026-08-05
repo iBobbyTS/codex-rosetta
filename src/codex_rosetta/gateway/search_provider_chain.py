@@ -18,7 +18,7 @@ _ReasonT = TypeVar("_ReasonT", bound=StrEnum)
 _AsyncOperation = Callable[[], Awaitable[_ResultT]]
 
 
-def _observe_future(future: asyncio.Future[object]) -> None:
+def _observe_future(future: asyncio.Future[_ResultT]) -> None:
     with suppress(asyncio.CancelledError):
         future.exception()
 
@@ -201,6 +201,11 @@ class SearchProviderRequestBudget:
             operation_future.add_done_callback(_observe_future)
             raise
         if operation_future in done:
+            try:
+                self._remaining()
+            except BaseException:
+                _observe_future(operation_future)
+                raise
             return operation_future.result()
         operation_future.cancel()
         operation_future.add_done_callback(_observe_future)

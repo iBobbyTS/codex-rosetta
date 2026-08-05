@@ -1,5 +1,6 @@
 import asyncio
 import math
+import time
 from collections.abc import Awaitable
 from typing import Any
 
@@ -91,6 +92,60 @@ def test_budget_deadline_is_frozen_and_run_does_not_count_calls() -> None:
         run(budget.run(operation))
     assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
     assert started is False
+
+
+@pytest.mark.parametrize("completed_at", [105.0, 105.001])
+def test_external_call_rejects_completion_at_or_after_absolute_deadline(
+    completed_at: float,
+) -> None:
+    clock = Clock()
+    budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+
+    async def operation() -> str:
+        clock.value = completed_at
+        return "late"
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(budget.run_external_call(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+    assert budget.external_calls == 1
+
+
+def test_budget_deadline_wins_over_and_observes_late_operation_error() -> None:
+    async def scenario() -> None:
+        clock = Clock()
+        budget = SearchProviderRequestBudget(timeout_seconds=5, clock=clock)
+        loop = asyncio.get_running_loop()
+        unhandled: list[dict[str, object]] = []
+        original_handler = loop.get_exception_handler()
+        loop.set_exception_handler(lambda _loop, context: unhandled.append(context))
+
+        async def operation() -> None:
+            clock.value = budget.deadline
+            raise RuntimeError("late-secret")
+
+        try:
+            with pytest.raises(SearchProviderBudgetExceeded) as caught:
+                await budget.run(operation)
+            assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
+            await asyncio.sleep(0)
+            assert unhandled == []
+        finally:
+            loop.set_exception_handler(original_handler)
+
+    run(scenario())
+
+
+def test_budget_rejects_result_after_event_loop_starvation() -> None:
+    async def operation() -> str:
+        time.sleep(0.01)
+        return "late"
+
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(SearchProviderRequestBudget(timeout_seconds=0.001).run(operation))
+
+    assert caught.value.reason is SearchProviderBudgetReason.DEADLINE_EXCEEDED
 
 
 def test_external_call_limit_allows_exactly_32_operations() -> None:
@@ -250,7 +305,7 @@ def test_invalid_runtime_clock_fails_before_operation_or_count(
 
 
 def test_external_call_starts_after_single_successful_deadline_admission() -> None:
-    clock_values = iter((100.0, 104.0, 105.0))
+    clock_values = iter((100.0, 104.0, 104.5))
     clock_reads: list[float] = []
 
     def crossing_clock() -> float:
@@ -269,7 +324,7 @@ def test_external_call_starts_after_single_successful_deadline_admission() -> No
     assert run(budget.run_external_call(operation)) == "ok"
     assert started is True
     assert budget.external_calls == 1
-    assert clock_reads == [100.0, 104.0]
+    assert clock_reads == [100.0, 104.0, 104.5]
 
 
 @pytest.mark.parametrize(
