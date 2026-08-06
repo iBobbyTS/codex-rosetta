@@ -27,7 +27,11 @@ from codex_rosetta.gateway.admin.routes.config import (
 from codex_rosetta.gateway.admin.routes.observability import get_provider_key
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.auth import AuthState
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import (
+    CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
+    GatewayConfig,
+    MAX_WEB_SEARCH_PROVIDERS,
+)
 from codex_rosetta.gateway.logging import BodyLogState
 from codex_rosetta.gateway.stream_trace import StreamTraceState
 from codex_rosetta.observability.metrics import MetricsCollector
@@ -688,11 +692,12 @@ def test_retention_activation_is_isolated_between_apps(tmp_path, monkeypatch):
 
 
 def test_get_config_masks_tavily_api_key(tmp_path):
-    """Admin config response does not expose the raw Tavily API key."""
+    """Admin config canonicalizes and masks a legacy Tavily API key."""
     config = _config_data()
     config["server"]["web_search"] = {"tavily_api_key": "tvly-1234567890"}
     config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(config), encoding="utf-8")
+    original = json.dumps(config).encode("utf-8")
+    config_path.write_bytes(original)
 
     app = SimpleNamespace(
         config_path=str(config_path),
@@ -704,7 +709,16 @@ def test_get_config_masks_tavily_api_key(tmp_path):
 
     assert response.status_code == 200
     body = json.loads(response.body.decode("utf-8"))
-    assert body["server"]["web_search"]["tavily_api_key"] == "tvly***7890"
+    assert body["server"]["web_search"] == {
+        "providers": [
+            {
+                "id": "legacy-0",
+                "provider": "tavily",
+                "tavily_api_key": "tvly***7890",
+            }
+        ]
+    }
+    assert config_path.read_bytes() == original
     assert body["server"]["request_body_limit_mb"] == 128
 
 
@@ -771,6 +785,111 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
             "tavily_api_key": "tvly***4321",
         },
     ]
+    assert body["web_search_contract"] == {
+        "provider_types": [
+            "tavily",
+            "configured_responses_provider",
+            "self_hosted_bing",
+            "self_hosted_bing_browser",
+            "self_hosted_google",
+        ],
+        "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
+        "max_providers": MAX_WEB_SEARCH_PROVIDERS,
+    }
+
+
+@pytest.mark.parametrize(
+    ("legacy", "extra_providers", "expected_masked", "expected_saved"),
+    [
+        (
+            {"provider": "tavily", "tavily_api_key": "tvly-legacy-secret"},
+            {},
+            {
+                "id": "legacy-0",
+                "provider": "tavily",
+                "tavily_api_key": "tvly***cret",
+            },
+            {
+                "id": "legacy-0",
+                "provider": "tavily",
+                "tavily_api_key": "tvly-legacy-secret",
+            },
+        ),
+        (
+            {
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-terra",
+            },
+            {
+                "search-upstream": {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "base_url": "https://search.example.test/v1",
+                    "api_key": "responses-search-secret",
+                }
+            },
+            {
+                "id": "legacy-0",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-terra",
+            },
+            {
+                "id": "legacy-0",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-terra",
+            },
+        ),
+        (
+            {"provider": "self_hosted_bing_browser"},
+            {},
+            {"id": "legacy-0", "provider": "self_hosted_bing_browser"},
+            {"id": "legacy-0", "provider": "self_hosted_bing_browser"},
+        ),
+    ],
+    ids=["tavily", "responses", "self-hosted"],
+)
+def test_legacy_web_search_get_then_unchanged_canonical_put_migrates_safely(
+    tmp_path,
+    legacy,
+    extra_providers,
+    expected_masked,
+    expected_saved,
+):
+    """Admin GET exposes one canonical row that unchanged PUT safely migrates."""
+    data = _config_data()
+    data["providers"].update(extra_providers)
+    data["server"]["web_search"] = legacy
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data).encode("utf-8")
+    config_path.write_bytes(original)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(data),
+        auth_state=None,
+        stream_trace_state=None,
+    )
+
+    get_response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert get_response.status_code == 200
+    returned = json.loads(get_response.body)["server"]["web_search"]
+    assert returned == {"providers": [expected_masked]}
+    assert config_path.read_bytes() == original
+
+    put_response = _run(
+        put_server_settings(
+            SimpleNamespace(app=app, json=lambda: {"web_search": returned})
+        )
+    )
+
+    assert put_response.status_code == 200
+    assert set(returned) == {"providers"}
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["web_search"] == {"providers": [expected_saved]}
+    assert app.gateway_config.web_search.providers == [expected_saved]
 
 
 def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(

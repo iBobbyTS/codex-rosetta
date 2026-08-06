@@ -13,8 +13,11 @@ from codex_rosetta.shims.providers import builtin_provider_shims
 from ...config import (
     API_TYPE_ORDER,
     CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+    CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
     DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL,
     GatewayConfig,
+    MAX_WEB_SEARCH_PROVIDERS,
+    SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     default_tool_profile_for_provider,
     load_config_raw,
     normalize_codex_settings,
@@ -63,23 +66,17 @@ _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
-    """Return a copy of server.web_search with sensitive values masked."""
-    if not isinstance(value, dict):
-        return {}
-    masked = dict(value)
-    if "tavily_api_key" in masked:
-        masked["tavily_api_key"] = _mask_api_key(str(masked["tavily_api_key"]))
-    providers = masked.get("providers")
-    if isinstance(providers, list):
-        masked["providers"] = [
-            {
-                **entry,
-                "tavily_api_key": _mask_api_key(str(entry["tavily_api_key"])),
-            }
-            if isinstance(entry, dict) and "tavily_api_key" in entry
-            else entry
-            for entry in providers
-        ]
+    """Return canonical server.web_search with sensitive values masked."""
+    masked = dict(normalize_web_search(value))
+    masked["providers"] = [
+        {
+            **entry,
+            "tavily_api_key": _mask_api_key(str(entry["tavily_api_key"])),
+        }
+        if "tavily_api_key" in entry
+        else entry
+        for entry in masked["providers"]
+    ]
     return masked
 
 
@@ -715,6 +712,15 @@ async def get_config(request: Any) -> Response:
                 for slug, model in full_model_presets().items()
             ],
             "provider_catalog": provider_catalog_for_admin(),
+            "web_search_contract": {
+                "provider_types": [
+                    "tavily",
+                    CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+                    *sorted(SELF_HOSTED_WEB_SEARCH_PROVIDERS),
+                ],
+                "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
+                "max_providers": MAX_WEB_SEARCH_PROVIDERS,
+            },
             "codex": config.codex,
             "server": server,
             "credential_visible": config.credential_visible,

@@ -63,7 +63,12 @@ describe('Admin application session', () => {
         return new Response(JSON.stringify({
           config_path: '/tmp/config.jsonc',
           providers: { TURNING: { api_type: 'responses' } },
-          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'TURNING', responses_model: 'gpt-5.6-sol' } },
+          web_search_contract: {
+            provider_types: ['tavily', 'configured_responses_provider', 'self_hosted_google', 'self_hosted_bing', 'self_hosted_bing_browser'],
+            responses_models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+            max_providers: 32,
+          },
+          server: { web_search: { providers: [{ id: 'responses', provider: 'configured_responses_provider', responses_provider: 'TURNING', responses_model: 'gpt-5.6-sol' }] } },
         }), { status: 200 });
       }
       return new Response(JSON.stringify({ error: 'Unexpected request' }), { status: 500 });

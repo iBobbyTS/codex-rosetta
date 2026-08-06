@@ -84,57 +84,210 @@ describe('GatewayLogsPage', () => {
 });
 
 describe('NetworkSearchPage', () => {
-  it('preserves a masked Tavily key when saving', async () => {
+  const contract = {
+    provider_types: ['tavily', 'configured_responses_provider', 'self_hosted_google', 'self_hosted_bing', 'self_hosted_bing_browser'],
+    responses_models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    max_providers: 32,
+  };
+
+  const configResponse = (rows: Array<Record<string, string | undefined>> = [], providers: Record<string, unknown> = {}) => ({
+    providers,
+    web_search_contract: contract,
+    server: { web_search: { providers: rows } },
+  });
+
+  function mockConfig(value: ReturnType<typeof configResponse>): void {
     apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
-      ? Promise.resolve({ server: { web_search: { provider: 'tavily', tavily_api_key: 'tav***key' } } })
+      ? Promise.resolve(value)
       : Promise.resolve({ configured: false }));
-    apiMock.put.mockResolvedValue({ server: { web_search: { provider: 'tavily', tavily_api_key: 'tav***key' } } });
+  }
+
+  function transfer(): { value: string; effectAllowed: string; setData: (_type: string, value: string) => void; getData: () => string } {
+    return {
+      value: '',
+      effectAllowed: 'none',
+      setData(_type: string, value: string) { this.value = value; },
+      getData() { return this.value; },
+    };
+  }
+
+  it('loads and saves a canonical multi-row chain without changing order, IDs, or masked keys', async () => {
+    const rows = [
+      { id: 'tavily-a', provider: 'tavily', tavily_api_key: 'tav***key' },
+      { id: 'responses-b', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'local-c', provider: 'self_hosted_google' },
+    ];
+    mockConfig(configResponse(rows, { search: { api_type: 'responses' } }));
+    apiMock.put.mockResolvedValue(configResponse(rows).server);
     render(NetworkSearchPage);
     expect(await screen.findByDisplayValue('tav***key')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { provider: 'tavily', tavily_api_key: 'tav***key' } });
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: rows } });
+    const body = apiMock.put.mock.calls[0][1] as { web_search: Record<string, unknown> };
+    expect(Object.keys(body.web_search)).toEqual(['providers']);
+    expect(body.web_search).not.toHaveProperty('provider');
+    expect(body.web_search).not.toHaveProperty('tavily_api_key');
   });
 
-  it('selects an enabled Responses provider instead of showing an API key input', async () => {
-    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
-      ? Promise.resolve({
-          providers: {
-            chat: { api_type: 'chat' },
-            disabled: { api_type: 'responses', enabled: false },
-            search: { api_type: 'responses' },
-          },
-          server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' } },
-        })
-      : Promise.resolve({ configured: false }));
-    apiMock.put.mockResolvedValue({ server: { web_search: { provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' } } });
+  it.each([
+    {
+      name: 'Tavily',
+      row: { id: 'legacy-0', provider: 'tavily', tavily_api_key: 'tvly***cret' },
+      providers: {},
+    },
+    {
+      name: 'Responses',
+      row: { id: 'legacy-0', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      providers: { search: { api_type: 'responses' } },
+    },
+    {
+      name: 'self-hosted',
+      row: { id: 'legacy-0', provider: 'self_hosted_bing_browser' },
+      providers: {},
+    },
+  ])('unchanged canonical save preserves the backend-adapted legacy $name row', async ({ row, providers }) => {
+    const rows = [{ ...row }];
+    mockConfig(configResponse(rows, providers));
+    apiMock.put.mockImplementation((_path: string, body: { web_search: { providers: Array<Record<string, string | undefined>> } }) => Promise.resolve({ server: { web_search: body.web_search } }));
+    render(NetworkSearchPage);
+    await waitFor(() => expect(document.querySelector('tr[data-row-id="legacy-0"]')).not.toBeNull());
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
+      web_search: { providers: rows },
+    });
+    const webSearch = (apiMock.put.mock.calls[0][1] as { web_search: Record<string, unknown> }).web_search;
+    expect(Object.keys(webSearch)).toEqual(['providers']);
+  });
+
+  it('renders only the controls allowed for Tavily, Responses, and self-hosted rows', async () => {
+    mockConfig(configResponse([
+      { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
+      { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'sh', provider: 'self_hosted_bing' },
+    ], {
+      chat: { api_type: 'chat' },
+      disabled: { api_type: 'responses', enabled: false },
+      search: { api_type: 'responses' },
+    }));
     render(NetworkSearchPage);
 
-    const providerSelect = await screen.findByLabelText('Search Provider');
-    await waitFor(() => expect(providerSelect).toHaveValue('configured_responses_provider'));
-    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+    expect(await screen.findByDisplayValue('masked***key')).toHaveAttribute('type', 'password');
+    expect(screen.getAllByLabelText('API Key')).toHaveLength(1);
     const responsesSelect = await screen.findByLabelText('Responses Provider');
     expect(responsesSelect).toHaveTextContent('search');
     expect(responsesSelect).not.toHaveTextContent('chat');
     expect(responsesSelect).not.toHaveTextContent('disabled');
     const modelSelect = await screen.findByLabelText('Search Model');
     expect(modelSelect).toHaveValue('gpt-5.6-terra');
-    expect(modelSelect).toHaveTextContent('gpt-5.6-sol');
-    expect(modelSelect).toHaveTextContent('gpt-5.6-terra');
-    expect(modelSelect).toHaveTextContent('gpt-5.6-luna');
+    expect(Array.from((modelSelect as HTMLSelectElement).options).map((option) => option.value)).toEqual(contract.responses_models);
+    expect(screen.getByLabelText('No configuration required')).toBeInTheDocument();
+    expect(screen.getAllByLabelText('Quota display is not available yet')).toHaveLength(3);
+  });
+
+  it('supports an empty list, adding and deleting rows, and cleans fields when changing type', async () => {
+    mockConfig(configResponse([], { search: { api_type: 'responses' } }));
+    apiMock.put.mockImplementation((_path: string, body: { web_search: { providers: Array<Record<string, string | undefined>> } }) => Promise.resolve({ server: { web_search: body.web_search } }));
+    render(NetworkSearchPage);
+
+    expect(await screen.findByText('No web search providers configured.')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' }));
+    const type = screen.getByLabelText('Search provider type');
+    expect(type).toHaveValue('tavily');
+    expect(screen.getByLabelText('API Key')).toBeInTheDocument();
+    await fireEvent.change(type, { target: { value: 'configured_responses_provider' } });
+    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Responses Provider')).toHaveValue('search');
+    await fireEvent.change(type, { target: { value: 'self_hosted_google' } });
+    expect(screen.queryByLabelText('Responses Provider')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Search Model')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const savedRows = (apiMock.put.mock.calls[0][1] as { web_search: { providers: Array<Record<string, unknown>> } }).web_search.providers;
+    expect(savedRows).toHaveLength(1);
+    expect(savedRows[0]).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{1,64}$/), provider: 'self_hosted_google' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByText('No web search providers configured.')).toBeInTheDocument();
+  });
+
+  it('caps additions at the backend-provided 32-row limit', async () => {
+    mockConfig(configResponse(Array.from({ length: 31 }, (_, index) => ({ id: `row-${index}`, provider: 'self_hosted_google' }))));
+    render(NetworkSearchPage);
+    const add = await screen.findByRole('button', { name: '+ Add search provider' });
+    await waitFor(() => expect(add).toBeEnabled());
+    await fireEvent.click(add);
+    expect(screen.getByText('32 / 32')).toBeInTheDocument();
+    expect(add).toBeDisabled();
+  });
+
+  it('reorders by keyboard without detaching a stable ID from its masked key', async () => {
+    const rows = [
+      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
+      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
+      { id: 'third', provider: 'self_hosted_google' },
+    ];
+    mockConfig(configResponse(rows));
+    apiMock.put.mockResolvedValue({ server: { web_search: { providers: [] } } });
+    render(NetworkSearchPage);
+    await screen.findByDisplayValue('first***mask');
+
+    await fireEvent.click(screen.getAllByRole('button', { name: 'Move search provider down' })[0]);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: [
+      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
+      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
+      { id: 'third', provider: 'self_hosted_google' },
+    ] } });
+  });
+
+  it.each([
+    {
+      name: 'upward',
+      sourceId: 'third',
+      targetId: 'second',
+      expectedIds: ['first', 'third', 'second'],
+    },
+    {
+      name: 'downward to the adjacent row',
+      sourceId: 'second',
+      targetId: 'third',
+      expectedIds: ['first', 'third', 'second'],
+    },
+    {
+      name: 'to the end',
+      sourceId: 'first',
+      targetId: 'third',
+      expectedIds: ['second', 'third', 'first'],
+    },
+  ])('supports an $name drag while keeping IDs and masked keys on the same rows', async ({ sourceId, targetId, expectedIds }) => {
+    const rows = [
+      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
+      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
+      { id: 'third', provider: 'tavily', tavily_api_key: 'third***mask' },
+    ];
+    const expected = expectedIds.map((id) => rows.find((row) => row.id === id)!);
+    mockConfig(configResponse(rows));
+    apiMock.put.mockResolvedValue({ server: { web_search: { providers: expected } } });
+    render(NetworkSearchPage);
+    await screen.findByDisplayValue('first***mask');
+
+    const source = document.querySelector(`tr[data-row-id="${sourceId}"] .drag-handle`);
+    const target = document.querySelector(`tr[data-row-id="${targetId}"]`);
+    expect(source).not.toBeNull();
+    expect(target).not.toBeNull();
+    const dataTransfer = transfer();
+    await fireEvent.dragStart(source!, { dataTransfer });
+    await fireEvent.drop(target!, { dataTransfer });
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
-      web_search: {
-        provider: 'configured_responses_provider',
-        responses_model: 'gpt-5.6-terra',
-        responses_provider: 'search',
-      },
+      web_search: { providers: expected },
     });
   });
 
   it('runs the fixed query through the network search test endpoint and displays its response', async () => {
-    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
-      ? Promise.resolve({ server: { web_search: { provider: 'tavily', tavily_api_key: 'configured' } } })
-      : Promise.resolve({ configured: false }));
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
     requestMock.mockResolvedValue({ result: 'Python 3.test' });
     render(NetworkSearchPage);
 
@@ -149,9 +302,7 @@ describe('NetworkSearchPage', () => {
   });
 
   it('displays a readable network search test failure', async () => {
-    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
-      ? Promise.resolve({ server: { web_search: { provider: 'tavily', tavily_api_key: 'configured' } } })
-      : Promise.resolve({ configured: false }));
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
     requestMock.mockRejectedValue(new Error('Upstream search failed'));
     render(NetworkSearchPage);
 
