@@ -20,6 +20,13 @@ vi.mock('../src/admin/lib/api', async (importOriginal) => ({
   request: requestMock,
 }));
 
+async function chooseDropdown(control: HTMLElement, value: string): Promise<void> {
+  await fireEvent.click(control);
+  const option = within(control.parentElement!).getAllByRole('option').find((item) => item.getAttribute('data-value') === value);
+  expect(option).toBeDefined();
+  await fireEvent.click(option!);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   apiMock.post.mockResolvedValue({ ok: true });
@@ -189,8 +196,9 @@ describe('NetworkSearchPage', () => {
     expect(responsesSelect).not.toHaveTextContent('chat');
     expect(responsesSelect).not.toHaveTextContent('disabled');
     const modelSelect = await screen.findByLabelText('Search Model');
-    expect(modelSelect).toHaveValue('gpt-5.6-terra');
-    expect(Array.from((modelSelect as HTMLSelectElement).options).map((option) => option.value)).toEqual(contract.responses_models);
+    expect(modelSelect).toHaveAttribute('data-value', 'gpt-5.6-terra');
+    await fireEvent.click(modelSelect);
+    expect(within(modelSelect.parentElement!).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(contract.responses_models);
     expect(screen.getByLabelText('No configuration required')).toBeInTheDocument();
     expect(await screen.findByText('Quota unavailable')).toBeInTheDocument();
     expect(document.querySelector('tr[data-row-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
@@ -261,12 +269,12 @@ describe('NetworkSearchPage', () => {
     expect(await screen.findByText('No web search providers configured.')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' }));
     const type = screen.getByLabelText('Search provider type');
-    expect(type).toHaveValue('tavily');
+    expect(type).toHaveAttribute('data-value', 'tavily');
     expect(screen.getByLabelText('API Key')).toBeInTheDocument();
-    await fireEvent.change(type, { target: { value: 'configured_responses_provider' } });
+    await chooseDropdown(type, 'configured_responses_provider');
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
-    expect(screen.getByLabelText('Responses Provider')).toHaveValue('search');
-    await fireEvent.change(type, { target: { value: 'self_hosted_google' } });
+    expect(screen.getByLabelText('Responses Provider')).toHaveAttribute('data-value', 'search');
+    await chooseDropdown(type, 'self_hosted_google');
     expect(screen.queryByLabelText('Responses Provider')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Search Model')).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));

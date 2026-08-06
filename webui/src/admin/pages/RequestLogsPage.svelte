@@ -4,6 +4,7 @@
   import { api } from '../lib/api';
   import { createSerialPoll } from '../lib/polling';
   import { t } from '../../shared/i18n.svelte';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type Entry = {
     timestamp?: string; model?: string; source_provider?: string; target_provider?: string;
@@ -77,8 +78,8 @@
   <div class="filters">
     <input aria-label={t('col.model')} bind:value={model} placeholder={t('filter.allModels')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
     <input aria-label={t('col.provider')} bind:value={provider} placeholder={t('filter.allProviders')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
-    <select aria-label={t('col.status')} bind:value={status} onchange={()=>void reload(true)}><option value="">{t('filter.allStatus')}</option><option value="ok">{t('filter.ok')}</option><option value="error">{t('filter.error')}</option></select>
-    <select aria-label={t('col.apiKey')} bind:value={apiKeyLabel} onchange={()=>void reload(true)}><option value="">{t('filter.allKeys')}</option>{#each keyLabels as label}<option value={label}>{label}</option>{/each}</select>
+    <Dropdown ariaLabel={t('col.status')} value={status} options={[{value:'',label:t('filter.allStatus')},{value:'ok',label:t('filter.ok')},{value:'error',label:t('filter.error')}]} onChange={(value:DropdownValue)=>{status=String(value);void reload(true);}} />
+    <Dropdown ariaLabel={t('col.apiKey')} value={apiKeyLabel} options={[{value:'',label:t('filter.allKeys')},...keyLabels.map((label)=>({value:label,label}))]} onChange={(value:DropdownValue)=>{apiKeyLabel=String(value);void reload(true);}} />
     <button class="btn btn-sm" onclick={reset}>{t('btn.resetFilters')}</button><button class="btn btn-sm btn-danger" disabled={clearing} onclick={()=>void clearLogs()}>{clearing?t('status.clearingLogs'):t('btn.clearRequestLogs')}</button>
   </div>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}

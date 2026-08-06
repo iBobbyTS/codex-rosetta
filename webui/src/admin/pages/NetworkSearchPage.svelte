@@ -3,6 +3,7 @@
   import { ApiError, api, request } from '../lib/api';
   import { t } from '../../shared/i18n.svelte';
   import { createSerialPoll } from '../lib/polling';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type SearchProviderType =
     | 'tavily'
@@ -334,14 +335,10 @@
                   <button class="order-button" disabled={index === rows.length - 1} aria-label={t('aria.moveSearchProviderDown')} onclick={() => moveRow(row.id, 1)}>↓</button>
                 </div>
                 <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
-                <select id={`search-provider-type-${row.id}`} class="provider-type" value={row.provider} onchange={(event) => changeType(row.id, event.currentTarget.value as SearchProviderType)}>
-                  {#each providerTypes as type}<option value={type}>{providerLabel(type)}</option>{/each}
-                </select>
+                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
                 {#if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
-                  <select id={`responses-provider-${row.id}`} aria-label={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={!responsesProviders.length} onchange={(event) => replaceRow(row.id, (item) => ({ ...item, responses_provider: event.currentTarget.value }))}>
-                    {#if !responsesProviders.length}<option value="">{t('network.provider.noResponses')}</option>{:else}{#each responsesProviders as name}<option value={name}>{name}</option>{/each}{/if}
-                  </select>
+                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={!responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
                 {/if}
                 <button class="btn btn-sm btn-danger remove-row" onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
               </td>
@@ -351,9 +348,7 @@
                   <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
                 {:else if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
-                  <select id={`responses-model-${row.id}`} aria-label={t('label.responsesSearchModel')} value={row.responses_model ?? ''} onchange={(event) => replaceRow(row.id, (item) => ({ ...item, responses_model: event.currentTarget.value }))}>
-                    {#each responsesModels as name}<option value={name}>{name}</option>{/each}
-                  </select>
+                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} options={responsesModels.map((name)=>({value:name,label:name}))} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
                 {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
               </td>
               <td class="search-quota-cell">
@@ -386,6 +381,6 @@
 <div class="section"><div class="section-header"><h2>{t('section.advancedSearch')}</h2></div><div class="provider-card" style="max-width:560px"><div class="form-group"><div class="form-label">{t('label.sidecarService')}</div><span class="badge" class:badge-success={status?.service_online} class:badge-error={status && !status.service_online}>{status === null ? t('status.checking') : status.service_online ? t('status.online') : status.configured === false ? t('status.notConfigured') : t('status.offline')}</span></div><div class="form-group"><div class="form-label">{t('label.sidecarBrowser')}</div><span class="badge" class:badge-success={status?.browser_ready} class:badge-error={status?.service_online && !status.browser_ready}>{status === null ? t('status.unknown') : status.browser_ready ? t('status.ready') : status?.service_online ? t('status.notReady') : t('status.unknown')}</span></div>{#if status?.error}<div style="font-size:11px;color:var(--text-dim)">{status.error}</div>{/if}</div></div>
 
 <style>
-  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit{color:var(--text-dim);font-size:12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-name-cell>.provider-type{width:calc(100% - 150px)}.search-name-cell>select:not(.provider-type){width:calc(100% - 150px);margin:8px 68px 0 82px}.remove-row{float:right}.search-config-cell>input,.search-config-cell>select{width:100%}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
+  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit{color:var(--text-dim);font-size:12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-name-cell>:global(.provider-type){width:calc(100% - 150px)}.search-name-cell>:global(.suu-dropdown):not(.provider-type){width:calc(100% - 150px);margin:8px 68px 0 82px}.remove-row{float:right}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown){width:100%}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
   @media(max-width:760px){.section-header{align-items:flex-start}.search-actions{flex-wrap:wrap;justify-content:flex-end}.search-provider-table{overflow-x:auto}.search-provider-table table{min-width:760px}}
 </style>

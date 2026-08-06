@@ -3,6 +3,7 @@
   import Modal from '../components/Modal.svelte';
   import { api } from '../lib/api';
   import { t } from '../../shared/i18n.svelte';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type InputOption = { value: string; label?: string };
   type ProfileInput = {
@@ -311,18 +312,15 @@
     onkeydown={(event) => selectOnKeyboard(event, item)}
   >
     <div class="tool-name">{item.name ?? item.id}</div>
-    <select
-      class="tool-state-select"
-      aria-label={t('aria.toolState', { name: item.name ?? item.id })}
+    <Dropdown
+      className="tool-state-select"
+      ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
       disabled={selected?.readonly || effectiveDisabled(item)}
+      onTriggerClick={(event) => event.stopPropagation()}
       value={stateFor(item)}
-      onclick={(event) => event.stopPropagation()}
-      onchange={(event) => updateTool(item, event.currentTarget.value)}
-    >
-      {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-        <option value={state} disabled={!stateSupportsProfileApis(item, state)}>{t(`tools.policy.${state}`)}</option>
-      {/each}
-    </select>
+      options={(profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified']).map((state)=>({value:state,label:t(`tools.policy.${state}`),disabled:!stateSupportsProfileApis(item,state)}))}
+      onChange={(value:DropdownValue) => updateTool(item, String(value))}
+    />
   </div>
 {/snippet}
 
@@ -351,18 +349,15 @@
       <div class="tool-name">{item.name ?? item.id}</div>
       <div class="tool-badges"><span class="tool-badge kind">{t(`tools.type.${item.type}`)}</span></div>
       <div class="tool-policy">
-        <select
-          class="tool-state-select"
-          aria-label={t('aria.toolState', { name: item.name ?? item.id })}
+        <Dropdown
+          className="tool-state-select"
+          ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
           disabled={selected?.readonly}
+          onTriggerClick={(event) => event.stopPropagation()}
           value={stateFor(item)}
-          onclick={(event) => event.stopPropagation()}
-          onchange={(event) => updateTool(item, event.currentTarget.value)}
-        >
-          {#each profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified'] as state}
-            <option value={state} disabled={!stateSupportsProfileApis(item, state)}>{t(`tools.policy.${state}`)}</option>
-          {/each}
-        </select>
+          options={(profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified']).map((state)=>({value:state,label:t(`tools.policy.${state}`),disabled:!stateSupportsProfileApis(item,state)}))}
+          onChange={(value:DropdownValue) => updateTool(item, String(value))}
+        />
       </div>
     </div>
     <div
@@ -399,11 +394,7 @@
     </div>
     <div class="tool-profile-toolbar">
       <label for="toolProfileSelect">{t('tools.profile')}</label>
-      <select id="toolProfileSelect" value={selectedId} onchange={(event) => selectProfile(event.currentTarget.value)}>
-        {#each profilesData.profiles ?? [] as profile}
-          <option value={profile.id}>{profile.name}</option>
-        {/each}
-      </select>
+      <Dropdown id="toolProfileSelect" value={selectedId} options={(profilesData.profiles ?? []).map((profile)=>({value:profile.id,label:profile.name}))} onChange={(value:DropdownValue)=>selectProfile(String(value))} />
       <button class="btn btn-sm" onclick={() => { cloneName = ''; cloneOpen = true; }}>{t('tools.cloneProfile')}</button>
       <button class="btn btn-sm btn-primary" disabled={busy || !dirty} onclick={() => void saveAs(selected.id)}>{t('tools.saveProfile')}</button>
       <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>{t('tools.resetProfile')}</button>
@@ -496,15 +487,14 @@
                   <div class="tool-profile-input-group">
                     <label class="tool-profile-input-label" for={`tool-${detail.id}-${input.id}`}>{input.label_i18n ? t(input.label_i18n) : input.id}</label>
                     {#if input.type === 'select'}
-                      <select
+                      <Dropdown
                         id={`tool-${detail.id}-${input.id}`}
-                        class="tool-profile-input"
+                        className="tool-profile-input"
                         disabled={input.readonly}
                         value={inputValue(detail, input)}
-                        onchange={(event) => setInput(detail, input, event.currentTarget.value)}
-                      >
-                        {#each input.options ?? [] as option}<option value={option.value}>{option.label ?? option.value}</option>{/each}
-                      </select>
+                        options={(input.options ?? []).map((option)=>({value:option.value,label:option.label ?? option.value}))}
+                        onChange={(value:DropdownValue) => setInput(detail, input, String(value))}
+                      />
                     {:else if input.type === 'textarea'}
                       <textarea
                         id={`tool-${detail.id}-${input.id}`}
