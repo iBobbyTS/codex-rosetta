@@ -34,7 +34,10 @@ from .search_provider_chain import (
     SearchProviderChainUnavailableReason,
     SearchProviderChainCoordinator,
 )
-from .search_provider_executor import SearchProviderExecutor
+from .search_provider_executor import (
+    SearchProviderExecutor,
+    SearchProviderTerminalError,
+)
 from .config import GatewayConfig
 from .downstream_errors import (
     DownstreamErrorOrigin,
@@ -49,8 +52,11 @@ from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_profiles import route_tool_state
 from .transport import ProviderInfo, UpstreamConnectionError, UpstreamTransport
 from .transport.credential_redaction import CredentialRedactingTransport
-from .web_run_sidecar import WebRunBrowserClient, WebRunSidecarHTTPClient
-from .web_search import TavilySearchClient
+from .web_run_sidecar import (
+    WebRunBrowserClient,
+    WebRunSearchClient,
+    WebRunSidecarHTTPClient,
+)
 
 _BROWSER_USE_HINT = 'Consider "Browser Use" skill'
 
@@ -173,7 +179,7 @@ async def handle_codex_auxiliary(  # noqa: C901
     config: GatewayConfig,
     upstream_path: str,
     *,
-    search_client: TavilySearchClient | None = None,
+    search_client: WebRunSearchClient | None = None,
     page_client: StaticPageClient | None = None,
     browser_client: WebRunBrowserClient | None = None,
 ) -> Response:
@@ -225,7 +231,6 @@ async def handle_codex_auxiliary(  # noqa: C901
     use_chain_search = (
         upstream_path == "alpha/search"
         and web_run_mapping
-        and search_client is None
         and not (
             isinstance(body.get("commands"), dict) and body["commands"].get("weather")
         )
@@ -235,7 +240,9 @@ async def handle_codex_auxiliary(  # noqa: C901
         and isinstance(body.get("commands"), dict)
         and bool(body["commands"].get("search_query"))
     )
-    resolved_browser_client = browser_client or _configured_browser_client(config)
+    configured_sidecar_client = _configured_sidecar_client(config)
+    resolved_browser_client = browser_client or configured_sidecar_client
+    resolved_search_client = search_client or configured_sidecar_client
     use_profile_images = (
         upstream_path in IMAGE_ENDPOINTS and image_tool_state == "modified"
     )
@@ -325,7 +332,7 @@ async def handle_codex_auxiliary(  # noqa: C901
                 trace,
                 body,
                 web_run_config,
-                search_client,
+                resolved_search_client,
                 page_client,
                 resolved_browser_client,
                 reference_store,
@@ -334,13 +341,12 @@ async def handle_codex_auxiliary(  # noqa: C901
                 if (upstream_path == "alpha/search" and web_run_mapping)
                 else None,
                 search_coordinator=search_coordinator if use_chain_search else None,
-                search_executor=(
-                    getattr(request.app, "search_provider_executor", None)
-                    if isinstance(
-                        getattr(request.app, "search_provider_executor", None),
-                        SearchProviderExecutor,
-                    )
-                    else None
+                search_executor=_search_executor(
+                    request,
+                    injected_search_client=search_client,
+                    configured_sidecar_client=configured_sidecar_client,
+                    transport=transport,
+                    extra_headers=extra_headers,
                 ),
             )
             return response
@@ -420,7 +426,7 @@ def _search_reference_context(
     )
 
 
-def _configured_browser_client(config: GatewayConfig) -> WebRunBrowserClient | None:
+def _configured_sidecar_client(config: GatewayConfig) -> WebRunSidecarHTTPClient | None:
     if not config.web_run_sidecar_url or not config.web_run_sidecar_token:
         return None
     return WebRunSidecarHTTPClient(
@@ -431,11 +437,33 @@ def _configured_browser_client(config: GatewayConfig) -> WebRunBrowserClient | N
     )
 
 
+def _search_executor(
+    request: Any,
+    *,
+    injected_search_client: WebRunSearchClient | None,
+    configured_sidecar_client: WebRunSidecarHTTPClient | None,
+    transport: UpstreamTransport,
+    extra_headers: dict[str, str],
+) -> SearchProviderExecutor:
+    configured = getattr(request.app, "search_provider_executor", None)
+    if isinstance(configured, SearchProviderExecutor):
+        return configured
+    return SearchProviderExecutor(
+        tavily_client=injected_search_client,
+        self_hosted_client=injected_search_client,
+        candidate_self_hosted_client=(
+            configured_sidecar_client if injected_search_client is None else None
+        ),
+        responses_transport=transport,
+        responses_extra_headers=extra_headers,
+    )
+
+
 async def _handle_local_search(
     trace: StreamTraceLogger | None,
     body: dict[str, Any],
     web_search_config: dict[str, Any],
-    search_client: TavilySearchClient | None,
+    search_client: WebRunSearchClient | None,
     page_client: StaticPageClient | None,
     browser_client: WebRunBrowserClient | None,
     reference_store: CodexSearchReferenceStore | None,
@@ -474,6 +502,9 @@ async def _handle_local_search(
             return error_response_for_source("openai_responses", 501, error), 501, error
         error = "搜索能力全部无效"
         return error_response_for_source("openai_responses", 502, error), 502, error
+    except SearchProviderTerminalError:
+        error = "Search request rejected"
+        return error_response_for_source("openai_responses", 422, error), 422, error
     except CodexSearchInvalidRequest as exc:
         error = str(exc)
         if trace is not None:

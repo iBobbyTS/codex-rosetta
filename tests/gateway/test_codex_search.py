@@ -709,6 +709,7 @@ def test_self_hosted_search_uses_web_run_sidecar(provider: str, executor: str) -
                 {"search_query": [{"q": "official Python", "domains": ["python.org"]}]}
             ),
             {"provider": provider, "tavily_api_key": ""},
+            client=client,
             browser_client=client,
         )
     )

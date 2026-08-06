@@ -13,9 +13,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Protocol
 
-from codex_rosetta._vendor.httpclient import AsyncClient
-from codex_rosetta.observability.redaction import SecretRedactor
-
+from .downstream_errors import CodexRosettaBlockedError
 from .search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
     SearchProviderCandidate,
@@ -30,9 +28,12 @@ from .search_provider_chain import (
     SearchProviderRequestFailoverReason,
     SearchProviderRequestBudget,
 )
-from .downstream_errors import CodexRosettaBlockedError
-from .transport._base import UpstreamConnectionError, UpstreamSafetyError
-from .transport.http.transport import request_bounded_response
+from .transport._base import (
+    UpstreamConnectionError,
+    UpstreamSafetyError,
+    UpstreamTransport,
+)
+from .transport.credential_redaction import CredentialRedactingTransport
 from .web_search import (
     TavilyHTTPClient,
     TavilyRequestError,
@@ -41,6 +42,8 @@ from .web_search import (
     format_web_search_result_for_model,
 )
 from .web_run_sidecar import (
+    WebRunCandidateSearchClient,
+    WebRunSearchClient,
     WebRunSidecarInvalidRequest,
     WebRunSidecarSearchError,
     WebRunSidecarSearchErrorCategory,
@@ -120,11 +123,23 @@ class SearchProviderExecutor:
     def __init__(
         self,
         *,
-        self_hosted_client: Any | None = None,
+        tavily_client: WebRunSearchClient | None = None,
+        self_hosted_client: WebRunSearchClient | None = None,
+        candidate_self_hosted_client: WebRunCandidateSearchClient | None = None,
         responses_client: SearchResponseClient | None = None,
+        responses_transport: UpstreamTransport | None = None,
+        responses_extra_headers: Mapping[str, str] | None = None,
     ) -> None:
+        self._tavily_client = tavily_client
         self._self_hosted_client = self_hosted_client
+        self._candidate_self_hosted_client = candidate_self_hosted_client
         self._responses_client = responses_client
+        self._responses_transport = (
+            CredentialRedactingTransport.wrap(responses_transport)
+            if responses_transport is not None
+            else None
+        )
+        self._responses_extra_headers = dict(responses_extra_headers or {})
 
     async def execute(
         self,
@@ -140,9 +155,13 @@ class SearchProviderExecutor:
             else SearchRequest.from_body(request)
         )
         if isinstance(candidate, TavilySearchProviderCandidate):
-            client: Any = TavilyHTTPClient(candidate.api_key)
+            client: Any = self._tavily_client or TavilyHTTPClient(candidate.api_key)
+            candidate_client = None
+            self_hosted_provider = None
         elif isinstance(candidate, SelfHostedSearchProviderCandidate):
             client = self._self_hosted_client
+            candidate_client = self._candidate_self_hosted_client
+            self_hosted_provider = candidate.provider
         else:
             body = copy.deepcopy(snapshot.body)
             body["model"] = candidate.responses_model
@@ -169,7 +188,7 @@ class SearchProviderExecutor:
                     expected_query_count=len(snapshot.queries),
                 )
             )
-        if client is None:
+        if client is None and candidate_client is None:
             raise SearchProviderRequestFailover(
                 SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
             )
@@ -178,6 +197,14 @@ class SearchProviderExecutor:
             try:
 
                 async def operation() -> Any:
+                    if candidate_client is not None:
+                        assert self_hosted_provider is not None
+                        return await candidate_client.search_for_provider(
+                            self_hosted_provider,
+                            query,
+                            settings=settings,
+                        )
+                    assert client is not None
                     return await client.search(query, settings=settings)
 
                 raw = await (
@@ -204,33 +231,32 @@ class SearchProviderExecutor:
         request_budget: SearchProviderRequestBudget | None = None,
         expected_query_count: int = 0,
     ) -> Any:
-        headers = candidate.provider_info.auth_headers()
-        redactor = SecretRedactor(candidate.provider_info.credential_values)
-        async with AsyncClient(timeout=120.0) as client:
-            try:
+        transport = self._responses_transport
+        if transport is None:
+            raise SearchProviderRequestFailover(
+                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            )
+        try:
 
-                async def operation() -> Any:
-                    return await request_bounded_response(
-                        client,
-                        "POST",
-                        candidate.provider_info.upstream_url(candidate.responses_model),
-                        headers=headers,
-                        json=body,
-                    )
-
-                response = await (
-                    request_budget.run_external_call(operation)
-                    if request_budget
-                    else operation()
+            async def operation() -> Any:
+                return await transport.send_passthrough(
+                    candidate.provider_info,
+                    f"{candidate.provider_info.base_url}/alpha/search",
+                    body,
+                    extra_headers=self._responses_extra_headers,
                 )
-            except (UpstreamSafetyError, SearchProviderBudgetExceeded):  # fmt: skip
-                raise
-            except UpstreamConnectionError:
-                raise SearchProviderAttemptError(
-                    SearchProviderAttemptCategory.CONNECTION_ERROR
-                ) from None
-        if redactor.contains_json_semantic(response.content):
-            raise RuntimeError("Search provider response blocked")
+
+            response = await (
+                request_budget.run_external_call(operation)
+                if request_budget
+                else operation()
+            )
+        except (UpstreamSafetyError, SearchProviderBudgetExceeded):  # fmt: skip
+            raise
+        except UpstreamConnectionError:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.CONNECTION_ERROR
+            ) from None
         if response.status_code in {400, 422}:
             raise SearchProviderTerminalError("Search request rejected")
         if response.status_code in {432, 433}:
@@ -244,7 +270,7 @@ class SearchProviderExecutor:
         if not 200 <= response.status_code < 300:
             raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
         try:
-            payload = json.loads(response.content.decode("utf-8"))
+            payload = response.body
             if expected_query_count > 1:
                 if not isinstance(payload, dict):
                     raise SearchProviderAttemptError(

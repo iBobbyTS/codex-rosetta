@@ -18,14 +18,16 @@ from codex_rosetta.gateway.auth import (
     api_key_principal_var,
 )
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import GatewayConfig, WebSearchConfig
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderAttemptCategory,
     SearchProviderAttemptError,
+    SearchProviderChainCoordinator,
 )
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.search_usage import TavilyUsageState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
+from codex_rosetta.gateway.transport._base import UpstreamResponse
 
 
 def _config() -> GatewayConfig:
@@ -179,7 +181,9 @@ def test_search_test_restores_principal_after_handler_failure(monkeypatch: Any) 
 
 def test_search_test_rejects_config_without_eligible_model() -> None:
     config = _config()
-    config.web_search = {"provider": "tavily", "tavily_api_key": "tvly-test"}
+    config.web_search = WebSearchConfig(
+        [{"id": "tavily", "provider": "tavily", "tavily_api_key": "tvly-test"}]
+    )
     config.models.clear()
 
     response = asyncio.run(
@@ -253,6 +257,40 @@ def test_search_test_replaces_configured_responses_error_with_safe_dto() -> None
     transport.send_passthrough.assert_not_awaited()
 
 
+def test_search_test_maps_real_terminal_rejection_to_safe_rejected_dto() -> None:
+    provider_detail = "private provider URL http://10.0.0.5 request abc-123"
+    transport = SimpleNamespace(
+        send_passthrough=AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=400,
+                body=None,
+                raw_content=json.dumps({"error": provider_detail}).encode(),
+            )
+        )
+    )
+    coordinator = SearchProviderChainCoordinator()
+    config = _config()
+    app = SimpleNamespace(
+        gateway_config=config,
+        transport=transport,
+        metrics=None,
+        request_log=None,
+        codex_search_reference_store=CodexSearchReferenceStore(),
+        search_provider_coordinator=coordinator,
+    )
+
+    response = asyncio.run(network_search.test_network_search(SimpleNamespace(app=app)))
+
+    assert response.status_code == 422
+    assert json.loads(response.body) == {
+        "error": "Search request was rejected",
+        "code": "network_search_test_rejected",
+    }
+    assert provider_detail.encode() not in response.body
+    transport.send_passthrough.assert_awaited_once()
+    assert coordinator.is_cooling(config.web_search_candidates[0]) is False
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected_code"),
     [
@@ -291,12 +329,12 @@ def test_search_test_normalizes_every_handler_failure_category(
 
 def test_usage_returns_only_safe_tavily_dto_rows() -> None:
     config = _config()
-    config.web_search = {
-        "providers": [
+    config.web_search = WebSearchConfig(
+        [
             {"id": "tavily-row", "provider": "tavily", "tavily_api_key": "secret"},
             {"id": "other-row", "provider": "self_hosted_google"},
         ]
-    }
+    )
     state = TavilyUsageState()
 
     async def run() -> Any:
@@ -325,9 +363,9 @@ def test_usage_returns_only_safe_tavily_dto_rows() -> None:
 
 def test_usage_with_no_tavily_rows_performs_no_io() -> None:
     config = _config()
-    config.web_search = {
-        "providers": [{"id": "other", "provider": "self_hosted_google"}]
-    }
+    config.web_search = WebSearchConfig(
+        [{"id": "other", "provider": "self_hosted_google"}]
+    )
 
     class NoIOState(TavilyUsageState):
         async def get(self, *_args: Any, **_kwargs: Any) -> Any:

@@ -10,20 +10,18 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import codex_rosetta.gateway.web_run_sidecar as sidecar_module
 from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
-from codex_rosetta.gateway.search_provider_chain import (
-    SearchProviderAttemptCategory,
-    SearchProviderAttemptError,
-)
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport import UpstreamConnectionError
 from codex_rosetta.gateway.transport._base import UpstreamResponse
+from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.gateway.web_search import WebSearchSettings
 
 
@@ -55,6 +53,7 @@ def _make_config(
     upstream_base_url: str = "https://upstream.example/v1",
     additional_image_base_url: str | None = None,
     additional_image_token: str = "other-image-token",
+    web_run_sidecar: bool = False,
 ) -> GatewayConfig:
     provider_by_api_type = {
         "responses": "openai",
@@ -139,6 +138,8 @@ def _make_config(
             "api_type": "responses",
             "api_key": "search-provider-key",
             "base_url": "https://search-provider.example/v1",
+            "proxy": "http://search-proxy.example:8080",
+            "allow_redirects": True,
         }
     model_groups = {
         "codex": {
@@ -209,6 +210,16 @@ def _make_config(
                             else {}
                         ),
                     }
+                ),
+                **(
+                    {
+                        "web_run": {
+                            "base_url": "http://web-run:8080",
+                            "token": "sidecar-token",
+                        }
+                    }
+                    if web_run_sidecar
+                    else {}
                 ),
             },
         }
@@ -487,6 +498,7 @@ def test_self_hosted_google_preserves_codex_search_response_contract() -> None:
             request,
             config,
             "alpha/search",
+            search_client=client,
             browser_client=client,
         )
     )
@@ -560,7 +572,169 @@ def test_search_passthrough_does_not_force_v1_into_upstream_base_url() -> None:
     )
 
 
-def test_modified_responses_first_row_fails_over_through_provider_chain() -> None:
+def test_modified_responses_candidate_uses_app_auxiliary_transport() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-only",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            }
+        ],
+    )
+    body = _search_body({"search_query": [{"q": "Python documentation"}]})
+    request = _make_request(body)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"output": "Python 3.test", "results": []},
+        raw_content=b'{"output":"Python 3.test","results":[]}',
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200
+    provider_info, url, forwarded_body = (
+        request.app.transport.send_passthrough.await_args.args
+    )
+    assert provider_info.base_url == "https://search-provider.example/v1"
+    assert provider_info.credential_values == ("search-provider-key",)
+    assert provider_info.proxy_url == "http://search-proxy.example:8080"
+    assert provider_info.allow_redirects is True
+    assert url == "https://search-provider.example/v1/alpha/search"
+    assert url != provider_info.upstream_url("gpt-5.6-luna")
+    assert forwarded_body == {**body, "model": "gpt-5.6-luna"}
+    assert request.app.transport.send_passthrough.await_args.kwargs[
+        "extra_headers"
+    ] == {
+        "x-request-id": "req-1",
+        "User-Agent": "codex-cli/test",
+    }
+
+
+def test_modified_responses_candidate_blocks_search_credential_collision() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-only",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            }
+        ],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    payload = {"output": "leaked search-provider-key", "results": []}
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body=payload,
+        raw_content=json.dumps(payload).encode(),
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 502
+    assert b"search-provider-key" not in response.body
+    assert json.loads(response.body)["error"]["message"].startswith(
+        "Codex Rosetta blocked: Upstream response contains a configured credential"
+    )
+
+
+def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+        web_run_sidecar=True,
+    )
+    body = _search_body({"search_query": [{"q": "Python documentation"}]})
+    request = _make_request(body)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=500,
+        body=None,
+        raw_content=b'{"error":"private"}',
+    )
+    sidecar_payloads: list[dict[str, Any]] = []
+
+    async def sidecar_search(_client: Any, _method: str, _url: str, **kwargs: Any):
+        sidecar_payloads.append(kwargs["json"])
+        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_search)
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200, response.body
+    assert request.app.transport.send_passthrough.await_args.args[1] == (
+        "https://search-provider.example/v1/alpha/search"
+    )
+    assert sidecar_payloads == [
+        {
+            "provider": "self_hosted_google",
+            "query": "Python documentation",
+            "max_results": 5,
+            "include_domains": [],
+        }
+    ]
+
+
+def test_each_self_hosted_candidate_selects_its_own_sidecar_engine(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {"id": "google-first", "provider": "self_hosted_google"},
+            {"id": "bing-second", "provider": "self_hosted_bing"},
+        ],
+        web_run_sidecar=True,
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    providers: list[str] = []
+
+    async def sidecar_search(_client: Any, _method: str, _url: str, **kwargs: Any):
+        providers.append(kwargs["json"]["provider"])
+        status = 500 if len(providers) == 1 else 200
+        return BoundedHttpResponse(
+            status, {}, b'{"results":[]}' if status == 200 else b"{}"
+        )
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_search)
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200
+    assert providers == ["self_hosted_google", "self_hosted_bing"]
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_injected_search_client_keeps_the_complete_provider_chain() -> None:
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -576,28 +750,104 @@ def test_modified_responses_first_row_fails_over_through_provider_chain() -> Non
             {"id": "self-hosted-second", "provider": "self_hosted_google"},
         ],
     )
-    body = _search_body({"search_query": [{"q": "Python documentation"}]})
-    request = _make_request(body)
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=500,
+        body=None,
+        raw_content=b"{}",
+    )
+    injected = _FakeTavilyClient()
 
-    responses_calls: list[tuple[str, dict[str, Any]]] = []
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            search_client=injected,
+        )
+    )
 
-    async def fail_responses(candidate: Any, body: dict[str, Any]) -> Any:
-        responses_calls.append((candidate.row_id, body))
-        raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+    assert response.status_code == 200
+    request.app.transport.send_passthrough.assert_awaited_once()
+    assert [query for query, _settings in injected.calls] == ["Python documentation"]
 
-    self_hosted = _FakeTavilyClient()
-    request.app.search_provider_executor = SearchProviderExecutor(
-        self_hosted_client=self_hosted,
-        responses_client=fail_responses,
+
+def test_browser_only_injection_is_not_used_as_a_search_dependency() -> None:
+    class BrowserOnly:
+        async def execute(
+            self,
+            *,
+            session_id: str,
+            operation: str,
+            arguments: dict[str, Any],
+        ) -> str:
+            del session_id, operation, arguments
+            return "unused"
+
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        tool_profile="test-web-run-mapping",
+        search_providers=[{"id": "self-hosted-only", "provider": "self_hosted_google"}],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            browser_client=BrowserOnly(),
+        )
+    )
+
+    assert response.status_code == 502
+    assert b"AttributeError" not in response.body
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_terminal_rejection_is_safe_and_does_not_fall_back_or_cool_down() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=422,
+        body=None,
+        raw_content=b'{"error":"provider detail"}',
     )
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
-    assert response.status_code == 200, response.body
-    assert responses_calls == [("responses-first", {**body, "model": "gpt-5.6-luna"})]
-    assert len(self_hosted.calls) == 1
-    assert self_hosted.calls[0][0] == "Python documentation"
-    request.app.transport.send_passthrough.assert_not_awaited()
+    assert response.status_code == 422
+    assert json.loads(response.body)["error"]["message"] == (
+        "Codex Rosetta: Search request rejected"
+    )
+    request.app.transport.send_passthrough.assert_awaited_once()
+    assert (
+        request.app.search_provider_coordinator.is_cooling(
+            config.web_search_candidates[0]
+        )
+        is False
+    )
 
 
 def test_passthrough_ignores_configured_search_chain_and_model() -> None:

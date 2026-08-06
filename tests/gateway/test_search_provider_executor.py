@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from typing import cast
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -16,6 +18,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetReason,
     SearchProviderRequestFailover,
     SearchProviderRequestFailoverReason,
+    SearchProviderRequestBudget,
 )
 from codex_rosetta.gateway.search_provider_executor import (
     SearchProviderExecutor,
@@ -23,6 +26,7 @@ from codex_rosetta.gateway.search_provider_executor import (
     SearchRequest,
     _map_local_error,
 )
+from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamTransport
 from codex_rosetta.gateway.web_search import (
     TavilyRequestError,
     TavilyRequestErrorCategory,
@@ -181,26 +185,30 @@ def test_responses_terminal_status_is_typed():
 
 
 @pytest.mark.parametrize("status", [401, 429, 302])
-def test_responses_non_success_statuses_are_http_attempt_failures(monkeypatch, status):
-    async def bounded(*args, **kwargs):
-        del args, kwargs
-        return SimpleNamespace(status_code=status, content=b'{"output":"ignored"}')
-
-    monkeypatch.setattr(
-        "codex_rosetta.gateway.search_provider_executor.request_bounded_response",
-        bounded,
+def test_responses_non_success_statuses_are_http_attempt_failures(status):
+    transport = SimpleNamespace(
+        send_passthrough=AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=status,
+                body=None,
+                raw_content=b'{"output":"ignored"}',
+            )
+        )
     )
     provider_info = SimpleNamespace(
+        base_url="https://example.invalid/v1",
         credential_values=("secret",),
-        auth_headers=lambda: {},
-        upstream_url=lambda model: "https://example.invalid/responses",
     )
     candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
     object.__setattr__(candidate, "responses_model", "m")
     object.__setattr__(candidate, "responses_provider", "p")
     object.__setattr__(candidate, "provider_info", provider_info)
     with pytest.raises(SearchProviderAttemptError) as caught:
-        run(SearchProviderExecutor().execute(candidate, SearchRequest.from_body({})))
+        run(
+            SearchProviderExecutor(
+                responses_transport=cast(UpstreamTransport, transport)
+            ).execute(candidate, SearchRequest.from_body({}))
+        )
     assert caught.value.category is SearchProviderAttemptCategory.HTTP_ERROR
 
 
@@ -220,33 +228,33 @@ def test_local_error_mapping_is_whitelisted_and_unknown_is_propagated():
     assert caught_unknown.value is unknown
 
 
-@pytest.mark.parametrize(
-    "failure",
-    [
-        ValueError("transport setup"),
-        SearchProviderBudgetExceeded(SearchProviderBudgetReason.DEADLINE_EXCEEDED),
-    ],
-)
-def test_responses_transport_unknown_and_budget_failures_propagate(
-    monkeypatch, failure
-):
-    async def bounded(*args, **kwargs):
-        del args, kwargs
-        raise failure
-
-    monkeypatch.setattr(
-        "codex_rosetta.gateway.search_provider_executor.request_bounded_response",
-        bounded,
-    )
+def test_responses_request_budget_failure_propagates():
     provider_info = SimpleNamespace(
+        base_url="https://example.invalid/v1",
         credential_values=("secret",),
-        auth_headers=lambda: {},
-        upstream_url=lambda model: "https://example.invalid/responses",
     )
     candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
     object.__setattr__(candidate, "responses_model", "m")
     object.__setattr__(candidate, "responses_provider", "p")
     object.__setattr__(candidate, "provider_info", provider_info)
-    with pytest.raises(type(failure)) as caught:
-        run(SearchProviderExecutor().execute(candidate, SearchRequest.from_body({})))
-    assert caught.value is failure
+    transport = SimpleNamespace(send_passthrough=AsyncMock())
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+
+    async def consume_budget() -> None:
+        return None
+
+    run(budget.run_external_call(consume_budget))
+    with pytest.raises(SearchProviderBudgetExceeded) as caught:
+        run(
+            SearchProviderExecutor(
+                responses_transport=cast(UpstreamTransport, transport)
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}),
+                request_budget=budget,
+            )
+        )
+    assert (
+        caught.value.reason is SearchProviderBudgetReason.EXTERNAL_CALL_LIMIT_EXCEEDED
+    )
+    transport.send_passthrough.assert_not_awaited()

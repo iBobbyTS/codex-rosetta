@@ -258,8 +258,6 @@ async def execute_local_codex_search(
     api_key = str(config.get("tavily_api_key") or "").strip()
     search_client = client
     chain_search = search_candidates is not None and search_coordinator is not None
-    if chain_search and search_client is None and browser_client is not None:
-        search_client = cast(WebSearchClient, browser_client)
     if queries and search_client is None and not chain_search:
         if provider == "tavily":
             if not api_key:
@@ -268,12 +266,11 @@ async def execute_local_codex_search(
                 )
             search_client = TavilyHTTPClient(api_key)
         elif provider in SELF_HOSTED_WEB_SEARCH_PROVIDERS:
-            if browser_client is None:
+            if search_client is None:
                 label = _search_provider_label(provider)
                 raise CodexSearchNotImplemented(
                     f"{label} search requires a healthy web-run sidecar"
                 )
-            search_client = cast(WebSearchClient, browser_client)
         else:
             raise CodexSearchNotImplemented(
                 f"Unsupported local web search provider: {provider}"

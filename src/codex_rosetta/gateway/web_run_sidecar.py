@@ -10,6 +10,7 @@ from codex_rosetta.observability.redaction import SecretRedactor
 
 from .config import DEFAULT_WEB_RUN_SIDECAR_TIMEOUT_SECONDS
 from .downstream_errors import CodexRosettaBlockedError
+from .search_provider_candidates import SelfHostedProviderType
 from .transport._base import UpstreamSafetyError
 from .transport.http.transport import request_bounded_response
 from .web_search import WebSearchSettings
@@ -82,6 +83,19 @@ class WebRunSearchClient(Protocol):
         settings: WebSearchSettings,
     ) -> dict[str, Any]:
         """Return a normalized search result object."""
+
+
+class WebRunCandidateSearchClient(Protocol):
+    """Self-hosted search executor that selects an engine per candidate."""
+
+    async def search_for_provider(
+        self,
+        provider: SelfHostedProviderType,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        """Return search results from the explicitly selected provider."""
 
 
 class WebRunSidecarHTTPClient:
@@ -179,8 +193,27 @@ class WebRunSidecarHTTPClient:
         settings: WebSearchSettings,
     ) -> dict[str, Any]:
         """Run a bounded self-hosted search inside the authenticated sidecar."""
+        return await self._search(self._search_provider, query, settings=settings)
+
+    async def search_for_provider(
+        self,
+        provider: SelfHostedProviderType,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
+        """Run search using the engine selected by one canonical candidate."""
+        return await self._search(provider, query, settings=settings)
+
+    async def _search(
+        self,
+        provider: str,
+        query: str,
+        *,
+        settings: WebSearchSettings,
+    ) -> dict[str, Any]:
         payload = {
-            "provider": self._search_provider,
+            "provider": provider,
             "query": query,
             "max_results": settings.max_results,
             "include_domains": list(settings.include_domains),
@@ -264,6 +297,7 @@ def _sidecar_error_message(body: dict[str, Any], status_code: int) -> str:
 
 __all__ = [
     "WebRunBrowserClient",
+    "WebRunCandidateSearchClient",
     "WebRunSearchClient",
     "WebRunSidecarError",
     "WebRunSidecarHTTPClient",

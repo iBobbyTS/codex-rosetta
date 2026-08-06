@@ -68,9 +68,10 @@ OpenAI `images/generations` 和 `images/edits` 线协议；Rosetta 不转换供�
 时，`/v1/alpha/search` 会在本地执行可靠子集：`search_query` 使用 Admin
 **联网搜索**页面中的有序 Provider 列表（`server.web_search.providers`）。列表最多
 包含 32 行，并严格从上到下尝试。单行列表只代表一个 Provider，不会自动切换；多行
-列表只有在已定义的连接、HTTP、无效响应、上游、额度、请求拒绝或本地不可用结果下
-才尝试下一候选，并且每个候选在每个 SearchRequest 中最多尝试一次。Tavily 使用所配置的
-API Key；**Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
+列表只有在已定义的连接、HTTP、无效响应、上游、额度或本地不可用结果下
+才尝试下一候选，并且每个候选在每个 SearchRequest 中最多尝试一次。400/422 请求拒绝
+属于终止结果，不会切换候选或启动冷却。Tavily 使用所配置的 API Key；
+**Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
 **Self-hosted (Bing Browser)** 则在现有 `web-run` 容器中运行，因此要求
 sidecar 健康。Bing RSS 读取 XML 结果表示，Bing Browser 加载并解析交互式
 HTML 结果页。每个**从已配置的 Provider 中选择**行都要求选择一个已启用且 API 类型为

@@ -84,9 +84,10 @@ locally: `search_query` uses the ordered Provider list configured under Admin
 **Web Search** (`server.web_search.providers`). The list accepts up to 32 rows
 and is tried from top to bottom. A one-row list is one Provider, not automatic
 failover. With multiple rows, Rosetta tries the next candidate only after a
-defined connection, HTTP, invalid-response, upstream, quota, request-rejection,
-or local-unavailable outcome; every candidate is attempted at most once per
-SearchRequest. Tavily uses the configured API Key;
+defined connection, HTTP, invalid-response, upstream, quota, or
+local-unavailable outcome; every candidate is attempted at most once per
+SearchRequest. A 400/422 request rejection is terminal and does not fail over
+or start a cooldown. Tavily uses the configured API Key;
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, and
 **Self-hosted (Bing Browser)** run in the existing `web-run` container and
 therefore require that sidecar to be healthy. Bing RSS reads the XML result

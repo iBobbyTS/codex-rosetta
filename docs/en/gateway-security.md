@@ -264,11 +264,10 @@ real `POST /v1/alpha/search` request and displays normalized result cards; it do
 Tavily, the sidecar, or a Provider-specific search client directly. The
 self-contained Admin boundary never displays a Provider's raw failure body:
 authorization, timeout, rate-limit, unavailable, and rejected outcomes are
-mapped to controlled error categories. The
-self-hosted providers send no search API credential, but either engine may
-rate-limit, challenge, or change its result page; such
-failures are returned as bounded `502` search errors instead of silently falling
-back to another provider. The read-only advanced section reports sidecar service
+mapped to controlled error categories. Self-hosted providers send no search API
+credential and never substitute another engine within one row. A typed
+candidate-health failure may still advance to the next explicitly configured
+row in the ordered Provider list. The read-only advanced section reports sidecar service
 availability and browser readiness independently. The status endpoint uses a
 five-second bounded request to the sidecar's public `/health` route and never
 returns the sidecar URL, bearer token, or upstream error text. The page checks
@@ -300,8 +299,9 @@ including occurrences inside documented `answer` and `results` fields.
 
 Self-hosted Bing RSS reads Bing's XML result representation. Self-hosted Bing
 Browser instead loads the interactive HTML result page in the sidecar's
-Patchright browser. They are separately selectable and never silently fall back
-to each other; both retain the same result and domain bounds. Operators remain
+Patchright browser. They are separately selectable and never replace each other
+inside a row; an explicit later candidate remains eligible under the documented
+chain failover rules. Both retain the same result and domain bounds. Operators remain
 responsible for using each search engine in accordance with its applicable
 terms.
 

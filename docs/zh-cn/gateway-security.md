@@ -213,8 +213,9 @@ Search body 原样发送到它的 `alpha/search` 端点；已禁用或非 Respon
 `latest python release version`，并通过与真实 `POST /v1/alpha/search` 请求相同的
 Gateway auxiliary handler 执行后只展示规范化结果卡片；它不会直接调用 Tavily、sidecar 或
 Provider-specific 搜索 client。Admin 边界不会显示 Provider 原始失败正文；认证、超时、
-限流、不可用和拒绝结果会映射为受控错误类别。self-hosted Provider 不会发送搜索 API 凭据，但搜索引擎可能限流、要求验证
-或改变结果页；这类失败会作为有界的 `502` 搜索错误返回，不会静默切换 Provider。高级 Section
+限流、不可用和拒绝结果会映射为受控错误类别。self-hosted Provider 不会发送搜索 API
+凭据，也不会在单行内部隐式替换搜索引擎；候选健康失败仍可按有序 Provider 列表切换到
+下一条显式配置的候选。高级 Section
 只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以五秒超时、
 有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token
 或上游错误正文。页面进入后立即检查，仅在页面停留期间每五秒刷新，离开后停止。
@@ -237,7 +238,8 @@ Tavily credential 只通过 Bearer Authorization header 发送。在 Tavily 成�
 
 Self-hosted Bing RSS 读取 Bing 的 XML 结果表示；Self-hosted Bing Browser
 则在 sidecar 的 Patchright 浏览器中加载交互式 HTML 结果页。两者可独立选择，
-不会静默相互回退，并保持相同的结果数量与 domain 边界。运维方仍需确保使用方式
+不会在单行内部相互替换；按文档规则配置的后续显式候选仍可参与失败切换。两者保持相同的
+结果数量与 domain 边界。运维方仍需确保使用方式
 符合各搜索引擎的适用条款。
 
 自托管搜索使用短生命周期、相互隔离的 browser context，并发上限为两个。搜索结果
