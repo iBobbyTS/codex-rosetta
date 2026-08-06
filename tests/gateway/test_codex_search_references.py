@@ -10,6 +10,7 @@ from codex_rosetta.gateway.codex_search_references import (
     CodexSearchReferenceStore,
     SearchQueryDraft,
     SearchResultDraft,
+    SearchProviderAffinity,
 )
 
 
@@ -22,6 +23,16 @@ def _query(url: str = "https://docs.python.org/3/") -> tuple[SearchQueryDraft, .
             1,
         ),
     )
+
+
+def test_provider_affinity_rejects_identity_change_without_publishing():
+    store = CodexSearchReferenceStore()
+    scope = CodexSearchReferenceScope("client", "session")
+    first = SearchProviderAffinity("row-a", "credential-a")
+    second = SearchProviderAffinity("row-a", "credential-b")
+    assert store.remember_search_with_provider_affinity(scope, first, "one", _query())
+    assert store.remember_search_with_provider_affinity(scope, second, "two", _query()) is None
+    assert store.get_search(scope, "two") is None
 
 
 def test_reference_session_expires_as_one_unit() -> None:

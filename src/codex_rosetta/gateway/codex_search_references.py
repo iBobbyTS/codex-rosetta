@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import copy
 import threading
 import time
 from collections import OrderedDict
@@ -49,6 +50,14 @@ class SearchQueryDraft:
     answer: str | None
     results: tuple[SearchResultDraft, ...]
     source_result_count: int
+
+
+@dataclass(frozen=True)
+class SearchProviderAffinity:
+    """Exact provider candidate identity bound to a search session."""
+
+    provider_id: str
+    fingerprint: str
 
 
 @dataclass(frozen=True)
@@ -107,18 +116,32 @@ class CodexSearchReferenceStore:
             OrderedDict()
         )
         self._lock = threading.Lock()
+        self._provider_affinity: dict[CodexSearchReferenceScope, SearchProviderAffinity] = {}
 
     def remember_search(
         self,
         scope: CodexSearchReferenceScope,
         fingerprint: str,
         queries: tuple[SearchQueryDraft, ...],
+        *,
+        affinity: SearchProviderAffinity | None = None,
+        _transactional: bool = False,
     ) -> tuple[StoredSearchBatch, bool]:
         """Return a cached batch or atomically assign one set of references."""
 
+        if affinity is not None and not _transactional:
+            result = self.remember_search_with_provider_affinity(scope, affinity, fingerprint, queries)
+            if result is None:
+                raise ValueError("search provider affinity conflict")
+            return result
         now = self._clock()
         with self._lock:
             self._remove_expired(now)
+            if affinity is not None:
+                existing = self._provider_affinity.get(scope)
+                if existing is not None and existing != affinity:
+                    raise ValueError("search provider affinity conflict")
+                self._provider_affinity[scope] = affinity
             state = self._session(scope, now)
             cached = state.batches.get(fingerprint)
             if cached is not None and self._batch_references_exist(state, cached):
@@ -162,6 +185,51 @@ class CodexSearchReferenceStore:
             self._enforce_session_limits(state)
             return batch, False
 
+    def remember_search_with_provider_affinity(
+        self,
+        scope: CodexSearchReferenceScope,
+        affinity: SearchProviderAffinity,
+        fingerprint: str,
+        queries: tuple[SearchQueryDraft, ...],
+    ) -> tuple[StoredSearchBatch, bool] | None:
+        """Reject a result if the session is already bound to another candidate."""
+        with self._lock:
+            sessions_snapshot = copy.deepcopy(self._sessions)
+            affinity_snapshot = dict(self._provider_affinity)
+            try:
+                self._remove_expired(self._clock())
+                existing = self._provider_affinity.get(scope)
+                if existing is not None and existing != affinity:
+                    return None
+                self._provider_affinity[scope] = affinity
+                state = self._session(scope, self._clock())
+                # Inline the existing allocator while retaining one transaction lock.
+                cached = state.batches.get(fingerprint)
+                if cached is not None and self._batch_references_exist(state, cached):
+                    return cached, True
+                turn_index = state.next_turn_index
+                stored_queries = []
+                result_index = 0
+                for query in queries:
+                    stored_results = []
+                    for result in query.results:
+                        ref_id = None
+                        if result.url.lower().startswith(("http://", "https://")):
+                            ref_id = f"turn{turn_index}search{result_index}"
+                            result_index += 1
+                            state.references[ref_id] = result.url
+                        stored_results.append(StoredSearchResult(result.title, result.url, result.content, result.score, ref_id))
+                    stored_queries.append(StoredSearchQuery(query.query, query.answer, tuple(stored_results), query.source_result_count))
+                batch = StoredSearchBatch(turn_index, tuple(stored_queries))
+                state.next_turn_index += 1
+                state.batches[fingerprint] = batch
+                self._enforce_session_limits(state)
+                return batch, False
+            except BaseException:
+                self._sessions = sessions_snapshot
+                self._provider_affinity = affinity_snapshot
+                raise
+
     def get_search(
         self,
         scope: CodexSearchReferenceScope,
@@ -183,6 +251,14 @@ class CodexSearchReferenceStore:
                 return None
             state.batches.move_to_end(fingerprint)
             return batch
+
+    def provider_affinity(
+        self, scope: CodexSearchReferenceScope
+    ) -> SearchProviderAffinity | None:
+        """Return the bound candidate identity for an authenticated session."""
+        with self._lock:
+            self._remove_expired(self._clock())
+            return self._provider_affinity.get(scope)
 
     def resolve(
         self,
@@ -210,6 +286,7 @@ class CodexSearchReferenceStore:
 
         with self._lock:
             self._sessions.clear()
+            self._provider_affinity.clear()
 
     def __len__(self) -> int:
         with self._lock:
@@ -226,7 +303,8 @@ class CodexSearchReferenceStore:
             self._sessions[scope] = state
         self._touch(scope, state, now)
         while len(self._sessions) > self._max_sessions:
-            self._sessions.popitem(last=False)
+            evicted, _ = self._sessions.popitem(last=False)
+            self._provider_affinity.pop(evicted, None)
         return state
 
     def _touch(
@@ -246,6 +324,7 @@ class CodexSearchReferenceStore:
         ]
         for scope in expired:
             del self._sessions[scope]
+            self._provider_affinity.pop(scope, None)
 
     def _enforce_session_limits(self, state: _SearchSessionState) -> None:
         while len(state.references) > self._max_references_per_session:

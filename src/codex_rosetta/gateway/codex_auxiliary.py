@@ -29,6 +29,13 @@ from .codex_search import (
     should_use_local_codex_search,
 )
 from .codex_search_references import CodexSearchReferenceStore
+from .search_provider_chain import (
+    SearchProviderBudgetExceeded,
+    SearchProviderChainUnavailable,
+    SearchProviderChainUnavailableReason,
+    SearchProviderChainCoordinator,
+)
+from .search_provider_executor import SearchProviderExecutor
 from .config import CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER, GatewayConfig
 from .downstream_errors import (
     DownstreamErrorOrigin,
@@ -189,7 +196,7 @@ def _resolve_auxiliary_route(
     )
 
 
-async def handle_codex_auxiliary(
+async def handle_codex_auxiliary(  # noqa: C901
     request: Any,
     config: GatewayConfig,
     upstream_path: str,
@@ -243,6 +250,21 @@ async def handle_codex_auxiliary(
         web_run_state=web_run_state,
     )
     use_configured_provider_search = configured_search_provider is not None
+    search_candidates = tuple(getattr(config, "web_search_candidates", ()))
+    search_coordinator = getattr(request.app, "search_provider_coordinator", None)
+    if not isinstance(search_coordinator, SearchProviderChainCoordinator):
+        search_coordinator = SearchProviderChainCoordinator()
+        if hasattr(request.app, "__dict__"):
+            setattr(request.app, "search_provider_coordinator", search_coordinator)
+    use_chain_search = (
+        upstream_path == "alpha/search"
+        and web_run_mapping
+        and search_client is None
+        and not (isinstance(body.get("commands"), dict) and body["commands"].get("weather"))
+        and not isinstance(getattr(request.app, "search_provider_coordinator", None), type(None))
+        and isinstance(body.get("commands"), dict)
+        and bool(body["commands"].get("search_query"))
+    )
     resolved_browser_client = browser_client or _configured_browser_client(config)
     use_profile_images = (
         upstream_path in IMAGE_ENDPOINTS and image_tool_state == "modified"
@@ -250,6 +272,7 @@ async def handle_codex_auxiliary(
     use_local_search = (
         upstream_path == "alpha/search"
         and not use_configured_provider_search
+        and not use_chain_search
         and web_run_mapping
         and should_use_local_codex_search(
             body,
@@ -259,7 +282,7 @@ async def handle_codex_auxiliary(
         )
     )
     native_endpoint_available = (
-        use_configured_provider_search
+        use_configured_provider_search or use_chain_search
         or _native_auxiliary_endpoint_available(
             native_passthrough=native_passthrough,
             upstream_path=upstream_path,
@@ -331,7 +354,7 @@ async def handle_codex_auxiliary(
     error_detail: str | None = None
 
     try:
-        if use_local_search:
+        if use_local_search or use_chain_search:
             reference_store, principal_id = _search_reference_context(request)
             response, status_code, error_detail = await _handle_local_search(
                 trace,
@@ -342,6 +365,11 @@ async def handle_codex_auxiliary(
                 resolved_browser_client,
                 reference_store,
                 principal_id,
+                search_candidates=search_candidates if (upstream_path == "alpha/search" and web_run_mapping) else None,
+                search_coordinator=search_coordinator if use_chain_search else None,
+                search_executor=(getattr(request.app, "search_provider_executor", None)
+                                 if isinstance(getattr(request.app, "search_provider_executor", None), SearchProviderExecutor)
+                                 else None),
             )
             return response
 
@@ -440,6 +468,10 @@ async def _handle_local_search(
     browser_client: WebRunBrowserClient | None,
     reference_store: CodexSearchReferenceStore | None,
     principal_id: str | None,
+    *,
+    search_candidates: tuple[Any, ...] | None = None,
+    search_coordinator: Any | None = None,
+    search_executor: SearchProviderExecutor | None = None,
 ) -> tuple[Response, int, str | None]:
     if trace is not None:
         trace.log("codex_search_request", codex_search_request_summary(body))
@@ -452,12 +484,24 @@ async def _handle_local_search(
             browser_client=browser_client,
             reference_store=reference_store,
             principal_id=principal_id,
+            search_candidates=search_candidates,
+            search_coordinator=search_coordinator,
+            search_executor=search_executor,
         )
     except CodexSearchNotImplemented as exc:
         error = str(exc)
         if trace is not None:
             trace.log("codex_search_not_implemented", {"error": error})
         return _not_implemented_response(error), 501, error
+    except SearchProviderBudgetExceeded:
+        error = "Search provider request budget exceeded"
+        return error_response_for_source("openai_responses", 504, error), 504, error
+    except SearchProviderChainUnavailable as exc:
+        if exc.reason is SearchProviderChainUnavailableReason.EMPTY_CHAIN:
+            error = "未配置搜索能力"
+            return error_response_for_source("openai_responses", 501, error), 501, error
+        error = "搜索能力全部无效"
+        return error_response_for_source("openai_responses", 502, error), 502, error
     except CodexSearchInvalidRequest as exc:
         error = str(exc)
         if trace is not None:
