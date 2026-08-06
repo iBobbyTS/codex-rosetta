@@ -572,7 +572,9 @@ def test_search_passthrough_does_not_force_v1_into_upstream_base_url() -> None:
     )
 
 
-def test_modified_responses_candidate_uses_app_auxiliary_transport() -> None:
+def test_modified_responses_candidate_uses_app_auxiliary_transport(
+    tmp_path: Path,
+) -> None:
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -589,6 +591,12 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport() -> None:
     )
     body = _search_body({"search_query": [{"q": "Python documentation"}]})
     request = _make_request(body)
+    request.app.metrics = MagicMock()
+    request.app.request_log = MagicMock()
+    trace_path = tmp_path / "responses-search-trace.jsonl"
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
     request.app.transport.send_passthrough.return_value = UpstreamResponse(
         status_code=200,
         body={"output": "Python 3.test", "results": []},
@@ -598,6 +606,7 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport() -> None:
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
     assert response.status_code == 200
+    assert set(json.loads(response.body)) == {"output", "results"}
     provider_info, url, forwarded_body = (
         request.app.transport.send_passthrough.await_args.args
     )
@@ -614,6 +623,25 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport() -> None:
         "x-request-id": "req-1",
         "User-Agent": "codex-cli/test",
     }
+    telemetry = request.app.metrics.record_request.call_args.kwargs
+    assert telemetry["model"] == "gpt-5.6-luna"
+    assert telemetry["target"] == "openai_responses"
+    assert telemetry["provider_name"] == "search-upstream"
+    request_log_entry = request.app.request_log.add.call_args.args[0]
+    assert request_log_entry.model == "gpt-5.6-luna"
+    assert request_log_entry.target_provider == "openai_responses"
+    assert request_log_entry.target_provider_name == "search-upstream"
+    trace_text = trace_path.read_text()
+    assert "search-provider-key" not in trace_text
+    assert "https://search-provider.example" not in trace_text
+    records = [json.loads(line) for line in trace_text.splitlines()]
+    assert {record["model"] for record in records} == {"gpt-5.6-luna"}
+    assert {record["target_provider"] for record in records} == {"openai_responses"}
+    assert {record["provider_name"] for record in records} == {"search-upstream"}
+    assert records[-1]["data"]["candidate_id"] == "responses-only"
+    assert records[-1]["data"]["candidate_provider"] == (
+        "configured_responses_provider"
+    )
 
 
 def test_modified_responses_candidate_blocks_search_credential_collision() -> None:
@@ -652,6 +680,7 @@ def test_modified_responses_candidate_blocks_search_credential_collision() -> No
 
 def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     config = _make_config(
         "chat",
@@ -671,6 +700,12 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
     )
     body = _search_body({"search_query": [{"q": "Python documentation"}]})
     request = _make_request(body)
+    request.app.metrics = MagicMock()
+    request.app.request_log = MagicMock()
+    trace_path = tmp_path / "self-hosted-failover-trace.jsonl"
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
     request.app.transport.send_passthrough.return_value = UpstreamResponse(
         status_code=500,
         body=None,
@@ -687,6 +722,7 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
     assert response.status_code == 200, response.body
+    assert set(json.loads(response.body)) == {"output", "results"}
     assert request.app.transport.send_passthrough.await_args.args[1] == (
         "https://search-provider.example/v1/alpha/search"
     )
@@ -698,6 +734,25 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
             "include_domains": [],
         }
     ]
+    telemetry = request.app.metrics.record_request.call_args.kwargs
+    assert telemetry["model"] == "self_hosted_google"
+    assert telemetry["target"] == "openai_responses"
+    assert telemetry["provider_name"] == "self_hosted_google"
+    request_log_entry = request.app.request_log.add.call_args.args[0]
+    assert request_log_entry.model == "self_hosted_google"
+    assert request_log_entry.target_provider == "openai_responses"
+    assert request_log_entry.target_provider_name == "self_hosted_google"
+    trace_text = trace_path.read_text()
+    assert "search-provider-key" not in trace_text
+    assert "sidecar-token" not in trace_text
+    assert "https://search-provider.example" not in trace_text
+    assert "http://web-run:8080" not in trace_text
+    records = [json.loads(line) for line in trace_text.splitlines()]
+    assert {record["model"] for record in records} == {"self_hosted_google"}
+    assert {record["target_provider"] for record in records} == {"openai_responses"}
+    assert {record["provider_name"] for record in records} == {"self_hosted_google"}
+    assert records[-1]["data"]["candidate_id"] == "self-hosted-second"
+    assert records[-1]["data"]["candidate_provider"] == "self_hosted_google"
 
 
 def test_each_self_hosted_candidate_selects_its_own_sidecar_engine(
@@ -810,7 +865,9 @@ def test_browser_only_injection_is_not_used_as_a_search_dependency() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_terminal_rejection_is_safe_and_does_not_fall_back_or_cool_down() -> None:
+def test_terminal_rejection_is_safe_and_does_not_fall_back_or_cool_down(
+    tmp_path: Path,
+) -> None:
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -828,6 +885,11 @@ def test_terminal_rejection_is_safe_and_does_not_fall_back_or_cool_down() -> Non
     )
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    request.app.metrics = MagicMock()
+    trace_path = tmp_path / "terminal-search-trace.jsonl"
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
     )
     request.app.transport.send_passthrough.return_value = UpstreamResponse(
         status_code=422,
@@ -848,6 +910,16 @@ def test_terminal_rejection_is_safe_and_does_not_fall_back_or_cool_down() -> Non
         )
         is False
     )
+    telemetry = request.app.metrics.record_request.call_args.kwargs
+    assert telemetry["model"] == "gateway-model"
+    assert telemetry["target"] == "openai_chat"
+    assert telemetry["provider_name"] == "upstream"
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert records
+    assert {record["model"] for record in records} == {"gateway-model"}
+    assert {record["target_provider"] for record in records} == {"openai_chat"}
+    assert {record["provider_name"] for record in records} == {"upstream"}
+    assert all("candidate_id" not in record["data"] for record in records)
 
 
 def test_passthrough_ignores_configured_search_chain_and_model() -> None:
@@ -975,6 +1047,7 @@ def test_local_search_open_returns_static_page_content() -> None:
     request = _make_request(
         _search_body({"open": [{"ref_id": "https://docs.python.org/3/"}]})
     )
+    request.app.metrics = MagicMock()
     page_client = _FakePageClient()
 
     response = asyncio.run(
@@ -991,6 +1064,10 @@ def test_local_search_open_returns_static_page_content() -> None:
     assert "Python 3 Documentation" in payload["output"]
     assert page_client.calls == ["https://docs.python.org/3/"]
     request.app.transport.send_passthrough.assert_not_awaited()
+    telemetry = request.app.metrics.record_request.call_args.kwargs
+    assert telemetry["model"] == "gateway-model"
+    assert telemetry["target"] == "openai_responses"
+    assert telemetry["provider_name"] == "upstream"
 
 
 def test_local_search_open_ssrf_rejection_uses_blocked_origin() -> None:

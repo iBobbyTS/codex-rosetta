@@ -9,6 +9,8 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
+from codex_rosetta.auto_detect import ProviderType
+
 from .config import SELF_HOSTED_WEB_SEARCH_PROVIDERS
 from .codex_page import (
     PageOpenExecutionError,
@@ -34,7 +36,12 @@ from .search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
 )
-from .search_provider_candidates import SearchProviderCandidate
+from .search_provider_candidates import (
+    ConfiguredResponsesSearchProviderCandidate,
+    SearchProviderCandidate,
+    SelfHostedSearchProviderCandidate,
+    TavilySearchProviderCandidate,
+)
 from .search_provider_executor import SearchProviderExecutor, SearchRequest
 from .transport._base import UpstreamSafetyError
 from .web_search import (
@@ -98,6 +105,24 @@ class _UnexpectedSearchProviderError(RuntimeError):
     """A safe cause replacing an untyped provider exception."""
 
 
+@dataclass(frozen=True, slots=True)
+class CodexSearchAttribution:
+    """Secret-free identity of the candidate that completed a search."""
+
+    candidate_id: str
+    provider_name: str
+    target_provider: ProviderType
+    model: str
+    search_provider: str
+
+    def trace_summary(self) -> dict[str, str]:
+        """Return fields safe to add to Gateway trace data."""
+        return {
+            "candidate_id": self.candidate_id,
+            "candidate_provider": self.search_provider,
+        }
+
+
 @dataclass(frozen=True)
 class CodexSearchBridgeResult:
     """Successful bridge output and bounded telemetry metadata."""
@@ -108,6 +133,7 @@ class CodexSearchBridgeResult:
     time_count: int
     search_result_count: int
     search_provider: str
+    attribution: CodexSearchAttribution | None = None
     results: tuple[dict[str, Any], ...] | None = None
     stored_reference_open_count: int = 0
     search_reference_count: int = 0
@@ -135,7 +161,9 @@ class CodexSearchBridgeResult:
             or self.find_count
             or self.screenshot_count
         )
-        if (
+        if self.search_provider == "configured_responses_provider":
+            executor = "configured_responses"
+        elif (
             self.search_provider in SELF_HOSTED_WEB_SEARCH_PROVIDERS
             and self.search_count
         ):
@@ -145,7 +173,7 @@ class CodexSearchBridgeResult:
             executor = "tavily_python_web_run_sidecar"
         else:
             executor = "tavily_python"
-        return {
+        summary = {
             "executor": executor,
             "search_count": self.search_count,
             "open_count": self.open_count,
@@ -162,6 +190,9 @@ class CodexSearchBridgeResult:
             "browser_open_count": self.browser_open_count,
             "output_chars": len(self.output),
         }
+        if self.attribution is not None:
+            summary.update(self.attribution.trace_summary())
+        return summary
 
 
 @dataclass(frozen=True)
@@ -171,6 +202,7 @@ class _SearchExecution:
     reference_count: int
     cache_hit: bool
     results: tuple[dict[str, Any], ...] | None
+    attribution: CodexSearchAttribution | None = None
 
 
 def should_use_local_codex_search(
@@ -360,13 +392,17 @@ async def execute_local_codex_search(
 
     output = "\n\n".join(section for section in sections if section).strip()
     output = _apply_output_budget(output, body.get("max_output_tokens"))
+    attribution = search_execution.attribution
     return CodexSearchBridgeResult(
         output=output,
         search_count=len(queries),
         open_count=len(open_operations),
         time_count=len(time_offsets),
         search_result_count=search_execution.result_count,
-        search_provider=provider,
+        search_provider=(
+            attribution.search_provider if attribution is not None else provider
+        ),
+        attribution=attribution,
         results=search_execution.results,
         stored_reference_open_count=stored_reference_open_count,
         search_reference_count=search_execution.reference_count,
@@ -398,7 +434,17 @@ async def _execute_search_queries(  # noqa: C901
     if reference_store is not None and scope is not None:
         cached = reference_store.get_search(scope, fingerprint)
         if cached is not None:
-            return _stored_search_execution(cached, cache_hit=True)
+            attribution = None
+            if search_candidates is not None:
+                affinity = reference_store.provider_affinity(scope)
+                candidate = _candidate_for_affinity(search_candidates, affinity)
+                if candidate is not None:
+                    attribution = _candidate_attribution(candidate)
+            return _stored_search_execution(
+                cached,
+                cache_hit=True,
+                attribution=attribution,
+            )
 
     if search_candidates is not None and search_coordinator is not None:
         selected: list[SearchProviderCandidate] = []
@@ -414,6 +460,12 @@ async def _execute_search_queries(  # noqa: C901
             )
 
         merged = await search_coordinator.run(search_candidates, run_candidate)
+        if not selected:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.INVALID_RESPONSE
+            )
+        successful_candidate = selected[-1]
+        attribution = _candidate_attribution(successful_candidate)
         per_query = merged.get("query_outputs")
         if len(queries) > 1 and not (
             isinstance(per_query, list) and len(per_query) == len(queries)
@@ -435,9 +487,11 @@ async def _execute_search_queries(  # noqa: C901
             )
             for index, (query, _) in enumerate(queries)
         )
-        if reference_store is not None and scope is not None and selected:
-            candidate = selected[-1]
-            affinity = SearchProviderAffinity(candidate.row_id, candidate.identity)
+        if reference_store is not None and scope is not None:
+            affinity = SearchProviderAffinity(
+                successful_candidate.row_id,
+                successful_candidate.identity,
+            )
             batch, cache_hit = reference_store.remember_search_with_provider_affinity(
                 scope, affinity, fingerprint, drafts
             ) or (None, False)
@@ -445,7 +499,11 @@ async def _execute_search_queries(  # noqa: C901
                 raise CodexSearchProviderAffinityConflict(
                     "Search provider affinity conflict"
                 )
-            return _stored_search_execution(batch, cache_hit=cache_hit)
+            return _stored_search_execution(
+                batch,
+                cache_hit=cache_hit,
+                attribution=attribution,
+            )
         return _SearchExecution(
             sections=tuple(
                 format_web_search_result_for_model(d.query, _draft_as_tavily_result(d))
@@ -455,6 +513,7 @@ async def _execute_search_queries(  # noqa: C901
             reference_count=0,
             cache_hit=False,
             results=_structured_draft_results(list(drafts)),
+            attribution=attribution,
         )
 
     query_drafts: list[SearchQueryDraft] = []
@@ -530,6 +589,7 @@ def _stored_search_execution(
     batch: StoredSearchBatch,
     *,
     cache_hit: bool,
+    attribution: CodexSearchAttribution | None = None,
 ) -> _SearchExecution:
     return _SearchExecution(
         sections=tuple(_format_stored_search_batch(batch)),
@@ -541,6 +601,47 @@ def _stored_search_execution(
         ),
         cache_hit=cache_hit,
         results=_structured_stored_results(batch),
+        attribution=attribution,
+    )
+
+
+def _candidate_for_affinity(
+    candidates: tuple[SearchProviderCandidate, ...],
+    affinity: SearchProviderAffinity | None,
+) -> SearchProviderCandidate | None:
+    if affinity is None:
+        return None
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate.row_id == affinity.provider_id
+            and candidate.identity == affinity.fingerprint
+        ),
+        None,
+    )
+
+
+def _candidate_attribution(
+    candidate: SearchProviderCandidate,
+) -> CodexSearchAttribution:
+    if isinstance(candidate, ConfiguredResponsesSearchProviderCandidate):
+        provider_name = candidate.responses_provider
+        model = candidate.responses_model
+    elif isinstance(candidate, TavilySearchProviderCandidate):
+        provider_name = "tavily"
+        model = "tavily"
+    elif isinstance(candidate, SelfHostedSearchProviderCandidate):
+        provider_name = candidate.provider
+        model = candidate.provider
+    else:  # pragma: no cover - the closed union keeps this defensive branch unreachable.
+        raise TypeError("Unsupported search provider candidate")
+    return CodexSearchAttribution(
+        candidate_id=candidate.row_id,
+        provider_name=provider_name,
+        target_provider="openai_responses",
+        model=model,
+        search_provider=candidate.provider,
     )
 
 

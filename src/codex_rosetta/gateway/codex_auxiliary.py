@@ -20,6 +20,7 @@ from .codex_images import (
 )
 from .codex_page import StaticPageClient
 from .codex_search import (
+    CodexSearchBridgeResult,
     CodexSearchExecutionError,
     CodexSearchInvalidRequest,
     CodexSearchNotImplemented,
@@ -307,7 +308,7 @@ async def handle_codex_auxiliary(  # noqa: C901
     )
 
     resolved_model = str(body.get("model") or route.upstream_model or model)
-    record_request_stat(resolved_model)
+    telemetry_model = model
     upstream_url = f"{active_provider_info.base_url}/{upstream_path}"
     transport: UpstreamTransport = CredentialRedactingTransport.wrap(
         request.app.transport
@@ -328,7 +329,12 @@ async def handle_codex_auxiliary(  # noqa: C901
     try:
         if use_local_search or use_chain_search:
             reference_store, principal_id = _search_reference_context(request)
-            response, status_code, error_detail = await _handle_local_search(
+            (
+                response,
+                status_code,
+                error_detail,
+                search_result,
+            ) = await _handle_local_search(
                 trace,
                 body,
                 web_run_config,
@@ -349,6 +355,28 @@ async def handle_codex_auxiliary(  # noqa: C901
                     extra_headers=extra_headers,
                 ),
             )
+            if search_result is not None:
+                attribution = search_result.attribution
+                if attribution is not None:
+                    active_provider_name = attribution.provider_name
+                    active_target_provider = attribution.target_provider
+                    resolved_model = attribution.model
+                    telemetry_model = attribution.model
+                success_trace = _create_auxiliary_trace(
+                    request,
+                    request_id=request_id,
+                    model=telemetry_model,
+                    route=route,
+                    target_provider=active_target_provider,
+                    provider_name=active_provider_name,
+                )
+                if success_trace is not None:
+                    success_trace.log(
+                        "codex_search_request", codex_search_request_summary(body)
+                    )
+                    success_trace.log(
+                        "codex_search_response", search_result.trace_summary()
+                    )
             return response
 
         _log_profile_image_request(
@@ -403,9 +431,10 @@ async def handle_codex_auxiliary(  # noqa: C901
     finally:
         from .app import _record_telemetry
 
+        record_request_stat(resolved_model)
         _record_telemetry(
             request,
-            model=model,
+            model=telemetry_model,
             source_provider="openai_responses",
             target_provider=active_target_provider,
             provider_name=active_provider_name,
@@ -472,9 +501,19 @@ async def _handle_local_search(
     search_candidates: tuple[Any, ...] | None = None,
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
-) -> tuple[Response, int, str | None]:
-    if trace is not None:
-        trace.log("codex_search_request", codex_search_request_summary(body))
+) -> tuple[Response, int, str | None, CodexSearchBridgeResult | None]:
+    request_summary = codex_search_request_summary(body)
+
+    def log_failure(
+        stage: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        if trace is None:
+            return
+        trace.log("codex_search_request", request_summary)
+        if stage is not None:
+            trace.log(stage, data or {})
+
     try:
         result = await execute_local_codex_search(
             body,
@@ -490,25 +529,47 @@ async def _handle_local_search(
         )
     except CodexSearchNotImplemented as exc:
         error = str(exc)
-        if trace is not None:
-            trace.log("codex_search_not_implemented", {"error": error})
-        return _not_implemented_response(error), 501, error
+        log_failure("codex_search_not_implemented", {"error": error})
+        return _not_implemented_response(error), 501, error, None
     except SearchProviderBudgetExceeded:
         error = "Search provider request budget exceeded"
-        return error_response_for_source("openai_responses", 504, error), 504, error
+        log_failure()
+        return (
+            error_response_for_source("openai_responses", 504, error),
+            504,
+            error,
+            None,
+        )
     except SearchProviderChainUnavailable as exc:
         if exc.reason is SearchProviderChainUnavailableReason.EMPTY_CHAIN:
             error = "未配置搜索能力"
-            return error_response_for_source("openai_responses", 501, error), 501, error
+            log_failure()
+            return (
+                error_response_for_source("openai_responses", 501, error),
+                501,
+                error,
+                None,
+            )
         error = "搜索能力全部无效"
-        return error_response_for_source("openai_responses", 502, error), 502, error
+        log_failure()
+        return (
+            error_response_for_source("openai_responses", 502, error),
+            502,
+            error,
+            None,
+        )
     except SearchProviderTerminalError:
         error = "Search request rejected"
-        return error_response_for_source("openai_responses", 422, error), 422, error
+        log_failure()
+        return (
+            error_response_for_source("openai_responses", 422, error),
+            422,
+            error,
+            None,
+        )
     except CodexSearchInvalidRequest as exc:
         error = str(exc)
-        if trace is not None:
-            trace.log("codex_search_invalid_request", {"error": error})
+        log_failure("codex_search_invalid_request", {"error": error})
         return (
             error_response_for_source(
                 "openai_responses",
@@ -518,11 +579,11 @@ async def _handle_local_search(
             ),
             400,
             error,
+            None,
         )
     except CodexSearchExecutionError as exc:
         error = str(exc)
-        if trace is not None:
-            trace.log("codex_search_execution_error", {"error": error})
+        log_failure("codex_search_execution_error", {"error": error})
         origin = classify_downstream_exception(exc)
         if origin is DownstreamErrorOrigin.ROSETTA:
             origin = DownstreamErrorOrigin.UPSTREAM
@@ -530,11 +591,13 @@ async def _handle_local_search(
             error_response_for_source("openai_responses", 502, error, origin=origin),
             502,
             error,
+            None,
         )
+    except Exception:
+        log_failure()
+        raise
 
-    if trace is not None:
-        trace.log("codex_search_response", result.trace_summary())
-    return JSONResponse(result.response_body()), 200, None
+    return JSONResponse(result.response_body()), 200, None, result
 
 
 def _not_implemented_response(message: str) -> JSONResponse:
