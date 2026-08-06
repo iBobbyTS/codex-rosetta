@@ -6,7 +6,6 @@ import time
 from typing import Any
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
-from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from .auth import api_key_principal_var
@@ -36,7 +35,7 @@ from .search_provider_chain import (
     SearchProviderChainCoordinator,
 )
 from .search_provider_executor import SearchProviderExecutor
-from .config import CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER, GatewayConfig
+from .config import GatewayConfig
 from .downstream_errors import (
     DownstreamErrorOrigin,
     classify_downstream_exception,
@@ -68,33 +67,6 @@ def _native_auxiliary_endpoint_available(
     return native_passthrough and (
         upstream_path != "alpha/search" or web_run_state == "passthrough"
     )
-
-
-def _configured_responses_search_provider(
-    config: GatewayConfig,
-    *,
-    upstream_path: str,
-    web_run_state: str,
-) -> tuple[str, ProviderInfo] | None:
-    """Resolve the global Responses search endpoint for an eligible web.run."""
-    if upstream_path != "alpha/search" or web_run_state == "disabled":
-        return None
-    if config.web_search["provider"] != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
-        return None
-    provider_name = config.web_search["responses_provider"]
-    return provider_name, config.providers[provider_name]
-
-
-def _active_auxiliary_provider(
-    route: ResolvedRoute,
-    provider_info: ProviderInfo,
-    configured_search_provider: tuple[str, ProviderInfo] | None,
-) -> tuple[str, ProviderType, ProviderInfo]:
-    """Return telemetry identity and transport for the effective endpoint."""
-    if configured_search_provider is None:
-        return route.provider_name, route.target_provider, provider_info
-    provider_name, search_provider = configured_search_provider
-    return provider_name, "openai_responses", search_provider
 
 
 def _apply_auxiliary_model_alias(
@@ -244,12 +216,6 @@ async def handle_codex_auxiliary(  # noqa: C901
     image_tool_state = route_tool_state(route, IMAGEGEN_PROFILE_ITEM_ID, "disabled")
     web_run_mapping = web_run_state == "modified"
     web_run_config = config.web_search
-    configured_search_provider = _configured_responses_search_provider(
-        config,
-        upstream_path=upstream_path,
-        web_run_state=web_run_state,
-    )
-    use_configured_provider_search = configured_search_provider is not None
     search_candidates = tuple(getattr(config, "web_search_candidates", ()))
     search_coordinator = getattr(request.app, "search_provider_coordinator", None)
     if not isinstance(search_coordinator, SearchProviderChainCoordinator):
@@ -259,7 +225,6 @@ async def handle_codex_auxiliary(  # noqa: C901
     use_chain_search = (
         upstream_path == "alpha/search"
         and web_run_mapping
-        and not use_configured_provider_search
         and search_client is None
         and not (
             isinstance(body.get("commands"), dict) and body["commands"].get("weather")
@@ -276,7 +241,6 @@ async def handle_codex_auxiliary(  # noqa: C901
     )
     use_local_search = (
         upstream_path == "alpha/search"
-        and not use_configured_provider_search
         and not use_chain_search
         and web_run_mapping
         and should_use_local_codex_search(
@@ -287,8 +251,7 @@ async def handle_codex_auxiliary(  # noqa: C901
         )
     )
     native_endpoint_available = (
-        use_configured_provider_search
-        or use_chain_search
+        use_chain_search
         or _native_auxiliary_endpoint_available(
             native_passthrough=native_passthrough,
             upstream_path=upstream_path,
@@ -318,9 +281,9 @@ async def handle_codex_auxiliary(  # noqa: C901
             ),
         )
 
-    active_provider_name, active_target_provider, active_provider_info = (
-        _active_auxiliary_provider(route, provider_info, configured_search_provider)
-    )
+    active_provider_name = route.provider_name
+    active_target_provider = route.target_provider
+    active_provider_info = provider_info
     if use_profile_images:
         try:
             active_provider_info = profile_image_provider(
@@ -333,11 +296,7 @@ async def handle_codex_auxiliary(  # noqa: C901
         body,
         route,
         fixed_image_route_fallback=fixed_image_route_fallback,
-        override_model=(
-            config.web_search["responses_model"]
-            if use_configured_provider_search
-            else None
-        ),
+        override_model=None,
     )
 
     resolved_model = str(body.get("model") or route.upstream_model or model)

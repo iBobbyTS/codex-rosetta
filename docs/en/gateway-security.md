@@ -249,17 +249,22 @@ CLI option, configure matching `server.web_run.base_url` and
 variables) explicitly. Sidecar operations default to a 300-second timeout;
 `server.web_run.timeout_seconds` accepts values from 1 through 600 seconds.
 
-The Admin **Web Search** page lets basic search use Tavily credentials,
+The Admin **Web Search** page stores an ordered list of at most 32 basic-search
+Providers. It can use Tavily credentials,
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, or
 **Self-hosted (Bing Browser)** in the existing sidecar. It can also select an
-enabled configured Responses Provider; in that mode the Gateway sends the
+enabled configured Responses Provider and one of the existing reviewed Search
+Models; in that mode the Gateway sends the
 unchanged Codex Search body to the Provider's `alpha/search` endpoint with that
 Provider's existing credential, proxy, and redirect policy. Disabled and
 non-Responses Providers are rejected during configuration. The
 self-contained **Search Test** card sends the fixed query
 `latest python release version` through the same Gateway auxiliary handler as a
-real `POST /v1/alpha/search` request and displays its response; it does not call
+real `POST /v1/alpha/search` request and displays normalized result cards; it does not call
 Tavily, the sidecar, or a Provider-specific search client directly. The
+self-contained Admin boundary never displays a Provider's raw failure body:
+authorization, timeout, rate-limit, unavailable, and rejected outcomes are
+mapped to controlled error categories. The
 self-hosted providers send no search API credential, but either engine may
 rate-limit, challenge, or change its result page; such
 failures are returned as bounded `502` search errors instead of silently falling
@@ -272,6 +277,21 @@ Admin page is selected. Model requests share the same five-second health cache;
 Modified `web.run` advertises browser commands only while the cached status is
 online with `browser_ready=true`. Concurrent refreshes are coalesced, and config
 hot reload invalidates the cached status.
+
+Provider runtime and Admin editing both use exactly one API Key per Provider.
+Legacy comma-separated Provider keys are accepted only at the read boundary:
+the first non-empty value becomes active, discarded values remain redaction
+inputs, and the next Admin save converges the field to that one key. Configure
+multiple accounts as separate Providers; do not put multiple keys in one field.
+Configured Responses search rows never rotate or fall back to another
+credential. Self-hosted rows have neither quota configuration nor automatic
+credential fallback.
+
+For each Tavily row, Admin usage shows only Tavily's
+`account.plan_usage` and `account.plan_limit`. Results are cached server-side
+for five minutes by credential and concurrent misses are coalesced. The reset
+date is shown only as the first day of the next month; Tavily does not provide
+an exact reset time or authoritative time zone for this value.
 
 Tavily credentials are sent only in the Bearer authorization header. Before a
 Tavily success or error response can reach a model, Search client, or diagnostic

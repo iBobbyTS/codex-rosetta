@@ -31,7 +31,10 @@ def test_provider_affinity_rejects_identity_change_without_publishing():
     first = SearchProviderAffinity("row-a", "credential-a")
     second = SearchProviderAffinity("row-a", "credential-b")
     assert store.remember_search_with_provider_affinity(scope, first, "one", _query())
-    assert store.remember_search_with_provider_affinity(scope, second, "two", _query()) is None
+    assert (
+        store.remember_search_with_provider_affinity(scope, second, "two", _query())
+        is None
+    )
     assert store.get_search(scope, "two") is None
 
 

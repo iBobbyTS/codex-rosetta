@@ -15,6 +15,11 @@ from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
+from codex_rosetta.gateway.search_provider_chain import (
+    SearchProviderAttemptCategory,
+    SearchProviderAttemptError,
+)
+from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport import UpstreamConnectionError
@@ -42,6 +47,7 @@ def _make_config(
     search_provider: str = "tavily",
     responses_search_provider: str | None = None,
     responses_search_model: str = "gpt-5.6-sol",
+    search_providers: list[dict[str, Any]] | None = None,
     tool_profile: str | None = None,
     image_state: str | None = None,
     image_base_url: str = "https://images.example/v1",
@@ -71,6 +77,7 @@ def _make_config(
         model["upstream_model"] = upstream_model
     tool_profiles: dict[str, Any] = {}
     explicit_web_mapping = tool_profile == "test-web-run-mapping"
+    explicit_web_disabled = tool_profile == "test-web-run-disabled"
     local_search = (tavily_api_key is not None or search_provider != "tavily") and (
         explicit_web_mapping or api_type != "responses"
     )
@@ -82,6 +89,7 @@ def _make_config(
         or local_search
         or explicit_pass_through
         or explicit_web_mapping
+        or explicit_web_disabled
     ):
         base_profile = tool_profile_contract()["readonly"]["builtin"]
         tools = dict(base_profile["tools"])
@@ -103,6 +111,8 @@ def _make_config(
             }
         if local_search or explicit_web_mapping:
             tools["namespace.web.run"] = "modified"
+        if explicit_web_disabled:
+            tools["namespace.web.run"] = "disabled"
         if image_state is not None:
             tools["namespace.image_gen.imagegen"] = image_state
             inputs["namespace.image_gen.imagegen"] = {
@@ -182,20 +192,24 @@ def _make_config(
                         "key": "gateway-key",
                     }
                 ],
-                "web_search": {
-                    "provider": search_provider,
-                    "tavily_api_key": tavily_api_key or "",
-                    **(
-                        {"responses_provider": responses_search_provider}
-                        if responses_search_provider is not None
-                        else {}
-                    ),
-                    **(
-                        {"responses_model": responses_search_model}
-                        if responses_search_provider is not None
-                        else {}
-                    ),
-                },
+                "web_search": (
+                    {"providers": search_providers}
+                    if search_providers is not None
+                    else {
+                        "provider": search_provider,
+                        "tavily_api_key": tavily_api_key or "",
+                        **(
+                            {"responses_provider": responses_search_provider}
+                            if responses_search_provider is not None
+                            else {}
+                        ),
+                        **(
+                            {"responses_model": responses_search_model}
+                            if responses_search_provider is not None
+                            else {}
+                        ),
+                    }
+                ),
             },
         }
     )
@@ -493,7 +507,7 @@ def test_self_hosted_google_preserves_codex_search_response_contract() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_web_run_mapping_requires_global_api_key_for_search_query() -> None:
+def test_web_run_mapping_requires_a_configured_search_candidate() -> None:
     config = _make_config(tool_profile="test-web-run-mapping")
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
@@ -503,7 +517,7 @@ def test_web_run_mapping_requires_global_api_key_for_search_query() -> None:
 
     assert response.status_code == 501
     payload = json.loads(response.body)
-    assert "Admin > Web Search" in payload["error"]["message"]
+    assert "未配置搜索能力" in payload["error"]["message"]
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
@@ -546,21 +560,66 @@ def test_search_passthrough_does_not_force_v1_into_upstream_base_url() -> None:
     )
 
 
-def test_configured_responses_provider_routes_all_search_requests() -> None:
+def test_modified_responses_first_row_fails_over_through_provider_chain() -> None:
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
-        search_provider="configured_responses_provider",
         responses_search_provider="search-upstream",
-        responses_search_model="gpt-5.6-luna",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
     )
-    body = _search_body(
-        {
-            "search_query": [{"q": "Python documentation"}],
-            "weather": [{"location": "Edmonton"}],
-        }
-    )
+    body = _search_body({"search_query": [{"q": "Python documentation"}]})
     request = _make_request(body)
+
+    responses_calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def fail_responses(candidate: Any, body: dict[str, Any]) -> Any:
+        responses_calls.append((candidate.row_id, body))
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+
+    self_hosted = _FakeTavilyClient()
+    request.app.search_provider_executor = SearchProviderExecutor(
+        self_hosted_client=self_hosted,
+        responses_client=fail_responses,
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200, response.body
+    assert responses_calls == [("responses-first", {**body, "model": "gpt-5.6-luna"})]
+    assert len(self_hosted.calls) == 1
+    assert self_hosted.calls[0][0] == "Python documentation"
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_passthrough_ignores_configured_search_chain_and_model() -> None:
+    config = _make_config(
+        responses_search_provider="search-upstream",
+        tool_profile="test-pass-through",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+    )
+    body = _search_body({"search_query": [{"q": "Python documentation"}]})
+    request = _make_request(body)
+    responses_client = AsyncMock()
+    request.app.search_provider_executor = SearchProviderExecutor(
+        responses_client=responses_client
+    )
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
@@ -568,10 +627,42 @@ def test_configured_responses_provider_routes_all_search_requests() -> None:
     provider_info, url, forwarded_body = (
         request.app.transport.send_passthrough.await_args.args
     )
-    assert provider_info.base_url == "https://search-provider.example/v1"
-    assert provider_info.credential_values == ("search-provider-key",)
-    assert url == "https://search-provider.example/v1/alpha/search"
-    assert forwarded_body == {**body, "model": "gpt-5.6-luna"}
+    assert provider_info.base_url == "https://upstream.example/v1"
+    assert url == "https://upstream.example/v1/alpha/search"
+    assert forwarded_body == {**body, "model": "gpt-image-2"}
+    responses_client.assert_not_awaited()
+
+
+def test_disabled_search_does_not_call_configured_chain_or_native_route() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-disabled",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    responses_client = AsyncMock()
+    request.app.search_provider_executor = SearchProviderExecutor(
+        responses_client=responses_client
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    assert "web.run is disabled" in json.loads(response.body)["error"]["message"]
+    responses_client.assert_not_awaited()
+    request.app.transport.send_passthrough.assert_not_awaited()
 
 
 def test_local_search_records_gateway_log_stages(tmp_path: Path) -> None:

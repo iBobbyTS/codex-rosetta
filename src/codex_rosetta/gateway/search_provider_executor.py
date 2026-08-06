@@ -146,15 +146,29 @@ class SearchProviderExecutor:
         else:
             body = copy.deepcopy(snapshot.body)
             body["model"] = candidate.responses_model
-            if self._responses_client is not None:
+            responses_client = self._responses_client
+            if responses_client is not None:
+
                 async def operation() -> Any:
-                    return await self._responses_client(candidate, body)
-                raw = await (request_budget.run_external_call(operation) if request_budget else operation())
+                    return await responses_client(candidate, body)
+
+                raw = await (
+                    request_budget.run_external_call(operation)
+                    if request_budget
+                    else operation()
+                )
                 validated = _validate_response(raw)
                 if len(snapshot.queries) > 1:
                     _validate_query_outputs(validated, len(snapshot.queries))
                 return validated
-            return _validate_response(await self._call_responses(candidate, body, request_budget=request_budget, expected_query_count=len(snapshot.queries)))
+            return _validate_response(
+                await self._call_responses(
+                    candidate,
+                    body,
+                    request_budget=request_budget,
+                    expected_query_count=len(snapshot.queries),
+                )
+            )
         if client is None:
             raise SearchProviderRequestFailover(
                 SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
@@ -162,9 +176,15 @@ class SearchProviderExecutor:
         outputs: list[dict[str, Any]] = []
         for query, settings in snapshot.queries:
             try:
+
                 async def operation() -> Any:
                     return await client.search(query, settings=settings)
-                raw = await (request_budget.run_external_call(operation) if request_budget else operation())
+
+                raw = await (
+                    request_budget.run_external_call(operation)
+                    if request_budget
+                    else operation()
+                )
                 outputs.append(_normalize_local_result(query, raw))
             except SearchProviderRequestFailover:
                 raise
@@ -188,6 +208,7 @@ class SearchProviderExecutor:
         redactor = SecretRedactor(candidate.provider_info.credential_values)
         async with AsyncClient(timeout=120.0) as client:
             try:
+
                 async def operation() -> Any:
                     return await request_bounded_response(
                         client,
@@ -196,7 +217,12 @@ class SearchProviderExecutor:
                         headers=headers,
                         json=body,
                     )
-                response = await (request_budget.run_external_call(operation) if request_budget else operation())
+
+                response = await (
+                    request_budget.run_external_call(operation)
+                    if request_budget
+                    else operation()
+                )
             except (UpstreamSafetyError, SearchProviderBudgetExceeded):  # fmt: skip
                 raise
             except UpstreamConnectionError:
@@ -221,7 +247,9 @@ class SearchProviderExecutor:
             payload = json.loads(response.content.decode("utf-8"))
             if expected_query_count > 1:
                 if not isinstance(payload, dict):
-                    raise SearchProviderAttemptError(SearchProviderAttemptCategory.INVALID_RESPONSE)
+                    raise SearchProviderAttemptError(
+                        SearchProviderAttemptCategory.INVALID_RESPONSE
+                    )
                 _validate_query_outputs(payload, expected_query_count)
             return payload
         except Exception:

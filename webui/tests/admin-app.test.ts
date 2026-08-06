@@ -78,7 +78,9 @@ describe('Admin application session', () => {
 
     await screen.findByRole('navigation', { name: 'Admin pages' });
     await fireEvent.click(await screen.findByRole('button', { name: 'Test' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Insufficient account balance');
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Search test failed');
+    expect(alert).not.toHaveTextContent('Insufficient account balance');
     expect(screen.getByRole('navigation', { name: 'Admin pages' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Sign in|Login/ })).not.toBeInTheDocument();
     expect(localStorage.getItem('admin_token')).toBe('valid-token');

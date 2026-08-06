@@ -11,7 +11,7 @@ from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from ...auth import INTERNAL_ADMIN_PRINCIPAL, api_key_principal_var
 from ...codex_auxiliary import handle_codex_auxiliary
-from ...config import CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER, GatewayConfig
+from ...config import GatewayConfig
 from ...search_provider_chain import (
     SearchProviderAttemptCategory,
     SearchProviderChainCoordinator,
@@ -67,13 +67,10 @@ class _SearchTestRequest:
 
 def _select_search_test_model(config: GatewayConfig) -> str | None:
     """Select a deterministic route that exercises the configured search path."""
-    configured_provider = (
-        config.web_search["provider"] == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
-    )
     for model in sorted(config.models):
         route, _provider_info = config.resolve("openai_responses", model)
         state = route_tool_state(route, "namespace.web.run", "modified")
-        if (configured_provider and state != "disabled") or state == "modified":
+        if state == "modified":
             return model
     return None
 

@@ -66,12 +66,15 @@ OpenAI `images/generations` 和 `images/edits` 线协议；Rosetta 不转换供�
 
 独立 Search 还提供本地 bridge。当所选 Profile 把 `web.run` 设为 Modified
 时，`/v1/alpha/search` 会在本地执行可靠子集：`search_query` 使用 Admin
-**联网搜索**页面中的全局 Provider（`server.web_search`）。Tavily 使用所配置的
+**联网搜索**页面中的有序 Provider 列表（`server.web_search.providers`）。列表最多
+包含 32 行，并严格从上到下尝试。单行列表只代表一个 Provider，不会自动切换；多行
+列表只有在已定义的连接、HTTP、无效响应、上游、额度、请求拒绝或本地不可用结果下
+才尝试下一候选，并且每个候选在每个 SearchRequest 中最多尝试一次。Tavily 使用所配置的
 API Key；**Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
 **Self-hosted (Bing Browser)** 则在现有 `web-run` 容器中运行，因此要求
 sidecar 健康。Bing RSS 读取 XML 结果表示，Bing Browser 加载并解析交互式
-HTML 结果页。**从已配置的 Provider 中选择**则要求再选择一个已启用且 API 类型为
-`responses` 的 Provider，并选择固定搜索模型：默认 `gpt-5.6-sol`，或
+HTML 结果页。每个**从已配置的 Provider 中选择**行都要求选择一个已启用且 API 类型为
+`responses` 的 Provider，并选择既有审核 allowlist 内的固定搜索模型：默认 `gpt-5.6-sol`，或
 `gpt-5.6-terra`、`gpt-5.6-luna`。由此产生的每个 `web.run` 请求都会转发到该
 Provider 的相对 `alpha/search` 端点，使用其凭据和传输设置，并把最终上游请求的
 `model` 字段替换为所选搜索模型。因此当前会话模型路由及其 upstream model alias
@@ -80,6 +83,10 @@ Provider 的相对 `alpha/search` 端点，使用其凭据和传输设置，并�
 UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
 `lineno`；已保存的 `turnXsearchY` 引用会在对应作用域内解析为搜索结果 URL。
+
+候选健康失败会启动一小时的进程内冷却，后续请求会跳过相同的行、配置和凭据 identity。
+Gateway 重启会清空全部冷却；修改某行的配置或凭据会形成新的候选 identity，而只调整
+未变化行的顺序不会。Tavily HTTP 432 和 433 还会额外归类为额度耗尽。
 
 可选、独立构建的 `web-run` Docker sidecar 会提供自托管 Google 或 Bing 基础搜索，并增加
 支持 JavaScript 渲染的 `open`、session 级 `turnXfetchY` 页面引用、带编号链接的 `click`、不区分大小写
@@ -97,10 +104,11 @@ UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公�
 blocked-domain、location 或非 live 访问语义，就会在任何部分操作执行前返回
 HTTP `501` 和 `code: "not_implemented"`。这些辅助端点的所有 `501` 文案还会
 以 `Consider "Browser Use" skill` 结尾，提示 Codex 改用浏览器回退。把
-`web.run` 设为 Passthrough 时，即使配置了 Tavily 或 sidecar，`/v1/alpha/search`
-也会继续原生透传给上游。**从已配置的 Provider 中选择**是明确例外：Modified
-和 Passthrough Profile 产生的每个 `web.run` 端点请求都使用这里选定的 Provider；
-Disabled 仍会阻止该端点。其他 Modified 模式的受支持命令走本地 Rosetta 搜索服务。
+`web.run` 设为 Passthrough 时，即使配置了 Tavily、sidecar 或已配置 Responses 行，
+`/v1/alpha/search` 也会继续原生透传给上游。Passthrough 会忽略全局 Provider
+列表和搜索模型，沿当前会话的原生 Responses route 转发。已配置 Responses 行只参与
+完整的 Modified Provider 链，包括它位于第一行时。Disabled 仍会阻止该端点。
+Modified 模式的受支持命令统一由 Rosetta Provider 链 coordinator 执行。
 模型可见定义始终保留直接 URL 的 `open`、固定时区 `time`
 和 `response_length`；配置全局 Tavily API Key，或选择任一 self-hosted Provider 且
 sidecar 报告就绪后，才增加 `search_query`；

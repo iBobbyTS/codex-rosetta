@@ -129,10 +129,10 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
     await fireEvent.change(dialog.getByLabelText('Provider'), { target: { value: 'deepseek' } });
-    expect(dialog.getByLabelText('Late developer cache compatibility')).toBeChecked();
-    expect(dialog.getByText(/append developer messages/)).toHaveTextContent('does not inspect or special-case turn_aborted');
+    expect(dialog.getByLabelText('Late instruction cache compatibility')).toBeChecked();
+    expect(dialog.getByText(/append system or developer messages/)).toHaveTextContent('does not inspect or special-case turn_aborted');
     await fireEvent.change(dialog.getByLabelText('Protocol'), { target: { value: 'anthropic' } });
-    expect(dialog.queryByLabelText('Late developer cache compatibility')).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText('Late instruction cache compatibility')).not.toBeInTheDocument();
     await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'deepseek-anthropic' } });
     await fireEvent.input(dialog.getByPlaceholderText('https://api.openai.com/v1'), { target: { value: 'https://api.deepseek.com/anthropic' } });
     await fireEvent.input(dialog.getByLabelText(/^API Key/), { target: { value: 'sk-test' } });
@@ -158,10 +158,10 @@ describe('ProvidersPage', () => {
     });
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    expect(screen.getByLabelText('Late developer cache compatibility')).not.toBeChecked();
+    expect(screen.getByLabelText('Late instruction cache compatibility')).not.toBeChecked();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Clone' }));
-    expect(screen.getByLabelText('Late developer cache compatibility')).not.toBeChecked();
+    expect(screen.getByLabelText('Late instruction cache compatibility')).not.toBeChecked();
   });
 
   it('shows forced prompt compaction only for Responses and preserves it when editing and cloning', async () => {

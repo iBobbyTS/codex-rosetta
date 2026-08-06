@@ -257,7 +257,10 @@ async def execute_local_codex_search(
     provider = str(config.get("provider") or "tavily")
     api_key = str(config.get("tavily_api_key") or "").strip()
     search_client = client
-    if queries and search_client is None:
+    chain_search = search_candidates is not None and search_coordinator is not None
+    if chain_search and search_client is None and browser_client is not None:
+        search_client = cast(WebSearchClient, browser_client)
+    if queries and search_client is None and not chain_search:
         if provider == "tavily":
             if not api_key:
                 raise CodexSearchNotImplemented(
@@ -279,10 +282,15 @@ async def execute_local_codex_search(
         StaticPageHTTPClient() if open_operations and browser_client is None else None
     )
     scope = _reference_scope(body, principal_id, reference_store)
-    if scope is not None and reference_store is not None and search_candidates is not None:
+    if (
+        scope is not None
+        and reference_store is not None
+        and search_candidates is not None
+    ):
         bound = reference_store.provider_affinity(scope)
         if bound is not None and not any(
-            candidate.row_id == bound.provider_id and candidate.identity == bound.fingerprint
+            candidate.row_id == bound.provider_id
+            and candidate.identity == bound.fingerprint
             for candidate in search_candidates
         ):
             raise CodexSearchInvalidRequest("Search provider configuration changed")
@@ -398,31 +406,58 @@ async def _execute_search_queries(  # noqa: C901
     if search_candidates is not None and search_coordinator is not None:
         selected: list[SearchProviderCandidate] = []
         request = SearchRequest.from_body(body, queries)
-        executor = search_executor or SearchProviderExecutor(self_hosted_client=search_client)
+        executor = search_executor or SearchProviderExecutor(
+            self_hosted_client=search_client
+        )
 
         async def run_candidate(candidate: SearchProviderCandidate) -> dict[str, Any]:
             selected.append(candidate)
-            return await executor.execute(candidate, request, request_budget=request_budget)
+            return await executor.execute(
+                candidate, request, request_budget=request_budget
+            )
 
         merged = await search_coordinator.run(search_candidates, run_candidate)
         per_query = merged.get("query_outputs")
-        if len(queries) > 1 and not (isinstance(per_query, list) and len(per_query) == len(queries)):
-            raise SearchProviderAttemptError(SearchProviderAttemptCategory.INVALID_RESPONSE)
+        if len(queries) > 1 and not (
+            isinstance(per_query, list) and len(per_query) == len(queries)
+        ):
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.INVALID_RESPONSE
+            )
         drafts = tuple(
-            _search_query_draft(query, per_query[index] if isinstance(per_query, list) and index < len(per_query) and isinstance(per_query[index], dict) else {"output": merged.get("output", ""), "results": merged.get("results", [])})
+            _search_query_draft(
+                query,
+                per_query[index]
+                if isinstance(per_query, list)
+                and index < len(per_query)
+                and isinstance(per_query[index], dict)
+                else {
+                    "output": merged.get("output", ""),
+                    "results": merged.get("results", []),
+                },
+            )
             for index, (query, _) in enumerate(queries)
         )
         if reference_store is not None and scope is not None and selected:
             candidate = selected[-1]
             affinity = SearchProviderAffinity(candidate.row_id, candidate.identity)
-            batch, cache_hit = reference_store.remember_search_with_provider_affinity(scope, affinity, fingerprint, drafts) or (None, False)
+            batch, cache_hit = reference_store.remember_search_with_provider_affinity(
+                scope, affinity, fingerprint, drafts
+            ) or (None, False)
             if batch is None:
-                raise CodexSearchProviderAffinityConflict("Search provider affinity conflict")
+                raise CodexSearchProviderAffinityConflict(
+                    "Search provider affinity conflict"
+                )
             return _stored_search_execution(batch, cache_hit=cache_hit)
         return _SearchExecution(
-            sections=tuple(format_web_search_result_for_model(d.query, _draft_as_tavily_result(d)) for d in drafts),
-            result_count=sum(d.source_result_count for d in drafts), reference_count=0,
-            cache_hit=False, results=_structured_draft_results(list(drafts)),
+            sections=tuple(
+                format_web_search_result_for_model(d.query, _draft_as_tavily_result(d))
+                for d in drafts
+            ),
+            result_count=sum(d.source_result_count for d in drafts),
+            reference_count=0,
+            cache_hit=False,
+            results=_structured_draft_results(list(drafts)),
         )
 
     query_drafts: list[SearchQueryDraft] = []

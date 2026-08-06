@@ -116,7 +116,9 @@ class CodexSearchReferenceStore:
             OrderedDict()
         )
         self._lock = threading.Lock()
-        self._provider_affinity: dict[CodexSearchReferenceScope, SearchProviderAffinity] = {}
+        self._provider_affinity: dict[
+            CodexSearchReferenceScope, SearchProviderAffinity
+        ] = {}
 
     def remember_search(
         self,
@@ -130,7 +132,9 @@ class CodexSearchReferenceStore:
         """Return a cached batch or atomically assign one set of references."""
 
         if affinity is not None and not _transactional:
-            result = self.remember_search_with_provider_affinity(scope, affinity, fingerprint, queries)
+            result = self.remember_search_with_provider_affinity(
+                scope, affinity, fingerprint, queries
+            )
             if result is None:
                 raise ValueError("search provider affinity conflict")
             return result
@@ -218,8 +222,23 @@ class CodexSearchReferenceStore:
                             ref_id = f"turn{turn_index}search{result_index}"
                             result_index += 1
                             state.references[ref_id] = result.url
-                        stored_results.append(StoredSearchResult(result.title, result.url, result.content, result.score, ref_id))
-                    stored_queries.append(StoredSearchQuery(query.query, query.answer, tuple(stored_results), query.source_result_count))
+                        stored_results.append(
+                            StoredSearchResult(
+                                result.title,
+                                result.url,
+                                result.content,
+                                result.score,
+                                ref_id,
+                            )
+                        )
+                    stored_queries.append(
+                        StoredSearchQuery(
+                            query.query,
+                            query.answer,
+                            tuple(stored_results),
+                            query.source_result_count,
+                        )
+                    )
                 batch = StoredSearchBatch(turn_index, tuple(stored_queries))
                 state.next_turn_index += 1
                 state.batches[fingerprint] = batch

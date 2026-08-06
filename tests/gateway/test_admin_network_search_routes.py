@@ -19,13 +19,32 @@ from codex_rosetta.gateway.auth import (
 )
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.search_provider_chain import (
+    SearchProviderAttemptCategory,
+    SearchProviderAttemptError,
+)
+from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.search_usage import TavilyUsageState
-from codex_rosetta.gateway.transport._base import UpstreamResponse
+from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 
 
 def _config() -> GatewayConfig:
+    profile = tool_profile_contract()["readonly"]["builtin"]
+    tools = dict(profile["tools"])
+    tools["hosted.tool_search"] = "passthrough"
+    tools["namespace.web.run"] = "modified"
     return GatewayConfig(
         {
+            "tool_profiles": {
+                "modified-search": {
+                    "api_types": ["responses"],
+                    "tools": tools,
+                    "inputs": {
+                        item_id: dict(values)
+                        for item_id, values in profile["inputs"].items()
+                    },
+                }
+            },
             "providers": {
                 "model-provider": {
                     "provider": "openai",
@@ -44,6 +63,7 @@ def _config() -> GatewayConfig:
                 "Models": {
                     "provider": "model-provider",
                     "type": "llm",
+                    "tool_profile": "modified-search",
                     "models": {"gpt-5.6-terra": {}},
                 }
             },
@@ -176,64 +196,50 @@ def test_search_test_rejects_config_without_eligible_model() -> None:
 
 
 def test_search_test_reaches_selected_responses_alpha_search() -> None:
-    transport = SimpleNamespace(
-        send_passthrough=AsyncMock(
-            return_value=UpstreamResponse(
-                status_code=200,
-                body={"result": "Python 3.test"},
-                raw_content=b'{"result":"Python 3.test"}',
-            )
-        )
-    )
+    calls: list[tuple[Any, dict[str, Any]]] = []
+
+    async def search(candidate: Any, body: dict[str, Any]) -> dict[str, Any]:
+        calls.append((candidate, body))
+        return {"output": "Python 3.test", "results": []}
+
+    transport = SimpleNamespace(send_passthrough=AsyncMock())
     app = SimpleNamespace(
         gateway_config=_config(),
         transport=transport,
         metrics=None,
         request_log=None,
         codex_search_reference_store=CodexSearchReferenceStore(),
+        search_provider_executor=SearchProviderExecutor(responses_client=search),
     )
 
     response = asyncio.run(network_search.test_network_search(SimpleNamespace(app=app)))
 
     assert response.status_code == 200
-    provider, url, body = transport.send_passthrough.await_args.args
-    assert provider.base_url == "https://search.example/v1"
-    assert url == "https://search.example/v1/alpha/search"
+    assert len(calls) == 1
+    candidate, body = calls[0]
+    assert candidate.responses_provider == "search-provider"
     assert body["commands"] == {
         "search_query": [{"q": network_search.SEARCH_TEST_QUERY}]
     }
     assert body["model"] == "gpt-5.6-luna"
+    transport.send_passthrough.assert_not_awaited()
 
 
 def test_search_test_replaces_configured_responses_error_with_safe_dto() -> None:
     provider_detail = "debug endpoint http://10.0.0.5:9000, upstream request abc-123"
-    transport = SimpleNamespace(
-        send_passthrough=AsyncMock(
-            return_value=UpstreamResponse(
-                status_code=502,
-                body={
-                    "error": {
-                        "message": provider_detail,
-                        "type": "upstream_error",
-                    }
-                },
-                raw_content=json.dumps(
-                    {
-                        "error": {
-                            "message": provider_detail,
-                            "type": "upstream_error",
-                        }
-                    }
-                ).encode(),
-            )
-        )
-    )
+
+    async def fail_search(candidate: Any, body: dict[str, Any]) -> Any:
+        del candidate, body
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE)
+
+    transport = SimpleNamespace(send_passthrough=AsyncMock())
     app = SimpleNamespace(
         gateway_config=_config(),
         transport=transport,
         metrics=None,
         request_log=None,
         codex_search_reference_store=CodexSearchReferenceStore(),
+        search_provider_executor=SearchProviderExecutor(responses_client=fail_search),
     )
 
     response = asyncio.run(network_search.test_network_search(SimpleNamespace(app=app)))
@@ -244,6 +250,7 @@ def test_search_test_replaces_configured_responses_error_with_safe_dto() -> None
         "code": "network_search_test_unavailable",
     }
     assert provider_detail.encode() not in response.body
+    transport.send_passthrough.assert_not_awaited()
 
 
 @pytest.mark.parametrize(

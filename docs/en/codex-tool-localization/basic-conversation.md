@@ -80,14 +80,20 @@ not translate vendor-specific image APIs.
 
 Standalone Search has an additional local bridge. When the selected Profile
 marks `web.run` as Modified, `/v1/alpha/search` executes the reliable subset
-locally: `search_query` uses the global Provider configured under Admin
-**Web Search** (`server.web_search`). Tavily uses the configured API Key;
+locally: `search_query` uses the ordered Provider list configured under Admin
+**Web Search** (`server.web_search.providers`). The list accepts up to 32 rows
+and is tried from top to bottom. A one-row list is one Provider, not automatic
+failover. With multiple rows, Rosetta tries the next candidate only after a
+defined connection, HTTP, invalid-response, upstream, quota, request-rejection,
+or local-unavailable outcome; every candidate is attempted at most once per
+SearchRequest. Tavily uses the configured API Key;
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, and
 **Self-hosted (Bing Browser)** run in the existing `web-run` container and
 therefore require that sidecar to be healthy. Bing RSS reads the XML result
 representation, while Bing Browser loads and parses the interactive HTML result
-page. **Configured Responses Provider** instead selects one enabled configured
-Provider whose API type is `responses` and one fixed Search Model:
+page. Each **Configured Responses Provider** row selects one enabled configured
+Provider whose API type is `responses` and one fixed Search Model already in
+the reviewed allowlist:
 `gpt-5.6-sol` (default), `gpt-5.6-terra`, or `gpt-5.6-luna`. Every resulting
 `web.run` request is forwarded to that Provider's relative `alpha/search`
 endpoint using its credential and transport settings, and its final upstream
@@ -101,6 +107,12 @@ rejects credentials and non-public addresses, permits at most five redirects,
 and applies a 15-second and 2 MiB response limit. It returns normalized,
 line-addressable text and supports `lineno`; stored `turnXsearchY` references
 resolve to their scoped search-result URL.
+
+A candidate-health failure starts a one-hour, process-local cooldown, so later
+requests skip that same row/configuration/credential identity. Restarting the
+Gateway clears all cooldowns. Changing a row's configuration or credential
+creates a new candidate identity; merely reordering an unchanged row does not.
+Tavily HTTP 432 and 433 are additionally classified as quota exhaustion.
 
 An optional, separately built `web-run` Docker sidecar provides self-hosted
 Google or Bing basic search and adds JavaScript-rendered `open`, session-scoped
@@ -123,11 +135,13 @@ non-live access semantics return HTTP `501` with `code: "not_implemented"`
 before any partial operation runs. Every `501` message from these auxiliary
 endpoints also ends with `Consider "Browser Use" skill` so Codex can choose the
 browser fallback. When a selected Profile sets `web.run` to Passthrough,
-`/v1/alpha/search` remains native upstream pass-through even when Tavily or the
-sidecar is configured. **Configured Responses Provider** is the explicit
-exception: every enabled `web.run` endpoint request uses that selected Provider
-for both Modified and Passthrough Profiles. Disabled remains blocked. In other
-Modified modes, supported commands use Rosetta's local search service. The
+`/v1/alpha/search` remains native upstream pass-through even when Tavily, the
+sidecar, or a configured Responses row is present. Passthrough ignores the
+global Provider list and Search Model and uses the current session's native
+Responses route. Configured Responses rows participate only in the complete
+Modified Provider chain, including when one is the first row. Disabled remains
+blocked. In Modified mode, supported commands use Rosetta's provider-chain
+coordinator. The
 model-visible definition always retains
 direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
 `search_query` when either a global Tavily API Key is configured or
