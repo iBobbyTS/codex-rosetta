@@ -1153,6 +1153,9 @@ def create_app(
         InMemoryChatToolSurfaceStore()
     )
     codex_search_reference_store = CodexSearchReferenceStore()
+    from .search_usage import TavilyUsageState
+
+    tavily_usage_state = TavilyUsageState()
     image_fetch_workers = ImageFetchWorkerPool()
     web_run_health_state = WebRunHealthState()
     transport = HttpTransport()
@@ -1269,6 +1272,7 @@ def create_app(
     app.codex_tool_store = codex_tool_store  # type: ignore
     app.chat_tool_surface_coordinator = chat_tool_surface_coordinator  # type: ignore
     app.codex_search_reference_store = codex_search_reference_store  # type: ignore
+    app.tavily_usage_state = tavily_usage_state  # type: ignore
     app.image_fetch_workers = image_fetch_workers  # type: ignore
     app.internal_token = internal_token  # type: ignore
     app.auth_state = auth_state  # type: ignore

@@ -54,7 +54,7 @@ from .keys import (
     rotate_api_key,
     update_api_key,
 )
-from .network_search import test_network_search
+from .network_search import get_network_search_usage, test_network_search
 from .observability import (
     clear_error_dumps,
     clear_requests,
@@ -139,6 +139,9 @@ def register_admin_routes(app: Any) -> None:
         get_network_search_status
     )
     app.route("/admin/api/network-search/test", methods=["POST"])(test_network_search)
+    app.route("/admin/api/network-search/usage", methods=["GET"])(
+        get_network_search_usage
+    )
     # Tool catalog and profiles
     app.route("/admin/api/tools/catalog", methods=["GET"])(get_tool_catalog)
     app.route("/admin/api/tools/profiles", methods=["GET"])(get_tool_profiles)

@@ -259,9 +259,14 @@ async def handle_codex_auxiliary(  # noqa: C901
     use_chain_search = (
         upstream_path == "alpha/search"
         and web_run_mapping
+        and not use_configured_provider_search
         and search_client is None
-        and not (isinstance(body.get("commands"), dict) and body["commands"].get("weather"))
-        and not isinstance(getattr(request.app, "search_provider_coordinator", None), type(None))
+        and not (
+            isinstance(body.get("commands"), dict) and body["commands"].get("weather")
+        )
+        and not isinstance(
+            getattr(request.app, "search_provider_coordinator", None), type(None)
+        )
         and isinstance(body.get("commands"), dict)
         and bool(body["commands"].get("search_query"))
     )
@@ -282,7 +287,8 @@ async def handle_codex_auxiliary(  # noqa: C901
         )
     )
     native_endpoint_available = (
-        use_configured_provider_search or use_chain_search
+        use_configured_provider_search
+        or use_chain_search
         or _native_auxiliary_endpoint_available(
             native_passthrough=native_passthrough,
             upstream_path=upstream_path,
@@ -365,11 +371,18 @@ async def handle_codex_auxiliary(  # noqa: C901
                 resolved_browser_client,
                 reference_store,
                 principal_id,
-                search_candidates=search_candidates if (upstream_path == "alpha/search" and web_run_mapping) else None,
+                search_candidates=search_candidates
+                if (upstream_path == "alpha/search" and web_run_mapping)
+                else None,
                 search_coordinator=search_coordinator if use_chain_search else None,
-                search_executor=(getattr(request.app, "search_provider_executor", None)
-                                 if isinstance(getattr(request.app, "search_provider_executor", None), SearchProviderExecutor)
-                                 else None),
+                search_executor=(
+                    getattr(request.app, "search_provider_executor", None)
+                    if isinstance(
+                        getattr(request.app, "search_provider_executor", None),
+                        SearchProviderExecutor,
+                    )
+                    else None
+                ),
             )
             return response
 

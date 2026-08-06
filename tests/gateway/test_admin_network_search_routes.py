@@ -18,6 +18,7 @@ from codex_rosetta.gateway.auth import (
 )
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.search_usage import TavilyUsageState
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 
 
@@ -205,3 +206,61 @@ def test_search_test_preserves_upstream_error_envelope() -> None:
             "type": "upstream_error",
         }
     }
+
+
+def test_usage_returns_only_safe_tavily_dto_rows() -> None:
+    config = _config()
+    config.web_search = {
+        "providers": [
+            {"id": "tavily-row", "provider": "tavily", "tavily_api_key": "secret"},
+            {"id": "other-row", "provider": "self_hosted_google"},
+        ]
+    }
+    state = TavilyUsageState()
+
+    async def run() -> Any:
+        async def fetch() -> dict[str, object]:
+            return {"account": {"plan_usage": 4.9, "plan_limit": 10.9}}
+
+        await state.get("secret", fetcher=fetch)
+        return await network_search.get_network_search_usage(
+            SimpleNamespace(
+                app=SimpleNamespace(gateway_config=config, tavily_usage_state=state)
+            )
+        )
+
+    response = asyncio.run(run())
+    entry = json.loads(response.body)["entries"][0]
+
+    assert {key: entry[key] for key in ("id", "status", "used", "limit")} == {
+        "id": "tavily-row",
+        "status": "ok",
+        "used": 4,
+        "limit": 10,
+    }
+    assert set(entry) == {"id", "status", "used", "limit", "reset_date"}
+    assert "secret" not in response.body.decode()
+
+
+def test_usage_with_no_tavily_rows_performs_no_io() -> None:
+    config = _config()
+    config.web_search = {
+        "providers": [{"id": "other", "provider": "self_hosted_google"}]
+    }
+
+    class NoIOState(TavilyUsageState):
+        async def get(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError("usage transport must not run")
+
+    response = asyncio.run(
+        network_search.get_network_search_usage(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    gateway_config=config,
+                    tavily_usage_state=NoIOState(),
+                )
+            )
+        )
+    )
+
+    assert json.loads(response.body) == {"entries": []}

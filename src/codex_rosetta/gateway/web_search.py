@@ -16,6 +16,7 @@ from .transport._base import UpstreamSafetyError
 from .transport.http.transport import request_bounded_response
 
 TAVILY_SEARCH_URL = "https://api.tavily.com/search"
+TAVILY_USAGE_URL = "https://api.tavily.com/usage"
 DEFAULT_TAVILY_TIMEOUT_SECONDS = 120.0
 WEB_SEARCH_TOOL_NAMES = {"web_search", "web_search_preview"}
 WEB_SEARCH_PROFILE_ITEM_ID = "hosted.web_search"
@@ -180,6 +181,46 @@ class TavilyHTTPClient:
         if invalid_json:
             raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_JSON) from None
         if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+            raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_SHAPE)
+        return parsed
+
+    async def usage(self) -> dict[str, Any]:
+        """Fetch account usage through Tavily's safe, secret-redacted endpoint."""
+        headers = {"Authorization": f"Bearer {self.api_key}"}
+        request_failed = False
+        try:
+            async with AsyncClient(timeout=self.timeout) as client:
+                response = await request_bounded_response(
+                    client, "GET", TAVILY_USAGE_URL, headers=headers
+                )
+        except MemoryError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, (CodexRosettaBlockedError, UpstreamSafetyError)):
+                raise
+            request_failed = True
+            response = None
+        if request_failed:
+            raise TavilyRequestError(
+                TavilyRequestErrorCategory.CONNECTION_ERROR
+            ) from None
+        assert response is not None
+        if self._redactor.contains_json_semantic(response.content):
+            raise TavilyCredentialCollisionError(
+                "Tavily response contains a configured credential; response blocked"
+            )
+        if not 200 <= response.status_code < 300:
+            raise TavilyRequestError(
+                TavilyRequestErrorCategory.HTTP_ERROR,
+                status_code=response.status_code,
+            )
+        try:
+            parsed = response.json()
+        except MemoryError:
+            raise
+        except Exception:
+            raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_JSON) from None
+        if not isinstance(parsed, dict):
             raise TavilyRequestError(TavilyRequestErrorCategory.INVALID_SHAPE)
         return parsed
 

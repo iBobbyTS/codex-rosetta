@@ -89,6 +89,45 @@ def test_tavily_accepts_empty_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert result == {"results": []}
 
 
+def test_tavily_usage_gets_bounded_safe_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        captured.update(method=args[1], url=args[2], kwargs=kwargs)
+        return BoundedHttpResponse(200, {}, b'{"account":{"plan_usage":1}}')
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    result = asyncio.run(TavilyHTTPClient("secret-key", timeout=3).usage())
+
+    assert result == {"account": {"plan_usage": 1}}
+    assert captured["method"] == "GET"
+    assert captured["url"] == web_search_module.TAVILY_USAGE_URL
+    assert captured["kwargs"]["headers"] == {"Authorization": "Bearer secret-key"}
+
+
+@pytest.mark.parametrize(
+    ("status_code", "content", "category"),
+    [(403, b'{"private":"quota"}', "http_error"), (200, b"not-json", "invalid_json")],
+)
+def test_tavily_usage_failures_are_typed_and_secret_safe(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    content: bytes,
+    category: str,
+) -> None:
+    async def fake_request(*args: Any, **kwargs: Any) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(status_code, {}, content)
+
+    monkeypatch.setattr(web_search_module, "request_bounded_response", fake_request)
+    with pytest.raises(TavilyRequestError) as caught:
+        asyncio.run(TavilyHTTPClient("secret-key").usage())
+    assert caught.value.category == category
+    assert "secret-key" not in str(caught.value)
+
+
 @pytest.mark.parametrize("failure_site", ["request", "client_exit", "response_json"])
 def test_tavily_request_boundary_propagates_memory_error(
     monkeypatch: pytest.MonkeyPatch,
