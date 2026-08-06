@@ -140,8 +140,8 @@
   <div class="settings-popup" class:open={settingsOpen} role="presentation" onclick={(event) => { if (event.target === event.currentTarget) settingsOpen = false; }}>
     <div class="settings-popup-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <h3 id="settings-title">{t('modal.settings')}</h3>
-      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme')}</label><Dropdown id="settingsThemeSelect" value={theme} options={themeOptions} onChange={(value: DropdownValue) => setTheme(String(value))} /></div>
-      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language')}</label><Dropdown id="settingsLangSelect" value={language.value} options={languageOptions} onChange={(value: DropdownValue) => setLanguage(String(value) === 'zh' ? 'zh' : 'en')} /></div>
+      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme')}</label><Dropdown id="settingsThemeSelect" value={theme} options={themeOptions} fitViewport={true} onChange={(value: DropdownValue) => setTheme(String(value))} /></div>
+      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language')}</label><Dropdown id="settingsLangSelect" value={language.value} options={languageOptions} fitViewport={true} onChange={(value: DropdownValue) => setLanguage(String(value) === 'zh' ? 'zh' : 'en')} /></div>
       <div class="settings-divider"></div>
       <div style="text-align:center;padding:4px 0 2px">
         <div style="font-size:15px;font-weight:600;margin-bottom:2px">{t('product.name')}</div>

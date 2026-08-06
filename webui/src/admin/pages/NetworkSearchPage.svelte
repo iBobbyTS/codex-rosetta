@@ -335,10 +335,10 @@
                   <button class="order-button" disabled={index === rows.length - 1} aria-label={t('aria.moveSearchProviderDown')} onclick={() => moveRow(row.id, 1)}>↓</button>
                 </div>
                 <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
-                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
+                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
                 {#if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
-                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={!responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
+                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={!responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
                 {/if}
                 <button class="btn btn-sm btn-danger remove-row" onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
               </td>
@@ -348,7 +348,7 @@
                   <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
                 {:else if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
-                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} options={responsesModels.map((name)=>({value:name,label:name}))} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
+                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
                 {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
               </td>
               <td class="search-quota-cell">

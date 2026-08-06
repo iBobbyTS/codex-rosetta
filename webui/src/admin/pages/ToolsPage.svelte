@@ -315,6 +315,7 @@
     <span role="presentation" onclick={(event) => event.stopPropagation()}>
     <Dropdown
       className="tool-state-select"
+      fitViewport={true}
       ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
       disabled={selected?.readonly || effectiveDisabled(item)}
       onTriggerClick={(event) => event.stopPropagation()}
@@ -354,6 +355,7 @@
         <span role="presentation" onclick={(event) => event.stopPropagation()}>
         <Dropdown
           className="tool-state-select"
+          fitViewport={true}
           ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
           disabled={selected?.readonly}
           onTriggerClick={(event) => event.stopPropagation()}
@@ -398,7 +400,7 @@
     </div>
     <div class="tool-profile-toolbar">
       <label for="toolProfileSelect">{t('tools.profile')}</label>
-      <Dropdown id="toolProfileSelect" value={selectedId} options={(profilesData.profiles ?? []).map((profile)=>({value:profile.id,label:profile.name}))} onChange={(value:DropdownValue)=>selectProfile(String(value))} />
+      <Dropdown id="toolProfileSelect" value={selectedId} options={(profilesData.profiles ?? []).map((profile)=>({value:profile.id,label:profile.name}))} fitViewport={true} onChange={(value:DropdownValue)=>selectProfile(String(value))} />
       <button class="btn btn-sm" onclick={() => { cloneName = ''; cloneOpen = true; }}>{t('tools.cloneProfile')}</button>
       <button class="btn btn-sm btn-primary" disabled={busy || !dirty} onclick={() => void saveAs(selected.id)}>{t('tools.saveProfile')}</button>
       <button class="btn btn-sm" disabled={busy || !dirty} onclick={() => selectProfile(selected.id)}>{t('tools.resetProfile')}</button>
@@ -494,6 +496,7 @@
                       <Dropdown
                         id={`tool-${detail.id}-${input.id}`}
                         className="tool-profile-input"
+                        fitViewport={true}
                         disabled={input.readonly}
                         value={inputValue(detail, input)}
                         options={(input.options ?? []).map((option)=>({value:option.value,label:option.label ?? option.value}))}

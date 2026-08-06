@@ -197,7 +197,7 @@
       <h3>{t('section.settingsServer')}</h3>
       <label>{t('label.globalProxy')} <input bind:value={proxy} placeholder={t('placeholder.genericProxy')} /></label>
       <label for="settingsRequestBodyLimit">{t('label.requestBodyLimit')}
-        <Dropdown id="settingsRequestBodyLimit" value={bodyLimit} options={bodyLimitOptions} onChange={(value: DropdownValue) => { bodyLimit = value; }} />
+        <Dropdown id="settingsRequestBodyLimit" value={bodyLimit} options={bodyLimitOptions} fitViewport={true} onChange={(value: DropdownValue) => { bodyLimit = value; }} />
       </label>
       <label class="check"><input type="checkbox" bind:checked={localMode} /> {t('label.localMode')}</label>
       <p class:warning={localMode && !localModeConfirmed} class="hint">
@@ -211,15 +211,15 @@
     <div class="panel">
       <h3>{t('section.taskModels')}</h3>
       <label for="settingsReviewModel">{t('label.autoReviewModelShort')}
-        <Dropdown id="settingsReviewModel" value={reviewModel} options={modelOptions(taskDefaults.review, reviewModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { reviewModel = String(value); }} />
+        <Dropdown id="settingsReviewModel" value={reviewModel} options={modelOptions(taskDefaults.review, reviewModel)} fitViewport={true} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { reviewModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(reviewModel, taskDefaults.review)}>{taskStatus(reviewModel, taskDefaults.review)}</p>
       <label for="settingsConsolidationModel">{t('label.memoryConsolidationModelShort')}
-        <Dropdown id="settingsConsolidationModel" value={consolidationModel} options={modelOptions(taskDefaults.consolidation, consolidationModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { consolidationModel = String(value); }} />
+        <Dropdown id="settingsConsolidationModel" value={consolidationModel} options={modelOptions(taskDefaults.consolidation, consolidationModel)} fitViewport={true} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { consolidationModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(consolidationModel, taskDefaults.consolidation)}>{taskStatus(consolidationModel, taskDefaults.consolidation)}</p>
       <label for="settingsExtractModel">{t('label.memoryExtractionModelShort')}
-        <Dropdown id="settingsExtractModel" value={extractModel} options={modelOptions(taskDefaults.extract, extractModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { extractModel = String(value); }} />
+        <Dropdown id="settingsExtractModel" value={extractModel} options={modelOptions(taskDefaults.extract, extractModel)} fitViewport={true} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { extractModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(extractModel, taskDefaults.extract)}>{taskStatus(extractModel, taskDefaults.extract)}</p>
       <button class="primary" disabled={busy || !taskModelsEnabled} onclick={saveCodex}>{t('btn.saveCodexSettings')}</button>

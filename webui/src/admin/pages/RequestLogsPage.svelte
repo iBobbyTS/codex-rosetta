@@ -78,8 +78,8 @@
   <div class="filters">
     <input aria-label={t('col.model')} bind:value={model} placeholder={t('filter.allModels')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
     <input aria-label={t('col.provider')} bind:value={provider} placeholder={t('filter.allProviders')} onkeydown={(event)=>{if(event.key==='Enter')void reload(true);}} />
-    <Dropdown ariaLabel={t('col.status')} value={status} options={[{value:'',label:t('filter.allStatus')},{value:'ok',label:t('filter.ok')},{value:'error',label:t('filter.error')}]} onChange={(value:DropdownValue)=>{status=String(value);void reload(true);}} />
-    <Dropdown ariaLabel={t('col.apiKey')} value={apiKeyLabel} options={[{value:'',label:t('filter.allKeys')},...keyLabels.map((label)=>({value:label,label}))]} onChange={(value:DropdownValue)=>{apiKeyLabel=String(value);void reload(true);}} />
+    <Dropdown ariaLabel={t('col.status')} value={status} options={[{value:'',label:t('filter.allStatus')},{value:'ok',label:t('filter.ok')},{value:'error',label:t('filter.error')}]} fitViewport={true} onChange={(value:DropdownValue)=>{status=String(value);void reload(true);}} />
+    <Dropdown ariaLabel={t('col.apiKey')} value={apiKeyLabel} options={[{value:'',label:t('filter.allKeys')},...keyLabels.map((label)=>({value:label,label}))]} fitViewport={true} onChange={(value:DropdownValue)=>{apiKeyLabel=String(value);void reload(true);}} />
     <button class="btn btn-sm" onclick={reset}>{t('btn.resetFilters')}</button><button class="btn btn-sm btn-danger" disabled={clearing} onclick={()=>void clearLogs()}>{clearing?t('status.clearingLogs'):t('btn.clearRequestLogs')}</button>
   </div>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}
