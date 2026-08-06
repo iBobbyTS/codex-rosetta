@@ -76,14 +76,21 @@ class SearchRequest:
 
     body: dict[str, Any]
     queries: tuple[tuple[str, WebSearchSettings], ...] = ()
+    requires_reference_storage: bool = False
 
     @classmethod
     def from_body(
         cls,
         body: Mapping[str, Any],
         queries: Sequence[tuple[str, WebSearchSettings]] = (),
+        *,
+        requires_reference_storage: bool = False,
     ) -> SearchRequest:
-        return cls(copy.deepcopy(dict(body)), tuple(queries))
+        return cls(
+            copy.deepcopy(dict(body)),
+            tuple(queries),
+            requires_reference_storage=requires_reference_storage,
+        )
 
 
 class SearchResponseClient(Protocol):
@@ -293,7 +300,7 @@ class SearchProviderExecutor:
             ) from None
 
 
-def _validate_candidate_execution_contract(
+def _validate_candidate_execution_contract(  # noqa: C901
     candidate: object, request: SearchRequest
 ) -> None:
     """Reject candidates whose declared contract cannot execute this request.
@@ -346,6 +353,19 @@ def _validate_candidate_execution_contract(
     if not required_capabilities <= contract.capabilities:
         raise SearchProviderTerminalError(
             "Search provider capabilities are insufficient"
+        )
+    if any(settings.include_domains for _, settings in request.queries):
+        if SearchProviderCapability.DOMAIN_FILTER not in contract.capabilities:
+            raise SearchProviderTerminalError(
+                "Search provider does not support domain filtering"
+            )
+    if (
+        request.requires_reference_storage
+        and contract.execution_mode is SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER
+        and SearchProviderCapability.REFERENCE_STORAGE not in contract.capabilities
+    ):
+        raise SearchProviderTerminalError(
+            "Search provider does not support reference storage"
         )
     if contract.execution_mode is SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER:
         for query, settings in request.queries:

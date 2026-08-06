@@ -24,6 +24,10 @@ from codex_rosetta.gateway.search_provider_chain import (
 )
 from codex_rosetta.gateway.search_provider_contract import (
     GPT_PASSTHROUGH_CONTRACT,
+    SearchProviderCapability,
+    SearchProviderContract,
+    SearchProviderExecutionMode,
+    SearchProviderFamily,
 )
 from codex_rosetta.gateway.search_provider_executor import (
     SearchProviderExecutor,
@@ -278,6 +282,71 @@ def test_unknown_candidate_is_terminal_without_external_call():
     request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
     with pytest.raises(SearchProviderTerminalError):
         run(SearchProviderExecutor().execute(cast(object, object()), request))
+
+
+@pytest.mark.parametrize(
+    ("missing", "search_request"),
+    [
+        (
+            SearchProviderCapability.DOMAIN_FILTER,
+            SearchRequest.from_body(
+                {}, [("q", WebSearchSettings(include_domains=("example.com",)))]
+            ),
+        ),
+        (
+            SearchProviderCapability.MULTI_QUERY,
+            SearchRequest.from_body(
+                {}, [("a", WebSearchSettings()), ("b", WebSearchSettings())]
+            ),
+        ),
+        (
+            SearchProviderCapability.NORMALIZED_RESULTS,
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        ),
+        (
+            SearchProviderCapability.REFERENCE_STORAGE,
+            SearchRequest.from_body(
+                {}, [("q", WebSearchSettings())], requires_reference_storage=True
+            ),
+        ),
+    ],
+)
+def test_local_missing_capability_is_terminal_before_budget_or_client(
+    missing: SearchProviderCapability,
+    search_request: SearchRequest,
+) -> None:
+    candidate = TavilySearchProviderCandidate("row", api_key="secret")
+    capabilities = frozenset(
+        {
+            SearchProviderCapability.SEARCH_QUERY,
+            SearchProviderCapability.DOMAIN_FILTER,
+            SearchProviderCapability.MULTI_QUERY,
+            SearchProviderCapability.NORMALIZED_RESULTS,
+            SearchProviderCapability.REFERENCE_STORAGE,
+        }
+        - {missing}
+    )
+    object.__setattr__(
+        candidate,
+        "contract",
+        SearchProviderContract.create(
+            SearchProviderFamily.TAVILY_LOCAL,
+            SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER,
+            capabilities,
+        ),
+    )
+    client = FakeSearch([{"output": "must not run", "results": []}])
+    budget = SearchProviderRequestBudget()
+
+    with pytest.raises(SearchProviderTerminalError):
+        run(
+            SearchProviderExecutor(tavily_client=client).execute(
+                candidate, search_request, request_budget=budget
+            )
+        )
+
+    assert client.calls == []
+    assert budget.external_calls == 0
 
 
 def test_responses_terminal_status_is_typed():

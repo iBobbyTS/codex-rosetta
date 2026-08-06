@@ -599,14 +599,18 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport(
     )
     request.app.transport.send_passthrough.return_value = UpstreamResponse(
         status_code=200,
-        body={"output": "Python 3.test", "results": []},
-        raw_content=b'{"output":"Python 3.test","results":[]}',
+        body={"output": "Python 3.test", "results": [], "opaque": {"x": 1}},
+        raw_content=b'{"output":"Python 3.test","results":[],"opaque":{"x":1}}',
     )
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
     assert response.status_code == 200
-    assert set(json.loads(response.body)) == {"output", "results"}
+    assert json.loads(response.body) == {
+        "output": "Python 3.test",
+        "results": [],
+        "opaque": {"x": 1},
+    }
     provider_info, url, forwarded_body = (
         request.app.transport.send_passthrough.await_args.args
     )
@@ -642,6 +646,73 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport(
     assert records[-1]["data"]["candidate_provider"] == (
         "configured_responses_provider"
     )
+
+
+def test_gpt_only_passthrough_accepts_recency_and_passthrough_command():
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-only",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            }
+        ],
+    )
+    body = _search_body(
+        {
+            "search_query": [{"q": "Python documentation", "recency": 7}],
+            "image_query": [{"q": "Python logo"}],
+        }
+    )
+    request = _make_request(body)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"output": "ok", "results": [], "opaque": True},
+        raw_content=b"{}",
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {
+        "output": "ok",
+        "results": [],
+        "opaque": True,
+    }
+    assert request.app.transport.send_passthrough.await_args.args[2] == body | {
+        "model": "gpt-5.6-luna"
+    }
+
+
+def test_mixed_chain_rejects_recency_before_any_provider_call():
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python", "recency": 7}]})
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    request.app.transport.send_passthrough.assert_not_awaited()
 
 
 def test_modified_responses_candidate_blocks_search_credential_collision() -> None:

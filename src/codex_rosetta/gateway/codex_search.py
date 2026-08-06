@@ -42,7 +42,15 @@ from .search_provider_candidates import (
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
 )
-from .search_provider_executor import SearchProviderExecutor, SearchRequest
+from .search_provider_executor import (
+    SearchProviderExecutor,
+    SearchProviderTerminalError,
+    SearchRequest,
+)
+from .search_provider_contract import (
+    SearchProviderCapability,
+    SearchProviderExecutionMode,
+)
 from .transport._base import UpstreamSafetyError
 from .web_search import (
     TavilyHTTPClient,
@@ -142,6 +150,7 @@ class CodexSearchBridgeResult:
     find_count: int = 0
     screenshot_count: int = 0
     browser_open_count: int = 0
+    passthrough_body: dict[str, Any] | None = None
 
     @property
     def tavily_result_count(self) -> int:
@@ -149,6 +158,8 @@ class CodexSearchBridgeResult:
         return self.search_result_count if self.search_provider == "tavily" else 0
 
     def response_body(self) -> dict[str, Any]:
+        if self.passthrough_body is not None:
+            return dict(self.passthrough_body)
         body: dict[str, Any] = {"output": self.output}
         if self.results is not None:
             body["results"] = [dict(result) for result in self.results]
@@ -203,6 +214,7 @@ class _SearchExecution:
     cache_hit: bool
     results: tuple[dict[str, Any], ...] | None
     attribution: CodexSearchAttribution | None = None
+    passthrough_body: dict[str, Any] | None = None
 
 
 def should_use_local_codex_search(
@@ -230,7 +242,7 @@ def should_use_local_codex_search(
     )
 
 
-async def execute_local_codex_search(
+async def execute_local_codex_search(  # noqa: C901
     body: dict[str, Any],
     web_search_config: dict[str, Any] | None,
     *,
@@ -250,6 +262,51 @@ async def execute_local_codex_search(
     commands = body.get("commands")
     if not isinstance(commands, dict):
         raise CodexSearchInvalidRequest("'commands' must be an object")
+
+    passthrough_only = _all_alpha_search_passthrough(search_candidates)
+    if passthrough_only:
+        queries = _parse_passthrough_search_queries(commands)
+        if not queries:
+            raise CodexSearchInvalidRequest(
+                "'commands' must contain at least one search_query"
+            )
+        request_budget = request_budget or SearchProviderRequestBudget()
+        search_execution = await _execute_search_queries(
+            queries,
+            body=body,
+            search_client=client,
+            search_provider="configured_responses_provider",
+            reference_store=None,
+            scope=None,
+            request_budget=request_budget,
+            search_candidates=search_candidates,
+            search_coordinator=search_coordinator,
+            search_executor=search_executor,
+        )
+        passthrough = search_execution.passthrough_body
+        if passthrough is None:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.INVALID_RESPONSE
+            )
+        return CodexSearchBridgeResult(
+            output=str(passthrough.get("output") or ""),
+            search_count=len(queries),
+            open_count=0,
+            time_count=0,
+            search_result_count=(
+                len(passthrough["results"])
+                if isinstance(passthrough.get("results"), list)
+                else 0
+            ),
+            search_provider=(
+                search_execution.attribution.search_provider
+                if search_execution.attribution is not None
+                else "configured_responses_provider"
+            ),
+            attribution=search_execution.attribution,
+            results=None,
+            passthrough_body=passthrough,
+        )
 
     supported_fields = web_run_supported_command_fields(
         search_available=True,
@@ -311,6 +368,18 @@ async def execute_local_codex_search(
         StaticPageHTTPClient() if open_operations and browser_client is None else None
     )
     scope = _reference_scope(body, principal_id, reference_store)
+    if scope is not None and search_candidates is not None:
+        for candidate in search_candidates:
+            contract = getattr(candidate, "contract", None)
+            if (
+                getattr(contract, "execution_mode", None)
+                is SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER
+                and SearchProviderCapability.REFERENCE_STORAGE
+                not in getattr(contract, "capabilities", frozenset())
+            ):
+                raise SearchProviderTerminalError(
+                    "Search provider does not support reference storage"
+                )
     if (
         scope is not None
         and reference_store is not None
@@ -414,6 +483,82 @@ async def execute_local_codex_search(
     )
 
 
+def _all_alpha_search_passthrough(
+    candidates: tuple[SearchProviderCandidate, ...] | None,
+) -> bool:
+    """Return whether every selected candidate exposes the full alpha/search wire."""
+    return bool(candidates) and all(
+        getattr(candidate, "contract", None) is not None
+        and getattr(candidate.contract, "execution_mode", None)
+        is SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH
+        and SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH
+        in getattr(candidate.contract, "capabilities", frozenset())
+        for candidate in candidates
+    )
+
+
+_PASSTHROUGH_COMMAND_FIELDS: dict[str, frozenset[str] | None] = {
+    "search_query": frozenset({"q", "domains", "recency"}),
+    "image_query": frozenset({"q"}),
+    "finance": frozenset({"ticker", "type"}),
+    "weather": frozenset({"location"}),
+    "sports": frozenset({"fn", "league", "team", "opponent", "date_from", "date_to"}),
+    "open": frozenset({"ref_id", "lineno"}),
+    "click": frozenset({"ref_id", "id"}),
+    "find": frozenset({"ref_id", "pattern"}),
+    "screenshot": frozenset({"ref_id", "pageno"}),
+    "time": frozenset({"utc_offset"}),
+}
+
+
+def _parse_passthrough_search_queries(
+    commands: dict[str, Any],
+) -> list[tuple[str, WebSearchSettings]]:
+    """Validate source-known command keys while extracting only query settings."""
+    for command, items in commands.items():
+        if command not in _PASSTHROUGH_COMMAND_FIELDS and _has_value(items):
+            raise CodexSearchNotImplemented(
+                f"Codex search feature has no source schema for commands.{command}"
+            )
+        allowed = _PASSTHROUGH_COMMAND_FIELDS.get(command)
+        if allowed is None or not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict):
+                unknown = {
+                    key
+                    for key, value in item.items()
+                    if key not in allowed and _has_value(value)
+                }
+                if unknown:
+                    raise CodexSearchNotImplemented(
+                        f"Codex search feature has no source schema for commands.{command}[]"
+                    )
+    raw_queries = commands.get("search_query")
+    if not isinstance(raw_queries, list):
+        return []
+    if len(raw_queries) > _MAX_SEARCH_QUERIES:
+        raise CodexSearchInvalidRequest(
+            f"'commands.search_query' supports at most {_MAX_SEARCH_QUERIES} entries"
+        )
+    parsed: list[tuple[str, WebSearchSettings]] = []
+    for index, item in enumerate(raw_queries):
+        if not isinstance(item, dict):
+            raise CodexSearchInvalidRequest(
+                f"'commands.search_query[{index}]' must be an object"
+            )
+        query = item.get("q")
+        if not isinstance(query, str) or not query.strip():
+            raise CodexSearchInvalidRequest(
+                f"'commands.search_query[{index}].q' must be a non-empty string"
+            )
+        domains = _parse_domains(
+            item.get("domains"), f"commands.search_query[{index}].domains"
+        )
+        parsed.append((query.strip(), WebSearchSettings(include_domains=domains)))
+    return parsed
+
+
 async def _execute_search_queries(  # noqa: C901
     queries: list[tuple[str, WebSearchSettings]],
     *,
@@ -448,7 +593,13 @@ async def _execute_search_queries(  # noqa: C901
 
     if search_candidates is not None and search_coordinator is not None:
         selected: list[SearchProviderCandidate] = []
-        request = SearchRequest.from_body(body, queries)
+        request = SearchRequest.from_body(
+            body,
+            queries,
+            requires_reference_storage=(
+                reference_store is not None and scope is not None
+            ),
+        )
         executor = search_executor or SearchProviderExecutor(
             self_hosted_client=search_client
         )
@@ -466,6 +617,23 @@ async def _execute_search_queries(  # noqa: C901
             )
         successful_candidate = selected[-1]
         attribution = _candidate_attribution(successful_candidate)
+        if (
+            successful_candidate.contract.execution_mode
+            is SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH
+        ):
+            return _SearchExecution(
+                sections=(),
+                result_count=(
+                    len(merged["results"])
+                    if isinstance(merged.get("results"), list)
+                    else 0
+                ),
+                reference_count=0,
+                cache_hit=False,
+                results=None,
+                attribution=attribution,
+                passthrough_body=merged,
+            )
         per_query = merged.get("query_outputs")
         if len(queries) > 1 and not (
             isinstance(per_query, list) and len(per_query) == len(queries)
