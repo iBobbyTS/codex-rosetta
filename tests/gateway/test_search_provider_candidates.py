@@ -10,11 +10,7 @@ from codex_rosetta.gateway.search_provider_candidates import (
     TavilySearchProviderCandidate,
     build_search_provider_candidates,
 )
-from codex_rosetta.gateway.transport.provider_info import (
-    KeyRing,
-    ProviderInfo,
-    openai_auth,
-)
+from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
 
 ALLOWED_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
 
@@ -144,7 +140,7 @@ def test_rejects_model_outside_shared_allowlist():
                     "responses_model": "gpt-5.6-sol",
                 },
             ],
-            {"upstream": _provider("responses", "other,shared")},
+            {"upstream": _provider("responses", "shared")},
             {"upstream": "responses"},
         ),
         (
@@ -163,8 +159,8 @@ def test_rejects_model_outside_shared_allowlist():
                 },
             ],
             {
-                "one": _provider("responses", "first,shared"),
-                "two": _provider("responses", "shared,second"),
+                "one": _provider("responses", "shared"),
+                "two": _provider("responses", "shared"),
             },
             {"one": "responses", "two": "responses"},
         ),
@@ -181,18 +177,8 @@ def test_rejects_every_remote_credential_overlap_without_leaking_secret(
     assert "hmac-sha256" not in message
 
 
-def test_deduplicates_one_provider_key_ring_without_advancing_or_expanding_rows(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    upstream = _provider("responses", "first,second,first")
-    selected_rings: list[KeyRing] = []
-    original_next = KeyRing.next
-
-    def tracked_next(key_ring: KeyRing) -> str:
-        selected_rings.append(key_ring)
-        return original_next(key_ring)
-
-    monkeypatch.setattr(KeyRing, "next", tracked_next)
+def test_candidate_build_keeps_single_credential_stable_without_runtime_state():
+    upstream = _provider("responses", "first")
     row = {
         "id": "responses",
         "provider": "configured_responses_provider",
@@ -203,14 +189,33 @@ def test_deduplicates_one_provider_key_ring_without_advancing_or_expanding_rows(
     candidates = _build([row], {"upstream": upstream}, {"upstream": "responses"})
 
     assert len(candidates) == 1
-    assert selected_rings == []
     assert upstream.auth_headers() == {"Authorization": "Bearer first"}
-    assert upstream.auth_headers() == {"Authorization": "Bearer second"}
-    assert selected_rings == [upstream.key_ring, upstream.key_ring]
-    deduplicated = _provider("responses", "first,second")
-    rebuilt = _build([row], {"upstream": deduplicated}, {"upstream": "responses"})
-    assert selected_rings == [upstream.key_ring, upstream.key_ring]
+    assert upstream.auth_headers() == {"Authorization": "Bearer first"}
+    rebuilt = _build(
+        [row],
+        {"upstream": _provider("responses", "first")},
+        {"upstream": "responses"},
+    )
     assert candidates[0].identity == rebuilt[0].identity
+
+
+def test_rejects_duplicate_configured_responses_provider_by_row_id_only():
+    rows = [
+        {
+            "id": row_id,
+            "provider": "configured_responses_provider",
+            "responses_provider": "upstream",
+            "responses_model": "gpt-5.6-sol",
+        }
+        for row_id in ("first", "second")
+    ]
+
+    with pytest.raises(ValueError, match="repeat Responses provider.*second") as exc:
+        _build(
+            rows, {"upstream": _provider("responses", "key")}, {"upstream": "responses"}
+        )
+
+    assert "first" not in str(exc.value)
 
 
 @pytest.mark.parametrize(
@@ -263,7 +268,7 @@ def test_allows_disjoint_remote_credentials_and_distinct_self_hosted_types():
         len(
             _build(
                 rows,
-                {"upstream": _provider("responses", "one,two")},
+                {"upstream": _provider("responses", "one")},
                 {"upstream": "responses"},
             )
         )

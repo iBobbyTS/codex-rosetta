@@ -120,6 +120,13 @@ export CODEX_ROSETTA_API_KEY='rsk-replace-with-a-strong-secret'
 任一值为空或环境变量仍未解析时，网关都会拒绝启动。Provider API 密钥与网关密钥
 相互独立，继续使用各 Provider 对应的环境变量。
 
+每个已配置的上游 Provider 只使用一个 API 密钥。若要使用多个上游账号，应为每个账号
+创建一个名称不同的独立 Provider，不能在单个 Provider 中填写逗号分隔的多个密钥。
+迁移期间仍可读取旧的逗号分隔值：环境变量替换完成后，Gateway 会按原顺序选取第一个
+trim 后非空的密钥，并忽略其余密钥。加载或查看配置不会改写文件；下次在 Admin 中成功
+保存该 Provider 时，才会只持久化选中的首个密钥。该 Provider 规则不会改变
+`server.api_keys`；后者仍是用于认证 Gateway 客户端的多 principal 列表。
+
 ## Docker 与远程访问
 
 容器监听 `0.0.0.0`，以便 Docker 发布网关端口；这不会放宽认证要求。请保留生成的

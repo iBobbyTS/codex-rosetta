@@ -103,16 +103,87 @@ def _identity_domain(
     )
 
 
-def _stable_credentials(provider_info: ProviderInfo) -> tuple[str, ...]:
-    return tuple(
-        dict.fromkeys(value for value in provider_info.credential_values if value)
-    )
-
-
 def _overlap_error(first_row_id: str, second_row_id: str) -> ValueError:
     return ValueError(
         "config: web search provider rows "
         f"{first_row_id!r} and {second_row_id!r} use overlapping credentials"
+    )
+
+
+def _configured_responses_candidate(
+    row: Mapping[str, Any],
+    row_id: str,
+    providers: Mapping[str, ProviderInfo],
+    provider_api_types: Mapping[str, str],
+    allowed_responses_models: Collection[str],
+    seen_providers: set[str],
+) -> tuple[ConfiguredResponsesSearchProviderCandidate, tuple[str, ...]]:
+    """Build one configured Responses candidate and validate its dependency."""
+    provider_name = str(row["responses_provider"])
+    if provider_name in seen_providers:
+        raise ValueError(
+            "config: web search provider rows must not repeat Responses "
+            f"provider {provider_name!r}; duplicate row {row_id!r}"
+        )
+    seen_providers.add(provider_name)
+    provider_info = providers.get(provider_name)
+    if provider_info is None:
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must name an enabled Responses provider"
+        )
+    if provider_api_types.get(provider_name) != "responses":
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must name a provider with api_type 'responses'"
+        )
+    responses_model = str(row["responses_model"])
+    if responses_model not in allowed_responses_models:
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} has an unsupported Responses model"
+        )
+    credentials = provider_info.credential_values
+    if len(credentials) != 1:
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must resolve exactly one provider credential"
+        )
+    return (
+        ConfiguredResponsesSearchProviderCandidate(
+            row_id=row_id,
+            responses_provider=provider_name,
+            responses_model=responses_model,
+            provider_info=provider_info,
+            identity=secret_fingerprint(
+                _identity_domain(row, provider_info=provider_info), credentials
+            ),
+        ),
+        credentials,
+    )
+
+
+def _self_hosted_candidate(
+    row: Mapping[str, Any],
+    row_id: str,
+    provider_type: str,
+    seen_provider_types: set[str],
+) -> SelfHostedSearchProviderCandidate:
+    """Build one credential-free candidate and enforce type uniqueness."""
+    if provider_type not in SELF_HOSTED_PROVIDERS:
+        raise ValueError(
+            f"config: web search provider row {row_id!r} has an unknown type"
+        )
+    if provider_type in seen_provider_types:
+        raise ValueError(
+            "config: web search provider rows must not repeat self-hosted "
+            f"type {provider_type!r}; duplicate row {row_id!r}"
+        )
+    seen_provider_types.add(provider_type)
+    return SelfHostedSearchProviderCandidate(
+        row_id=row_id,
+        provider=cast(SelfHostedProviderType, provider_type),
+        identity=secret_fingerprint(_identity_domain(row), ()),
     )
 
 
@@ -141,6 +212,7 @@ def build_search_provider_candidates(
     candidates: list[SearchProviderCandidate] = []
     credential_owners: dict[str, str] = {}
     seen_self_hosted: set[str] = set()
+    seen_responses_providers: set[str] = set()
 
     for row in rows:
         row_id = str(row["id"])
@@ -156,54 +228,17 @@ def build_search_provider_candidates(
                 identity=secret_fingerprint(_identity_domain(row), credentials),
             )
         elif provider_type == CONFIGURED_RESPONSES_PROVIDER:
-            provider_name = str(row["responses_provider"])
-            provider_info = providers.get(provider_name)
-            if provider_info is None:
-                raise ValueError(
-                    "config: web search provider row "
-                    f"{row_id!r} must name an enabled Responses provider"
-                )
-            if provider_api_types.get(provider_name) != "responses":
-                raise ValueError(
-                    "config: web search provider row "
-                    f"{row_id!r} must name a provider with api_type 'responses'"
-                )
-            responses_model = str(row["responses_model"])
-            if responses_model not in allowed_responses_models:
-                raise ValueError(
-                    "config: web search provider row "
-                    f"{row_id!r} has an unsupported Responses model"
-                )
-            credentials = _stable_credentials(provider_info)
-            if not credentials:
-                raise ValueError(
-                    "config: web search provider row "
-                    f"{row_id!r} must resolve at least one provider credential"
-                )
-            candidate = ConfiguredResponsesSearchProviderCandidate(
-                row_id=row_id,
-                responses_provider=provider_name,
-                responses_model=responses_model,
-                provider_info=provider_info,
-                identity=secret_fingerprint(
-                    _identity_domain(row, provider_info=provider_info), credentials
-                ),
+            candidate, credentials = _configured_responses_candidate(
+                row,
+                row_id,
+                providers,
+                provider_api_types,
+                allowed_responses_models,
+                seen_responses_providers,
             )
         else:
-            if provider_type not in SELF_HOSTED_PROVIDERS:
-                raise ValueError(
-                    f"config: web search provider row {row_id!r} has an unknown type"
-                )
-            if provider_type in seen_self_hosted:
-                raise ValueError(
-                    "config: web search provider rows must not repeat self-hosted "
-                    f"type {provider_type!r}; duplicate row {row_id!r}"
-                )
-            seen_self_hosted.add(provider_type)
-            candidate = SelfHostedSearchProviderCandidate(
-                row_id=row_id,
-                provider=cast(SelfHostedProviderType, provider_type),
-                identity=secret_fingerprint(_identity_domain(row), ()),
+            candidate = _self_hosted_candidate(
+                row, row_id, provider_type, seen_self_hosted
             )
 
         for credential in credentials:

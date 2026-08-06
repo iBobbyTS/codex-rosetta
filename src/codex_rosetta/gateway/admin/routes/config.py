@@ -35,6 +35,7 @@ from ...model_profiles import (
     resolve_model_profile,
 )
 from ...provider_profiles import provider_catalog_for_admin, resolve_soft_interrupt
+from ...providers import normalize_provider_api_key
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     TOOL_PROFILE_PASSTHROUGH_OPTION,
@@ -534,7 +535,9 @@ async def get_config(request: Any) -> Response:
     for name, cfg in providers.items():
         masked = dict(cfg)
         if "api_key" in masked:
-            masked["api_key"] = _mask_api_key(masked["api_key"])
+            masked["api_key"] = _mask_api_key(
+                normalize_provider_api_key(masked["api_key"])
+            )
         masked.pop("shim", None)
         masked.pop("type", None)
         masked.pop("validation_error", None)
@@ -650,6 +653,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         return body
 
     api_key = body.get("api_key", "")
+    if not isinstance(api_key, str):
+        return JSONResponse({"error": "'api_key' must be a string"}, status_code=400)
     base_url = body.get("base_url", "")
     provider = body.get("provider")
 
@@ -662,9 +667,11 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     resolve_name = body.get("rename_from", name) or name
     is_new_provider = name not in existing_providers
 
-    # When api_key is omitted/empty and we're editing, keep the existing key
-    if not api_key and resolve_name in existing_providers:
+    # An omitted or masked edit preserves the existing credential, while the
+    # save itself silently converges any legacy CSV value to its first key.
+    if (not api_key or "***" in api_key) and resolve_name in existing_providers:
         api_key = existing_providers[resolve_name].get("api_key", "")
+    api_key = normalize_provider_api_key(api_key)
 
     if (
         not api_key
@@ -1167,7 +1174,7 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
 
     pinfo = config.providers[provider_name]
     ptype = config.provider_types.get(provider_name, "unknown")
-    redactor = SecretRedactor(pinfo.credential_values)
+    redactor = SecretRedactor(config.token_values)
 
     # Build the models listing URL based on provider type
     if ptype == "google":

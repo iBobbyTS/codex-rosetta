@@ -226,15 +226,10 @@ code.copyable:hover { background: var(--bg-hover); }
   border-radius: var(--radius); color: var(--text); font-size: 14px; font-family: var(--mono);
 }
 .form-group input:focus, .form-group select:focus, .form-group textarea:focus { outline: none; border-color: var(--accent); }
-/* Multi-key entry list (auto-switches from single input when comma-separated keys detected) */
-.multi-key-list { display:flex;flex-direction:column;gap:4px;margin-top:4px; }
-.multi-key-row { display:flex;gap:4px;align-items:center; }
-.multi-key-row input { flex:1;padding:6px 10px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:var(--mono); }
-.multi-key-row input:focus { outline:none;border-color:var(--accent); }
-.multi-key-row .key-btn { flex-shrink:0; }
-.multi-key-footer { display:flex;align-items:center;gap:8px;margin-top:4px; }
-.multi-key-footer .key-count { font-size:11px;color:var(--text-dim); }
-.multi-key-footer .btn { font-size:11px;padding:2px 8px; }
+/* Single Provider credential input. */
+.provider-key-input { display:flex;gap:4px;align-items:center; }
+.provider-key-input input { flex:1; }
+.provider-key-input .key-btn { flex-shrink:0; }
 .modal-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 8px; padding: 20px 24px 24px; }
 .model-group-modal-shell { display:flex;align-items:flex-start;gap:12px;max-width:calc(100vw - 32px); }
 .model-info-modal { display:none;width:min(820px,calc(100vw - 560px)); }

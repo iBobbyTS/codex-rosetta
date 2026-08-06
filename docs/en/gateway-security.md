@@ -149,6 +149,16 @@ export CODEX_ROSETTA_API_KEY='rsk-replace-with-a-strong-secret'
 Startup fails if either value is empty or unresolved. Provider API keys remain
 separate and use their provider-specific environment variables.
 
+Each configured upstream Provider uses exactly one API key. To use multiple
+upstream accounts, create a separate named Provider for each account instead of
+putting comma-separated keys in one Provider. Legacy comma-separated Provider
+values are accepted during migration: after environment substitution, the
+Gateway uses the first non-empty trimmed key and ignores the rest. Loading or
+viewing the configuration does not rewrite the file; the next successful Admin
+save for that Provider persists only the selected first key. This Provider rule
+does not change `server.api_keys`, which remains the multi-principal list used
+to authenticate Gateway clients.
+
 ## Docker and remote access
 
 The container listens on `0.0.0.0` so Docker can publish the gateway. This does

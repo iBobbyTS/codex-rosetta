@@ -31,10 +31,10 @@ from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_a
 from codex_rosetta.observability.redaction import SecretCollisionError, SecretRedactor
 
 
-def _provider(keys: str = "first-key, prefix, prefix-long, final-key") -> ProviderInfo:
+def _provider(key: str = "provider-key") -> ProviderInfo:
     return ProviderInfo(
         "test",
-        api_key=keys,
+        api_key=key,
         base_url="https://upstream.example/v1",
         auth_header_fn=openai_auth,
         url_template="{base_url}/responses",
@@ -92,7 +92,7 @@ class _ReflectingTransport:
         return None
 
 
-def test_non_streaming_blocks_every_rotation_position_on_success_and_error():
+def test_non_streaming_reuses_and_blocks_the_single_credential_on_every_request():
     provider = _provider()
     transport = CredentialRedactingTransport.wrap(_ReflectingTransport())
 
@@ -109,6 +109,7 @@ def test_non_streaming_blocks_every_rotation_position_on_success_and_error():
             assert all(
                 token not in str(caught.value) for token in provider.credential_values
             )
+            assert _active_key(provider) == "provider-key"
 
     asyncio.run(run())
 

@@ -218,7 +218,11 @@ async def get_provider_key(request: Any, **kwargs: Any) -> Response:
     if not provider:
         return JSONResponse({"error": f"Provider '{name}' not found"}, status_code=404)
 
-    return JSONResponse({"api_key": provider.get("api_key", "")})
+    from ...providers import normalize_provider_api_key
+
+    return JSONResponse(
+        {"api_key": normalize_provider_api_key(provider.get("api_key", ""))}
+    )
 
 
 async def network_diagnostics(request: Any) -> Response:

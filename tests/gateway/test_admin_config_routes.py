@@ -23,6 +23,7 @@ from codex_rosetta.gateway.admin.routes.config import (
     put_server_settings,
     reload_config,
 )
+from codex_rosetta.gateway.admin.routes.observability import get_provider_key
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.auth import AuthState
 from codex_rosetta.gateway.config import GatewayConfig
@@ -283,7 +284,7 @@ def _assert_exact_tokens(
             assert redactor.redact(token) == token
 
 
-def test_startup_registers_every_rotated_provider_key_in_all_runtime_redactors(
+def test_startup_registers_every_legacy_provider_key_in_all_runtime_redactors(
     tmp_path,
 ) -> None:
     data = _config_data()
@@ -295,12 +296,7 @@ def test_startup_registers_every_rotated_provider_key_in_all_runtime_redactors(
     app = cast(Any, create_app(config, config_path=str(config_path)))
 
     try:
-        assert config.providers["openai"].credential_values == (
-            "first-startup",
-            "startup-prefix",
-            "startup-prefix-long",
-            "first-startup",
-        )
+        assert config.providers["openai"].credential_values == ("first-startup",)
         assert raw_keys in config.token_values
         _assert_exact_tokens(
             _runtime_redactors(app),
@@ -344,9 +340,6 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
         assert app.gateway_config is new_config
         assert app.gateway_config.providers["openai"].credential_values == (
             "new-first",
-            "new-prefix",
-            "new-prefix-long",
-            "new-first",
         )
         _assert_exact_tokens(
             _runtime_redactors(app), hidden=new_tokens, visible=old_tokens
@@ -355,7 +348,9 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
         _shared._rollback_gateway_activation(SimpleNamespace(app=app), rollback)
 
         assert app.gateway_config is initial_config
-        assert app.gateway_config.providers["openai"].credential_values == old_tokens
+        assert app.gateway_config.providers["openai"].credential_values == (
+            "old-first",
+        )
         _assert_exact_tokens(
             _runtime_redactors(app), hidden=old_tokens, visible=new_tokens
         )
@@ -1164,6 +1159,131 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
     assert app.gateway_config.provider_shim_names["DeepSeek"] == "deepseek"
     assert app.gateway_config.providers["DeepSeek"].allow_redirects is True
     assert app.gateway_config.providers["DeepSeek"].soft_interrupt is False
+
+
+def test_get_config_canonicalizes_legacy_provider_mask_without_writing(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["api_key"] = (
+        " first-provider-secret, discarded-provider-secret "
+    )
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data, indent=2).encode()
+    config_path.write_bytes(original)
+    config = GatewayConfig(data)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=config,
+            codex_home="",
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["providers"]["openai"]["api_key"] == "firs***cret"
+    assert config._raw_providers["openai"]["api_key"] == "first-provider-secret"
+    assert "discarded-provider-secret" in config.token_values
+    assert config_path.read_bytes() == original
+
+
+def test_get_provider_key_returns_first_legacy_credential_without_writing(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["api_key"] = " first-secret, discarded-secret "
+    data["server"]["credential_visible"] = True
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data, indent=2).encode()
+    config_path.write_bytes(original)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=GatewayConfig(data)
+        ),
+        path_params={"name": "openai"},
+    )
+
+    response = _run(get_provider_key(request))
+
+    assert json.loads(response.body) == {"api_key": "first-secret"}
+    assert config_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("submitted_key", [None, "", "firs***cret"])
+def test_put_provider_without_new_key_converges_existing_legacy_csv(
+    tmp_path, submitted_key
+):
+    data = _config_data()
+    data["providers"]["openai"]["api_key"] = " first-secret, discarded-secret "
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    initial_config = GatewayConfig(data)
+    body = {
+        "provider": "openai",
+        "api_type": "chat",
+        "base_url": "https://api.example.com",
+    }
+    if submitted_key is not None:
+        body["api_key"] = submitted_key
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            stream_trace_state=StreamTraceState(initial_config.stream_trace),
+            auth_state=None,
+        ),
+        path_params={"name": "openai"},
+        json=lambda: body,
+    )
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    assert json.loads(config_path.read_text())["providers"]["openai"]["api_key"] == (
+        "first-secret"
+    )
+
+
+def test_put_provider_normalizes_submitted_csv_and_rejects_empty_csv_without_write(
+    tmp_path,
+):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    initial_config = GatewayConfig(data)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            stream_trace_state=StreamTraceState(initial_config.stream_trace),
+            auth_state=None,
+        ),
+        path_params={"name": "openai"},
+    )
+    request.json = lambda: {
+        "provider": "openai",
+        "api_type": "chat",
+        "base_url": "https://api.example.com",
+        "api_key": " first-new, discarded-new ",
+    }
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    assert json.loads(config_path.read_text())["providers"]["openai"]["api_key"] == (
+        "first-new"
+    )
+
+    persisted = config_path.read_bytes()
+    request.json = lambda: {
+        "provider": "openai",
+        "api_type": "chat",
+        "base_url": "https://api.example.com",
+        "api_key": " , , ",
+    }
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert config_path.read_bytes() == persisted
 
 
 def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):

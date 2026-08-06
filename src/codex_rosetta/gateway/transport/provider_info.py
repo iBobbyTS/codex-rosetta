@@ -1,9 +1,8 @@
-"""Provider runtime configuration — connection info, auth, and key rotation.
+"""Provider runtime configuration — connection info and authentication.
 
 This module contains the data classes that describe *how* to talk to an
 upstream provider at the transport level:
 
-* :class:`KeyRing` — round-robin API key selector.
 * :class:`ProviderInfo` — base URL, auth headers, URL templates.
 * Auth header builder functions (``openai_auth``, ``anthropic_auth``,
   ``google_auth``).
@@ -21,39 +20,6 @@ AuthHeaderFn = Callable[[str], dict[str, str]]
 
 
 # ---------------------------------------------------------------------------
-# API key rotation (round-robin)
-# ---------------------------------------------------------------------------
-
-
-class KeyRing:
-    """Round-robin API key selector.
-
-    Accepts a single key string **or** a comma-separated list of keys.
-    Each call to :meth:`next` returns the next key in rotation.
-    """
-
-    def __init__(self, keys_csv: str) -> None:
-        self._keys = tuple(key for part in keys_csv.split(",") if (key := part.strip()))
-        self._idx = 0
-
-    @property
-    def values(self) -> tuple[str, ...]:
-        """Return selectable keys in their exact rotation order."""
-        return self._keys
-
-    def next(self) -> str:
-        """Return the next API key."""
-        if not self._keys:
-            raise ValueError("No API keys configured")
-        key = self._keys[self._idx]
-        self._idx = (self._idx + 1) % len(self._keys)
-        return key
-
-    def __len__(self) -> int:
-        return len(self._keys)
-
-
-# ---------------------------------------------------------------------------
 # Provider descriptor
 # ---------------------------------------------------------------------------
 
@@ -61,8 +27,8 @@ class KeyRing:
 class ProviderInfo:
     """Runtime representation of a single configured provider.
 
-    Encapsulates base_url, key rotation, auth-header construction,
-    and upstream URL building.
+    Encapsulates one credential, base URL, auth-header construction, and
+    upstream URL building.
     """
 
     def __init__(
@@ -86,7 +52,9 @@ class ProviderInfo:
             )
         self.name = name
         self.base_url = base_url.rstrip("/")
-        self.key_ring = KeyRing(api_key)
+        self._credential = api_key.strip()
+        if not self._credential:
+            raise ValueError("No API keys configured")
         self._auth_header_fn = auth_header_fn
         self._url_template = url_template
         self._stream_url_template = stream_url_template
@@ -97,14 +65,14 @@ class ProviderInfo:
 
     @property
     def credential_values(self) -> tuple[str, ...]:
-        """Return every credential that this provider can send on the wire."""
-        return self.key_ring.values
+        """Return the provider's single wire credential as a read-only view."""
+        return (self._credential,)
 
     # -- public helpers used by the proxy -----------------------------------
 
     def auth_headers(self) -> dict[str, str]:
-        """Return auth headers using the next rotated key."""
-        return self._auth_header_fn(self.key_ring.next())
+        """Return auth headers using the configured credential."""
+        return self._auth_header_fn(self._credential)
 
     def upstream_url(self, model: str, *, stream: bool = False) -> str:
         """Build the upstream URL for the given model."""

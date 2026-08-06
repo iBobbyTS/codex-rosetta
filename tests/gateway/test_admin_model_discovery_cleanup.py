@@ -209,7 +209,7 @@ def test_model_discovery_rejects_redirect_before_applying_models(
 
 
 @pytest.mark.parametrize("outcome", ["success", "connection_error"])
-def test_model_discovery_blocks_rotated_wire_key(
+def test_model_discovery_uses_first_legacy_key_and_blocks_discarded_key(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     outcome: str,
@@ -249,7 +249,7 @@ def test_model_discovery_blocks_rotated_wire_key(
 
     response = asyncio.run(config_routes.fetch_upstream_models(request))
 
-    assert observed_headers["Authorization"] == f"Bearer {wire_key}"
+    assert observed_headers["Authorization"] == f"Bearer {first_key}"
     response_text = response.body.decode("utf-8")
     assert first_key not in response_text
     assert wire_key not in response_text

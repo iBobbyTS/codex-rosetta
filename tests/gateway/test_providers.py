@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import codex_rosetta.gateway.transport.provider_info as provider_info_module
+
 from codex_rosetta.gateway.config import GatewayConfig
-from codex_rosetta.gateway.providers import build_provider_info
-from codex_rosetta.gateway.transport.provider_info import KeyRing
+from codex_rosetta.gateway.providers import (
+    build_provider_info,
+    normalize_provider_api_key,
+    provider_api_key_values,
+)
 from codex_rosetta.shims.providers import load_providers
 
 
@@ -68,23 +73,15 @@ def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
     )
 
 
-def test_key_ring_canonical_parser_preserves_rotation_order_and_duplicates():
-    ring = KeyRing(" first , , second,first, third ,, ")
+def test_provider_legacy_parser_preserves_inventory_and_selects_first_non_empty():
+    value = " first , , second,first, third ,, "
 
-    assert ring.values == ("first", "second", "first", "third")
-    assert [ring.next() for _ in range(8)] == [
-        "first",
-        "second",
-        "first",
-        "third",
-        "first",
-        "second",
-        "first",
-        "third",
-    ]
+    assert provider_api_key_values(value) == ("first", "second", "first", "third")
+    assert normalize_provider_api_key(value) == "first"
+    assert normalize_provider_api_key(" , , ") == ""
 
 
-def test_gateway_registers_raw_csv_and_every_selectable_provider_credential():
+def test_gateway_canonicalizes_legacy_csv_and_redacts_every_discarded_credential():
     raw_keys = " prefix ,prefix-long, , prefix,final "
     config = _gateway_config(
         {
@@ -95,17 +92,23 @@ def test_gateway_registers_raw_csv_and_every_selectable_provider_credential():
         }
     )
 
-    assert config.providers["upstream"].credential_values == (
-        "prefix",
-        "prefix-long",
-        "prefix",
-        "final",
-    )
+    assert config._raw_providers["upstream"]["api_key"] == "prefix"
+    assert config.providers["upstream"].credential_values == ("prefix",)
+    assert config.providers["upstream"].auth_headers() == {
+        "Authorization": "Bearer prefix"
+    }
+    assert config.providers["upstream"].auth_headers() == {
+        "Authorization": "Bearer prefix"
+    }
     assert {raw_keys, "prefix", "prefix-long", "final"} <= config.token_values
+    assert not hasattr(config.providers["upstream"], "key_ring")
+    assert not hasattr(provider_info_module, "KeyRing")
 
 
 def test_gateway_registers_environment_fallback_credential(monkeypatch):
-    monkeypatch.setenv("OPENAI_API_KEY", "environment-provider-key")
+    monkeypatch.setenv(
+        "OPENAI_API_KEY", " environment-provider-key,discarded-environment-key "
+    )
 
     config = _gateway_config(
         {
@@ -118,4 +121,6 @@ def test_gateway_registers_environment_fallback_credential(monkeypatch):
     assert config.providers["upstream"].credential_values == (
         "environment-provider-key",
     )
-    assert "environment-provider-key" in config.token_values
+    assert {"environment-provider-key", "discarded-environment-key"} <= (
+        config.token_values
+    )

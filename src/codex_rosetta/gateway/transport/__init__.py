@@ -27,7 +27,6 @@ from ._base import (
 from .http import HttpTransport
 from .provider_info import (
     AuthHeaderFn,
-    KeyRing,
     ProviderInfo,
     anthropic_auth,
     google_auth,
@@ -53,7 +52,6 @@ __all__ = [
     "HttpTransport",
     # Provider config
     "AuthHeaderFn",
-    "KeyRing",
     "ProviderInfo",
     "openai_auth",
     "anthropic_auth",

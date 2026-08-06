@@ -18,7 +18,11 @@ from codex_rosetta.observability.redaction import collect_token_values
 from codex_rosetta.observability.retention import resolve_request_log_caps
 from codex_rosetta.routing import ResolvedRoute
 
-from .providers import build_provider_info
+from .providers import (
+    build_provider_info,
+    normalize_provider_api_key,
+    provider_api_key_values,
+)
 from .provider_profiles import (
     API_TYPE_TO_PROVIDER_TYPE as PROFILE_API_TYPE_TO_PROVIDER_TYPE,
     api_type_order,
@@ -914,10 +918,20 @@ class GatewayConfig:
         self.token_values = collect_token_values(raw)
         self.codex = normalize_codex_settings(raw.get("codex"))
         all_providers: dict[str, dict[str, Any]] = raw.get("providers", {})
+        for provider in all_providers.values():
+            if isinstance(provider, dict) and "api_key" in provider:
+                self.token_values.update(provider_api_key_values(provider["api_key"]))
 
         # Filter out disabled providers (enabled defaults to True)
         self._raw_providers: dict[str, dict[str, Any]] = {
-            name: dict(cfg)
+            name: {
+                **cfg,
+                **(
+                    {"api_key": normalize_provider_api_key(cfg["api_key"])}
+                    if "api_key" in cfg
+                    else {}
+                ),
+            }
             for name, cfg in all_providers.items()
             if cfg.get("enabled", True) is not False
         }
@@ -1045,10 +1059,13 @@ class GatewayConfig:
             entry["key"]: entry["id"] for entry in self.api_keys
         }
 
-        # Build ProviderInfo objects (with key rotation support)
+        # Build ProviderInfo objects with one canonical credential each.
         self.providers: dict[str, ProviderInfo] = {
             name: build_provider_info(
-                self.provider_types[name], cfg, global_proxy=self.proxy
+                self.provider_types[name],
+                cfg,
+                global_proxy=self.proxy,
+                credential_inventory=self.token_values,
             )
             for name, cfg in self._raw_providers.items()
         }

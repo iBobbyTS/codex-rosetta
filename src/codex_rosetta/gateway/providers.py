@@ -1,7 +1,7 @@
 """Gateway provider definitions — registry, factory, and defaults.
 
-Transport-level classes (:class:`ProviderInfo`, :class:`KeyRing`) and auth
-header builders live in :mod:`gateway.transport.provider_info`.  This module
+Transport-level classes (:class:`ProviderInfo`) and auth header builders live
+in :mod:`gateway.transport.provider_info`.  This module
 keeps the provider *registry* and *factory* that resolve shim config into
 runtime :class:`ProviderInfo` instances.
 """
@@ -20,7 +20,12 @@ from .transport.provider_info import (
 
 # Re-export ProviderInfo so existing ``from .providers import ProviderInfo``
 # continues to work without changes across the codebase.
-__all__ = ["ProviderInfo", "build_provider_info"]
+__all__ = [
+    "ProviderInfo",
+    "build_provider_info",
+    "normalize_provider_api_key",
+    "provider_api_key_values",
+]
 
 logger = logging.getLogger("codex-rosetta-gateway")
 
@@ -86,11 +91,31 @@ def known_provider_types() -> list[str]:
 # ---------------------------------------------------------------------------
 
 
+def provider_api_key_values(value: Any) -> tuple[str, ...]:
+    """Return non-empty credentials from a canonical or legacy Provider value.
+
+    Legacy Gateway configurations represented multiple upstream credentials as
+    a comma-separated string.  This parser remains solely at the persistent
+    Provider configuration boundary so discarded values can still enter the
+    redaction inventory during migration.
+    """
+    if not isinstance(value, str):
+        raise ValueError("config: provider api_key must be a string")
+    return tuple(part for item in value.split(",") if (part := item.strip()))
+
+
+def normalize_provider_api_key(value: Any) -> str:
+    """Return the first non-empty Provider credential from a legacy value."""
+    values = provider_api_key_values(value)
+    return values[0] if values else ""
+
+
 def build_provider_info(
     provider_type: str,
     cfg: dict[str, Any],
     *,
     global_proxy: str | None = None,
+    credential_inventory: set[str] | None = None,
 ) -> ProviderInfo:
     """Create a :class:`ProviderInfo` from a provider config dict.
 
@@ -166,9 +191,14 @@ def build_provider_info(
     if not isinstance(force_rosetta_compaction, bool):
         raise ValueError("config: provider force_rosetta_compaction must be a boolean")
 
+    credential_values = provider_api_key_values(cfg["api_key"])
+    if credential_inventory is not None:
+        credential_inventory.update(credential_values)
+    api_key = credential_values[0] if credential_values else ""
+
     return ProviderInfo(
         name=provider_type,
-        api_key=cfg["api_key"],
+        api_key=api_key,
         base_url=cfg["base_url"],
         auth_header_fn=auth_fn,
         url_template=url_tpl,

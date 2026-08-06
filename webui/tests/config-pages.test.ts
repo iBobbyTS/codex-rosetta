@@ -48,7 +48,11 @@ describe('ProvidersPage', () => {
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
     expect(await screen.findByDisplayValue('provider-secret')).toBeInTheDocument();
     expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config/providers/official/key');
-    await fireEvent.click(within(screen.getByRole('dialog', { name: /Edit Provider/ })).getByRole('button', { name: 'Save' }));
+    const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
+    expect(dialog.getAllByLabelText(/^API Key/)).toHaveLength(1);
+    expect(dialog.queryByRole('button', { name: /Add key/i })).not.toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: /Remove key/i })).not.toBeInTheDocument();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
     expect(screen.getByRole('status')).toHaveTextContent("Provider 'official' saved");
     expect(screen.getByRole('status')).not.toHaveTextContent('{name}');
