@@ -60,7 +60,7 @@ from .logging import (
     get_logger,
     record_request_stat,
 )
-from .search_provider_candidates import search_candidates_support_basic_search
+from .search_provider_candidates import search_candidates_capabilities
 
 from .proxy import (
     ProviderMetadataCapacityError,
@@ -629,12 +629,17 @@ async def _resolve_request_tool_runtime_capabilities(
 
     capabilities = set(route.tool_runtime_capabilities)
     capabilities.add(WEB_RUN_SIDECAR_CAPABILITY)
-    if search_candidates_support_basic_search(
+    search_capabilities = search_candidates_capabilities(
         config.web_search_candidates,
         self_hosted_ready=True,
-    ):
+    )
+    if search_capabilities:
         capabilities.add(WEB_RUN_BASIC_SEARCH_CAPABILITY)
-    return replace(route, tool_runtime_capabilities=frozenset(capabilities))
+    return replace(
+        route,
+        tool_runtime_capabilities=frozenset(capabilities),
+        web_run_search_capabilities=search_capabilities,
+    )
 
 
 def _request_exposes_web_run(body: dict[str, Any]) -> bool:

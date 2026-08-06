@@ -136,6 +136,7 @@ from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
     project_modified_web_run_function,
     web_run_model_availability,
+    web_run_search_projection_capabilities,
 )
 from .web_search import (
     TavilySearchClient,
@@ -776,11 +777,15 @@ def _apply_profile_runtime_adapter(
         and isinstance(adapted, dict)
     ):
         search_available, browser_available = web_run_model_availability(route)
-        projected = project_modified_web_run_function(
-            adapted,
-            search_available=search_available,
-            browser_available=browser_available,
-        )
+        projection_kwargs = {
+            "search_available": search_available,
+            "browser_available": browser_available,
+        }
+        if route.web_run_search_capabilities is not None:
+            projection_kwargs["search_capabilities"] = (
+                web_run_search_projection_capabilities(route)
+            )
+        projected = project_modified_web_run_function(adapted, **projection_kwargs)
         if projected is None:
             return None, {name} if isinstance(name, str) else set()
         return projected, set()

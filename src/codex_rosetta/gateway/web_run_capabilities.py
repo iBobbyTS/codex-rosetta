@@ -10,7 +10,10 @@ from collections.abc import Collection, Mapping
 from typing import Any
 
 from .admin.tool_catalog import load_tool_catalog
-from .search_provider_contract import SearchProviderCapability
+from .search_provider_contract import (
+    SearchProviderCapability,
+    SearchProviderExecutionMode,
+)
 
 WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
 WEB_RUN_BASIC_SEARCH_CAPABILITY = "web_run_basic_search"
@@ -206,14 +209,19 @@ def web_run_supported_command_fields(
     """Return the command schema implemented by the active local executors."""
     supported = dict(WEB_RUN_BASE_COMMAND_FIELDS)
     parsed_values: set[SearchProviderCapability] = set()
-    for value in search_capabilities or ():
-        try:
-            parsed_values.add(SearchProviderCapability(value))
-        except TypeError, ValueError:
-            # A stale or unknown capability must never widen the model surface.
-            parsed_values.clear()
-            break
-    parsed = frozenset(parsed_values)
+    typed_present = search_capabilities is not None
+    typed_valid = True
+    if typed_present:
+        if isinstance(search_capabilities, (str, bytes)):
+            typed_valid = False
+        else:
+            try:
+                for value in search_capabilities:
+                    parsed_values.add(SearchProviderCapability(value))
+            except TypeError, ValueError:
+                typed_valid = False
+                parsed_values.clear()
+    parsed = frozenset(parsed_values) if typed_valid else frozenset()
     if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in parsed:
         # Preserve the complete upstream alpha/search command surface.  Browser
         # sidecar commands remain independently gated below.
@@ -227,7 +235,9 @@ def web_run_supported_command_fields(
             )
         else:
             supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
-    elif search_available or SearchProviderCapability.SEARCH_QUERY in parsed:
+    elif (not typed_present and search_available) or (
+        typed_valid and SearchProviderCapability.SEARCH_QUERY in parsed
+    ):
         supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
     if browser_available:
         supported.update(WEB_RUN_SIDECAR_COMMAND_FIELDS)
@@ -237,9 +247,14 @@ def web_run_supported_command_fields(
 def web_run_model_availability(route: Any) -> tuple[bool, bool]:
     """Return configured search and ready browser capabilities for one route."""
     capabilities = getattr(route, "tool_runtime_capabilities", frozenset())
+    typed_marker = object()
+    typed_values = getattr(route, WEB_RUN_SEARCH_CAPABILITIES, typed_marker)
+    if typed_values is typed_marker or typed_values is None:
+        search_available = WEB_RUN_BASIC_SEARCH_CAPABILITY in capabilities
+    else:
+        search_available = bool(web_run_search_projection_capabilities(route))
     return (
-        bool(web_run_search_projection_capabilities(route))
-        or WEB_RUN_BASIC_SEARCH_CAPABILITY in capabilities,
+        search_available,
         WEB_RUN_SIDECAR_CAPABILITY in capabilities,
     )
 
@@ -266,14 +281,25 @@ def web_run_capability_trace_summary(
 ) -> dict[str, Any]:
     """Return bounded projection metadata suitable for capability traces."""
     values = sorted(str(value) for value in capabilities)
+    parsed: set[SearchProviderCapability] = set()
+    try:
+        if isinstance(capabilities, (str, bytes)):
+            raise ValueError
+        parsed = {SearchProviderCapability(value) for value in capabilities}
+    except TypeError, ValueError:
+        parsed = set()
     digest = hashlib.sha256(
         json.dumps(values, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:16]
     return {
         "family": "web_run_search",
-        "execution_mode": "passthrough"
-        if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH.value in values
-        else "local_query_adapter",
+        "execution_mode": (
+            SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH.value
+            if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in parsed
+            else SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER.value
+            if parsed
+            else "unknown"
+        ),
         "capability_hash": digest,
         "projected_commands": sorted(set(projected_commands)),
     }

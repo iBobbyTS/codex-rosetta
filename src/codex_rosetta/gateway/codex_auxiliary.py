@@ -58,6 +58,10 @@ from .web_run_sidecar import (
     WebRunSearchClient,
     WebRunSidecarHTTPClient,
 )
+from .web_run_capabilities import (
+    web_run_capability_trace_summary,
+    web_run_search_projection_capabilities,
+)
 
 _BROWSER_USE_HINT = 'Consider "Browser Use" skill'
 
@@ -354,6 +358,7 @@ async def handle_codex_auxiliary(  # noqa: C901
                     transport=transport,
                     extra_headers=extra_headers,
                 ),
+                capability_trace_route=route,
             )
             if search_result is not None:
                 attribution = search_result.attribution
@@ -373,6 +378,15 @@ async def handle_codex_auxiliary(  # noqa: C901
                 if success_trace is not None:
                     success_trace.log(
                         "codex_search_request", codex_search_request_summary(body)
+                    )
+                    success_trace.log(
+                        "codex_search_capability_projection",
+                        web_run_capability_trace_summary(
+                            web_run_search_projection_capabilities(route),
+                            body.get("commands", {}).keys()
+                            if isinstance(body.get("commands"), dict)
+                            else (),
+                        ),
                     )
                     success_trace.log(
                         "codex_search_response", search_result.trace_summary()
@@ -500,6 +514,7 @@ async def _handle_local_search(
     search_candidates: tuple[Any, ...] | None = None,
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
+    capability_trace_route: ResolvedRoute | None = None,
 ) -> tuple[Response, int, str | None, CodexSearchBridgeResult | None]:
     request_summary = codex_search_request_summary(body)
 
@@ -510,6 +525,16 @@ async def _handle_local_search(
         if trace is None:
             return
         trace.log("codex_search_request", request_summary)
+        if capability_trace_route is not None:
+            trace.log(
+                "codex_search_capability_projection",
+                web_run_capability_trace_summary(
+                    web_run_search_projection_capabilities(capability_trace_route),
+                    body.get("commands", {}).keys()
+                    if isinstance(body.get("commands"), dict)
+                    else (),
+                ),
+            )
         if stage is not None:
             trace.log(stage, data or {})
 

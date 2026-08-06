@@ -33,6 +33,7 @@ from .provider_profiles import (
 from .stream_trace import StreamTraceConfig
 from .search_provider_candidates import (
     build_search_provider_candidates,
+    search_candidates_capabilities,
     search_candidates_support_basic_search,
 )
 from .tool_profiles import (
@@ -1390,6 +1391,10 @@ class GatewayConfig:
                     self_hosted_ready=False,
                 )
                 else frozenset()
+            ),
+            web_run_search_capabilities=search_candidates_capabilities(
+                self.web_search_candidates,
+                self_hosted_ready=False,
             ),
         )
         return route, self.providers[provider_name]

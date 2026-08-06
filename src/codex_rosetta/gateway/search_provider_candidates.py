@@ -325,7 +325,11 @@ def search_candidates_capabilities(
     )
     if not eligible:
         return frozenset()
-    contracts = tuple(getattr(candidate, "contract", None) for candidate in eligible)
+    contracts = tuple(
+        getattr(candidate, "contract", None)
+        or _contract_for_legacy_candidate(candidate)
+        for candidate in eligible
+    )
     if any(
         contract is None
         or not isinstance(getattr(contract, "capabilities", None), frozenset)
@@ -348,3 +352,13 @@ def search_candidates_capabilities(
     for contract in local_contracts[1:]:
         capabilities.intersection_update(contract.capabilities)
     return frozenset(capabilities)
+
+
+def _contract_for_legacy_candidate(
+    candidate: SearchProviderCandidate,
+) -> SearchProviderContract | None:
+    """Resolve a contract for pre-typed route test doubles and callers."""
+    try:
+        return contract_for_wire_provider(str(candidate.provider))
+    except TypeError, ValueError:
+        return None

@@ -479,13 +479,19 @@ def plan_exec_tool_definitions(
                     search_available, browser_available = web_run_model_availability(
                         profile_route
                     )
+                    projection_kwargs = {
+                        "search_available": search_available,
+                        "browser_available": browser_available,
+                    }
+                    if (
+                        getattr(profile_route, "web_run_search_capabilities", None)
+                        is not None
+                    ):
+                        projection_kwargs["search_capabilities"] = (
+                            web_run_search_projection_capabilities(profile_route)
+                        )
                     projected_function = project_modified_web_run_function(
-                        parsed["function"],
-                        search_available=search_available,
-                        browser_available=browser_available,
-                        search_capabilities=web_run_search_projection_capabilities(
-                            profile_route
-                        ),
+                        parsed["function"], **projection_kwargs
                     )
                     if projected_function is None:
                         continue
@@ -1391,11 +1397,16 @@ def project_modified_exec_web_run_description(
         return exec_description[: heading.start()] + exec_description[section_end:]
 
     search_available, browser_available = web_run_model_availability(profile_route)
+    projection_kwargs = {
+        "search_available": search_available,
+        "browser_available": browser_available,
+    }
+    if getattr(profile_route, "web_run_search_capabilities", None) is not None:
+        projection_kwargs["search_capabilities"] = (
+            web_run_search_projection_capabilities(profile_route)
+        )
     projected_function = project_modified_web_run_function(
-        parsed["function"],
-        search_available=search_available,
-        browser_available=browser_available,
-        search_capabilities=web_run_search_projection_capabilities(profile_route),
+        parsed["function"], **projection_kwargs
     )
     declaration = _nested_declaration_match(section, projection.nested_name)
     declaration_label = section.find("exec tool declaration:")
