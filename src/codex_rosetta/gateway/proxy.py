@@ -60,6 +60,7 @@ from .codex_compaction import (
 from .code_mode_projection import (
     ExecToolProjection,
     exec_tool_projections_for_route,
+    project_exec_tool_definitions,
     project_modified_exec_web_run_description,
 )
 from .downstream_errors import (
@@ -134,8 +135,13 @@ from .transport import (
 )
 from .transport.sse_format import SSE_FORMATTERS, format_sse_done
 from .web_run_capabilities import (
+    WEB_RUN_BASIC_SEARCH_CAPABILITY,
+    WEB_RUN_PROFILE_ITEM_ID,
+    WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS,
     project_modified_web_run_function,
+    web_run_capability_trace_summary,
     web_run_model_availability,
+    web_run_projected_commands,
     web_run_search_projection_capabilities,
 )
 from .web_search import (
@@ -537,6 +543,56 @@ def _flatten_responses_tools(body: dict[str, Any]) -> list[Any]:
     return [
         tool for _container, tools in _responses_tool_containers(body) for tool in tools
     ]
+
+
+def _web_run_projection_trace_summary(
+    body: dict[str, Any], route: ResolvedRoute
+) -> dict[str, Any] | None:
+    """Summarize the actual bounded web.run projection in an adapted request."""
+    commands: set[str] = set()
+
+    def merge(projected: frozenset[str]) -> None:
+        commands.update(projected)
+        if len(commands) > WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS:
+            commands.intersection_update(
+                sorted(commands)[:WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS]
+            )
+
+    projection = ExecToolProjection(
+        item_id=WEB_RUN_PROFILE_ITEM_ID,
+        chat_name="web-run",
+        nested_name="web__run",
+    )
+    for tool in _flatten_responses_tools(body):
+        if not isinstance(tool, dict):
+            continue
+        if _profile_item_id(tool) == WEB_RUN_PROFILE_ITEM_ID:
+            function = tool.get("function")
+            merge(
+                web_run_projected_commands(
+                    function if isinstance(function, dict) else tool
+                )
+            )
+        description = tool.get("description")
+        if isinstance(description, str) and "web__run" in description:
+            definitions = project_exec_tool_definitions(
+                description,
+                {"web-run": projection},
+            )
+            definition = definitions.get("web-run")
+            if isinstance(definition, dict):
+                function = definition.get("function")
+                if isinstance(function, dict):
+                    merge(web_run_projected_commands(function))
+    if not commands:
+        return None
+    capabilities = web_run_search_projection_capabilities(route)
+    if (
+        route.web_run_search_capabilities is None
+        and WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
+    ):
+        capabilities = frozenset({"search_query"})
+    return web_run_capability_trace_summary(capabilities, commands)
 
 
 def _tool_identifier(tool: Any) -> str | None:
@@ -2581,6 +2637,9 @@ async def _handle_direct_responses_streaming(
             "tool_runtime_plan",
             build_tool_runtime_plan(body, route).trace_summary(),
         )
+        capability_projection = _web_run_projection_trace_summary(body, route)
+        if capability_projection is not None:
+            trace.log("web_run_capability_projection", capability_projection)
         trace.log(
             "stream_start",
             {

@@ -19,6 +19,8 @@ WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
 WEB_RUN_BASIC_SEARCH_CAPABILITY = "web_run_basic_search"
 WEB_RUN_SIDECAR_CAPABILITY = "web_run_sidecar"
 WEB_RUN_SEARCH_CAPABILITIES = "web_run_search_capabilities"
+WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS = 64
+WEB_RUN_TRACE_MAX_COMMAND_BYTES = 128
 
 
 def _web_run_projection() -> dict[str, Any]:
@@ -212,7 +214,7 @@ def web_run_supported_command_fields(
     typed_present = search_capabilities is not None
     typed_valid = True
     if typed_present:
-        if isinstance(search_capabilities, (str, bytes)):
+        if isinstance(search_capabilities, (str, bytes, Mapping)):
             typed_valid = False
         else:
             try:
@@ -264,7 +266,7 @@ def web_run_search_projection_capabilities(
 ) -> frozenset[SearchProviderCapability]:
     """Read typed search capabilities carried by a route, failing closed."""
     values = getattr(route, WEB_RUN_SEARCH_CAPABILITIES, frozenset())
-    if not isinstance(values, Collection) or isinstance(values, (str, bytes)):
+    if not isinstance(values, Collection) or isinstance(values, (str, bytes, Mapping)):
         return frozenset()
     result: set[SearchProviderCapability] = set()
     for value in values:
@@ -291,6 +293,14 @@ def web_run_capability_trace_summary(
     digest = hashlib.sha256(
         json.dumps(values, separators=(",", ":")).encode("utf-8")
     ).hexdigest()[:16]
+    bounded_commands = sorted(
+        {
+            command
+            for command in projected_commands
+            if isinstance(command, str)
+            and len(command.encode("utf-8")) <= WEB_RUN_TRACE_MAX_COMMAND_BYTES
+        }
+    )[:WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS]
     return {
         "family": "web_run_search",
         "execution_mode": (
@@ -301,8 +311,22 @@ def web_run_capability_trace_summary(
             else "unknown"
         ),
         "capability_hash": digest,
-        "projected_commands": sorted(set(projected_commands)),
+        "projected_commands": bounded_commands,
     }
+
+
+def web_run_projected_commands(function: Mapping[str, Any]) -> frozenset[str]:
+    """Return bounded command names from one already-projected function."""
+    parameters = function.get("parameters")
+    properties = parameters.get("properties") if isinstance(parameters, dict) else None
+    if not isinstance(properties, dict):
+        return frozenset()
+    return frozenset(
+        command
+        for command in properties
+        if isinstance(command, str)
+        and len(command.encode("utf-8")) <= WEB_RUN_TRACE_MAX_COMMAND_BYTES
+    )
 
 
 def _project_array_command(
@@ -350,11 +374,14 @@ __all__ = [
     "WEB_RUN_SEARCH_CAPABILITIES",
     "WEB_RUN_SUPPORTED_COMMANDS",
     "WEB_RUN_SUPPORTED_COMMAND_FIELDS",
+    "WEB_RUN_TRACE_MAX_COMMAND_BYTES",
+    "WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS",
     "WEB_RUN_UNSUPPORTED_COMMANDS",
     "project_modified_web_run_description",
     "project_modified_web_run_function",
     "project_modified_web_run_schema",
     "web_run_model_availability",
+    "web_run_projected_commands",
     "web_run_search_projection_capabilities",
     "web_run_capability_trace_summary",
     "web_run_supported_command_fields",

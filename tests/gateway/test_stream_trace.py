@@ -31,6 +31,7 @@ from codex_rosetta.gateway.transport._base import (
     UpstreamProtocolError,
     UpstreamStream,
 )
+from codex_rosetta.gateway.search_provider_contract import LOCAL_QUERY_CAPABILITIES
 from codex_rosetta.routing import ResolvedRoute
 
 
@@ -361,6 +362,117 @@ def test_stream_trace_redacts_known_and_bearer_tokens(tmp_path):
     assert record["data"]["echo"] == "[REDACTED]"
     assert stat.S_IMODE(trace_path.parent.stat().st_mode) == 0o700
     assert stat.S_IMODE(trace_path.stat().st_mode) == 0o600
+
+
+def test_web_run_projection_trace_uses_actual_schema_on_success_and_failure(tmp_path):
+    function = {
+        "type": "function",
+        "name": "web__run",
+        "description": "provider-secret",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search_query": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                },
+                "finance": {
+                    "type": "array",
+                    "items": {"type": "object", "properties": {}},
+                },
+                "open": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"ref_id": {"type": "string"}},
+                    },
+                },
+                "time": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"utc_offset": {"type": "string"}},
+                    },
+                },
+                "response_length": {"type": "string"},
+            },
+        },
+    }
+    route = ResolvedRoute(
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="test",
+        upstream_model="gpt-test",
+        tool_profile={"namespace.web.run": "modified"},
+        web_run_search_capabilities=LOCAL_QUERY_CAPABILITIES,
+    )
+    provider_info = MagicMock()
+    provider_info.base_url = "https://api.example.test/v1"
+    body = {
+        "model": "gpt-test",
+        "input": "hello",
+        "stream": True,
+        "tools": [function],
+    }
+
+    async def run(path: Path, *, fail: bool) -> None:
+        state = StreamTraceState(
+            StreamTraceConfig(enabled=True, path=str(path)),
+            token_values={"provider-secret"},
+        )
+        transport = MagicMock()
+        if fail:
+            transport.send_streaming = AsyncMock(
+                side_effect=UpstreamConnectionError("upstream failure")
+            )
+        else:
+            transport.send_streaming = AsyncMock(
+                return_value=_RawStream(
+                    [
+                        b'event: response.completed\ndata: {"type":"response.completed"}\n\n'
+                    ]
+                )
+            )
+        response, _ = await handle_streaming(
+            route,
+            provider_info,
+            body,
+            transport=transport,
+            stream_trace_state=state,
+        )
+        if fail:
+            assert response.status_code == 502
+        else:
+            assert isinstance(response, StreamingResponse)
+            _ = [chunk async for chunk in response._generator]
+
+    for fail in (False, True):
+        path = tmp_path / f"projection-{fail}.jsonl"
+        asyncio.run(run(path, fail=fail))
+        text = path.read_text()
+        assert "provider-secret" not in text
+        records = [json.loads(line) for line in text.splitlines()]
+        projections = [
+            record["data"]
+            for record in records
+            if record["stage"] == "web_run_capability_projection"
+        ]
+        assert projections == [
+            {
+                "family": "web_run_search",
+                "execution_mode": "local_query_adapter",
+                "capability_hash": projections[0]["capability_hash"],
+                "projected_commands": [
+                    "open",
+                    "response_length",
+                    "search_query",
+                    "time",
+                ],
+            }
+        ]
 
 
 def test_stream_trace_state_respects_config_filter():
