@@ -315,6 +315,7 @@
       <button class="btn btn-primary btn-sm" disabled={loading || saving || hasInvalidResponses} onclick={() => void save()}>{t('btn.save')}</button>
     </div>
   </div>
+  <p class="chain-help">{t('network.chain.help')}</p>
   {#if error}<div class="toast error show" role="alert">{error}</div>{/if}
   {#if notice}<div class="toast show" role="status">{notice}</div>{/if}
   {#if loading}

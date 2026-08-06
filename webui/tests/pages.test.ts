@@ -129,6 +129,7 @@ describe('NetworkSearchPage', () => {
     apiMock.put.mockResolvedValue(configResponse(rows).server);
     render(NetworkSearchPage);
     expect(await screen.findByDisplayValue('tav***key')).toBeInTheDocument();
+    expect(screen.getByText(/Providers are tried in this order/)).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: rows } });
     const body = apiMock.put.mock.calls[0][1] as { web_search: Record<string, unknown> };

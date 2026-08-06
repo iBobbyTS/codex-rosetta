@@ -134,11 +134,7 @@ WebSearchProvider = (
 
 
 class WebSearchConfig(dict[str, Any]):
-    """Canonical providers plus a narrow, phased legacy-read adapter.
-
-    Synthetic legacy keys are resolved only by ``__getitem__`` and ``get``;
-    iteration and serialization expose only the canonical ``providers`` key.
-    """
+    """Canonical ordered web-search providers."""
 
     def __init__(self, providers: list[WebSearchProvider]) -> None:
         super().__init__({"providers": providers})
@@ -147,35 +143,6 @@ class WebSearchConfig(dict[str, Any]):
     def providers(self) -> list[WebSearchProvider]:
         """Return canonical providers in configured order."""
         return dict.__getitem__(self, "providers")
-
-    def _legacy_primary(self) -> dict[str, Any]:
-        if not self.providers:
-            return {"provider": "tavily", "tavily_api_key": ""}
-        row = dict(self.providers[0])
-        row.pop("id")
-        row.setdefault("tavily_api_key", "")
-        return row
-
-    def __getitem__(self, key: str) -> Any:
-        if key == "providers":
-            return super().__getitem__(key)
-        if key in {
-            "provider",
-            "responses_model",
-            "responses_provider",
-            "tavily_api_key",
-        }:
-            return self._legacy_primary()[key]
-        return super().__getitem__(key)
-
-    def get(self, key: object, default: Any = None) -> Any:
-        """Read canonical keys or the first provider through the legacy shape."""
-        if not isinstance(key, str):
-            return default
-        try:
-            return self[key]
-        except KeyError:
-            return default
 
 
 def resolve_provider_api_type(
@@ -1075,7 +1042,9 @@ class GatewayConfig:
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
         if legacy_web_search:
-            self._validate_legacy_web_search_provider()
+            self._validate_legacy_web_search_provider(
+                raw_web_search if isinstance(raw_web_search, dict) else {}
+            )
         self.web_search_candidates = build_search_provider_candidates(
             self.web_search.providers,
             self.providers,
@@ -1083,11 +1052,14 @@ class GatewayConfig:
             allowed_responses_models=CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
         )
 
-    def _validate_legacy_web_search_provider(self) -> None:
+    def _validate_legacy_web_search_provider(self, mapping: dict[str, Any]) -> None:
         """Require a legacy configured search upstream to support Responses."""
-        if self.web_search["provider"] != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
+        if (
+            mapping.get("provider", "tavily")
+            != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
+        ):
             return
-        provider_name = self.web_search["responses_provider"]
+        provider_name = mapping.get("responses_provider", "")
         provider = self._raw_providers.get(provider_name)
         if provider is None:
             raise ValueError(

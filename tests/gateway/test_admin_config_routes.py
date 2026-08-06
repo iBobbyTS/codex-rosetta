@@ -932,7 +932,10 @@ def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(
             }
         ]
     }
-    assert app.gateway_config.web_search["tavily_api_key"] == "tvly-secret-value"
+    assert (
+        app.gateway_config.web_search.providers[0]["tavily_api_key"]
+        == "tvly-secret-value"
+    )
     assert "tvly-secret-value" in app.gateway_config.token_values
     assert (
         json.loads(response.body)["server"]["web_search"]["providers"][0][
@@ -968,7 +971,7 @@ def test_put_server_settings_clears_web_search_key(tmp_path):
     assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
         "web_search"
     ] == {"providers": []}
-    assert app.gateway_config.web_search["tavily_api_key"] == ""
+    assert app.gateway_config.web_search.providers == []
 
 
 def test_put_server_settings_selects_self_hosted_google_and_preserves_tavily_key(
@@ -1003,7 +1006,9 @@ def test_put_server_settings_selects_self_hosted_google_and_preserves_tavily_key
     assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
         "web_search"
     ] == {"providers": [{"id": "legacy-0", "provider": "self_hosted_google"}]}
-    assert app.gateway_config.web_search["provider"] == "self_hosted_google"
+    assert app.gateway_config.web_search.providers == [
+        {"id": "legacy-0", "provider": "self_hosted_google"}
+    ]
 
 
 def test_put_server_settings_selects_configured_responses_provider(tmp_path):
@@ -1048,8 +1053,10 @@ def test_put_server_settings_selects_configured_responses_provider(tmp_path):
             }
         ]
     }
-    assert app.gateway_config.web_search["responses_provider"] == "search"
-    assert app.gateway_config.web_search["responses_model"] == "gpt-5.6-terra"
+    assert app.gateway_config.web_search.providers[0]["responses_provider"] == "search"
+    assert (
+        app.gateway_config.web_search.providers[0]["responses_model"] == "gpt-5.6-terra"
+    )
 
 
 def test_put_server_settings_rejects_configured_non_responses_provider(tmp_path):
@@ -1910,7 +1917,10 @@ def test_delete_provider_legacy_search_failure_preserves_disk_and_live_config(
     assert config_path.read_bytes() == original
     assert request.app.gateway_config is initial_config
     assert "search" in request.app.gateway_config.providers
-    assert request.app.gateway_config.web_search["responses_provider"] == "search"
+    assert (
+        request.app.gateway_config.web_search.providers[0]["responses_provider"]
+        == "search"
+    )
 
 
 def test_put_provider_rejects_missing_persisted_provider(tmp_path):

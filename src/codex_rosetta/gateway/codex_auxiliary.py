@@ -462,7 +462,6 @@ def _configured_sidecar_client(config: GatewayConfig) -> WebRunSidecarHTTPClient
         config.web_run_sidecar_url,
         config.web_run_sidecar_token,
         timeout=config.web_run_sidecar_timeout,
-        search_provider=config.web_search["provider"],
     )
 
 

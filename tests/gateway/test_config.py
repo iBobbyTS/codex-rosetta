@@ -688,8 +688,8 @@ class TestWebSearchConfig:
         config = GatewayConfig(_minimal_raw())
 
         assert config.web_search == {"providers": []}
-        assert config.web_search["provider"] == "tavily"
-        assert config.web_search.get("tavily_api_key") == ""
+        assert "provider" not in config.web_search
+        assert "tavily_api_key" not in config.web_search
 
     def test_canonical_providers_are_normalized_redacted_and_ordered(self):
         raw = _minimal_raw(
@@ -747,8 +747,8 @@ class TestWebSearchConfig:
         assert config.web_search == {
             "providers": [{"id": "local", "provider": provider}]
         }
-        assert config.web_search["provider"] == provider
-        assert config.web_search.get("tavily_api_key") == ""
+        assert "provider" not in config.web_search
+        assert "tavily_api_key" not in config.web_search
 
     @pytest.mark.parametrize(
         ("value", "message"),
