@@ -1202,7 +1202,7 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
         msg = _format_connection_error(safe_error, models_url)
         return JSONResponse({"error": msg})  # 200 so reverse proxies don't intercept
 
-    if resp.status_code >= 400:
+    if not 200 <= resp.status_code < 300:
         logger.warning(
             "Upstream %s returned %d for model listing", provider_name, resp.status_code
         )

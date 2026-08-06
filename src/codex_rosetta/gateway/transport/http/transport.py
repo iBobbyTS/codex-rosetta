@@ -287,7 +287,9 @@ async def request_bounded_response(
             raise ValueError(f"{name} must be a positive integer")
     request_headers = dict(headers or {})
     _force_identity_encoding(request_headers)
-    kwargs["max_redirects"] = DEFAULT_MAX_REDIRECTS if allow_redirects else 0
+    kwargs["follow_redirects"] = allow_redirects
+    if allow_redirects:
+        kwargs["max_redirects"] = DEFAULT_MAX_REDIRECTS
     try:
         resp = await client.request(
             method,
@@ -302,7 +304,7 @@ async def request_bounded_response(
         raise UpstreamConnectionError(str(exc)) from exc
     if not isinstance(resp, HttpStreamingResponse):
         raise UpstreamConnectionError("Auxiliary HTTP request did not return a stream")
-    max_bytes = max_error_bytes if resp.status_code >= 400 else max_success_bytes
+    max_bytes = max_success_bytes if 200 <= resp.status_code < 300 else max_error_bytes
     raw_content = await _read_bounded_body(resp, max_bytes)
     return BoundedHttpResponse(
         status_code=resp.status_code,

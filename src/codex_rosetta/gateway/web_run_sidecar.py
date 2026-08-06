@@ -146,6 +146,8 @@ class WebRunSidecarHTTPClient:
                 "response blocked"
             )
 
+        if response.status_code < 200 or 300 <= response.status_code < 400:
+            raise WebRunSidecarError(_sidecar_error_message({}, response.status_code))
         invalid_json = False
         try:
             body = response.json()
@@ -156,7 +158,7 @@ class WebRunSidecarHTTPClient:
             raise WebRunSidecarError("web-run sidecar returned invalid JSON") from None
         if not isinstance(body, dict):
             raise WebRunSidecarError("web-run sidecar returned a non-object response")
-        if response.status_code >= 400:
+        if not 200 <= response.status_code < 300:
             message = _sidecar_error_message(body, response.status_code)
             if response.status_code in {400, 404, 422}:
                 raise WebRunSidecarInvalidRequest(message)

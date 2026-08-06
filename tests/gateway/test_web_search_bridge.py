@@ -39,6 +39,7 @@ from codex_rosetta.routing import ResolvedRoute
 @pytest.mark.parametrize(
     ("status_code", "content", "category"),
     [
+        (302, b'{"private":"redirect body"}', "http_error"),
         (432, b'{"private":"quota body"}', "http_error"),
         (433, b'{"private":"quota body"}', "http_error"),
         (400, b'{"private":"request body"}', "http_error"),

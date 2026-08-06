@@ -82,6 +82,69 @@ def test_sidecar_client_maps_client_errors(monkeypatch) -> None:
         )
 
 
+@pytest.mark.parametrize("status_code", [199, 302])
+def test_sidecar_execute_rejects_informational_and_redirect_success_payload(
+    monkeypatch,
+    status_code: int,
+) -> None:
+    async def fake_request(client, method, url, **kwargs):
+        del client, method, url, kwargs
+        return BoundedHttpResponse(
+            status_code=status_code,
+            headers={"location": "https://target.test/private"},
+            content=b'{"output":"must not escape"}',
+        )
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(WebRunSidecarError, match=f"HTTP {status_code}"):
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "secret").execute(
+                session_id="a" * 64,
+                operation="open",
+                arguments={"ref_id": "https://example.com"},
+            )
+        )
+
+
+def test_sidecar_execute_preserves_invalid_json_error_for_400(monkeypatch) -> None:
+    async def fake_request(client, method, url, **kwargs):
+        del client, method, url, kwargs
+        return BoundedHttpResponse(status_code=400, headers={}, content=b"not-json")
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(WebRunSidecarError, match="returned invalid JSON") as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "secret").execute(
+                session_id="a" * 64,
+                operation="open",
+                arguments={},
+            )
+        )
+
+    assert type(caught.value) is WebRunSidecarError
+
+
+def test_sidecar_execute_preserves_non_object_error_for_501(monkeypatch) -> None:
+    async def fake_request(client, method, url, **kwargs):
+        del client, method, url, kwargs
+        return BoundedHttpResponse(status_code=501, headers={}, content=b"[]")
+
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", fake_request)
+
+    with pytest.raises(WebRunSidecarError, match="returned a non-object") as caught:
+        asyncio.run(
+            WebRunSidecarHTTPClient("http://web-run:8080", "secret").execute(
+                session_id="a" * 64,
+                operation="open",
+                arguments={},
+            )
+        )
+
+    assert type(caught.value) is WebRunSidecarError
+
+
 @pytest.mark.parametrize(
     "provider",
     ["self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"],
@@ -134,6 +197,7 @@ def test_sidecar_client_sends_bounded_self_hosted_search(
 @pytest.mark.parametrize(
     ("status_code", "content", "category"),
     [
+        (302, b'{"detail":"private redirect"}', "http_error"),
         (400, b'{"detail":"private detail"}', "http_error"),
         (422, b'{"detail":"private detail"}', "http_error"),
         (500, b'{"detail":"private detail"}', "http_error"),

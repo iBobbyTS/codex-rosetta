@@ -169,6 +169,45 @@ def test_model_discovery_uses_provider_redirect_policy(
     assert observed["allow_redirects"] is True
 
 
+def test_model_discovery_rejects_redirect_before_applying_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeAsyncClient:
+        def __init__(self, **kwargs: Any) -> None:
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args: Any) -> None:
+            pass
+
+    class _RedirectResponse:
+        status_code = 302
+
+        def json(self) -> dict[str, Any]:
+            raise AssertionError("redirect body must not be consumed as model data")
+
+    async def _fake_bounded_request(*args: Any, **kwargs: Any):
+        del args, kwargs
+        return _RedirectResponse()
+
+    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        config_routes,
+        "request_bounded_response",
+        _fake_bounded_request,
+    )
+
+    response = asyncio.run(config_routes.fetch_upstream_models(_request()))
+
+    assert json.loads(response.body) == {
+        "error": (
+            "Upstream returned HTTP 302. This provider may not support model listing."
+        )
+    }
+
+
 @pytest.mark.parametrize("outcome", ["success", "connection_error"])
 def test_model_discovery_blocks_rotated_wire_key(
     monkeypatch: pytest.MonkeyPatch,

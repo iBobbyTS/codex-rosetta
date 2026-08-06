@@ -1,5 +1,5 @@
 # /// zerodep
-# version = "0.4.6"
+# version = "0.5.0"
 # deps = []
 # tier = "subsystem"
 # category = "network"
@@ -42,6 +42,7 @@ import base64
 import email.parser
 import hashlib
 import http.client
+import io
 import json as _json
 import logging
 import os
@@ -52,9 +53,9 @@ import threading
 import time
 import warnings
 import zlib
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
 from typing import IO, Any
-from urllib.parse import quote, urlencode, urlparse
+from urllib.parse import quote, urlencode, urljoin, urlparse
 
 __all__ = [
     # Constants
@@ -66,6 +67,7 @@ __all__ = [
     "DEFAULT_MAX_LINE_BYTES",
     "DEFAULT_MAX_HEADER_COUNT",
     "DEFAULT_MAX_HEADER_BYTES",
+    "DEFAULT_MAX_INFORMATIONAL_RESPONSES",
     "DEFAULT_HEADER_TIMEOUT",
     # Exceptions
     "HttpClientError",
@@ -85,6 +87,7 @@ __all__ = [
     "BasicAuth",
     "DigestAuth",
     # Sync convenience functions
+    "request",
     "get",
     "post",
     "put",
@@ -93,6 +96,7 @@ __all__ = [
     "head",
     "options",
     # Async convenience functions
+    "async_request",
     "async_get",
     "async_post",
     "async_put",
@@ -117,7 +121,23 @@ DEFAULT_POOL_IDLE_TIMEOUT = 60.0
 DEFAULT_MAX_LINE_BYTES = 1024 * 1024
 DEFAULT_MAX_HEADER_COUNT = 100
 DEFAULT_MAX_HEADER_BYTES = 64 * 1024
+DEFAULT_MAX_INFORMATIONAL_RESPONSES = 8
 DEFAULT_HEADER_TIMEOUT = 10.0
+_ASYNC_WRITER_CLOSE_TIMEOUT = 0.25
+
+# Stable minimum credential set that must never cross an origin boundary
+# implicitly.  It includes standard HTTP credentials plus the provider API-key
+# header spellings used by common OpenAI-compatible, Anthropic, and Google APIs.
+_CROSS_ORIGIN_REDIRECT_CREDENTIAL_HEADERS = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "x-api-key",
+        "api-key",
+        "x-goog-api-key",
+    }
+)
 
 
 # ── CaseInsensitiveDict ──
@@ -336,16 +356,21 @@ class HttpResponseLimitError(HttpClientError):
 
 
 def _header_timeout_error() -> HttpTimeoutError:
-    """Return the stable error for one response header-section deadline."""
+    """Return the stable error for one response-head or trailer deadline."""
     return HttpTimeoutError(
         f"HTTP response headers exceeded {DEFAULT_HEADER_TIMEOUT:g} seconds",
         timeout=DEFAULT_HEADER_TIMEOUT,
     )
 
 
-def _remaining_header_timeout(deadline: float, read_timeout: float | None) -> float:
+def _remaining_header_timeout(
+    deadline: float,
+    read_timeout: float | None,
+    *,
+    now: float | None = None,
+) -> float:
     """Return the next read timeout without allowing deadline renewal."""
-    remaining = deadline - time.monotonic()
+    remaining = deadline - (time.monotonic() if now is None else now)
     if remaining <= 0:
         raise _header_timeout_error()
     if read_timeout is None:
@@ -375,12 +400,147 @@ def _check_header_line_budget(
     return actual_count, actual_bytes
 
 
-def _sync_response_socket(response: http.client.HTTPResponse) -> socket.socket | None:
-    """Best-effort lookup of the socket behind an ``HTTPResponse`` file."""
-    fp = response.fp
-    raw = getattr(fp, "raw", None)
-    sock = getattr(raw, "_sock", None)
-    return sock if isinstance(sock, socket.socket) else None
+class _SyncDeadlineRawReader(io.RawIOBase):
+    """Apply one absolute response-head deadline to every raw sync read."""
+
+    def __init__(
+        self,
+        raw: Any,
+        sock: Any,
+        clock: Callable[[], float],
+    ) -> None:
+        super().__init__()
+        self._raw = raw
+        self._sock = sock
+        self._clock = clock
+        gettimeout = getattr(sock, "gettimeout", None)
+        self._read_timeout = gettimeout() if callable(gettimeout) else None
+        self._deadline: float | None = None
+
+    def readable(self) -> bool:
+        """Return whether the wrapped raw reader supports reads."""
+        return True
+
+    def fileno(self) -> int:
+        """Return the wrapped reader's file descriptor."""
+        return self._raw.fileno()
+
+    def start_deadline(self) -> bool:
+        """Start one deadline, or reuse the active enclosing deadline."""
+        if self._deadline is not None:
+            return False
+        self._deadline = self._clock() + DEFAULT_HEADER_TIMEOUT
+        return True
+
+    def finish_deadline(self) -> None:
+        """Clear the active deadline and restore the ordinary read timeout."""
+        if self._deadline is None:
+            return
+        self._deadline = None
+        self._set_socket_timeout(self._read_timeout)
+
+    def check_deadline(self) -> None:
+        """Raise when the active response-head deadline has expired."""
+        if self._deadline is not None:
+            _remaining_header_timeout(
+                self._deadline,
+                self._read_timeout,
+                now=self._clock(),
+            )
+
+    def _set_socket_timeout(self, timeout: float | None) -> None:
+        settimeout = getattr(self._sock, "settimeout", None)
+        if callable(settimeout):
+            settimeout(timeout)
+
+    def readinto(self, buffer: Any) -> int | None:
+        """Read once after applying the remaining absolute deadline."""
+        deadline = self._deadline
+        deadline_limited = False
+        if deadline is not None:
+            remaining = _remaining_header_timeout(
+                deadline,
+                self._read_timeout,
+                now=self._clock(),
+            )
+            deadline_limited = (
+                self._read_timeout is None or remaining < self._read_timeout
+            )
+            self._set_socket_timeout(remaining)
+        try:
+            read = self._raw.readinto(buffer)
+        except socket.timeout:
+            if deadline_limited:
+                raise _header_timeout_error() from None
+            raise
+        if deadline is not None and self._clock() >= deadline:
+            raise _header_timeout_error()
+        return read
+
+    def readline(self, size: int = -1, /) -> bytes:
+        """Read one line without consuming bytes beyond its terminator."""
+        if self.closed:
+            raise ValueError("I/O operation on closed file")
+        if size == 0:
+            return b""
+        line = bytearray()
+        byte = bytearray(1)
+        while size < 0 or len(line) < size:
+            read = self.readinto(byte)
+            if not read:
+                break
+            line.extend(byte[:read])
+            if byte[0] == 0x0A:
+                break
+        return bytes(line)
+
+    def close(self) -> None:
+        """Close the file reference without taking ownership of the socket."""
+        if self.closed:
+            return
+        try:
+            self.finish_deadline()
+        finally:
+            try:
+                self._raw.close()
+            finally:
+                super().close()
+
+
+class _SyncResponseReaderOwner:
+    """Own one buffered response reader and its active head deadline."""
+
+    def __init__(
+        self,
+        sock: Any,
+        clock: Callable[[], float],
+        *,
+        no_read_ahead: bool = False,
+    ) -> None:
+        raw = sock.makefile("rb", buffering=0)
+        self._deadline_reader = _SyncDeadlineRawReader(raw, sock, clock)
+        self.file: IO[bytes] = (
+            self._deadline_reader
+            if no_read_ahead
+            else io.BufferedReader(self._deadline_reader)
+        )
+
+    def makefile(self, *args: Any, **kwargs: Any) -> IO[bytes]:
+        """Return the single file object expected by ``HTTPResponse``."""
+        del args, kwargs
+        return self.file
+
+    def start_deadline(self) -> bool:
+        """Start or reuse the reader's absolute deadline."""
+        return self._deadline_reader.start_deadline()
+
+    def finish_deadline(self) -> None:
+        """Finish the reader's active absolute deadline."""
+        self._deadline_reader.finish_deadline()
+
+    def check_deadline(self) -> None:
+        """Check the reader's active absolute deadline."""
+        self._deadline_reader.check_deadline()
 
 
 def _sync_read_header_section(
@@ -388,25 +548,20 @@ def _sync_read_header_section(
 ) -> list[bytes]:
     """Read one bounded sync response header or trailer section."""
     assert response.fp is not None
-    sock = _sync_response_socket(response)
-    original_timeout = sock.gettimeout() if sock is not None else None
-    deadline = time.monotonic() + DEFAULT_HEADER_TIMEOUT
+    owner = getattr(response, "_reader_owner", None)
+    owns_deadline = owner.start_deadline() if owner is not None else False
+    fallback_deadline = (
+        None if owner is not None else time.monotonic() + DEFAULT_HEADER_TIMEOUT
+    )
     count = 0
     total_bytes = 0
     lines: list[bytes] = []
     try:
         while True:
-            remaining = _remaining_header_timeout(deadline, original_timeout)
-            deadline_limited = original_timeout is None or remaining < original_timeout
-            if sock is not None:
-                sock.settimeout(remaining)
-            try:
-                line = response.fp.readline(DEFAULT_MAX_HEADER_BYTES - total_bytes + 1)
-            except socket.timeout:
-                if deadline_limited:
-                    raise _header_timeout_error() from None
-                raise
-            if time.monotonic() > deadline:
+            if fallback_deadline is not None:
+                _remaining_header_timeout(fallback_deadline, None)
+            line = response.fp.readline(DEFAULT_MAX_HEADER_BYTES - total_bytes + 1)
+            if fallback_deadline is not None and time.monotonic() >= fallback_deadline:
                 raise _header_timeout_error()
             if not line:
                 raise HttpConnectionError("Incomplete HTTP response header section")
@@ -419,74 +574,118 @@ def _sync_read_header_section(
             if line in (b"\r\n", b"\n"):
                 return lines
     finally:
-        if sock is not None:
-            sock.settimeout(original_timeout)
+        if owns_deadline:
+            owner.finish_deadline()
+
+
+def _is_skippable_informational_response(status: int) -> bool:
+    """Return whether an informational response precedes the final response."""
+    return 100 <= status < 200 and status != http.client.SWITCHING_PROTOCOLS
+
+
+def _advance_informational_response_count(count: int) -> int:
+    """Account one informational response and enforce the response-head limit."""
+    actual = count + 1
+    if actual > DEFAULT_MAX_INFORMATIONAL_RESPONSES:
+        raise HttpResponseLimitError(
+            "informational response count",
+            DEFAULT_MAX_INFORMATIONAL_RESPONSES,
+            actual,
+        )
+    return actual
 
 
 class _BoundedHTTPResponse(http.client.HTTPResponse):
     """Stdlib-compatible response parser with bounded header sections."""
+
+    def __init__(
+        self,
+        sock: Any,
+        debuglevel: int = 0,
+        method: str | None = None,
+        url: str | None = None,
+        *,
+        _clock: Callable[[], float] | None = None,
+        _no_read_ahead: bool = False,
+    ) -> None:
+        clock = time.monotonic if _clock is None else _clock
+        self._reader_owner = _SyncResponseReaderOwner(
+            sock,
+            clock,
+            no_read_ahead=_no_read_ahead,
+        )
+        super().__init__(self._reader_owner, debuglevel, method, url)
 
     def begin(self) -> None:
         """Read the response metadata, including bounded interim sections."""
         if self.headers is not None:
             return
 
-        while True:
-            version, status, reason = self._read_status()
-            if status != http.client.CONTINUE:
-                break
-            skipped_headers = _sync_read_header_section(self)
-            if self.debuglevel > 0:
-                print("headers:", skipped_headers)
+        self._reader_owner.start_deadline()
+        try:
+            informational_count = 0
+            while True:
+                version, status, reason = self._read_status()
+                if not _is_skippable_informational_response(status):
+                    break
+                informational_count = _advance_informational_response_count(
+                    informational_count
+                )
+                skipped_headers = _sync_read_header_section(self)
+                if self.debuglevel > 0:
+                    print("headers:", skipped_headers)
 
-        self.code = self.status = status
-        self.reason = reason.strip()
-        if version in ("HTTP/1.0", "HTTP/0.9"):
-            self.version = 10
-        elif version.startswith("HTTP/1."):
-            self.version = 11
-        else:
-            raise http.client.UnknownProtocol(version)
-
-        raw_headers = b"".join(_sync_read_header_section(self))
-        header_text = raw_headers.decode("iso-8859-1")
-        self.headers = self.msg = email.parser.Parser(
-            _class=http.client.HTTPMessage
-        ).parsestr(header_text)
-
-        if self.debuglevel > 0:
-            for header, value in self.headers.items():
-                print("header:", header + ":", value)
-
-        transfer_encoding = self.headers.get("transfer-encoding")
-        if transfer_encoding and transfer_encoding.lower() == "chunked":
-            self.chunked = True
-            self.chunk_left = None
-        else:
-            self.chunked = False
-
-        self.will_close = self._check_close()
-        self.length = None
-        length = self.headers.get("content-length")
-        if length and not self.chunked:
-            try:
-                self.length = int(length)
-            except ValueError:
-                self.length = None
+            self.code = self.status = status
+            self.reason = reason.strip()
+            if version in ("HTTP/1.0", "HTTP/0.9"):
+                self.version = 10
+            elif version.startswith("HTTP/1."):
+                self.version = 11
             else:
-                if self.length < 0:
+                raise http.client.UnknownProtocol(version)
+
+            raw_headers = b"".join(_sync_read_header_section(self))
+            header_text = raw_headers.decode("iso-8859-1")
+            self.headers = self.msg = email.parser.Parser(
+                _class=http.client.HTTPMessage
+            ).parsestr(header_text)
+
+            if self.debuglevel > 0:
+                for header, value in self.headers.items():
+                    print("header:", header + ":", value)
+
+            transfer_encoding = self.headers.get("transfer-encoding")
+            if transfer_encoding and transfer_encoding.lower() == "chunked":
+                self.chunked = True
+                self.chunk_left = None
+            else:
+                self.chunked = False
+
+            self.will_close = self._check_close()
+            self.length = None
+            length = self.headers.get("content-length")
+            if length and not self.chunked:
+                try:
+                    self.length = int(length)
+                except ValueError:
                     self.length = None
+                else:
+                    if self.length < 0:
+                        self.length = None
 
-        if (
-            status == http.client.NO_CONTENT
-            or status == http.client.NOT_MODIFIED
-            or 100 <= status < 200
-            or self._method == "HEAD"
-        ):
-            self.length = 0
+            if (
+                status == http.client.NO_CONTENT
+                or status == http.client.NOT_MODIFIED
+                or 100 <= status < 200
+                or self._method == "HEAD"
+            ):
+                self.length = 0
 
-        if not self.will_close and not self.chunked and self.length is None:
-            self.will_close = True
+            if not self.will_close and not self.chunked and self.length is None:
+                self.will_close = True
+            self._reader_owner.check_deadline()
+        finally:
+            self._reader_owner.finish_deadline()
 
     def _read_and_discard_trailer(self) -> None:
         """Consume a bounded trailer section after a chunked body."""
@@ -766,6 +965,83 @@ def _make_decompressor(encoding: str) -> zlib._Decompress | None:
     return None
 
 
+def _sync_teardown_action(
+    action: Callable[[], None],
+    *,
+    preserve_primary: bool,
+    context: str,
+) -> None:
+    """Run one sync cleanup action without replacing an active exception."""
+    try:
+        action()
+    except BaseException:
+        if not preserve_primary:
+            raise
+        logger.debug("failed to clean up %s", context, exc_info=True)
+
+
+def _consume_async_teardown_result(future: asyncio.Future[Any]) -> None:
+    """Consume a detached writer-close result without surfacing callback errors."""
+    try:
+        future.result()
+    except BaseException:
+        pass
+
+
+async def _async_teardown_writer(
+    writer: asyncio.StreamWriter,
+    *,
+    preserve_primary: bool,
+    context: str,
+) -> None:
+    """Close an async writer without allowing teardown to wait indefinitely.
+
+    When ``preserve_primary`` is true, another exception is already propagating,
+    so every teardown failure is logged and suppressed. Otherwise the historical
+    explicit-close contract is retained: ordinary exceptions are logged while
+    ``BaseException`` subclasses still propagate.
+    """
+    try:
+        writer.close()
+    except BaseException as exc:
+        if preserve_primary or isinstance(exc, Exception):
+            logger.debug("failed to close writer for %s", context, exc_info=True)
+            if not preserve_primary:
+                return
+        else:
+            raise
+
+    wait_task: asyncio.Future[Any] | None = None
+    try:
+        wait_task = asyncio.ensure_future(writer.wait_closed())
+        done, _ = await asyncio.wait(
+            {wait_task},
+            timeout=_ASYNC_WRITER_CLOSE_TIMEOUT,
+        )
+        if wait_task not in done:
+            wait_task.cancel()
+            wait_task.add_done_callback(_consume_async_teardown_result)
+            logger.debug(
+                "timed out waiting %.2fs for writer close for %s",
+                _ASYNC_WRITER_CLOSE_TIMEOUT,
+                context,
+            )
+            return
+        await wait_task
+    except BaseException as exc:
+        if wait_task is not None and not wait_task.done():
+            wait_task.cancel()
+            wait_task.add_done_callback(_consume_async_teardown_result)
+        if preserve_primary or isinstance(exc, Exception):
+            logger.debug(
+                "failed while waiting for writer close for %s",
+                context,
+                exc_info=True,
+            )
+            return
+        raise
+
+
 # ── Streaming Response (state machine) ──
 
 
@@ -910,14 +1186,17 @@ class StreamingResponse:
                 if remaining:
                     yield remaining
         except GeneratorExit:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise
         except HttpResponseLimitError:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise
         except (OSError, http.client.HTTPException) as exc:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise HttpConnectionError(str(exc)) from exc
+        except BaseException:
+            self._close_sync_resources(preserve_primary=True)
+            raise
 
     def iter_lines(
         self,
@@ -943,14 +1222,17 @@ class StreamingResponse:
                     raise HttpResponseLimitError("line", max_line_bytes, len(line))
                 yield line.decode(self._encoding, errors="replace").rstrip("\r\n")
         except GeneratorExit:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise
         except HttpResponseLimitError:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise
         except (OSError, http.client.HTTPException) as exc:
-            self.close()
+            self._close_sync_resources(preserve_primary=True)
             raise HttpConnectionError(str(exc)) from exc
+        except BaseException:
+            self._close_sync_resources(preserve_primary=True)
+            raise
 
     def read(self) -> bytes:
         """Consume entire stream into bytes."""
@@ -975,24 +1257,27 @@ class StreamingResponse:
                 if remaining:
                     yield remaining
         except (asyncio.CancelledError, GeneratorExit):
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise
         except asyncio.TimeoutError:
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise HttpTimeoutError(
                 f"Streaming read timed out for {self.url}",
                 url=self.url,
                 timeout=self._async_timeout or 0.0,
             )
         except (HttpTimeoutError, HttpResponseLimitError):
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise
         except HttpConnectionError:
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise
         except (OSError, asyncio.IncompleteReadError, ValueError) as exc:
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise HttpConnectionError(str(exc)) from exc
+        except BaseException:
+            await self._aclose_resources(preserve_primary=True)
+            raise
 
     async def _select_raw_iterator(self, chunk_size: int) -> AsyncIterator[bytes]:
         """Select and yield from the appropriate raw byte iterator."""
@@ -1091,10 +1376,13 @@ class StreamingResponse:
             if buf:
                 yield bytes(buf).decode(self._encoding, errors="replace").rstrip("\r")
         except (asyncio.CancelledError, GeneratorExit):
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
             raise
         except HttpResponseLimitError:
-            await self.aclose()
+            await self._aclose_resources(preserve_primary=True)
+            raise
+        except BaseException:
+            await self._aclose_resources(preserve_primary=True)
             raise
 
     async def aread(self) -> bytes:
@@ -1120,45 +1408,47 @@ class StreamingResponse:
 
     def close(self) -> None:
         """Close the underlying sync connection."""
+        self._close_sync_resources(preserve_primary=False)
+
+    def _close_sync_resources(self, *, preserve_primary: bool) -> None:
+        """Close sync resources, optionally preserving an active exception."""
         if self._closed:
             return
         self._closed = True
-        # Tier 2: best-effort observable -- active streaming resource
-        if self._sync_resp is not None:
+        resources = (
+            (self._sync_resp, "sync response"),
+            (self._sync_conn, "sync connection"),
+        )
+        for resource, resource_name in resources:
+            if resource is None:
+                continue
             try:
-                self._sync_resp.close()
-            except Exception:
+                resource.close()
+            except BaseException as exc:
+                if not preserve_primary and not isinstance(exc, Exception):
+                    raise
                 logger.debug(
-                    "failed to close sync response for %s",
-                    self.url,
-                    exc_info=True,
-                )
-        if self._sync_conn is not None:
-            try:
-                self._sync_conn.close()
-            except Exception:
-                logger.debug(
-                    "failed to close sync connection for %s",
+                    "failed to close %s for %s",
+                    resource_name,
                     self.url,
                     exc_info=True,
                 )
 
     async def aclose(self) -> None:
         """Close the underlying async connection."""
+        await self._aclose_resources(preserve_primary=False)
+
+    async def _aclose_resources(self, *, preserve_primary: bool) -> None:
+        """Close async resources, optionally preserving an active exception."""
         if self._closed:
             return
         self._closed = True
-        # Tier 2: best-effort observable -- active streaming resource
         if self._async_writer is not None:
-            try:
-                self._async_writer.close()
-                await self._async_writer.wait_closed()
-            except Exception:
-                logger.debug(
-                    "failed to close async writer for %s",
-                    self.url,
-                    exc_info=True,
-                )
+            await _async_teardown_writer(
+                self._async_writer,
+                preserve_primary=preserve_primary,
+                context=f"streaming response {self.url}",
+            )
 
     def __del__(self) -> None:
         if not self._closed:
@@ -1345,20 +1635,20 @@ class _AsyncConnectionPool:
                 reader, writer, timestamp = conns.pop()
                 if now - timestamp > DEFAULT_POOL_IDLE_TIMEOUT:
                     # Tier 3: best-effort silent -- stale connection eviction
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                    await _async_teardown_writer(
+                        writer,
+                        preserve_primary=False,
+                        context="stale pooled connection",
+                    )
                     continue
                 if not reader.at_eof():
                     return reader, writer
                 # Tier 3: best-effort silent -- dead connection eviction
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                await _async_teardown_writer(
+                    writer,
+                    preserve_primary=False,
+                    context="dead pooled connection",
+                )
         return None
 
     async def release(
@@ -1385,11 +1675,11 @@ class _AsyncConnectionPool:
                 conns.append((reader, writer, time.monotonic()))
             else:
                 # Tier 3: best-effort silent -- pool overflow discard
-                try:
-                    writer.close()
-                    await writer.wait_closed()
-                except Exception:
-                    pass
+                await _async_teardown_writer(
+                    writer,
+                    preserve_primary=False,
+                    context="pooled connection overflow",
+                )
 
     async def close_all(self) -> None:
         """Close all pooled connections."""
@@ -1397,11 +1687,11 @@ class _AsyncConnectionPool:
             for conns in self._pool.values():
                 for _, writer, _ in conns:
                     # Tier 3: best-effort silent -- bulk shutdown
-                    try:
-                        writer.close()
-                        await writer.wait_closed()
-                    except Exception:
-                        pass
+                    await _async_teardown_writer(
+                        writer,
+                        preserve_primary=False,
+                        context="pooled connection shutdown",
+                    )
             self._pool.clear()
 
 
@@ -1668,6 +1958,21 @@ def _parse_url(url: str) -> tuple[str, str, int, str, bool]:
     return parsed.scheme, host, port, path, is_https
 
 
+def _host_header_value(
+    host: str,
+    port: int,
+    is_https: bool,
+    *,
+    always_include_port: bool = False,
+) -> str:
+    """Return the HTTP Host authority for one parsed request target."""
+    authority_host = f"[{host}]" if ":" in host else host
+    default_port = 443 if is_https else 80
+    if port == default_port and not always_include_port:
+        return authority_host
+    return f"{authority_host}:{port}"
+
+
 # -- Shared request preparation helpers --
 
 
@@ -1759,23 +2064,34 @@ def _compute_redirect(
     url: str,
     redirects: int,
     max_redirects: int,
-) -> tuple[str, str, bytes | None]:
+) -> tuple[str, str, bytes | None, bool]:
     """Compute redirect target and adjust method/body.
 
     Raises:
         TooManyRedirects: If redirect limit exceeded.
 
     Returns:
-        (new_url, new_method, new_body).
+        (new_url, new_method, new_body, cross_origin).
     """
     redirects_now = redirects + 1
     if redirects_now > max_redirects:
         raise TooManyRedirects(url, max_redirects)
     location = resp_headers["location"]
-    if location.startswith("/"):
-        new_url = f"{scheme}://{host}:{port}{location}"
-    else:
-        new_url = location
+    new_url = urljoin(url, location)
+    new_scheme, new_host, new_port, _, _ = _parse_url(new_url)
+    cross_origin = (
+        scheme.lower(),
+        host.lower(),
+        port,
+    ) != (
+        new_scheme.lower(),
+        new_host.lower(),
+        new_port,
+    )
+    if cross_origin:
+        req_headers.pop("Host", None)
+        for header_name in _CROSS_ORIGIN_REDIRECT_CREDENTIAL_HEADERS:
+            req_headers.pop(header_name, None)
     new_method = method
     new_body = body
     if status == 303 or (status in (301, 302) and method == "POST"):
@@ -1783,7 +2099,7 @@ def _compute_redirect(
         new_body = None
         req_headers.pop("Content-Type", None)
         req_headers.pop("Content-Length", None)
-    return new_url, new_method, new_body
+    return new_url, new_method, new_body, cross_origin
 
 
 def _is_redirect(status: int, resp_headers: dict[str, str]) -> bool:
@@ -1804,6 +2120,18 @@ def _should_attempt_digest(
         and not digest_attempted
         and resp_headers.get("www-authenticate", "").lower().startswith("digest")
     )
+
+
+def _reset_digest_auth_for_redirect(
+    auth_obj: Auth | None,
+    req_headers: dict[str, str],
+    digest_attempted: bool,
+) -> bool:
+    """Remove URI-bound Digest credentials before following a redirect."""
+    if isinstance(auth_obj, DigestAuth) and digest_attempted:
+        req_headers.pop("Authorization", None)
+        return False
+    return digest_attempted
 
 
 def _make_ssl_context(verify: bool) -> ssl.SSLContext:
@@ -1847,28 +2175,74 @@ def _sync_connect_via_proxy(
 
     # CONNECT tunnel for HTTPS through proxy
     tunnel_conn = http.client.HTTPConnection(proxy_host, proxy_port, timeout=timeout)
-    tunnel_conn.response_class = _BoundedHTTPResponse
-    connect_headers: dict[str, str] = {"Host": f"{host}:{port}"}
-    if proxy_user and proxy_pass:
-        connect_headers["Proxy-Authorization"] = _proxy_auth_header(
-            proxy_user, proxy_pass
+    wrapped: socket.socket | None = None
+    try:
+        authority = _host_header_value(
+            host,
+            port,
+            is_https=True,
+            always_include_port=True,
         )
-    tunnel_conn.request("CONNECT", f"{host}:{port}", headers=connect_headers)
-    tunnel_resp = tunnel_conn.getresponse()
-    if tunnel_resp.status != 200:
-        tunnel_conn.close()
-        raise HttpConnectionError(
-            f"CONNECT tunnel failed: {tunnel_resp.status}",
-            host=host,
-            port=port,
+        connect_headers: dict[str, str] = {"Host": authority}
+        if proxy_user and proxy_pass:
+            connect_headers["Proxy-Authorization"] = _proxy_auth_header(
+                proxy_user, proxy_pass
+            )
+        tunnel_conn.request("CONNECT", authority, headers=connect_headers)
+        sock = tunnel_conn.sock
+        if sock is None:
+            raise HttpConnectionError(
+                "CONNECT tunnel did not establish a socket",
+                host=host,
+                port=port,
+            )
+        tunnel_resp = _BoundedHTTPResponse(
+            sock,
+            method="CONNECT",
+            _no_read_ahead=True,
         )
-    tunnel_resp.read()
-    sock = tunnel_conn.sock
-    ctx = _make_ssl_context(verify)
-    wrapped = ctx.wrap_socket(sock, server_hostname=host)
-    conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
-    conn.sock = wrapped
-    return conn, path
+        preserve_primary = False
+        try:
+            tunnel_resp.begin()
+            tunnel_status = tunnel_resp.status
+        except BaseException:
+            preserve_primary = True
+            raise
+        finally:
+            # A successful CONNECT has no HTTP response body. Closing only the
+            # response file releases parser ownership while tunnel_conn keeps
+            # the live socket until TLS takes over below.
+            _sync_teardown_action(
+                tunnel_resp.close,
+                preserve_primary=preserve_primary,
+                context=f"CONNECT response from {proxy_host}:{proxy_port}",
+            )
+        if tunnel_status != 200:
+            raise HttpConnectionError(
+                f"CONNECT tunnel failed: {tunnel_status}",
+                host=host,
+                port=port,
+            )
+        ctx = _make_ssl_context(verify)
+        wrapped = ctx.wrap_socket(sock, server_hostname=host)
+        conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=ctx)
+        conn.sock = wrapped
+        tunnel_conn.sock = None
+        wrapped = None
+        return conn, path
+    except BaseException:
+        if wrapped is not None:
+            _sync_teardown_action(
+                wrapped.close,
+                preserve_primary=True,
+                context=f"wrapped CONNECT socket to {host}:{port}",
+            )
+        _sync_teardown_action(
+            tunnel_conn.close,
+            preserve_primary=True,
+            context=f"CONNECT tunnel to {host}:{port}",
+        )
+        raise
 
 
 def _sync_connect_via_socks5(
@@ -1948,6 +2322,7 @@ def _sync_acquire_connection(
 
 def _sync_release_or_close(
     close_conn: bool,
+    response_complete: bool,
     _pool: _SyncConnectionPool | None,
     proxy: str | None,
     stream: bool,
@@ -1956,29 +2331,47 @@ def _sync_release_or_close(
     port: int,
     is_https: bool,
     conn: http.client.HTTPConnection,
+    *,
+    preserve_primary: bool = False,
 ) -> None:
     """Release a sync connection back to the pool or close it.
 
     Pool reuse decision: a connection is returned to the pool
     only when ALL of the following hold:
       - close_conn is True (not handed off to streaming)
+      - the response was consumed completely without error
       - a pool is active (_pool is not None)
       - the request did not use a proxy
       - the request is not streaming
       - the server did not send "Connection: close"
-    Otherwise the connection is closed immediately.
+    Otherwise the connection is closed immediately. If ``preserve_primary`` is
+    true, a close failure is logged without replacing the active exception.
     """
     if not close_conn:
         return
     if (
-        _pool
+        response_complete
+        and _pool
         and not proxy
         and not stream
         and resp_headers.get("connection", "").lower() != "close"
     ):
-        _pool.release(host, port, is_https, conn)
+        try:
+            _pool.release(host, port, is_https, conn)
+        except BaseException:
+            # Preserve the release failure while ensuring ownership does not
+            # fall through with an open, unpooled connection.
+            try:
+                conn.close()
+            except BaseException:
+                pass
+            raise
     else:
-        conn.close()
+        _sync_teardown_action(
+            conn.close,
+            preserve_primary=preserve_primary,
+            context=f"request connection to {host}:{port}",
+        )
 
 
 def _build_sync_response(
@@ -2047,6 +2440,7 @@ def _sync_request(
     params: dict[str, Any] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
+    follow_redirects: bool = True,
     verify: bool = True,
     stream: bool = False,
     auth: tuple[str, str] | Auth | None = None,
@@ -2071,7 +2465,11 @@ def _sync_request(
     _digest_attempted = False
     while True:
         scheme, host, port, path, is_https = _parse_url(url)
+        _headers_set_default(
+            req_headers, "Host", _host_header_value(host, port, is_https)
+        )
         close_conn = True
+        response_complete = False
         resp_headers: dict[str, str] = {}
         try:
             conn, request_path = _sync_acquire_connection(
@@ -2090,40 +2488,72 @@ def _sync_request(
             if _pool and not proxy:
                 req_headers.setdefault("Connection", "keep-alive")
 
+            preserve_primary = False
             try:
                 conn.request(method, request_path, body=body, headers=req_headers)
                 resp = conn.getresponse()
                 resp_headers = CaseInsensitiveDict(resp.getheaders())
                 status = resp.status
 
-                if _is_redirect(status, resp_headers):
-                    resp.read()
-                    url, method, body = _compute_redirect(
-                        status,
-                        method,
-                        body,
-                        req_headers,
-                        resp_headers,
-                        scheme,
-                        host,
-                        port,
-                        url,
-                        redirects,
-                        max_redirects,
+                if status == http.client.SWITCHING_PROTOCOLS:
+                    unsupported_error = HttpConnectionError(
+                        "HTTP 101 Switching Protocols is unsupported",
+                        host=host,
+                        port=port,
                     )
+                    _sync_teardown_action(
+                        resp.close,
+                        preserve_primary=True,
+                        context=f"HTTP 101 response from {host}:{port}",
+                    )
+                    raise unsupported_error
+
+                if follow_redirects and _is_redirect(status, resp_headers):
+                    redirect_preserve_primary = False
+                    try:
+                        url, method, body, cross_origin = _compute_redirect(
+                            status,
+                            method,
+                            body,
+                            req_headers,
+                            resp_headers,
+                            scheme,
+                            host,
+                            port,
+                            url,
+                            redirects,
+                            max_redirects,
+                        )
+                    except BaseException:
+                        redirect_preserve_primary = True
+                        raise
+                    finally:
+                        # Redirect bodies are never needed.  Close instead of
+                        # buffering untrusted intermediate content.
+                        _sync_teardown_action(
+                            resp.close,
+                            preserve_primary=redirect_preserve_primary,
+                            context=f"redirect response from {host}:{port}",
+                        )
+                    _digest_attempted = _reset_digest_auth_for_redirect(
+                        auth_obj,
+                        req_headers,
+                        _digest_attempted,
+                    )
+                    if cross_origin:
+                        auth_obj = None
                     redirects += 1
                     continue
 
                 if _should_attempt_digest(
                     auth_obj, status, resp_headers, _digest_attempted
                 ):
-                    resp.read()
                     www_auth = resp_headers["www-authenticate"]
+                    resp.close()
                     req_headers.update(
                         auth_obj.auth_headers_from_challenge(method, path, www_auth)
                     )
                     _digest_attempted = True
-                    conn.close()
                     continue
 
                 result, close_conn = _build_sync_response(
@@ -2134,10 +2564,15 @@ def _sync_request(
                     conn,
                     stream,
                 )
+                response_complete = close_conn
                 return result
+            except BaseException:
+                preserve_primary = True
+                raise
             finally:
                 _sync_release_or_close(
                     close_conn,
+                    response_complete,
                     _pool,
                     proxy,
                     stream,
@@ -2146,6 +2581,7 @@ def _sync_request(
                     port,
                     is_https,
                     conn,
+                    preserve_primary=preserve_primary,
                 )
         except Exception as exc:
             wrapped = _wrap_sync_errors(exc, host, port, url, timeout)
@@ -2157,9 +2593,37 @@ def _sync_request(
 # -- Async transport helpers --
 
 
+async def _async_readline_with_header_deadline(
+    reader: asyncio.StreamReader,
+    read_timeout: float | None,
+    deadline: float,
+    clock: Callable[[], float],
+) -> bytes:
+    """Read one line within an existing absolute header deadline."""
+    now = clock()
+    head_remaining = deadline - now
+    remaining = _remaining_header_timeout(
+        deadline,
+        read_timeout,
+        now=now,
+    )
+    deadline_limited = read_timeout is None or head_remaining <= read_timeout
+    try:
+        line = await asyncio.wait_for(reader.readline(), timeout=remaining)
+    except asyncio.TimeoutError:
+        if deadline_limited:
+            raise _header_timeout_error() from None
+        raise
+    if clock() >= deadline:
+        raise _header_timeout_error()
+    return line
+
+
 async def _async_read_response_headers(
     reader: asyncio.StreamReader,
     timeout: float,
+    *,
+    _clock: Callable[[], float] | None = None,
 ) -> tuple[int, CaseInsensitiveDict]:
     """Read HTTP status line and headers from an asyncio StreamReader.
 
@@ -2169,8 +2633,16 @@ async def _async_read_response_headers(
     Returns:
         (status_code, headers_dict).
     """
+    clock = time.monotonic if _clock is None else _clock
+    deadline = clock() + DEFAULT_HEADER_TIMEOUT
+    informational_count = 0
     while True:
-        status_line = await asyncio.wait_for(reader.readline(), timeout=timeout)
+        status_line = await _async_readline_with_header_deadline(
+            reader,
+            timeout,
+            deadline,
+            clock,
+        )
         status_str = status_line.decode("latin-1").rstrip("\r\n")
         parts = status_str.split(" ", 2)
         if len(parts) < 2:
@@ -2179,9 +2651,25 @@ async def _async_read_response_headers(
             status_code = int(parts[1])
         except ValueError:
             raise HttpConnectionError(f"Malformed status line: {status_str}") from None
-        headers = await _async_read_header_section(reader, timeout)
-        if status_code != http.client.CONTINUE:
-            return status_code, headers
+        if _is_skippable_informational_response(status_code):
+            informational_count = _advance_informational_response_count(
+                informational_count
+            )
+            await _async_read_header_section(
+                reader,
+                timeout,
+                discard=True,
+                _deadline=deadline,
+                _clock=clock,
+            )
+            continue
+        headers = await _async_read_header_section(
+            reader,
+            timeout,
+            _deadline=deadline,
+            _clock=clock,
+        )
+        return status_code, headers
 
 
 async def _async_read_header_section(
@@ -2189,29 +2677,29 @@ async def _async_read_header_section(
     read_timeout: float | None,
     *,
     discard: bool = False,
+    _deadline: float | None = None,
+    _clock: Callable[[], float] | None = None,
 ) -> CaseInsensitiveDict:
     """Read one bounded async response header or trailer section."""
-    deadline = time.monotonic() + DEFAULT_HEADER_TIMEOUT
+    clock = time.monotonic if _clock is None else _clock
+    deadline = clock() + DEFAULT_HEADER_TIMEOUT if _deadline is None else _deadline
     count = 0
     total_bytes = 0
     headers = CaseInsensitiveDict()
     while True:
-        remaining = _remaining_header_timeout(deadline, read_timeout)
-        deadline_limited = read_timeout is None or remaining < read_timeout
         try:
-            line = await asyncio.wait_for(reader.readline(), timeout=remaining)
-        except asyncio.TimeoutError:
-            if deadline_limited:
-                raise _header_timeout_error() from None
-            raise
+            line = await _async_readline_with_header_deadline(
+                reader,
+                read_timeout,
+                deadline,
+                clock,
+            )
         except ValueError:
             raise HttpResponseLimitError(
                 "header section",
                 DEFAULT_MAX_HEADER_BYTES,
                 DEFAULT_MAX_HEADER_BYTES + 1,
             ) from None
-        if time.monotonic() > deadline:
-            raise _header_timeout_error()
         if not line:
             raise HttpConnectionError("Incomplete HTTP response header section")
         count, total_bytes = _check_header_line_budget(
@@ -2300,6 +2788,98 @@ async def _async_connect_via_proxy_plain(
     return reader, writer, request_path
 
 
+def _replace_asyncio_stream_transport(
+    protocol: Any,
+    transport: asyncio.BaseTransport,
+) -> None:
+    """Update asyncio stream protocol state after a TLS transport upgrade."""
+    replace_transport = getattr(protocol, "_replace_transport", None)
+    if replace_transport is not None:
+        replace_transport(transport)
+        return
+    # Python 3.10 predates StreamReaderProtocol._replace_transport(). Keep this
+    # fallback equivalent to the newer stdlib helper.
+    protocol._transport = transport
+    protocol._over_ssl = transport.get_extra_info("sslcontext") is not None
+
+
+def _freeze_async_plaintext_before_tls(
+    reader: asyncio.StreamReader,
+    writer: asyncio.StreamWriter,
+    host: str,
+    port: int,
+    *,
+    context: str,
+) -> None:
+    """Freeze plaintext input and reject bytes buffered before TLS starts.
+
+    This synchronous helper must run immediately after the plaintext tunnel
+    handshake, before any await can yield control back to the event loop.
+    """
+    transport = writer.transport
+    transport.pause_reading()
+    if not reader._buffer:  # type: ignore[attr-defined]
+        return
+    try:
+        transport.close()
+    except BaseException:
+        pass
+    raise HttpConnectionError(
+        f"{context} received unexpected plaintext bytes before TLS upgrade",
+        host=host,
+        port=port,
+    )
+
+
+async def _async_upgrade_writer_to_tls(
+    writer: asyncio.StreamWriter,
+    host: str,
+    port: int,
+    timeout: float,
+    verify: bool,
+    *,
+    context: str,
+) -> None:
+    """Upgrade an owned stream writer to TLS within a bounded cleanup scope."""
+    new_transport: asyncio.BaseTransport | None = None
+    try:
+        transport = writer.transport
+        protocol = transport.get_protocol()
+        ctx = _make_ssl_context(verify)
+        loop = asyncio.get_event_loop()
+        new_transport = await asyncio.wait_for(
+            loop.start_tls(
+                transport,
+                protocol,
+                ctx,
+                server_hostname=host,
+                ssl_handshake_timeout=timeout,
+            ),
+            timeout=timeout,
+        )
+        if new_transport is None:
+            raise HttpConnectionError(
+                f"{context} TLS upgrade returned no transport",
+                host=host,
+                port=port,
+            )
+        writer._transport = new_transport  # type: ignore[attr-defined]
+        _replace_asyncio_stream_transport(protocol, new_transport)
+        new_transport = None
+    except BaseException:
+        if new_transport is not None:
+            try:
+                new_transport.close()
+            except BaseException:
+                pass
+        await _async_teardown_writer(
+            writer,
+            preserve_primary=True,
+            context=f"{context} TLS upgrade to {host}:{port}",
+        )
+        raise
+
+
 async def _async_connect_via_proxy_tunnel(
     host: str,
     port: int,
@@ -2317,36 +2897,52 @@ async def _async_connect_via_proxy_tunnel(
         asyncio.open_connection(proxy_host, proxy_port),
         timeout=timeout,
     )
-    connect_line = f"CONNECT {host}:{port} HTTP/1.1\r\n"
-    connect_headers = f"Host: {host}:{port}\r\n"
-    if proxy_user and proxy_pass:
-        connect_headers += (
-            f"Proxy-Authorization: {_proxy_auth_header(proxy_user, proxy_pass)}\r\n"
+    try:
+        authority = _host_header_value(
+            host,
+            port,
+            is_https=True,
+            always_include_port=True,
         )
-    connect_headers += "\r\n"
-    proxy_writer.write((connect_line + connect_headers).encode("latin-1"))
-    await asyncio.wait_for(proxy_writer.drain(), timeout=timeout)
-    tunnel_status, _ = await _async_read_response_headers(proxy_reader, timeout)
-    if tunnel_status != 200:
-        proxy_writer.close()
-        # Tier 3: best-effort silent -- proxy tunnel teardown
-        try:
-            await proxy_writer.wait_closed()
-        except Exception:
-            pass
-        raise HttpConnectionError(
-            f"CONNECT tunnel failed: {tunnel_status}",
-            host=host,
-            port=port,
+        connect_line = f"CONNECT {authority} HTTP/1.1\r\n"
+        connect_headers = f"Host: {authority}\r\n"
+        if proxy_user and proxy_pass:
+            connect_headers += (
+                f"Proxy-Authorization: {_proxy_auth_header(proxy_user, proxy_pass)}\r\n"
+            )
+        connect_headers += "\r\n"
+        proxy_writer.write((connect_line + connect_headers).encode("latin-1"))
+        await asyncio.wait_for(proxy_writer.drain(), timeout=timeout)
+        tunnel_status, _ = await _async_read_response_headers(proxy_reader, timeout)
+        if tunnel_status != 200:
+            raise HttpConnectionError(
+                f"CONNECT tunnel failed: {tunnel_status}",
+                host=host,
+                port=port,
+            )
+        _freeze_async_plaintext_before_tls(
+            proxy_reader,
+            proxy_writer,
+            host,
+            port,
+            context="CONNECT tunnel",
         )
-    # Upgrade to TLS over the tunnel
-    ctx = _make_ssl_context(verify)
-    loop = asyncio.get_event_loop()
-    transport = proxy_writer.transport
-    new_transport = await loop.start_tls(
-        transport, transport.get_protocol(), ctx, server_hostname=host
+    except BaseException:
+        await _async_teardown_writer(
+            proxy_writer,
+            preserve_primary=True,
+            context=f"CONNECT tunnel to {host}:{port}",
+        )
+        raise
+    # Keep plaintext reads paused until start_tls has installed its protocol.
+    await _async_upgrade_writer_to_tls(
+        proxy_writer,
+        host,
+        port,
+        timeout,
+        verify,
+        context="CONNECT tunnel",
     )
-    proxy_writer._transport = new_transport  # type: ignore[attr-defined]
     return proxy_reader, proxy_writer
 
 
@@ -2372,22 +2968,31 @@ async def _async_connect_via_socks5(
         await _socks5_handshake_async(
             reader, writer, host, port, timeout, proxy_user, proxy_pass
         )
-    except Exception:
-        writer.close()
-        try:
-            await writer.wait_closed()
-        except Exception:
-            pass
+        if is_https:
+            _freeze_async_plaintext_before_tls(
+                reader,
+                writer,
+                host,
+                port,
+                context="SOCKS5 tunnel",
+            )
+    except BaseException:
+        await _async_teardown_writer(
+            writer,
+            preserve_primary=True,
+            context=f"SOCKS5 tunnel to {host}:{port}",
+        )
         raise
 
     if is_https:
-        ctx = _make_ssl_context(verify)
-        loop = asyncio.get_event_loop()
-        transport = writer.transport
-        new_transport = await loop.start_tls(
-            transport, transport.get_protocol(), ctx, server_hostname=host
+        await _async_upgrade_writer_to_tls(
+            writer,
+            host,
+            port,
+            timeout,
+            verify,
+            context="SOCKS5 tunnel",
         )
-        writer._transport = new_transport  # type: ignore[attr-defined]
 
     return reader, writer
 
@@ -2494,6 +3099,8 @@ def _build_raw_http_request(
 
 async def _async_release_or_close(
     close_writer: bool,
+    response_complete: bool,
+    preserve_primary: bool,
     _pool: _AsyncConnectionPool | None,
     proxy: str | None,
     stream: bool,
@@ -2509,6 +3116,7 @@ async def _async_release_or_close(
     Pool reuse decision: a connection is returned to the pool
     only when ALL of the following hold:
       - close_writer is True (not handed off to streaming)
+      - the response was consumed completely without error
       - a pool is active (_pool is not None)
       - the request did not use a proxy
       - the request is not streaming
@@ -2518,28 +3126,38 @@ async def _async_release_or_close(
     if not close_writer:
         return
     if (
-        _pool
+        response_complete
+        and _pool
         and not proxy
         and not stream
         and resp_headers.get("connection", "").lower() != "close"
     ):
-        await _pool.release(host, port, is_https, reader, writer)
-    else:
-        writer.close()
-        # Tier 3: best-effort silent -- wait_closed on direct close
         try:
-            await writer.wait_closed()
-        except Exception:
-            pass
+            await _pool.release(host, port, is_https, reader, writer)
+        except BaseException:
+            # Ownership transfer may suspend on the pool lock.  If it is
+            # interrupted, close the writer before preserving the exception.
+            await _async_teardown_writer(
+                writer,
+                preserve_primary=True,
+                context=f"interrupted pool release for {host}:{port}",
+            )
+            raise
+    else:
+        await _async_teardown_writer(
+            writer,
+            preserve_primary=preserve_primary,
+            context=f"request connection to {host}:{port}",
+        )
 
 
 async def _async_close_writer_silent(writer: asyncio.StreamWriter) -> None:
     """Close an async writer, ignoring errors on wait_closed."""
-    writer.close()
-    try:
-        await writer.wait_closed()
-    except Exception:
-        pass
+    await _async_teardown_writer(
+        writer,
+        preserve_primary=False,
+        context="discarded response connection",
+    )
 
 
 def _build_async_streaming_response(
@@ -2583,6 +3201,7 @@ async def _async_request(
     params: dict[str, Any] | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     max_redirects: int = DEFAULT_MAX_REDIRECTS,
+    follow_redirects: bool = True,
     verify: bool = True,
     stream: bool = False,
     auth: tuple[str, str] | Auth | None = None,
@@ -2607,7 +3226,9 @@ async def _async_request(
     _digest_attempted = False
     while True:
         scheme, host, port, path, is_https = _parse_url(url)
-
+        _headers_set_default(
+            req_headers, "Host", _host_header_value(host, port, is_https)
+        )
         reader, writer, request_path = await _async_acquire_connection(
             host, port, path, is_https, timeout, verify, proxy, _pool, req_headers, url
         )
@@ -2615,6 +3236,8 @@ async def _async_request(
             req_headers.setdefault("Connection", "keep-alive")
 
         close_writer = True
+        response_complete = False
+        preserve_primary = False
         resp_headers: dict[str, str] = {}
         try:
             raw_request = _build_raw_http_request(
@@ -2632,9 +3255,17 @@ async def _async_request(
 
             status, resp_headers = await _async_read_response_headers(reader, timeout)
 
-            if _is_redirect(status, resp_headers):
-                await _async_read_body(reader, resp_headers, timeout)
-                url, method, body = _compute_redirect(
+            if status == http.client.SWITCHING_PROTOCOLS:
+                await _async_close_writer_silent(writer)
+                close_writer = False
+                raise HttpConnectionError(
+                    "HTTP 101 Switching Protocols is unsupported",
+                    host=host,
+                    port=port,
+                )
+
+            if follow_redirects and _is_redirect(status, resp_headers):
+                url, method, body, cross_origin = _compute_redirect(
                     status,
                     method,
                     body,
@@ -2647,25 +3278,30 @@ async def _async_request(
                     redirects,
                     max_redirects,
                 )
+                _digest_attempted = _reset_digest_auth_for_redirect(
+                    auth_obj,
+                    req_headers,
+                    _digest_attempted,
+                )
+                if cross_origin:
+                    auth_obj = None
                 redirects += 1
                 continue
 
             if _should_attempt_digest(
                 auth_obj, status, resp_headers, _digest_attempted
             ):
-                await _async_read_body(reader, resp_headers, timeout)
                 www_auth = resp_headers["www-authenticate"]
+                await _async_close_writer_silent(writer)
+                close_writer = False
                 req_headers.update(
                     auth_obj.auth_headers_from_challenge(method, path, www_auth)
                 )
                 _digest_attempted = True
-                await _async_close_writer_silent(writer)
-                close_writer = False
                 continue
 
             if stream:
-                close_writer = False
-                return _build_async_streaming_response(
+                response = _build_async_streaming_response(
                     status,
                     resp_headers,
                     url,
@@ -2673,21 +3309,31 @@ async def _async_request(
                     writer,
                     timeout,
                 )
+                close_writer = False
+                return response
 
             content_encoding = resp_headers.get("content-encoding", "")
             resp_body = await _async_read_body(reader, resp_headers, timeout)
             if content_encoding:
                 resp_body = _decompress_body(resp_body, content_encoding)
-            return Response(status, resp_headers, resp_body, url)
+            result = Response(status, resp_headers, resp_body, url)
+            response_complete = True
+            return result
         except asyncio.TimeoutError:
+            preserve_primary = True
             raise HttpTimeoutError(
                 f"Request to {url} timed out after {timeout}s",
                 url=url,
                 timeout=timeout,
             )
+        except BaseException:
+            preserve_primary = True
+            raise
         finally:
             await _async_release_or_close(
                 close_writer,
+                response_complete,
+                preserve_primary,
                 _pool,
                 proxy,
                 stream,
@@ -2843,6 +3489,29 @@ def _merge_headers(
 # -- Sync convenience functions --
 
 
+def request(
+    method: str,
+    url: str,
+    *,
+    follow_redirects: bool = True,
+    **kwargs: Any,
+) -> Response | StreamingResponse:
+    """Send a synchronous HTTP request.
+
+    Args:
+        method: HTTP method.
+        url: Request URL.
+        follow_redirects: Whether to follow redirect responses.
+        **kwargs: Additional request options.
+    """
+    return _sync_request(
+        method,
+        url,
+        follow_redirects=follow_redirects,
+        **kwargs,
+    )
+
+
 def get(url: str, **kwargs: Any) -> Response | StreamingResponse:
     """Send a GET request."""
     return _sync_request("GET", url, **kwargs)
@@ -2879,6 +3548,29 @@ def options(url: str, **kwargs: Any) -> Response | StreamingResponse:
 
 
 # -- Async convenience functions --
+
+
+async def async_request(
+    method: str,
+    url: str,
+    *,
+    follow_redirects: bool = True,
+    **kwargs: Any,
+) -> Response | StreamingResponse:
+    """Send an asynchronous HTTP request.
+
+    Args:
+        method: HTTP method.
+        url: Request URL.
+        follow_redirects: Whether to follow redirect responses.
+        **kwargs: Additional request options.
+    """
+    return await _async_request(
+        method,
+        url,
+        follow_redirects=follow_redirects,
+        **kwargs,
+    )
 
 
 async def async_get(url: str, **kwargs: Any) -> Response | StreamingResponse:
@@ -2937,6 +3629,7 @@ class Client:
         headers: dict[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_redirects: int = DEFAULT_MAX_REDIRECTS,
+        follow_redirects: bool = True,
         verify: bool = True,
         auth: tuple[str, str] | Auth | None = None,
         proxy: str | None = None,
@@ -2945,6 +3638,7 @@ class Client:
         self._base_headers = headers or {}
         self._timeout = timeout
         self._max_redirects = max_redirects
+        self._follow_redirects = follow_redirects
         self._verify = verify
         self._auth = auth
         self._proxy = proxy
@@ -2954,11 +3648,16 @@ class Client:
         self,
         method: str,
         url: str,
+        *,
+        follow_redirects: bool | None = None,
         **kwargs: Any,
     ) -> Response | StreamingResponse:
         """Send an HTTP request."""
         kwargs.setdefault("timeout", self._timeout)
         kwargs.setdefault("max_redirects", self._max_redirects)
+        kwargs["follow_redirects"] = (
+            self._follow_redirects if follow_redirects is None else follow_redirects
+        )
         kwargs.setdefault("verify", self._verify)
         kwargs.setdefault("auth", self._auth)
         kwargs.setdefault("proxy", self._proxy)
@@ -3023,6 +3722,7 @@ class AsyncClient:
         headers: dict[str, str] | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_redirects: int = DEFAULT_MAX_REDIRECTS,
+        follow_redirects: bool = True,
         verify: bool = True,
         auth: tuple[str, str] | Auth | None = None,
         proxy: str | None = None,
@@ -3031,6 +3731,7 @@ class AsyncClient:
         self._base_headers = headers or {}
         self._timeout = timeout
         self._max_redirects = max_redirects
+        self._follow_redirects = follow_redirects
         self._verify = verify
         self._auth = auth
         self._proxy = proxy
@@ -3040,11 +3741,16 @@ class AsyncClient:
         self,
         method: str,
         url: str,
+        *,
+        follow_redirects: bool | None = None,
         **kwargs: Any,
     ) -> Response | StreamingResponse:
         """Send an async HTTP request."""
         kwargs.setdefault("timeout", self._timeout)
         kwargs.setdefault("max_redirects", self._max_redirects)
+        kwargs["follow_redirects"] = (
+            self._follow_redirects if follow_redirects is None else follow_redirects
+        )
         kwargs.setdefault("verify", self._verify)
         kwargs.setdefault("auth", self._auth)
         kwargs.setdefault("proxy", self._proxy)

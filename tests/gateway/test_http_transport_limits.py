@@ -16,7 +16,7 @@ from typing import Any, cast
 
 import pytest
 
-from codex_rosetta._vendor.httpclient import AsyncClient
+from codex_rosetta._vendor.httpclient import AsyncClient, DEFAULT_MAX_REDIRECTS
 from codex_rosetta.gateway.transport import (
     ProviderInfo,
     UpstreamContentEncodingError,
@@ -265,13 +265,16 @@ class _RedirectUpstreamHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(payload)
             return
+        payload = b'{"redirect":"preserved"}'
         self.send_response(302)
         self.send_header(
             "Location",
             f"http://127.0.0.1:{server.server_address[1]}/redirect-target",
         )
-        self.send_header("Content-Length", "0")
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
+        self.wfile.write(payload)
 
     def do_GET(self) -> None:
         server = cast(_RedirectUpstreamServer, self.server)
@@ -466,27 +469,28 @@ def test_real_client_follows_redirect_only_when_provider_allows_it() -> None:
         thread.join(timeout=2)
 
 
-def test_auxiliary_real_client_rejects_redirect_before_target() -> None:
+def test_auxiliary_real_client_returns_first_redirect_before_target() -> None:
     server = _RedirectUpstreamServer(("127.0.0.1", 0), _RedirectUpstreamHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{server.server_address[1]}/models"
 
-    async def _request() -> None:
+    async def _request() -> BoundedHttpResponse:
         async with AsyncClient() as client:
-            with pytest.raises(
-                transport_module.UpstreamConnectionError,
-                match="Too many redirects",
-            ):
-                await request_bounded_response(
-                    client,
-                    "POST",
-                    url,
-                    headers={"Authorization": "Bearer audit-sentinel"},
-                )
+            return await request_bounded_response(
+                client,
+                "POST",
+                url,
+                headers={"Authorization": "Bearer audit-sentinel"},
+            )
 
     try:
-        asyncio.run(_request())
+        response = asyncio.run(_request())
+        assert response.status_code == 302
+        assert response.headers["Location"] == (
+            f"http://127.0.0.1:{server.server_address[1]}/redirect-target"
+        )
+        assert response.content == b'{"redirect":"preserved"}'
         assert server.redirect_target_hit is False
     finally:
         server.shutdown()
@@ -1368,14 +1372,10 @@ def test_auxiliary_reader_enforces_explicit_four_mib_boundary_without_partial_re
     assert response.closed is True
 
 
-@pytest.mark.parametrize(
-    ("allow_redirects", "expected_max_redirects"),
-    [(False, 0), (True, 10)],
-)
+@pytest.mark.parametrize("allow_redirects", [False, True])
 def test_auxiliary_reader_enforces_explicit_redirect_policy(
     monkeypatch: pytest.MonkeyPatch,
     allow_redirects: bool,
-    expected_max_redirects: int,
 ) -> None:
     response = _FakeStreamingResponse(200, [b"{}"])
     monkeypatch.setattr(
@@ -1400,7 +1400,11 @@ def test_auxiliary_reader_enforces_explicit_redirect_policy(
         )
     )
 
-    assert observed["max_redirects"] == expected_max_redirects
+    assert observed["follow_redirects"] is allow_redirects
+    if allow_redirects:
+        assert observed["max_redirects"] == DEFAULT_MAX_REDIRECTS
+    else:
+        assert "max_redirects" not in observed
 
 
 @pytest.mark.parametrize(
