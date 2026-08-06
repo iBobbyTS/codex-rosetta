@@ -10,6 +10,16 @@ from codex_rosetta.gateway.search_provider_candidates import (
     TavilySearchProviderCandidate,
     build_search_provider_candidates,
 )
+from codex_rosetta.gateway.search_provider_contract import (
+    GPT_PASSTHROUGH_CONTRACT,
+    SELF_HOSTED_LOCAL_CONTRACT,
+    TAVILY_LOCAL_CONTRACT,
+    SearchProviderCapability,
+    SearchProviderContract,
+    SearchProviderExecutionMode,
+    SearchProviderFamily,
+    contract_for_wire_provider,
+)
 from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
 
 ALLOWED_MODELS = ("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna")
@@ -74,10 +84,88 @@ def test_builds_mixed_candidates_in_exact_order_and_empty_is_immutable():
         isinstance(candidate, SelfHostedSearchProviderCandidate)
         for candidate in candidates[2:]
     )
+    assert [candidate.contract for candidate in candidates] == [
+        TAVILY_LOCAL_CONTRACT,
+        GPT_PASSTHROUGH_CONTRACT,
+        SELF_HOSTED_LOCAL_CONTRACT,
+        SELF_HOSTED_LOCAL_CONTRACT,
+        SELF_HOSTED_LOCAL_CONTRACT,
+    ]
+    assert candidates[1].safe_view() == {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "family": "gpt_passthrough",
+        "execution_mode": "alpha_search_passthrough",
+    }
     assert candidates[1].provider_info is upstream
     assert _build([]) == ()
     with pytest.raises(FrozenInstanceError):
         candidates[0].row_id = "changed"
+
+
+@pytest.mark.parametrize(
+    ("wire_provider", "contract"),
+    [
+        ("configured_responses_provider", GPT_PASSTHROUGH_CONTRACT),
+        ("tavily", TAVILY_LOCAL_CONTRACT),
+        ("self_hosted_google", SELF_HOSTED_LOCAL_CONTRACT),
+        ("self_hosted_bing", SELF_HOSTED_LOCAL_CONTRACT),
+        ("self_hosted_bing_browser", SELF_HOSTED_LOCAL_CONTRACT),
+    ],
+)
+def test_persisted_wire_provider_maps_to_one_typed_contract(wire_provider, contract):
+    assert contract_for_wire_provider(wire_provider) is contract
+
+
+def test_provider_contracts_declare_only_their_supported_semantics():
+    assert GPT_PASSTHROUGH_CONTRACT.family is SearchProviderFamily.GPT_PASSTHROUGH
+    assert (
+        GPT_PASSTHROUGH_CONTRACT.execution_mode
+        is SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH
+    )
+    assert GPT_PASSTHROUGH_CONTRACT.capabilities == {
+        SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH
+    }
+
+    local_capabilities = {
+        SearchProviderCapability.SEARCH_QUERY,
+        SearchProviderCapability.DOMAIN_FILTER,
+        SearchProviderCapability.MULTI_QUERY,
+        SearchProviderCapability.NORMALIZED_RESULTS,
+        SearchProviderCapability.REFERENCE_STORAGE,
+    }
+    for contract, family in (
+        (TAVILY_LOCAL_CONTRACT, SearchProviderFamily.TAVILY_LOCAL),
+        (SELF_HOSTED_LOCAL_CONTRACT, SearchProviderFamily.SELF_HOSTED_LOCAL),
+    ):
+        assert contract.family is family
+        assert (
+            contract.execution_mode is SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER
+        )
+        assert contract.capabilities == local_capabilities
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: contract_for_wire_provider("self_hosted_unknown"),
+        lambda: SearchProviderContract.create(
+            "unknown", "local_query_adapter", ["search_query"]
+        ),
+        lambda: SearchProviderContract.create(
+            "tavily_local", "unknown", ["search_query"]
+        ),
+        lambda: SearchProviderContract.create(
+            "tavily_local", "local_query_adapter", ["unknown"]
+        ),
+        lambda: SearchProviderContract.create(
+            "tavily_local", "local_query_adapter", []
+        ),
+    ],
+)
+def test_invalid_provider_contract_inputs_fail_closed(factory):
+    with pytest.raises(ValueError):
+        factory()
 
 
 @pytest.mark.parametrize(

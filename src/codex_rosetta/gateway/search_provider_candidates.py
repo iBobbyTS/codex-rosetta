@@ -9,6 +9,14 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from codex_rosetta.observability.redaction import secret_fingerprint
 
+from .search_provider_contract import (
+    GPT_PASSTHROUGH_CONTRACT,
+    SELF_HOSTED_LOCAL_CONTRACT,
+    TAVILY_LOCAL_CONTRACT,
+    SearchProviderContract,
+    contract_for_wire_provider,
+)
+
 if TYPE_CHECKING:
     from .transport.provider_info import ProviderInfo
 
@@ -18,8 +26,15 @@ SELF_HOSTED_PROVIDERS = frozenset(
 )
 
 
-def _safe_view(row_id: str, provider: str) -> dict[str, str]:
-    return {"id": row_id, "provider": provider}
+def _safe_view(
+    row_id: str, provider: str, contract: SearchProviderContract
+) -> dict[str, str]:
+    return {
+        "id": row_id,
+        "provider": provider,
+        "family": contract.family.value,
+        "execution_mode": contract.execution_mode.value,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,10 +45,17 @@ class TavilySearchProviderCandidate:
     provider: Literal["tavily"] = "tavily"
     api_key: str = field(repr=False, compare=False, default="")
     identity: str = field(repr=False, default="")
+    contract: SearchProviderContract = field(
+        repr=False, compare=False, default=TAVILY_LOCAL_CONTRACT
+    )
+
+    def __post_init__(self) -> None:
+        if self.contract is not TAVILY_LOCAL_CONTRACT:
+            raise ValueError("Tavily candidate has an incompatible provider contract")
 
     def safe_view(self) -> dict[str, str]:
         """Return the candidate fields safe for diagnostic serialization."""
-        return _safe_view(self.row_id, self.provider)
+        return _safe_view(self.row_id, self.provider, self.contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,10 +68,19 @@ class ConfiguredResponsesSearchProviderCandidate:
     provider_info: ProviderInfo = field(repr=False, compare=False)
     provider: Literal["configured_responses_provider"] = "configured_responses_provider"
     identity: str = field(repr=False, default="")
+    contract: SearchProviderContract = field(
+        repr=False, compare=False, default=GPT_PASSTHROUGH_CONTRACT
+    )
+
+    def __post_init__(self) -> None:
+        if self.contract is not GPT_PASSTHROUGH_CONTRACT:
+            raise ValueError(
+                "Responses candidate has an incompatible provider contract"
+            )
 
     def safe_view(self) -> dict[str, str]:
         """Return the candidate fields safe for diagnostic serialization."""
-        return _safe_view(self.row_id, self.provider)
+        return _safe_view(self.row_id, self.provider, self.contract)
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,10 +92,19 @@ class SelfHostedSearchProviderCandidate:
         "self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"
     ]
     identity: str = field(repr=False, default="")
+    contract: SearchProviderContract = field(
+        repr=False, compare=False, default=SELF_HOSTED_LOCAL_CONTRACT
+    )
+
+    def __post_init__(self) -> None:
+        if self.contract is not SELF_HOSTED_LOCAL_CONTRACT:
+            raise ValueError(
+                "self-hosted candidate has an incompatible provider contract"
+            )
 
     def safe_view(self) -> dict[str, str]:
         """Return the candidate fields safe for diagnostic serialization."""
-        return _safe_view(self.row_id, self.provider)
+        return _safe_view(self.row_id, self.provider, self.contract)
 
 
 type SearchProviderCandidate = (
@@ -158,6 +198,7 @@ def _configured_responses_candidate(
             identity=secret_fingerprint(
                 _identity_domain(row, provider_info=provider_info), credentials
             ),
+            contract=contract_for_wire_provider(CONFIGURED_RESPONSES_PROVIDER),
         ),
         credentials,
     )
@@ -184,6 +225,7 @@ def _self_hosted_candidate(
         row_id=row_id,
         provider=cast(SelfHostedProviderType, provider_type),
         identity=secret_fingerprint(_identity_domain(row), ()),
+        contract=contract_for_wire_provider(provider_type),
     )
 
 
@@ -226,6 +268,7 @@ def build_search_provider_candidates(
                 row_id=row_id,
                 api_key=api_key,
                 identity=secret_fingerprint(_identity_domain(row), credentials),
+                contract=contract_for_wire_provider(provider_type),
             )
         elif provider_type == CONFIGURED_RESPONSES_PROVIDER:
             candidate, credentials = _configured_responses_candidate(
