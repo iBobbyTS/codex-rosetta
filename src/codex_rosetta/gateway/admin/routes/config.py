@@ -137,10 +137,82 @@ def _apply_local_mode_server_settings(
     return None
 
 
-def _apply_web_search_settings(
+def _apply_canonical_web_search(
+    server: dict[str, Any], incoming: dict[str, Any]
+) -> Response | None:
+    """Validate canonical rows and merge masked Tavily credentials by ID."""
+    if "providers" in incoming:
+        unsupported = set(incoming) - {"providers"}
+        if unsupported:
+            return JSONResponse(
+                {
+                    "error": f"'web_search' has unsupported fields: {sorted(unsupported)}"
+                },
+                status_code=400,
+            )
+        rows = incoming.get("providers")
+        if not isinstance(rows, list):
+            return JSONResponse(
+                {"error": "'web_search.providers' must be a list"}, status_code=400
+            )
+        current = server.get("web_search")
+        current_rows: list[dict[str, Any]] = []
+        if isinstance(current, dict) and isinstance(current.get("providers"), list):
+            current_rows = [
+                row for row in current["providers"] if isinstance(row, dict)
+            ]
+        elif isinstance(current, dict):
+            try:
+                current_rows = [
+                    dict(row) for row in normalize_web_search(current).providers
+                ]
+            except ValueError:
+                current_rows = []
+        current_by_id = {str(row.get("id")): row for row in current_rows}
+        merged: list[dict[str, Any]] = []
+        for index, value in enumerate(rows):
+            if not isinstance(value, dict):
+                return JSONResponse(
+                    {"error": f"'web_search.providers[{index}]' must be an object"},
+                    status_code=400,
+                )
+            row = dict(value)
+            if row.get("provider") == "tavily":
+                key = row.get("tavily_api_key")
+                if not isinstance(key, str):
+                    return JSONResponse(
+                        {
+                            "error": f"'web_search.providers[{index}].tavily_api_key' must be a string"
+                        },
+                        status_code=400,
+                    )
+                if "***" in key:
+                    row_id = row.get("id")
+                    existing = current_by_id.get(str(row_id))
+                    existing_key = existing.get("tavily_api_key") if existing else None
+                    if (
+                        not isinstance(existing_key, str)
+                        or _mask_api_key(existing_key) != key
+                    ):
+                        return JSONResponse(
+                            {
+                                "error": f"'web_search.providers[{index}].tavily_api_key' mask does not match saved credential"
+                            },
+                            status_code=400,
+                        )
+                    row["tavily_api_key"] = existing_key
+            merged.append(row)
+        try:
+            server["web_search"] = dict(normalize_web_search({"providers": merged}))
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return None
+
+
+def _apply_web_search_settings(  # noqa: C901
     server: dict[str, Any], body: dict[str, Any]
 ) -> Response | None:
-    """Merge one masked Admin edit into ``server.web_search``."""
+    """Merge and validate an Admin edit into canonical ``server.web_search``."""
     if "web_search" not in body:
         return None
     incoming = body.get("web_search")
@@ -148,6 +220,20 @@ def _apply_web_search_settings(
         return JSONResponse(
             {"error": "'web_search' must be an object"}, status_code=400
         )
+    if "providers" in incoming:
+        return _apply_canonical_web_search(server, incoming)
+
+    current = server.get("web_search")
+    if isinstance(current, dict) and isinstance(current.get("providers"), list):
+        return JSONResponse(
+            {
+                "error": (
+                    "Legacy 'web_search' payload cannot replace canonical provider rows"
+                )
+            },
+            status_code=409,
+        )
+
     unsupported = set(incoming) - {
         "provider",
         "responses_model",
@@ -159,7 +245,6 @@ def _apply_web_search_settings(
             {"error": f"'web_search' has unsupported fields: {sorted(unsupported)}"},
             status_code=400,
         )
-    current = server.get("web_search")
     current = dict(current) if isinstance(current, dict) else {}
     provider = incoming.get("provider", current.get("provider", "tavily"))
     next_value: dict[str, Any] = {"provider": provider}
@@ -195,8 +280,17 @@ def _apply_web_search_settings(
             )
         if "***" in api_key:
             existing_key = current.get("tavily_api_key")
-            if isinstance(existing_key, str) and existing_key:
-                next_value["tavily_api_key"] = existing_key
+            if (
+                not isinstance(existing_key, str)
+                or _mask_api_key(existing_key) != api_key
+            ):
+                return JSONResponse(
+                    {
+                        "error": "'web_search.tavily_api_key' mask does not match saved credential"
+                    },
+                    status_code=400,
+                )
+            next_value["tavily_api_key"] = existing_key
         elif api_key.strip():
             next_value["tavily_api_key"] = api_key.strip()
     else:
@@ -204,10 +298,10 @@ def _apply_web_search_settings(
         if isinstance(existing_key, str) and existing_key:
             next_value["tavily_api_key"] = existing_key
     try:
-        normalize_web_search(next_value)
+        normalized = normalize_web_search(next_value)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
-    server["web_search"] = next_value
+    server["web_search"] = {"providers": [dict(row) for row in normalized.providers]}
     return None
 
 
@@ -759,6 +853,36 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
             },
             status_code=409,
         )
+
+    server = data.get("server")
+    web_search = server.get("web_search") if isinstance(server, dict) else None
+    search_references: list[str] = []
+    clear_legacy_web_search = False
+    if isinstance(web_search, dict):
+        rows = web_search.get("providers")
+        if isinstance(rows, list):
+            search_references = [
+                str(row.get("id"))
+                for row in rows
+                if isinstance(row, dict) and row.get("responses_provider") == name
+            ]
+        elif (
+            web_search.get("provider") == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
+            and web_search.get("responses_provider") == name
+        ):
+            clear_legacy_web_search = True
+    if search_references:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Cannot delete provider '{name}': referenced by web search rows: "
+                    f"{search_references}"
+                )
+            },
+            status_code=409,
+        )
+    if clear_legacy_web_search and isinstance(server, dict):
+        server.pop("web_search", None)
 
     cascade_deleted_groups: list[str] = []
     if referencing_groups and cascade:

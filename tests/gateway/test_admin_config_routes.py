@@ -15,6 +15,7 @@ from codex_rosetta.gateway.admin.routes import _shared
 from codex_rosetta.gateway import web_run_health
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
+    delete_provider,
     get_config,
     get_network_search_status,
     put_codex_settings,
@@ -804,13 +805,20 @@ def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["web_search"] == {
-        "provider": "tavily",
-        "tavily_api_key": "tvly-secret-value",
+        "providers": [
+            {
+                "id": "legacy-0",
+                "provider": "tavily",
+                "tavily_api_key": "tvly-secret-value",
+            }
+        ]
     }
     assert app.gateway_config.web_search["tavily_api_key"] == "tvly-secret-value"
     assert "tvly-secret-value" in app.gateway_config.token_values
     assert (
-        json.loads(response.body)["server"]["web_search"]["tavily_api_key"]
+        json.loads(response.body)["server"]["web_search"]["providers"][0][
+            "tavily_api_key"
+        ]
         == "tvly***alue"
     )
 
@@ -840,7 +848,7 @@ def test_put_server_settings_clears_web_search_key(tmp_path):
     assert response.status_code == 200
     assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
         "web_search"
-    ] == {"provider": "tavily"}
+    ] == {"providers": []}
     assert app.gateway_config.web_search["tavily_api_key"] == ""
 
 
@@ -875,10 +883,7 @@ def test_put_server_settings_selects_self_hosted_google_and_preserves_tavily_key
     assert response.status_code == 200
     assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
         "web_search"
-    ] == {
-        "provider": "self_hosted_google",
-        "tavily_api_key": "tvly-secret-value",
-    }
+    ] == {"providers": [{"id": "legacy-0", "provider": "self_hosted_google"}]}
     assert app.gateway_config.web_search["provider"] == "self_hosted_google"
 
 
@@ -915,9 +920,14 @@ def test_put_server_settings_selects_configured_responses_provider(tmp_path):
     assert json.loads(config_path.read_text(encoding="utf-8"))["server"][
         "web_search"
     ] == {
-        "provider": "configured_responses_provider",
-        "responses_model": "gpt-5.6-terra",
-        "responses_provider": "search",
+        "providers": [
+            {
+                "id": "legacy-0",
+                "provider": "configured_responses_provider",
+                "responses_model": "gpt-5.6-terra",
+                "responses_provider": "search",
+            }
+        ]
     }
     assert app.gateway_config.web_search["responses_provider"] == "search"
     assert app.gateway_config.web_search["responses_model"] == "gpt-5.6-terra"
@@ -967,6 +977,182 @@ def test_put_server_settings_rejects_invalid_web_search_fields(tmp_path):
     assert response.status_code == 400
     assert config_path.read_bytes() == original
     assert app.gateway_config is initial_config
+
+
+def test_put_server_settings_saves_canonical_search_rows_and_merges_key_by_id(tmp_path):
+    data = _config_data()
+    data["server"]["web_search"] = {
+        "providers": [
+            {"id": "tv", "provider": "tavily", "tavily_api_key": "tvly-secret"},
+            {"id": "local", "provider": "self_hosted_google"},
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    initial = GatewayConfig(data)
+    request = SimpleNamespace(
+        app=SimpleNamespace(config_path=str(config_path), gateway_config=initial),
+        json=lambda: {
+            "web_search": {
+                "providers": [
+                    {"id": "tv", "provider": "tavily", "tavily_api_key": "tvly***cret"},
+                    {"id": "local", "provider": "self_hosted_google"},
+                ]
+            }
+        },
+    )
+    response = _run(put_server_settings(request))
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        saved["server"]["web_search"]["providers"][0]["tavily_api_key"] == "tvly-secret"
+    )
+
+
+@pytest.mark.parametrize(
+    ("web_search", "extra_providers", "secrets"),
+    [
+        (
+            {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "provider": "tavily",
+                        "tavily_api_key": "tvly-canonical-secret",
+                    }
+                ]
+            },
+            {},
+            {"tvly-canonical-secret"},
+        ),
+        (
+            {
+                "providers": [
+                    {
+                        "id": "responses",
+                        "provider": "configured_responses_provider",
+                        "responses_provider": "search-upstream",
+                        "responses_model": "gpt-5.6-terra",
+                    }
+                ]
+            },
+            {
+                "search-upstream": {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "base_url": "https://search.example.test/v1",
+                    "api_key": "responses-upstream-secret",
+                }
+            },
+            {"responses-upstream-secret"},
+        ),
+        (
+            {
+                "providers": [
+                    {
+                        "id": "primary",
+                        "provider": "tavily",
+                        "tavily_api_key": "tvly-multi-row-secret",
+                    },
+                    {
+                        "id": "responses",
+                        "provider": "configured_responses_provider",
+                        "responses_provider": "search-upstream",
+                        "responses_model": "gpt-5.6-terra",
+                    },
+                    {"id": "local", "provider": "self_hosted_google"},
+                ]
+            },
+            {
+                "search-upstream": {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "base_url": "https://search.example.test/v1",
+                    "api_key": "responses-multi-row-secret",
+                }
+            },
+            {"tvly-multi-row-secret", "responses-multi-row-secret"},
+        ),
+    ],
+    ids=["tavily", "responses", "multiple-rows"],
+)
+def test_put_server_settings_rejects_legacy_page_save_for_canonical_search(
+    tmp_path,
+    web_search,
+    extra_providers,
+    secrets,
+):
+    data = _config_data()
+    data["providers"].update(extra_providers)
+    data["server"]["web_search"] = web_search
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data).encode("utf-8")
+    config_path.write_bytes(original)
+    initial_config = GatewayConfig(data)
+    initial_rows = [dict(row) for row in initial_config.web_search.providers]
+    initial_tokens = set(initial_config.token_values)
+    app = SimpleNamespace(config_path=str(config_path), gateway_config=initial_config)
+
+    get_response = _run(get_config(SimpleNamespace(app=app)))
+    assert get_response.status_code == 200
+    serialized = get_response.body.decode("utf-8")
+    assert all(secret not in serialized for secret in secrets)
+    returned_search = json.loads(serialized)["server"]["web_search"]
+    assert "provider" not in returned_search
+    assert "tavily_api_key" not in returned_search
+
+    legacy_page_payload = {
+        "provider": returned_search.get("provider", "tavily"),
+        "tavily_api_key": returned_search.get("tavily_api_key", "").strip(),
+    }
+    response = _run(
+        put_server_settings(
+            SimpleNamespace(
+                app=app,
+                json=lambda: {"web_search": legacy_page_payload},
+            )
+        )
+    )
+
+    assert response.status_code == 409
+    assert json.loads(response.body) == {
+        "error": "Legacy 'web_search' payload cannot replace canonical provider rows"
+    }
+    assert config_path.read_bytes() == original
+    assert app.gateway_config is initial_config
+    assert app.gateway_config.web_search.providers == initial_rows
+    assert app.gateway_config.token_values == initial_tokens
+    assert secrets <= app.gateway_config.token_values
+
+
+def test_put_server_settings_rejects_unknown_masked_search_row(tmp_path):
+    data = _config_data()
+    data["server"]["web_search"] = {
+        "providers": [
+            {"id": "tv", "provider": "tavily", "tavily_api_key": "tvly-secret"}
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=GatewayConfig(data)
+        ),
+        json=lambda: {
+            "web_search": {
+                "providers": [
+                    {
+                        "id": "other",
+                        "provider": "tavily",
+                        "tavily_api_key": "tvly***cret",
+                    }
+                ]
+            }
+        },
+    )
+    response = _run(put_server_settings(request))
+    assert response.status_code == 400
+    assert b"mask does not match" in response.body
 
 
 class _FakeAsyncClient:
@@ -1451,6 +1637,161 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
     assert list(saved["providers"]) == ["beta", "Zulu"]
     assert saved["model_groups"]["OpenAI"]["provider"] == "beta"
     assert json.loads(response.body)["providers"] == ["beta", "Zulu"]
+
+
+def test_put_provider_rename_updates_search_dependency(tmp_path):
+    config = _config_data()
+    config["providers"]["search"] = {
+        "api_key": "search-key",
+        "base_url": "https://search.example.test",
+        "provider": "openai",
+        "api_type": "responses",
+    }
+    config["server"]["web_search"] = {
+        "providers": [
+            {
+                "id": "r",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search",
+                "responses_model": "gpt-5.6-terra",
+            }
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial, auth_state=None
+        ),
+        path_params={"name": "renamed"},
+        json=lambda: {
+            "rename_from": "search",
+            "provider": "openai",
+            "api_type": "responses",
+            "base_url": "https://new.example.test",
+        },
+    )
+    response = _run(put_provider(request))
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        saved["server"]["web_search"]["providers"][0]["responses_provider"] == "renamed"
+    )
+
+
+def test_delete_provider_rejects_search_dependency(tmp_path):
+    config = _config_data()
+    config["providers"]["search"] = {
+        "api_key": "search-key",
+        "base_url": "https://search.example.test",
+        "provider": "openai",
+        "api_type": "responses",
+    }
+    config["server"]["web_search"] = {
+        "providers": [
+            {
+                "id": "r",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search",
+                "responses_model": "gpt-5.6-terra",
+            }
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(config_path=str(config_path)),
+        path_params={"name": "search"},
+        query_params={},
+    )
+    response = _run(delete_provider(request))
+    assert response.status_code == 409
+    assert b"web search rows" in response.body
+
+
+def _legacy_responses_search_config() -> dict[str, Any]:
+    config = _config_data()
+    config["providers"]["search"] = {
+        "api_key": "search-key",
+        "base_url": "https://search.example.test",
+        "provider": "openai",
+        "api_type": "responses",
+    }
+    config["server"]["web_search"] = {
+        "provider": "configured_responses_provider",
+        "responses_provider": "search",
+        "responses_model": "gpt-5.6-terra",
+    }
+    return config
+
+
+def test_delete_provider_clears_legacy_search_dependency(tmp_path):
+    config = _legacy_responses_search_config()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            auth_state=None,
+        ),
+        path_params={"name": "search"},
+        query_params={},
+    )
+
+    response = _run(delete_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "search" not in saved["providers"]
+    assert "web_search" not in saved["server"]
+    assert "search" not in request.app.gateway_config.providers
+    assert not request.app.gateway_config.web_search.providers
+
+
+@pytest.mark.parametrize("failure_phase", ["write", "activate"])
+def test_delete_provider_legacy_search_failure_preserves_disk_and_live_config(
+    tmp_path,
+    monkeypatch,
+    failure_phase,
+):
+    config = _legacy_responses_search_config()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(config).encode("utf-8")
+    config_path.write_bytes(original)
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            auth_state=None,
+        ),
+        path_params={"name": "search"},
+        query_params={},
+    )
+
+    if failure_phase == "write":
+
+        def fail_write(*args, **kwargs):
+            raise OSError("simulated config write failure")
+
+        monkeypatch.setattr(_shared, "write_config", fail_write)
+    else:
+
+        def fail_activation(*args, **kwargs):
+            raise RuntimeError("simulated config activation failure")
+
+        monkeypatch.setattr(_shared, "_activate_gateway_config", fail_activation)
+
+    response = _run(delete_provider(request))
+
+    assert response.status_code == 500
+    assert config_path.read_bytes() == original
+    assert request.app.gateway_config is initial_config
+    assert "search" in request.app.gateway_config.providers
+    assert request.app.gateway_config.web_search["responses_provider"] == "search"
 
 
 def test_put_provider_rejects_missing_persisted_provider(tmp_path):

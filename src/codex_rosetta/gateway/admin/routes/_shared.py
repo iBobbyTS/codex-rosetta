@@ -602,4 +602,16 @@ def _handle_provider_rename(
         for group_val in model_groups.values():
             if isinstance(group_val, dict) and group_val.get("provider") == rename_from:
                 group_val["provider"] = name
+    server = data.get("server")
+    web_search = server.get("web_search") if isinstance(server, dict) else None
+    if isinstance(web_search, dict):
+        if isinstance(web_search.get("providers"), list):
+            for row in web_search["providers"]:
+                if (
+                    isinstance(row, dict)
+                    and row.get("responses_provider") == rename_from
+                ):
+                    row["responses_provider"] = name
+        elif web_search.get("responses_provider") == rename_from:
+            web_search["responses_provider"] = name
     return None
