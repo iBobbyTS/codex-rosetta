@@ -37,8 +37,8 @@
       : { '--bg':'#ffffff','--bg-card':'#f6f8fa','--bg-hover':'#eef1f5','--border':'#d1d9e0','--text':'#1f2328','--text-dim':'#656d76','--accent':'#0969da','--accent-hover':'#0550ae','--green':'#1a7f37','--red':'#cf222e','--orange':'#bf8700','--blue':'#0969da','--provider-logo-filter':'none' };
     for (const [key, color] of Object.entries(colors)) document.documentElement.style.setProperty(key, color);
   }
-  const themeOptions = [{ value: 'light', label: t('theme.light') }, { value: 'dark', label: t('theme.dark') }];
-  const languageOptions = [{ value: 'en', label: t('language.english') }, { value: 'zh', label: t('language.chinese') }];
+  const themeOptions = $derived([{ value: 'light', label: t('theme.light') }, { value: 'dark', label: t('theme.dark') }]);
+  const languageOptions = $derived([{ value: 'en', label: t('language.english') }, { value: 'zh', label: t('language.chinese') }]);
 
   async function loadShellConfig(): Promise<void> {
     try {

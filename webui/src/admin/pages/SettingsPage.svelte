@@ -127,7 +127,7 @@
   function taskMissing(selected: string, fallback: string): boolean {
     return taskModelsEnabled && !configuredModels.includes(selected || fallback);
   }
-  const bodyLimitOptions: { value: DropdownValue; label: string }[] = [...[64, 128, 256, 512, 1024].map((value) => ({ value, label: t('format.megabytes', { value }) })), { value: 'unlimited', label: t('label.unlimited') }];
+  const bodyLimitOptions = $derived([... [64, 128, 256, 512, 1024].map((value) => ({ value, label: t('format.megabytes', { value }) })), { value: 'unlimited', label: t('label.unlimited') }]);
   function modelOptions(fallback: string, selected: string) {
     return [{ value: '', label: t('format.defaultModel', { model: fallback }) }, ...configuredModels.map((model) => ({ value: model, label: model })), ...(selected && !configuredModels.includes(selected) ? [{ value: selected, label: t('format.missingModel', { model: selected }) }] : [])];
   }

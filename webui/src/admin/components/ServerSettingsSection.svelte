@@ -15,7 +15,7 @@
   let diagnostics = $state<Dict | null>(null);
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
-  const bodyLimitOptions: { value: DropdownValue; label: string }[] = [...[64,128,256,512,1024].map((value) => ({ value, label: t('format.megabytes',{value}) })), { value: 'unlimited', label: t('label.unlimited') }];
+  const bodyLimitOptions = $derived([... [64,128,256,512,1024].map((value) => ({ value, label: t('format.megabytes',{value}) })), { value: 'unlimited', label: t('label.unlimited') }]);
 
   async function load(signal?: AbortSignal): Promise<void> {
     try {
