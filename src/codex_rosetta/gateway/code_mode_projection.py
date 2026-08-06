@@ -23,6 +23,7 @@ from .web_run_capabilities import (
     WEB_RUN_PROFILE_ITEM_ID,
     project_modified_web_run_function,
     web_run_model_availability,
+    web_run_search_projection_capabilities,
 )
 
 
@@ -482,6 +483,9 @@ def plan_exec_tool_definitions(
                         parsed["function"],
                         search_available=search_available,
                         browser_available=browser_available,
+                        search_capabilities=web_run_search_projection_capabilities(
+                            profile_route
+                        ),
                     )
                     if projected_function is None:
                         continue
@@ -1391,6 +1395,7 @@ def project_modified_exec_web_run_description(
         parsed["function"],
         search_available=search_available,
         browser_available=browser_available,
+        search_capabilities=web_run_search_projection_capabilities(profile_route),
     )
     declaration = _nested_declaration_match(section, projection.nested_name)
     declaration_label = section.find("exec tool declaration:")

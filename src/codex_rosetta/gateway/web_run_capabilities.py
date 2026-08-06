@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
+from collections.abc import Collection, Mapping
 from typing import Any
 
 from .admin.tool_catalog import load_tool_catalog
+from .search_provider_contract import SearchProviderCapability
 
 WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
 WEB_RUN_BASIC_SEARCH_CAPABILITY = "web_run_basic_search"
 WEB_RUN_SIDECAR_CAPABILITY = "web_run_sidecar"
+WEB_RUN_SEARCH_CAPABILITIES = "web_run_search_capabilities"
 
 
 def _web_run_projection() -> dict[str, Any]:
@@ -69,6 +74,7 @@ def project_modified_web_run_function(
     *,
     search_available: bool = False,
     browser_available: bool = False,
+    search_capabilities: Collection[SearchProviderCapability | str] | None = None,
 ) -> dict[str, Any] | None:
     """Restrict a live Codex ``web.run`` definition to Rosetta capabilities."""
     parameters = function.get("parameters")
@@ -78,6 +84,7 @@ def project_modified_web_run_function(
         parameters,
         search_available=search_available,
         browser_available=browser_available,
+        search_capabilities=search_capabilities,
     )
     if projected_parameters is None:
         return None
@@ -96,6 +103,7 @@ def project_modified_web_run_function(
             description,
             search_available=search_available,
             browser_available=browser_available,
+            search_capabilities=search_capabilities,
             live_commands=live_commands,
         )
     return projected
@@ -106,6 +114,7 @@ def project_modified_web_run_schema(
     *,
     search_available: bool = False,
     browser_available: bool = False,
+    search_capabilities: Collection[SearchProviderCapability | str] | None = None,
 ) -> dict[str, Any] | None:
     """Keep only live schema branches implemented by Rosetta's local bridge."""
     properties = schema.get("properties")
@@ -114,10 +123,13 @@ def project_modified_web_run_schema(
 
     projected = copy.deepcopy(schema)
     projected_properties: dict[str, Any] = {}
-    for command, allowed_fields in web_run_supported_command_fields(
+    supported_fields = web_run_supported_command_fields(
         search_available=search_available,
         browser_available=browser_available,
-    ).items():
+        search_capabilities=search_capabilities,
+        source_properties=properties,
+    )
+    for command, allowed_fields in supported_fields.items():
         command_schema = properties.get(command)
         if not isinstance(command_schema, dict):
             continue
@@ -144,6 +156,7 @@ def project_modified_web_run_description(
     search_available: bool = False,
     browser_available: bool = False,
     live_commands: frozenset[str] = frozenset(),
+    search_capabilities: Collection[SearchProviderCapability | str] | None = None,
 ) -> str:
     """Remove unsupported command guidance from the live Codex description."""
     retained: list[str] = []
@@ -151,6 +164,8 @@ def project_modified_web_run_description(
         web_run_supported_command_fields(
             search_available=search_available,
             browser_available=browser_available,
+            search_capabilities=search_capabilities,
+            source_properties={name: {} for name in live_commands},
         )
     )
     unsupported_commands = (WEB_RUN_KNOWN_COMMANDS | live_commands) - supported_commands
@@ -182,11 +197,37 @@ def project_modified_web_run_description(
 
 
 def web_run_supported_command_fields(
-    *, search_available: bool = False, browser_available: bool
+    *,
+    search_available: bool = False,
+    browser_available: bool,
+    search_capabilities: Collection[SearchProviderCapability | str] | None = None,
+    source_properties: Mapping[str, Any] | None = None,
 ) -> dict[str, frozenset[str] | None]:
     """Return the command schema implemented by the active local executors."""
     supported = dict(WEB_RUN_BASE_COMMAND_FIELDS)
-    if search_available:
+    parsed_values: set[SearchProviderCapability] = set()
+    for value in search_capabilities or ():
+        try:
+            parsed_values.add(SearchProviderCapability(value))
+        except TypeError, ValueError:
+            # A stale or unknown capability must never widen the model surface.
+            parsed_values.clear()
+            break
+    parsed = frozenset(parsed_values)
+    if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in parsed:
+        # Preserve the complete upstream alpha/search command surface.  Browser
+        # sidecar commands remain independently gated below.
+        if source_properties is not None:
+            supported.update(
+                {
+                    name: None
+                    for name in source_properties
+                    if name not in WEB_RUN_SIDECAR_COMMAND_FIELDS
+                }
+            )
+        else:
+            supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
+    elif search_available or SearchProviderCapability.SEARCH_QUERY in parsed:
         supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
     if browser_available:
         supported.update(WEB_RUN_SIDECAR_COMMAND_FIELDS)
@@ -197,9 +238,45 @@ def web_run_model_availability(route: Any) -> tuple[bool, bool]:
     """Return configured search and ready browser capabilities for one route."""
     capabilities = getattr(route, "tool_runtime_capabilities", frozenset())
     return (
-        WEB_RUN_BASIC_SEARCH_CAPABILITY in capabilities,
+        bool(web_run_search_projection_capabilities(route))
+        or WEB_RUN_BASIC_SEARCH_CAPABILITY in capabilities,
         WEB_RUN_SIDECAR_CAPABILITY in capabilities,
     )
+
+
+def web_run_search_projection_capabilities(
+    route: Any,
+) -> frozenset[SearchProviderCapability]:
+    """Read typed search capabilities carried by a route, failing closed."""
+    values = getattr(route, WEB_RUN_SEARCH_CAPABILITIES, frozenset())
+    if not isinstance(values, Collection) or isinstance(values, (str, bytes)):
+        return frozenset()
+    result: set[SearchProviderCapability] = set()
+    for value in values:
+        try:
+            result.add(SearchProviderCapability(value))
+        except TypeError, ValueError:
+            return frozenset()
+    return frozenset(result)
+
+
+def web_run_capability_trace_summary(
+    capabilities: Collection[SearchProviderCapability | str],
+    projected_commands: Collection[str],
+) -> dict[str, Any]:
+    """Return bounded projection metadata suitable for capability traces."""
+    values = sorted(str(value) for value in capabilities)
+    digest = hashlib.sha256(
+        json.dumps(values, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()[:16]
+    return {
+        "family": "web_run_search",
+        "execution_mode": "passthrough"
+        if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH.value in values
+        else "local_query_adapter",
+        "capability_hash": digest,
+        "projected_commands": sorted(set(projected_commands)),
+    }
 
 
 def _project_array_command(
@@ -244,6 +321,7 @@ __all__ = [
     "WEB_RUN_SEARCH_COMMAND_FIELDS",
     "WEB_RUN_SIDECAR_COMMAND_FIELDS",
     "WEB_RUN_SIDECAR_CAPABILITY",
+    "WEB_RUN_SEARCH_CAPABILITIES",
     "WEB_RUN_SUPPORTED_COMMANDS",
     "WEB_RUN_SUPPORTED_COMMAND_FIELDS",
     "WEB_RUN_UNSUPPORTED_COMMANDS",
@@ -251,5 +329,7 @@ __all__ = [
     "project_modified_web_run_function",
     "project_modified_web_run_schema",
     "web_run_model_availability",
+    "web_run_search_projection_capabilities",
+    "web_run_capability_trace_summary",
     "web_run_supported_command_fields",
 ]

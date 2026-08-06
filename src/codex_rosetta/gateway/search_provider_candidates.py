@@ -14,6 +14,7 @@ from .search_provider_contract import (
     SELF_HOSTED_LOCAL_CONTRACT,
     TAVILY_LOCAL_CONTRACT,
     SearchProviderContract,
+    SearchProviderCapability,
     contract_for_wire_provider,
 )
 
@@ -300,9 +301,50 @@ def search_candidates_support_basic_search(
     self_hosted_ready: bool,
 ) -> bool:
     """Return whether the canonical chain has an executable search candidate."""
-    for candidate in candidates:
-        if candidate.provider in {"tavily", CONFIGURED_RESPONSES_PROVIDER}:
-            return True
-        if self_hosted_ready and candidate.provider in SELF_HOSTED_PROVIDERS:
-            return True
-    return False
+    return bool(
+        search_candidates_capabilities(candidates, self_hosted_ready=self_hosted_ready)
+    )
+
+
+def search_candidates_capabilities(
+    candidates: Sequence[SearchProviderCandidate],
+    *,
+    self_hosted_ready: bool,
+) -> frozenset[SearchProviderCapability]:
+    """Return the fail-closed capabilities safe for the complete candidate chain.
+
+    A passthrough candidate is only allowed to retain its full alpha surface when
+    every candidate is passthrough-capable.  Once a local fallback exists, the
+    projection is the intersection of local capabilities so a failed GPT request
+    cannot send an unsupported command to the fallback adapter.
+    """
+    eligible = tuple(
+        candidate
+        for candidate in candidates
+        if self_hosted_ready or candidate.provider not in SELF_HOSTED_PROVIDERS
+    )
+    if not eligible:
+        return frozenset()
+    contracts = tuple(getattr(candidate, "contract", None) for candidate in eligible)
+    if any(
+        contract is None
+        or not isinstance(getattr(contract, "capabilities", None), frozenset)
+        or any(
+            not isinstance(capability, SearchProviderCapability)
+            for capability in contract.capabilities
+        )
+        for contract in contracts
+    ):
+        return frozenset()
+    full = SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH
+    if all(full in contract.capabilities for contract in contracts):
+        return frozenset({full})
+    local_contracts = tuple(
+        contract for contract in contracts if full not in contract.capabilities
+    )
+    if not local_contracts:
+        return frozenset()
+    capabilities = set(local_contracts[0].capabilities)
+    for contract in local_contracts[1:]:
+        capabilities.intersection_update(contract.capabilities)
+    return frozenset(capabilities)
