@@ -28,6 +28,14 @@ from .search_provider_chain import (
     SearchProviderRequestFailoverReason,
     SearchProviderRequestBudget,
 )
+from .search_provider_contract import (
+    GPT_PASSTHROUGH_CONTRACT,
+    SELF_HOSTED_LOCAL_CONTRACT,
+    TAVILY_LOCAL_CONTRACT,
+    SearchProviderCapability,
+    SearchProviderContract,
+    SearchProviderExecutionMode,
+)
 from .transport._base import (
     UpstreamConnectionError,
     UpstreamSafetyError,
@@ -154,6 +162,7 @@ class SearchProviderExecutor:
             if isinstance(request, SearchRequest)
             else SearchRequest.from_body(request)
         )
+        _validate_candidate_execution_contract(candidate, snapshot)
         if isinstance(candidate, TavilySearchProviderCandidate):
             client: Any = self._tavily_client or TavilyHTTPClient(candidate.api_key)
             candidate_client = None
@@ -282,6 +291,68 @@ class SearchProviderExecutor:
             raise SearchProviderAttemptError(
                 SearchProviderAttemptCategory.INVALID_RESPONSE
             ) from None
+
+
+def _validate_candidate_execution_contract(
+    candidate: object, request: SearchRequest
+) -> None:
+    """Reject candidates whose declared contract cannot execute this request.
+
+    This runs before selecting a client or charging an external-call budget, so
+    configuration or contract mismatches remain local terminal failures instead
+    of affecting provider health.
+    """
+    expected: SearchProviderContract
+    required_capabilities: frozenset[SearchProviderCapability]
+    if isinstance(candidate, ConfiguredResponsesSearchProviderCandidate):
+        expected = GPT_PASSTHROUGH_CONTRACT
+        required_capabilities = frozenset(
+            {SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH}
+        )
+    elif isinstance(candidate, TavilySearchProviderCandidate):
+        expected = TAVILY_LOCAL_CONTRACT
+        required_capabilities = frozenset(
+            {
+                SearchProviderCapability.SEARCH_QUERY,
+                SearchProviderCapability.NORMALIZED_RESULTS,
+            }
+        )
+        if len(request.queries) > 1:
+            required_capabilities = required_capabilities | frozenset(
+                {SearchProviderCapability.MULTI_QUERY}
+            )
+    elif isinstance(candidate, SelfHostedSearchProviderCandidate):
+        expected = SELF_HOSTED_LOCAL_CONTRACT
+        required_capabilities = frozenset(
+            {
+                SearchProviderCapability.SEARCH_QUERY,
+                SearchProviderCapability.NORMALIZED_RESULTS,
+            }
+        )
+        if len(request.queries) > 1:
+            required_capabilities = required_capabilities | frozenset(
+                {SearchProviderCapability.MULTI_QUERY}
+            )
+    else:
+        raise SearchProviderTerminalError("Unsupported search provider candidate")
+
+    contract = getattr(candidate, "contract", None)
+    if not isinstance(contract, SearchProviderContract):
+        raise SearchProviderTerminalError("Search provider contract is invalid")
+    if contract.family is not expected.family:
+        raise SearchProviderTerminalError("Search provider contract family is invalid")
+    if contract.execution_mode is not expected.execution_mode:
+        raise SearchProviderTerminalError("Search provider execution mode is invalid")
+    if not required_capabilities <= contract.capabilities:
+        raise SearchProviderTerminalError(
+            "Search provider capabilities are insufficient"
+        )
+    if contract.execution_mode is SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER:
+        for query, settings in request.queries:
+            if not isinstance(query, str) or not isinstance(
+                settings, WebSearchSettings
+            ):
+                raise SearchProviderTerminalError("Search request is invalid")
 
 
 def _map_local_error(exc: Exception) -> None:

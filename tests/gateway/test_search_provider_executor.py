@@ -10,15 +10,20 @@ import pytest
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
+    TavilySearchProviderCandidate,
 )
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderAttemptCategory,
     SearchProviderAttemptError,
     SearchProviderBudgetExceeded,
     SearchProviderBudgetReason,
+    SearchProviderChainCoordinator,
     SearchProviderRequestFailover,
     SearchProviderRequestFailoverReason,
     SearchProviderRequestBudget,
+)
+from codex_rosetta.gateway.search_provider_contract import (
+    GPT_PASSTHROUGH_CONTRACT,
 )
 from codex_rosetta.gateway.search_provider_executor import (
     SearchProviderExecutor,
@@ -53,6 +58,14 @@ class FakeSearch:
         if isinstance(value, BaseException):
             raise value
         return value
+
+
+def configured_responses_candidate():
+    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
+    object.__setattr__(candidate, "responses_model", "search-model")
+    object.__setattr__(candidate, "responses_provider", "p")
+    object.__setattr__(candidate, "contract", GPT_PASSTHROUGH_CONTRACT)
+    return candidate
 
 
 def test_self_hosted_replays_all_queries_and_merges_results():
@@ -96,9 +109,7 @@ def test_responses_rejects_invalid_encrypted_output_and_result_values():
         del candidate, body
         return {"output": "ok", "results": [{"bad": object()}]}
 
-    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
-    object.__setattr__(candidate, "responses_model", "m")
-    object.__setattr__(candidate, "responses_provider", "p")
+    candidate = configured_responses_candidate()
     request = SearchRequest.from_body({})
     with pytest.raises(SearchProviderAttemptError):
         run(
@@ -155,9 +166,7 @@ def test_responses_overrides_model_only_and_validates_shape():
         "input": [{"role": "user", "content": "q"}],
         "tools": [{"type": "x"}],
     }
-    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
-    object.__setattr__(candidate, "responses_model", "search-model")
-    object.__setattr__(candidate, "responses_provider", "p")
+    candidate = configured_responses_candidate()
     result = run(
         SearchProviderExecutor(responses_client=call).execute(
             candidate, SearchRequest.from_body(body)
@@ -168,14 +177,115 @@ def test_responses_overrides_model_only_and_validates_shape():
     assert body["model"] == "caller"
 
 
+def test_gpt_passthrough_captures_complete_body_url_model_and_result():
+    payload = {"output": "complete", "results": [], "opaque": {"kept": True}}
+    transport = SimpleNamespace(
+        send_passthrough=AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=200, body=payload, raw_content=b"{}"
+            )
+        )
+    )
+    provider_info = SimpleNamespace(
+        base_url="https://example.invalid/v1",
+        credential_values=("secret",),
+    )
+    candidate = configured_responses_candidate()
+    object.__setattr__(candidate, "provider_info", provider_info)
+    body = {
+        "model": "caller",
+        "input": [{"role": "user", "content": "q"}],
+        "commands": [{"type": "search_query", "query": "q"}],
+        "gpt_only": {"preserve": [1, 2]},
+    }
+
+    result = run(
+        SearchProviderExecutor(
+            responses_transport=cast(UpstreamTransport, transport)
+        ).execute(candidate, SearchRequest.from_body(body))
+    )
+
+    assert result is payload
+    _, url, sent_body = transport.send_passthrough.await_args.args[:3]
+    assert url == "https://example.invalid/v1/alpha/search"
+    assert sent_body == {**body, "model": "search-model"}
+
+
+def test_tavily_local_adapter_captures_only_canonical_queries_and_settings():
+    client = FakeSearch([{"output": "ok", "results": []}])
+    settings = WebSearchSettings(max_results=3, include_domains=("example.com",))
+    request = SearchRequest.from_body(
+        {
+            "commands": [{"type": "unknown", "payload": "do not forward"}],
+            "gpt_only": {"nested": True},
+        },
+        [("canonical query", settings)],
+    )
+
+    result = run(
+        SearchProviderExecutor(tavily_client=client).execute(
+            TavilySearchProviderCandidate("row", api_key="secret"), request
+        )
+    )
+
+    assert result["output"] == "ok"
+    assert client.calls == [("canonical query", settings)]
+
+
+def test_self_hosted_local_adapter_captures_all_queries_without_request_body():
+    client = FakeSearch(
+        [{"output": "first", "results": []}, {"output": "second", "results": []}]
+    )
+    first = WebSearchSettings(max_results=1)
+    second = WebSearchSettings(max_results=2, include_domains=("example.org",))
+    request = SearchRequest.from_body(
+        {"commands": [{"type": "unknown"}], "model": "gpt-only"},
+        [("first", first), ("second", second)],
+    )
+
+    result = run(
+        SearchProviderExecutor(self_hosted_client=client).execute(
+            SelfHostedSearchProviderCandidate("row", "self_hosted_google"), request
+        )
+    )
+
+    assert result["output"] == "first\n\nsecond"
+    assert client.calls == [("first", first), ("second", second)]
+
+
+def test_contract_mismatch_is_terminal_and_does_not_cool_candidate():
+    client = FakeSearch([{"output": "should not run", "results": []}])
+    candidate = TavilySearchProviderCandidate("row", api_key="secret")
+    object.__setattr__(candidate, "contract", GPT_PASSTHROUGH_CONTRACT)
+    coordinator = SearchProviderChainCoordinator()
+    request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
+
+    with pytest.raises(SearchProviderTerminalError):
+        run(
+            coordinator.run(
+                (candidate,),
+                lambda admitted: SearchProviderExecutor(tavily_client=client).execute(
+                    admitted, request
+                ),
+            )
+        )
+
+    assert client.calls == []
+    assert not coordinator.is_cooling(candidate)
+
+
+def test_unknown_candidate_is_terminal_without_external_call():
+    request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
+    with pytest.raises(SearchProviderTerminalError):
+        run(SearchProviderExecutor().execute(cast(object, object()), request))
+
+
 def test_responses_terminal_status_is_typed():
     async def call(candidate, body):
         del candidate, body
         raise SearchProviderTerminalError("Search request rejected")
 
-    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
-    object.__setattr__(candidate, "responses_model", "m")
-    object.__setattr__(candidate, "responses_provider", "p")
+    candidate = configured_responses_candidate()
     with pytest.raises(SearchProviderTerminalError):
         run(
             SearchProviderExecutor(responses_client=call).execute(
@@ -199,9 +309,7 @@ def test_responses_non_success_statuses_are_http_attempt_failures(status):
         base_url="https://example.invalid/v1",
         credential_values=("secret",),
     )
-    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
-    object.__setattr__(candidate, "responses_model", "m")
-    object.__setattr__(candidate, "responses_provider", "p")
+    candidate = configured_responses_candidate()
     object.__setattr__(candidate, "provider_info", provider_info)
     with pytest.raises(SearchProviderAttemptError) as caught:
         run(
@@ -233,9 +341,7 @@ def test_responses_request_budget_failure_propagates():
         base_url="https://example.invalid/v1",
         credential_values=("secret",),
     )
-    candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
-    object.__setattr__(candidate, "responses_model", "m")
-    object.__setattr__(candidate, "responses_provider", "p")
+    candidate = configured_responses_candidate()
     object.__setattr__(candidate, "provider_info", provider_info)
     transport = SimpleNamespace(send_passthrough=AsyncMock())
     budget = SearchProviderRequestBudget(max_external_calls=1)
