@@ -312,6 +312,7 @@
     onkeydown={(event) => selectOnKeyboard(event, item)}
   >
     <div class="tool-name">{item.name ?? item.id}</div>
+    <span role="presentation" onclick={(event) => event.stopPropagation()}>
     <Dropdown
       className="tool-state-select"
       ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
@@ -321,6 +322,7 @@
       options={(profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified']).map((state)=>({value:state,label:t(`tools.policy.${state}`),disabled:!stateSupportsProfileApis(item,state)}))}
       onChange={(value:DropdownValue) => updateTool(item, String(value))}
     />
+    </span>
   </div>
 {/snippet}
 
@@ -349,6 +351,7 @@
       <div class="tool-name">{item.name ?? item.id}</div>
       <div class="tool-badges"><span class="tool-badge kind">{t(`tools.type.${item.type}`)}</span></div>
       <div class="tool-policy">
+        <span role="presentation" onclick={(event) => event.stopPropagation()}>
         <Dropdown
           className="tool-state-select"
           ariaLabel={t('aria.toolState', { name: item.name ?? item.id })}
@@ -358,6 +361,7 @@
           options={(profilesData.supported_states?.[item.id] ?? ['disabled', 'passthrough', 'modified']).map((state)=>({value:state,label:t(`tools.policy.${state}`),disabled:!stateSupportsProfileApis(item,state)}))}
           onChange={(value:DropdownValue) => updateTool(item, String(value))}
         />
+        </span>
       </div>
     </div>
     <div
