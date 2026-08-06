@@ -209,6 +209,7 @@ def test_request_route_adds_browser_capability_only_when_ready(monkeypatch):
                 web_run_sidecar_url="http://web-run:8080",
                 web_run_sidecar_token="sidecar-token",
                 web_search={"provider": "tavily", "tavily_api_key": ""},
+                web_search_candidates=(),
             ),
         )
         route = ResolvedRoute(
@@ -265,7 +266,7 @@ def test_ready_sidecar_adds_self_hosted_search_capability(monkeypatch, provider)
         SimpleNamespace(
             web_run_sidecar_url="http://web-run:8080",
             web_run_sidecar_token="sidecar-token",
-            web_search={"provider": provider, "tavily_api_key": ""},
+            web_search_candidates=(SimpleNamespace(provider=provider),),
         ),
     )
     route = ResolvedRoute(
@@ -289,9 +290,12 @@ def test_ready_sidecar_adds_self_hosted_search_capability(monkeypatch, provider)
     )
 
 
-def test_request_route_skips_health_for_passthrough_profile(monkeypatch):
+@pytest.mark.parametrize("profile_state", ["passthrough", "disabled"])
+def test_request_route_skips_health_for_non_modified_profile(
+    monkeypatch, profile_state
+):
     async def unexpected_request(*args, **kwargs):
-        raise AssertionError("passthrough must not probe sidecar readiness")
+        raise AssertionError("non-modified web.run must not probe sidecar readiness")
 
     monkeypatch.setattr(web_run_health, "request_bounded_response", unexpected_request)
 
@@ -302,14 +306,14 @@ def test_request_route_skips_health_for_passthrough_profile(monkeypatch):
             SimpleNamespace(
                 web_run_sidecar_url="http://web-run:8080",
                 web_run_sidecar_token="sidecar-token",
-                web_search={"provider": "tavily", "tavily_api_key": ""},
+                web_search_candidates=(),
             ),
         )
         route = ResolvedRoute(
             source_provider="openai_responses",
             target_provider="openai_responses",
             provider_name="test",
-            tool_profile={"namespace.web.run": "passthrough"},
+            tool_profile={"namespace.web.run": profile_state},
         )
         return route, await _resolve_request_tool_runtime_capabilities(
             app,

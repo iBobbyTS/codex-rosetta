@@ -347,6 +347,56 @@ def test_web_search_key_enables_basic_route_capability() -> None:
     assert WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
 
 
+@pytest.mark.parametrize("later_provider", ["configured_responses_provider", "tavily"])
+def test_later_external_candidate_enables_basic_route_capability(
+    later_provider: str,
+) -> None:
+    later_row = (
+        {
+            "id": "responses",
+            "provider": "configured_responses_provider",
+            "responses_provider": "test",
+            "responses_model": "gpt-5.6-terra",
+        }
+        if later_provider == "configured_responses_provider"
+        else {
+            "id": "tavily",
+            "provider": "tavily",
+            "tavily_api_key": "tvly-test-key",
+        }
+    )
+    raw = _minimal_raw(
+        web_search={
+            "providers": [
+                {"id": "local", "provider": "self_hosted_google"},
+                later_row,
+            ]
+        }
+    )
+    if later_provider == "configured_responses_provider":
+        raw["providers"]["test"]["api_type"] = "responses"
+
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+
+    assert WEB_RUN_BASIC_SEARCH_CAPABILITY in route.tool_runtime_capabilities
+
+
+def test_unready_self_hosted_only_chain_does_not_enable_basic_route_capability() -> (
+    None
+):
+    config = GatewayConfig(
+        _minimal_raw(
+            web_search={
+                "providers": [{"id": "local", "provider": "self_hosted_google"}]
+            }
+        )
+    )
+
+    route, _provider = config.resolve("openai_responses", "gpt-test")
+
+    assert WEB_RUN_BASIC_SEARCH_CAPABILITY not in route.tool_runtime_capabilities
+
+
 def test_web_run_sidecar_environment_overrides_config(monkeypatch) -> None:
     monkeypatch.setenv("CODEX_ROSETTA_WEB_RUN_URL", "http://browser.internal:9090")
     monkeypatch.setenv(

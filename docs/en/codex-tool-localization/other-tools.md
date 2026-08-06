@@ -56,8 +56,11 @@ For Exec Expansion cards, **Pass through** means representation-only adaptation:
 With `web.run` Modified, Rosetta rewrites the live `web__run` declaration even
 when it remains nested inside a custom `exec` tool on a direct Responses route.
 The model always sees bounded `open`, fixed-offset `time`, and
-`response_length`; `search_query` appears when the global Tavily Key is
-configured, or when either self-hosted provider is selected and the sidecar is ready.
+`response_length`; `search_query` appears when any canonical Provider-list
+candidate can supply basic search. A configured Responses row or a Tavily row
+with a valid Key qualifies at any list position; a self-hosted row qualifies
+only while the sidecar is ready. Candidate order controls execution and does
+not hide a later eligible candidate from the model.
 A healthy, authenticated `web-run` sidecar additionally exposes
 browser `open`, `find`, `click`, and PDF `screenshot` only while its shared
 five-second health cache reports `browser_ready=true`; the sidecar must be started through the supplied

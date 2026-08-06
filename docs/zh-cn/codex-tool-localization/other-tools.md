@@ -55,8 +55,10 @@ Chat Default 会把父级 `exec` 设为“禁用”，禁止向模型暴露。�
 
 当 `web.run` 为“修改”时，即使直接 Responses 路由仍把 `web__run` 放在 custom
 `exec` 内，Rosetta 也会改写这段实时声明。模型始终看到有界 `open`、固定时区 `time`
-和 `response_length`；配置全局 Tavily Key，或选择任一 self-hosted Provider 且 sidecar
-就绪后，才显示 `search_query`。配置健康且
+和 `response_length`；只要标准 Provider 列表中任一候选能够提供基础搜索，就会显示
+`search_query`。已配置 Responses 行或具有有效 Key 的 Tavily 行无论位于列表何处都
+符合条件；self-hosted 行仅在 sidecar 就绪时符合条件。候选顺序只控制执行次序，
+不会隐藏后续可用候选。配置健康且
 通过认证的 `web-run` sidecar 后，只有共享的五秒健康缓存报告 `browser_ready=true`
 时才额外暴露浏览器 `open`、`find`、`click` 和 PDF `screenshot`；必须通过提供的 Compose profile 启动 sidecar，才能让 Chromium 获得必需的
 seccomp 配置。2026-07-14 的隔离测试中，`gpt-5.6-sol → deepseek-v4-flash` 已成功使用静态

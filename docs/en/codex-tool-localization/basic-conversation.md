@@ -145,8 +145,11 @@ blocked. In Modified mode, supported commands use Rosetta's provider-chain
 coordinator. The
 model-visible definition always retains
 direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
-`search_query` when either a global Tavily API Key is configured or
-either self-hosted provider is selected and the sidecar reports ready, and adds
+`search_query` when any canonical Provider-list candidate can supply basic
+search. A configured Responses row or a Tavily row with a valid Key qualifies
+regardless of its list position; a self-hosted row qualifies only while the
+sidecar reports ready. Candidate order therefore controls execution, not
+whether a later eligible candidate is visible to the model. The definition adds
 `click`, `find`, and `screenshot` only while the optional sidecar reports
 `browser_ready=true`. The Hosted `web_search` tool remains independent:
 its Provider, Token, and guidance continue to belong to the selected Profile.

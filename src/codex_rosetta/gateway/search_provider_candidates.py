@@ -249,3 +249,17 @@ def build_search_provider_candidates(
         candidates.append(candidate)
 
     return tuple(candidates)
+
+
+def search_candidates_support_basic_search(
+    candidates: Sequence[SearchProviderCandidate],
+    *,
+    self_hosted_ready: bool,
+) -> bool:
+    """Return whether the canonical chain has an executable search candidate."""
+    for candidate in candidates:
+        if candidate.provider in {"tavily", CONFIGURED_RESPONSES_PROVIDER}:
+            return True
+        if self_hosted_ready and candidate.provider in SELF_HOSTED_PROVIDERS:
+            return True
+    return False

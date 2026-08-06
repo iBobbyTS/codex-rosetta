@@ -111,8 +111,10 @@ HTTP `501` 和 `code: "not_implemented"`。这些辅助端点的所有 `501` 文
 完整的 Modified Provider 链，包括它位于第一行时。Disabled 仍会阻止该端点。
 Modified 模式的受支持命令统一由 Rosetta Provider 链 coordinator 执行。
 模型可见定义始终保留直接 URL 的 `open`、固定时区 `time`
-和 `response_length`；配置全局 Tavily API Key，或选择任一 self-hosted Provider 且
-sidecar 报告就绪后，才增加 `search_query`；
+和 `response_length`；只要标准 Provider 列表中任一候选能够提供基础搜索，就会增加
+`search_query`。已配置 Responses 行或具有有效 Key 的 Tavily 行无论位于列表何处都
+符合条件；self-hosted 行则仅在 sidecar 报告就绪时符合条件。因此候选顺序只控制
+执行次序，不会让模型看不到后续可用候选；
 只有可选 sidecar 报告 `browser_ready=true` 时才增加 `click`、`find` 和
 `screenshot`。Hosted
 `web_search` 保持独立，其 Provider、Token 和 guidance 仍属于所选 Profile。

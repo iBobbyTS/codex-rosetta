@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+from dataclasses import replace
 
 import pytest
 
@@ -18,6 +19,7 @@ from codex_rosetta.gateway.proxy import (
     _apply_converted_request_tool_adaptation,
     _apply_tool_adaptation,
 )
+from codex_rosetta.gateway.tool_adaptation import NativeToolCapabilities
 from codex_rosetta.gateway.tool_profiles import (
     normalize_tool_profile_input_overrides,
     normalize_tool_profile_documents,
@@ -1187,6 +1189,116 @@ def test_modified_web_run_without_tavily_keeps_only_static_capabilities():
         "time",
         "response_length",
     }
+
+
+@pytest.mark.parametrize("later_provider", ["configured_responses_provider", "tavily"])
+def test_later_external_candidate_projects_search_on_all_shared_surfaces(
+    later_provider: str,
+) -> None:
+    later_row = (
+        {
+            "id": "responses",
+            "provider": "configured_responses_provider",
+            "responses_provider": "test",
+            "responses_model": "gpt-5.6-terra",
+        }
+        if later_provider == "configured_responses_provider"
+        else {
+            "id": "tavily",
+            "provider": "tavily",
+            "tavily_api_key": "tvly-test-key",
+        }
+    )
+    raw = {
+        "providers": {
+            "test": {
+                "provider": "custom",
+                "api_key": "sk-test",
+                "base_url": "https://api.example.com",
+                "api_type": "responses",
+            }
+        },
+        "model_groups": {
+            "Test": {
+                "provider": "test",
+                "type": "llm",
+                "tool_profile": "responses-tool-mapping",
+                "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+            }
+        },
+        "server": {
+            "admin_password": "test-password",
+            "api_keys": [{"id": "test", "key": "test-key"}],
+            "web_search": {
+                "providers": [
+                    {"id": "local", "provider": "self_hosted_google"},
+                    later_row,
+                ]
+            },
+        },
+    }
+    route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
+    nested_route = replace(
+        route,
+        tool_profile={**route.tool_profile, "custom.exec": "passthrough"},
+    )
+
+    top_level = _apply_tool_adaptation(
+        {"tools": [_web_run_tool("search_query", "open")]},
+        route,
+    )
+    nested = _apply_tool_adaptation(
+        {
+            "tools": [
+                {
+                    "type": "custom",
+                    "name": "exec",
+                    "description": _exec_web_run_description(),
+                }
+            ],
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "tools": [
+                        {
+                            "type": "custom",
+                            "name": "exec",
+                            "description": _exec_web_run_description(),
+                        }
+                    ],
+                }
+            ],
+        },
+        nested_route,
+    )
+    converted = _apply_converted_request_tool_adaptation(
+        {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "exec",
+                        "description": _exec_web_run_description(),
+                        "parameters": {"type": "object"},
+                    },
+                }
+            ]
+        },
+        replace(route, target_provider="openai_chat"),
+        capabilities=NativeToolCapabilities(has_custom_exec=True),
+    )
+
+    assert "search_query" in top_level["tools"][0]["parameters"]["properties"]
+    assert "search_query" in _projected_exec_web_commands(
+        nested["tools"][0]["description"]
+    )
+    assert "search_query" in _projected_exec_web_commands(
+        nested["input"][0]["tools"][0]["description"]
+    )
+    projected_chat = next(
+        tool for tool in converted["tools"] if tool["function"]["name"] == "web-run"
+    )
+    assert "search_query" in projected_chat["function"]["parameters"]["properties"]
 
 
 def test_modified_web_run_removes_unknown_schema_and_guidance():

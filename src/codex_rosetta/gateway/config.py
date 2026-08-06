@@ -31,7 +31,10 @@ from .provider_profiles import (
     resolve_soft_interrupt,
 )
 from .stream_trace import StreamTraceConfig
-from .search_provider_candidates import build_search_provider_candidates
+from .search_provider_candidates import (
+    build_search_provider_candidates,
+    search_candidates_support_basic_search,
+)
 from .tool_profiles import (
     BUILTIN_TOOL_PROFILE,
     TOOL_PROFILE_API_TYPES,
@@ -1410,12 +1413,10 @@ class GatewayConfig:
             ),
             tool_runtime_capabilities=(
                 frozenset({WEB_RUN_BASIC_SEARCH_CAPABILITY})
-                if (
-                    self.web_search["provider"] == "tavily"
-                    and self.web_search["tavily_api_key"]
+                if search_candidates_support_basic_search(
+                    self.web_search_candidates,
+                    self_hosted_ready=False,
                 )
-                or self.web_search["provider"]
-                == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
                 else frozenset()
             ),
         )
