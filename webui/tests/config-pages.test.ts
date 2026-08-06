@@ -7,6 +7,13 @@ import ProvidersPage from '../src/admin/pages/ProvidersPage.svelte';
 import SettingsPage from '../src/admin/pages/SettingsPage.svelte';
 import { setLanguage } from '../src/shared/i18n.svelte';
 
+async function selectDropdown(control: HTMLElement, label: string): Promise<void> {
+  await fireEvent.click(control);
+  const lists = screen.getAllByRole('listbox');
+  const option = lists.flatMap((node) => within(node).getAllByRole('option')).find((item) => item.textContent?.trim() === label || item.getAttribute('data-value') === label)!;
+  await fireEvent.click(option);
+}
+
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 
@@ -43,8 +50,8 @@ describe('ProvidersPage', () => {
       : Promise.resolve(config));
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
-    expect(screen.getByLabelText('Provider')).toHaveValue('openai');
-    expect(screen.getByLabelText('Provider variant')).toHaveValue('official');
+    expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'openai');
+    expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
     expect(await screen.findByDisplayValue('provider-secret')).toBeInTheDocument();
     expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config/providers/official/key');
@@ -69,8 +76,8 @@ describe('ProvidersPage', () => {
     expect(body).not.toHaveProperty('preset');
     expect(body).not.toHaveProperty('base');
     expect(body).not.toHaveProperty('variant');
-    const bodyLimit = screen.getByLabelText('Maximum Request Body') as HTMLSelectElement;
-    expect(Array.from(bodyLimit.options, (option) => option.value)).toEqual(['64', '128', '256', '512', '1024', 'unlimited']);
+    await fireEvent.click(screen.getByLabelText('Maximum Request Body'));
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['64', '128', '256', '512', '1024', 'unlimited']);
   });
 
   it('derives a child option from persisted provider and URL without using api_type', async () => {
@@ -87,12 +94,12 @@ describe('ProvidersPage', () => {
     render(ProvidersPage);
     const edits = await screen.findAllByRole('button', { name: 'Edit' });
     await fireEvent.click(edits[0]);
-    expect(screen.getByLabelText('Provider')).toHaveValue('moonshot');
-    expect(screen.getByLabelText('Provider variant')).toHaveValue('international');
+    expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'moonshot');
+    expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'international');
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(edits[1]);
-    expect(screen.getByLabelText('Provider')).toHaveValue('deepseek');
-    expect(screen.getByLabelText('Provider variant')).toHaveValue('custom');
+    expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'deepseek');
+    expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'custom');
   });
 
   it('renders only backend-supported API types with user-facing protocol names', async () => {
@@ -105,14 +112,15 @@ describe('ProvidersPage', () => {
     });
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
-    const protocol = within(screen.getByRole('dialog', { name: 'Add Provider' })).getByLabelText('Protocol') as HTMLSelectElement;
-    expect(Array.from(protocol.options, (option) => [option.value, option.textContent])).toEqual([
+    const protocol = within(screen.getByRole('dialog', { name: 'Add Provider' })).getByLabelText('Protocol');
+    await fireEvent.click(protocol);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => [option.getAttribute('data-value'), option.textContent?.trim()])).toEqual([
       ['responses', 'OpenAI Responses'],
       ['chat', 'OpenAI Chat Completions'],
       ['anthropic', 'Anthropic Messages'],
       ['google', 'Google GenAI'],
     ]);
-    expect(protocol).not.toHaveTextContent('open_responses');
+    expect(screen.getByRole('listbox')).not.toHaveTextContent('open_responses');
     expect(protocol).not.toHaveTextContent('openai_chat');
     expect(protocol).not.toHaveTextContent('openai_responses');
   });
@@ -128,10 +136,10 @@ describe('ProvidersPage', () => {
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
-    await fireEvent.change(dialog.getByLabelText('Provider'), { target: { value: 'deepseek' } });
+    await selectDropdown(dialog.getByLabelText('Provider'), 'DeepSeek');
     expect(dialog.getByLabelText('Late instruction cache compatibility')).toBeChecked();
     expect(dialog.getByText(/append system or developer messages/)).toHaveTextContent('does not inspect or special-case turn_aborted');
-    await fireEvent.change(dialog.getByLabelText('Protocol'), { target: { value: 'anthropic' } });
+    await selectDropdown(dialog.getByLabelText('Protocol'), 'Anthropic Messages');
     expect(dialog.queryByLabelText('Late instruction cache compatibility')).not.toBeInTheDocument();
     await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'deepseek-anthropic' } });
     await fireEvent.input(dialog.getByPlaceholderText('https://api.openai.com/v1'), { target: { value: 'https://api.deepseek.com/anthropic' } });
@@ -190,7 +198,7 @@ describe('ProvidersPage', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Clone' }));
     expect(screen.getByLabelText('Force Rosetta prompt compaction')).toBeChecked();
-    await fireEvent.change(screen.getByLabelText('Protocol'), { target: { value: 'chat' } });
+    await selectDropdown(screen.getByLabelText('Protocol'), 'OpenAI Chat Completions');
     expect(screen.queryByLabelText('Force Rosetta prompt compaction')).not.toBeInTheDocument();
   });
 
@@ -206,7 +214,7 @@ describe('ProvidersPage', () => {
     });
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ 添加服务方' }));
-    await fireEvent.change(screen.getByLabelText('协议'), { target: { value: 'responses' } });
+    await selectDropdown(screen.getByLabelText('协议'), 'OpenAI Responses');
     expect(screen.getByLabelText('强制 Rosetta 提示词压缩')).toBeInTheDocument();
     expect(screen.getByText(/SQLite 中以明文保存摘要七天/)).toBeInTheDocument();
   });
@@ -261,8 +269,11 @@ describe('SettingsPage', () => {
     expect(await screen.findByText('Missing model: deleted-model')).toBeInTheDocument();
     expect(screen.getByText('Effective default: gpt-5.4')).toBeInTheDocument();
     expect(screen.getByText('Effective default: gpt-5.4-mini')).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'deleted-model (missing)' })).toBeInTheDocument();
-    await fireEvent.change(screen.getByLabelText('Memory consolidation model'), { target: { value: 'configured' } });
+    await fireEvent.click(screen.getByLabelText('Auto review model'));
+    expect(within(screen.getAllByRole('listbox').at(-1)!).getByRole('option', { name: 'deleted-model (missing)' })).toBeInTheDocument();
+    const consolidation = screen.getByLabelText('Memory consolidation model');
+    await fireEvent.click(consolidation);
+    await fireEvent.click(within(consolidation.parentElement!).getByRole('option', { name: 'configured' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save Codex settings' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/codex', {
       auto_review_model_override: 'deleted-model',
@@ -339,31 +350,32 @@ describe('ModelsPage', () => {
     const providerSelect = screen.getByLabelText('Provider');
     const profileSelect = screen.getByLabelText('Profile');
 
-    expect(within(profileSelect).getByRole('option', { name: 'Chat Default' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'custom-chat' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
-    expect(within(profileSelect).queryByRole('option', { name: 'Responses Default' })).toBeNull();
+    await fireEvent.click(profileSelect);
+    expect(screen.getByRole('option', { name: 'Chat Default' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'custom-chat' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Responses Default' })).toBeNull();
 
-    await fireEvent.change(providerSelect, { target: { value: 'responses' } });
+    await selectDropdown(providerSelect, 'responses');
 
-    expect(within(profileSelect).getByRole('option', { name: 'Responses Default' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'Pass through' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'custom-responses' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
-    expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'Responses Default' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Pass through' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'custom-responses' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Chat Default' })).toBeNull();
 
-    await fireEvent.change(providerSelect, { target: { value: 'anthropic' } });
+    await selectDropdown(providerSelect, 'anthropic');
 
-    expect(within(profileSelect).getByRole('option', { name: 'custom-anthropic' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
-    expect(within(profileSelect).queryByRole('option', { name: 'Responses Default' })).toBeNull();
-    expect(within(profileSelect).queryByRole('option', { name: 'Pass through' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'custom-anthropic' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Responses Default' })).toBeNull();
+    expect(screen.queryByRole('option', { name: 'Pass through' })).toBeNull();
 
-    await fireEvent.change(providerSelect, { target: { value: 'gemini' } });
+    await selectDropdown(providerSelect, 'gemini');
 
-    expect(within(profileSelect).getByRole('option', { name: 'custom-gemini' })).toBeInTheDocument();
-    expect(within(profileSelect).getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
-    expect(within(profileSelect).queryByRole('option', { name: 'Chat Default' })).toBeNull();
+    expect(screen.getByRole('option', { name: 'custom-gemini' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Chat Default' })).toBeNull();
   });
 
   it('persists the Responses pass-through option outside actual profiles', async () => {
@@ -378,7 +390,7 @@ describe('ModelsPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
-    await fireEvent.change(screen.getByLabelText('Profile'), { target: { value: 'passthrough' } });
+    await selectDropdown(screen.getByLabelText('Profile'), 'Pass through');
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(

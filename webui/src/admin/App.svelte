@@ -3,6 +3,7 @@
   import { AUTH_EXPIRED_EVENT, RESTART_REQUIRED_EVENT, ApiError, api, getAdminToken, request, setAdminToken } from './lib/api';
   import { routeFromPath, routes, type RouteId } from './lib/routes';
   import { language, setLanguage, t } from '../shared/i18n.svelte';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
   import DashboardPage from './pages/DashboardPage.svelte';
   import GatewayLogsPage from './pages/GatewayLogsPage.svelte';
   import KeysPage from './pages/KeysPage.svelte';
@@ -36,6 +37,8 @@
       : { '--bg':'#ffffff','--bg-card':'#f6f8fa','--bg-hover':'#eef1f5','--border':'#d1d9e0','--text':'#1f2328','--text-dim':'#656d76','--accent':'#0969da','--accent-hover':'#0550ae','--green':'#1a7f37','--red':'#cf222e','--orange':'#bf8700','--blue':'#0969da','--provider-logo-filter':'none' };
     for (const [key, color] of Object.entries(colors)) document.documentElement.style.setProperty(key, color);
   }
+  const themeOptions = [{ value: 'light', label: t('theme.light') }, { value: 'dark', label: t('theme.dark') }];
+  const languageOptions = [{ value: 'en', label: t('language.english') }, { value: 'zh', label: t('language.chinese') }];
 
   async function loadShellConfig(): Promise<void> {
     try {
@@ -137,8 +140,8 @@
   <div class="settings-popup" class:open={settingsOpen} role="presentation" onclick={(event) => { if (event.target === event.currentTarget) settingsOpen = false; }}>
     <div class="settings-popup-panel" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <h3 id="settings-title">{t('modal.settings')}</h3>
-      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme')}</label><select id="settingsThemeSelect" value={theme} onchange={(event) => setTheme(event.currentTarget.value)}><option value="light">{t('theme.light')}</option><option value="dark">{t('theme.dark')}</option></select></div>
-      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language')}</label><select id="settingsLangSelect" value={language.value} onchange={(event) => setLanguage(event.currentTarget.value === 'zh' ? 'zh' : 'en')}><option value="en">{t('language.english')}</option><option value="zh">{t('language.chinese')}</option></select></div>
+      <div class="settings-popup-item"><label for="settingsThemeSelect">{t('label.theme')}</label><Dropdown id="settingsThemeSelect" value={theme} options={themeOptions} onChange={(value: DropdownValue) => setTheme(String(value))} /></div>
+      <div class="settings-popup-item"><label for="settingsLangSelect">{t('label.language')}</label><Dropdown id="settingsLangSelect" value={language.value} options={languageOptions} onChange={(value: DropdownValue) => setLanguage(String(value) === 'zh' ? 'zh' : 'en')} /></div>
       <div class="settings-divider"></div>
       <div style="text-align:center;padding:4px 0 2px">
         <div style="font-size:15px;font-weight:600;margin-bottom:2px">{t('product.name')}</div>

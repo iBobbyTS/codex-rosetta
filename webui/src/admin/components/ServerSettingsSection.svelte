@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { t } from '../../shared/i18n.svelte';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type Dict = Record<string, unknown>;
   type Config = { server?: Dict; model_catalog_configured?: boolean; codex_home?: string };
@@ -14,6 +15,7 @@
   let diagnostics = $state<Dict | null>(null);
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
+  const bodyLimitOptions: { value: DropdownValue; label: string }[] = [...[64,128,256,512,1024].map((value) => ({ value, label: t('format.megabytes',{value}) })), { value: 'unlimited', label: t('label.unlimited') }];
 
   async function load(signal?: AbortSignal): Promise<void> {
     try {
@@ -65,7 +67,7 @@
       <label for="globalProxy">{t('label.globalProxy')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label>
       <div style="display:flex;gap:8px"><input id="globalProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} style="flex:1" /><button class="btn btn-primary btn-sm" disabled={busy} onclick={() => void save()}>{t('btn.save')}</button></div>
       <div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.globalProxy.hint')}</div>
-      <div style="margin-top:14px"><label for="requestBodyLimitMb">{t('label.requestBodyLimit')}</label><select id="requestBodyLimitMb" bind:value={bodyLimit} style="max-width:180px">{#each [64,128,256,512,1024] as value}<option value={value}>{t('format.megabytes',{value})}</option>{/each}<option value="unlimited">{t('label.unlimited')}</option></select><div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.requestBodyLimitHint')}</div></div>
+      <div style="margin-top:14px"><label for="requestBodyLimitMb">{t('label.requestBodyLimit')}</label><Dropdown id="requestBodyLimitMb" value={bodyLimit} options={bodyLimitOptions} onChange={(value: DropdownValue) => { bodyLimit = value; }} /><div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.requestBodyLimitHint')}</div></div>
       <div style="margin-top:14px"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input type="checkbox" bind:checked={localMode} style="width:auto" /> <span>{t('label.localMode')}</span></label><div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.localModeHint')}</div></div>
       <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"><button class="btn btn-sm" disabled={busy} onclick={() => void runDiagnostics()}>{t('diag.runDiag')}</button>{#if diagnostics}<div class="net-diag" aria-live="polite"><span class="diag-item">{JSON.stringify(diagnostics)}</span></div>{/if}</div>
     </div>

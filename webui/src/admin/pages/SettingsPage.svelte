@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { t } from '../../shared/i18n.svelte';
+  import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type Dict = Record<string, unknown>;
   type Config = {
@@ -126,6 +127,10 @@
   function taskMissing(selected: string, fallback: string): boolean {
     return taskModelsEnabled && !configuredModels.includes(selected || fallback);
   }
+  const bodyLimitOptions: { value: DropdownValue; label: string }[] = [...[64, 128, 256, 512, 1024].map((value) => ({ value, label: t('format.megabytes', { value }) })), { value: 'unlimited', label: t('label.unlimited') }];
+  function modelOptions(fallback: string, selected: string) {
+    return [{ value: '', label: t('format.defaultModel', { model: fallback }) }, ...configuredModels.map((model) => ({ value: model, label: model })), ...(selected && !configuredModels.includes(selected) ? [{ value: selected, label: t('format.missingModel', { model: selected }) }] : [])];
+  }
 
   async function diagnose(): Promise<void> {
     busy = true;
@@ -191,11 +196,8 @@
     <div class="panel">
       <h3>{t('section.settingsServer')}</h3>
       <label>{t('label.globalProxy')} <input bind:value={proxy} placeholder={t('placeholder.genericProxy')} /></label>
-      <label>{t('label.requestBodyLimit')}
-        <select bind:value={bodyLimit}>
-          {#each [64, 128, 256, 512, 1024] as value}<option value={value}>{t('format.megabytes',{value})}</option>{/each}
-          <option value="unlimited">{t('label.unlimited')}</option>
-        </select>
+      <label for="settingsRequestBodyLimit">{t('label.requestBodyLimit')}
+        <Dropdown id="settingsRequestBodyLimit" value={bodyLimit} options={bodyLimitOptions} onChange={(value: DropdownValue) => { bodyLimit = value; }} />
       </label>
       <label class="check"><input type="checkbox" bind:checked={localMode} /> {t('label.localMode')}</label>
       <p class:warning={localMode && !localModeConfirmed} class="hint">
@@ -208,28 +210,16 @@
 
     <div class="panel">
       <h3>{t('section.taskModels')}</h3>
-      <label>{t('label.autoReviewModelShort')}
-        <select bind:value={reviewModel} disabled={!taskModelsEnabled}>
-          <option value="">{t('format.defaultModel',{model:taskDefaults.review})}</option>
-          {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if reviewModel && !configuredModels.includes(reviewModel)}<option value={reviewModel}>{t('format.missingModel',{model:reviewModel})}</option>{/if}
-        </select>
+      <label for="settingsReviewModel">{t('label.autoReviewModelShort')}
+        <Dropdown id="settingsReviewModel" value={reviewModel} options={modelOptions(taskDefaults.review, reviewModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { reviewModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(reviewModel, taskDefaults.review)}>{taskStatus(reviewModel, taskDefaults.review)}</p>
-      <label>{t('label.memoryConsolidationModelShort')}
-        <select bind:value={consolidationModel} disabled={!taskModelsEnabled}>
-          <option value="">{t('format.defaultModel',{model:taskDefaults.consolidation})}</option>
-          {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if consolidationModel && !configuredModels.includes(consolidationModel)}<option value={consolidationModel}>{t('format.missingModel',{model:consolidationModel})}</option>{/if}
-        </select>
+      <label for="settingsConsolidationModel">{t('label.memoryConsolidationModelShort')}
+        <Dropdown id="settingsConsolidationModel" value={consolidationModel} options={modelOptions(taskDefaults.consolidation, consolidationModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { consolidationModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(consolidationModel, taskDefaults.consolidation)}>{taskStatus(consolidationModel, taskDefaults.consolidation)}</p>
-      <label>{t('label.memoryExtractionModelShort')}
-        <select bind:value={extractModel} disabled={!taskModelsEnabled}>
-          <option value="">{t('format.defaultModel',{model:taskDefaults.extract})}</option>
-          {#each configuredModels as model}<option value={model}>{model}</option>{/each}
-          {#if extractModel && !configuredModels.includes(extractModel)}<option value={extractModel}>{t('format.missingModel',{model:extractModel})}</option>{/if}
-        </select>
+      <label for="settingsExtractModel">{t('label.memoryExtractionModelShort')}
+        <Dropdown id="settingsExtractModel" value={extractModel} options={modelOptions(taskDefaults.extract, extractModel)} disabled={!taskModelsEnabled} onChange={(value: DropdownValue) => { extractModel = String(value); }} />
       </label>
       <p class="hint" class:missing={taskMissing(extractModel, taskDefaults.extract)}>{taskStatus(extractModel, taskDefaults.extract)}</p>
       <button class="primary" disabled={busy || !taskModelsEnabled} onclick={saveCodex}>{t('btn.saveCodexSettings')}</button>
@@ -261,7 +251,7 @@
   .columns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .panel{display:grid;gap:10px;padding:16px;border:1px solid #d0d5dd;border-radius:6px;background:#fff}
   .panel label{display:grid;gap:5px}
-  .panel input,.panel select{font:inherit;padding:8px;min-width:0}
+  .panel input,.panel :global(.suu-dropdown__button){font:inherit;padding:8px;min-width:0}
   .check{display:flex!important;align-items:center}.check input{width:auto}
   .warning,.missing{color:#b42318}.sensitive .actions{justify-content:flex-start}
   .alert,.notice{padding:10px;border-radius:4px}.alert{background:#fee4e2;color:#912018}.notice{background:#dcfae6;color:#085d3a}

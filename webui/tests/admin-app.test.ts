@@ -3,6 +3,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import AdminApp from '../src/admin/App.svelte';
 
+async function selectDropdown(control: HTMLElement, value: string): Promise<void> {
+  await fireEvent.click(control);
+  await fireEvent.click(screen.getByRole('option', { name: new RegExp(`^${value}$`) }));
+}
+
 beforeEach(() => {
   localStorage.clear();
   history.replaceState({}, '', '/admin/providers');
@@ -34,7 +39,7 @@ describe('Admin application session', () => {
       : new Response(JSON.stringify({ providers: {}, model_groups: {} }), { status: 200 }));
     render(AdminApp);
     await screen.findByRole('navigation', { name: 'Admin pages' });
-    await fireEvent.change(screen.getByLabelText('Theme'), { target: { value: 'dark' } });
+    await selectDropdown(screen.getByLabelText('Theme'), 'Dark');
     expect(localStorage.getItem('codex-rosetta-theme')).toBe('dark');
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#0f1117');
     expect(document.documentElement.style.getPropertyValue('--provider-logo-filter')).toBe('invert(1)');
