@@ -24,6 +24,20 @@ SEARCH_TEST_QUERY = "latest python release version"
 TAVILY_USAGE_MAX_CONCURRENCY = 8
 TAVILY_USAGE_ROW_TIMEOUT_SECONDS = 12.0
 
+_SEARCH_TEST_ERROR_DETAILS = {
+    "network_search_test_configuration_unavailable": (
+        "Gateway configuration is unavailable"
+    ),
+    "network_search_test_no_eligible_model": (
+        "No configured model has an enabled web.run search route"
+    ),
+    "network_search_test_authorization_failed": "Search test authorization failed",
+    "network_search_test_timed_out": "Search test timed out",
+    "network_search_test_rate_limited": "Search provider rate limit reached",
+    "network_search_test_unavailable": "Search provider is unavailable",
+    "network_search_test_rejected": "Search request was rejected",
+}
+
 
 def _safe_usage_value(value: Any, *, upper_bound: int | None = None) -> int | None:
     """Return a finite, non-negative integer suitable for the Admin DTO."""
@@ -64,19 +78,39 @@ def _select_search_test_model(config: GatewayConfig) -> str | None:
     return None
 
 
+def _search_test_error(code: str, status_code: int) -> JSONResponse:
+    """Return a stable Admin-only error DTO without provider-supplied content."""
+    return JSONResponse(
+        {"error": _SEARCH_TEST_ERROR_DETAILS[code], "code": code},
+        status_code=status_code,
+    )
+
+
+def _normalize_search_test_failure(response: Response) -> Response:
+    """Discard every non-success body returned by the public search handler."""
+    if 200 <= response.status_code < 300:
+        return response
+    if response.status_code in {401, 403}:
+        code = "network_search_test_authorization_failed"
+    elif response.status_code in {408, 504}:
+        code = "network_search_test_timed_out"
+    elif response.status_code == 429:
+        code = "network_search_test_rate_limited"
+    elif response.status_code >= 500:
+        code = "network_search_test_unavailable"
+    else:
+        code = "network_search_test_rejected"
+    return _search_test_error(code, response.status_code)
+
+
 async def test_network_search(request: Any) -> Response:
     """Run the fixed diagnostic through the public ``alpha/search`` handler."""
     config = getattr(request.app, "gateway_config", None)
     if not isinstance(config, GatewayConfig):
-        return JSONResponse(
-            {"error": "Gateway configuration is unavailable"}, status_code=503
-        )
+        return _search_test_error("network_search_test_configuration_unavailable", 503)
     model = _select_search_test_model(config)
     if model is None:
-        return JSONResponse(
-            {"error": "No configured model has an enabled web.run search route"},
-            status_code=409,
-        )
+        return _search_test_error("network_search_test_no_eligible_model", 409)
     body = {
         "id": f"admin-search-test-{secrets.token_hex(12)}",
         "model": model,
@@ -88,9 +122,10 @@ async def test_network_search(request: Any) -> Response:
     }
     principal_token = api_key_principal_var.set(INTERNAL_ADMIN_PRINCIPAL)
     try:
-        return await handle_codex_auxiliary(
+        response = await handle_codex_auxiliary(
             _SearchTestRequest(request, body), config, "alpha/search"
         )
+        return _normalize_search_test_failure(response)
     finally:
         api_key_principal_var.reset(principal_token)
 

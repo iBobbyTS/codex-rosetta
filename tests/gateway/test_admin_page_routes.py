@@ -140,6 +140,17 @@ def test_manifest_allows_only_generated_assets() -> None:
         load_admin_asset("assets/not-in-manifest.js")
 
 
+def test_bundled_admin_search_ui_excludes_provider_debug_details() -> None:
+    package_files = importlib.resources.files("codex_rosetta.gateway.admin")
+    manifest = json.loads(
+        package_files.joinpath("dist", "manifest.json").read_text("utf-8")
+    )
+    script = load_admin_asset(manifest["admin.html"]["file"])
+
+    assert b"debug endpoint http://10.0.0.5:9000" not in script.body
+    assert b"upstream request abc-123" not in script.body
+
+
 def test_manifest_bundles_all_provider_logos() -> None:
     package_files = importlib.resources.files("codex_rosetta.gateway.admin")
     manifest = json.loads(

@@ -27,17 +27,10 @@ function errorMessage(payload: unknown, status: number): string {
     return `Request failed (${status})`;
   }
   const error = (payload as { error: unknown }).error;
+  if (typeof error === 'string' && error) return error;
   if (error && typeof error === 'object' && 'message' in error) {
     const message = (error as { message: unknown }).message;
     if (typeof message === 'string' && message) return message;
-  }
-  if (typeof error === 'string' && error) return error;
-  if (error !== undefined && error !== null && typeof error !== 'object') return String(error);
-  try {
-    const serialized = JSON.stringify(error);
-    if (serialized) return serialized;
-  } catch {
-    // Fall through to the status-based message for non-serializable envelopes.
   }
   return `Request failed (${status})`;
 }

@@ -10,8 +10,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from codex_rosetta._vendor.httpserver import JSONResponse
+from codex_rosetta._vendor.httpserver import JSONResponse, Request
 from codex_rosetta.gateway.admin.routes import network_search
+from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.auth import (
     INTERNAL_ADMIN_PRINCIPAL,
     api_key_principal_var,
@@ -61,6 +62,34 @@ def _config() -> GatewayConfig:
     )
 
 
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [
+        ("GET", "/admin/api/network-search/usage"),
+        ("POST", "/admin/api/network-search/test"),
+    ],
+)
+def test_network_search_admin_endpoints_require_authentication(
+    method: str, path: str
+) -> None:
+    app = create_app(_config())
+    request = Request(
+        method=method,
+        path=path,
+        query_string="",
+        headers={},
+        body=b"",
+        client_addr=("127.0.0.1", 12345),
+        app=app,
+    )
+
+    response = asyncio.run(app._dispatch(request))
+
+    assert isinstance(response, JSONResponse)
+    assert response.status_code == 401
+    assert json.loads(response.body) == {"error": "Admin authentication required"}
+
+
 def test_search_test_uses_public_auxiliary_handler(monkeypatch: Any) -> None:
     app = SimpleNamespace(gateway_config=_config())
     request = SimpleNamespace(app=app)
@@ -106,7 +135,8 @@ def test_search_test_requires_live_gateway_config() -> None:
 
     assert response.status_code == 503
     assert json.loads(response.body) == {
-        "error": "Gateway configuration is unavailable"
+        "error": "Gateway configuration is unavailable",
+        "code": "network_search_test_configuration_unavailable",
     }
 
 
@@ -140,7 +170,8 @@ def test_search_test_rejects_config_without_eligible_model() -> None:
 
     assert response.status_code == 409
     assert json.loads(response.body) == {
-        "error": "No configured model has an enabled web.run search route"
+        "error": "No configured model has an enabled web.run search route",
+        "code": "network_search_test_no_eligible_model",
     }
 
 
@@ -174,18 +205,26 @@ def test_search_test_reaches_selected_responses_alpha_search() -> None:
     assert body["model"] == "gpt-5.6-luna"
 
 
-def test_search_test_preserves_upstream_error_envelope() -> None:
+def test_search_test_replaces_configured_responses_error_with_safe_dto() -> None:
+    provider_detail = "debug endpoint http://10.0.0.5:9000, upstream request abc-123"
     transport = SimpleNamespace(
         send_passthrough=AsyncMock(
             return_value=UpstreamResponse(
                 status_code=502,
                 body={
                     "error": {
-                        "message": "Upstream search failed",
+                        "message": provider_detail,
                         "type": "upstream_error",
                     }
                 },
-                raw_content=b'{"error":{"message":"Upstream search failed","type":"upstream_error"}}',
+                raw_content=json.dumps(
+                    {
+                        "error": {
+                            "message": provider_detail,
+                            "type": "upstream_error",
+                        }
+                    }
+                ).encode(),
             )
         )
     )
@@ -201,11 +240,46 @@ def test_search_test_preserves_upstream_error_envelope() -> None:
 
     assert response.status_code == 502
     assert json.loads(response.body) == {
-        "error": {
-            "message": "Upstream: Upstream search failed",
-            "type": "upstream_error",
-        }
+        "error": "Search provider is unavailable",
+        "code": "network_search_test_unavailable",
     }
+    assert provider_detail.encode() not in response.body
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_code"),
+    [
+        (302, "network_search_test_rejected"),
+        (400, "network_search_test_rejected"),
+        (401, "network_search_test_authorization_failed"),
+        (403, "network_search_test_authorization_failed"),
+        (408, "network_search_test_timed_out"),
+        (429, "network_search_test_rate_limited"),
+        (500, "network_search_test_unavailable"),
+        (504, "network_search_test_timed_out"),
+    ],
+)
+def test_search_test_normalizes_every_handler_failure_category(
+    monkeypatch: Any, status_code: int, expected_code: str
+) -> None:
+    provider_detail = "provider debug body http://internal.example/request/secret"
+
+    async def fake_handle(*_args: Any, **_kwargs: Any) -> JSONResponse:
+        return JSONResponse(
+            {"error": {"message": provider_detail}}, status_code=status_code
+        )
+
+    monkeypatch.setattr(network_search, "handle_codex_auxiliary", fake_handle)
+
+    response = asyncio.run(
+        network_search.test_network_search(
+            SimpleNamespace(app=SimpleNamespace(gateway_config=_config()))
+        )
+    )
+
+    assert response.status_code == status_code
+    assert json.loads(response.body)["code"] == expected_code
+    assert provider_detail.encode() not in response.body
 
 
 def test_usage_returns_only_safe_tavily_dto_rows() -> None:

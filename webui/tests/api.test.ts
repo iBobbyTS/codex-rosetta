@@ -41,23 +41,56 @@ describe('admin API client', () => {
     const expired = vi.fn();
     window.addEventListener(AUTH_EXPIRED_EVENT, expired, { once: true });
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ error: { message: 'Provider rejected search' } }), { status }),
+      new Response(JSON.stringify({
+        error: 'Search test authorization failed',
+        code: 'network_search_test_authorization_failed',
+      }), { status }),
     );
 
     await expect(request('/admin/api/network-search/test', { responseEffects: 'local' })).rejects.toEqual(
-      expect.objectContaining({ status, message: 'Provider rejected search' }),
+      expect.objectContaining({
+        status,
+        message: 'Search test authorization failed',
+        code: 'network_search_test_authorization_failed',
+      }),
     );
     expect(localStorage.getItem('admin_token')).toBe('valid-admin-session');
     expect(expired).not.toHaveBeenCalled();
   });
 
-  it('renders an OpenAI-style nested error message instead of object coercion', async () => {
+  it('keeps generic nested error handling outside the Search Test trust boundary', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ error: { message: 'Upstream search failed', type: 'upstream_error' } }), { status: 502 }),
     );
 
-    await expect(request('/admin/api/network-search/test')).rejects.toEqual(
+    await expect(request('/admin/api/request-log/example')).rejects.toEqual(
       expect.objectContaining({ status: 502, message: 'Upstream search failed' }),
+    );
+  });
+
+  it('renders a controlled string error envelope', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Search is unavailable' }), { status: 503 }),
+    );
+
+    await expect(request('/admin/api/network-search/test')).rejects.toEqual(
+      expect.objectContaining({ status: 503, message: 'Search is unavailable' }),
+    );
+  });
+
+  it.each([
+    ['plain text', 'provider secret at http://internal.example', 'text/plain'],
+    ['JSON primitive string', JSON.stringify('provider secret at http://internal.example'), 'application/json'],
+    ['object without an error envelope', JSON.stringify({ message: 'provider secret at http://internal.example' }), 'application/json'],
+    ['unrecognized error object', JSON.stringify({ error: { detail: 'provider secret at http://internal.example' } }), 'application/json'],
+    ['non-string error primitive', JSON.stringify({ error: 3711 }), 'application/json'],
+  ])('does not expose an uncontrolled %s response', async (_name, body, contentType) => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(body, { status: 502, headers: { 'Content-Type': contentType } }),
+    );
+
+    await expect(request('/admin/api/network-search/test')).rejects.toEqual(
+      expect.objectContaining({ status: 502, message: 'Request failed (502)' }),
     );
   });
 

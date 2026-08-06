@@ -1,18 +1,24 @@
 // @vitest-environment-options { "customExportConditions": ["browser"] }
-import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import DashboardPage from '../src/admin/pages/DashboardPage.svelte';
 import GatewayLogsPage from '../src/admin/pages/GatewayLogsPage.svelte';
 import NetworkSearchPage from '../src/admin/pages/NetworkSearchPage.svelte';
 import RequestLogsPage from '../src/admin/pages/RequestLogsPage.svelte';
 import ToolsPage from '../src/admin/pages/ToolsPage.svelte';
+import { ApiError } from '../src/admin/lib/api';
 
 const apiMock = vi.hoisted(() => ({
   get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn(),
 }));
 const downloadMock = vi.hoisted(() => vi.fn());
 const requestMock = vi.hoisted(() => vi.fn());
-vi.mock('../src/admin/lib/api', () => ({ api: apiMock, download: downloadMock, request: requestMock }));
+vi.mock('../src/admin/lib/api', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/admin/lib/api')>(),
+  api: apiMock,
+  download: downloadMock,
+  request: requestMock,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -96,10 +102,12 @@ describe('NetworkSearchPage', () => {
     server: { web_search: { providers: rows } },
   });
 
-  function mockConfig(value: ReturnType<typeof configResponse>): void {
-    apiMock.get.mockImplementation((path: string) => path.endsWith('/config')
-      ? Promise.resolve(value)
-      : Promise.resolve({ configured: false }));
+  function mockConfig(value: ReturnType<typeof configResponse>, usage: Record<string, unknown> = { entries: [] }): void {
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return Promise.resolve(value);
+      if (path.endsWith('/usage')) return Promise.resolve(usage);
+      return Promise.resolve({ configured: false });
+    });
   }
 
   function transfer(): { value: string; effectAllowed: string; setData: (_type: string, value: string) => void; getData: () => string } {
@@ -183,7 +191,65 @@ describe('NetworkSearchPage', () => {
     expect(modelSelect).toHaveValue('gpt-5.6-terra');
     expect(Array.from((modelSelect as HTMLSelectElement).options).map((option) => option.value)).toEqual(contract.responses_models);
     expect(screen.getByLabelText('No configuration required')).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Quota display is not available yet')).toHaveLength(3);
+    expect(await screen.findByText('Quota unavailable')).toBeInTheDocument();
+    expect(document.querySelector('tr[data-row-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
+    expect(document.querySelector('tr[data-row-id="sh"] .search-quota-cell')).toBeEmptyDOMElement();
+  });
+
+  it('loads usage once and binds clamped values and reset dates to stable Tavily row IDs', async () => {
+    const rows = [
+      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
+      { id: 'responses', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
+    ];
+    mockConfig(configResponse(rows, { search: { api_type: 'responses' } }), { entries: [
+      { id: 'second', status: 'ok', used: 25, limit: 100, reset_date: '2026-09-01' },
+      { id: 'unknown', status: 'ok', used: 1, limit: 2, reset_date: '2026-09-02' },
+      { id: 'first', status: 'ok', used: 120, limit: 100, reset_date: '2026-10-01' },
+    ] });
+    render(NetworkSearchPage);
+
+    await waitFor(() => expect(document.querySelector('tr[data-row-id="first"]')).not.toBeNull());
+    const first = document.querySelector<HTMLElement>('tr[data-row-id="first"]')!;
+    const second = document.querySelector<HTMLElement>('tr[data-row-id="second"]')!;
+    const responses = document.querySelector<HTMLElement>('tr[data-row-id="responses"]')!;
+    await waitFor(() => expect(within(first).getByText('120/100')).toBeInTheDocument());
+    expect(within(first).getByRole('progressbar')).toHaveValue(100);
+    expect(within(first).getByText('Resets 2026/10/01')).toBeInTheDocument();
+    expect(within(second).getByText('25/100')).toBeInTheDocument();
+    expect(within(second).getByRole('progressbar')).toHaveValue(25);
+    expect(responses.querySelector('.search-quota-cell')).toBeEmptyDOMElement();
+    expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1);
+
+    await fireEvent.click(within(first).getByRole('button', { name: 'Move search provider down' }));
+    expect(within(document.querySelector<HTMLElement>('tr[data-row-id="first"]')!).getByText('120/100')).toBeInTheDocument();
+    expect(within(document.querySelector<HTMLElement>('tr[data-row-id="second"]')!).getByText('25/100')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
+    expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1);
+  });
+
+  it('shows localized unavailable usage for missing, unavailable, zero-limit, and invalid-date Tavily entries', async () => {
+    const rows = ['missing', 'unavailable', 'zero', 'date'].map((id) => ({ id, provider: 'tavily', tavily_api_key: `${id}***mask` }));
+    mockConfig(configResponse(rows), { entries: [
+      { id: 'unavailable', status: 'unavailable', used: null, limit: null, reset_date: null },
+      { id: 'zero', status: 'ok', used: 0, limit: 0, reset_date: '2026-09-01' },
+      { id: 'date', status: 'ok', used: 1, limit: 10, reset_date: '2026-02-30' },
+    ] });
+    render(NetworkSearchPage);
+
+    expect(await screen.findAllByText('Quota unavailable')).toHaveLength(4);
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('still calls the usage endpoint exactly once when there are no Tavily rows', async () => {
+    mockConfig(configResponse([{ id: 'local', provider: 'self_hosted_google' }]));
+    render(NetworkSearchPage);
+
+    await screen.findByLabelText('No configuration required');
+    await waitFor(() => expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1));
+    expect(document.querySelector('tr[data-row-id="local"] .search-quota-cell')).toBeEmptyDOMElement();
   });
 
   it('supports an empty list, adding and deleting rows, and cleans fields when changing type', async () => {
@@ -297,20 +363,89 @@ describe('NetworkSearchPage', () => {
     await waitFor(() => expect(requestMock).toHaveBeenCalledWith('/admin/api/network-search/test', {
       method: 'POST',
       responseEffects: 'local',
+      signal: expect.any(AbortSignal),
     }));
     expect(await screen.findByText(/Python 3\.test/)).toBeInTheDocument();
   });
 
-  it('displays a readable network search test failure', async () => {
+  it('does not display an uncontrolled network search test failure', async () => {
+    const providerDetail = 'debug endpoint http://10.0.0.5:9000, upstream request abc-123';
     mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
-    requestMock.mockRejectedValue(new Error('Upstream search failed'));
+    requestMock.mockRejectedValue(new Error(providerDetail));
     render(NetworkSearchPage);
 
     await screen.findByText('latest python release version');
     await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Upstream search failed');
-    expect(screen.getByRole('alert')).not.toHaveTextContent('[object Object]');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Search test failed');
+    expect(screen.getByRole('alert')).not.toHaveTextContent(providerDetail);
+  });
+
+  it('displays a localized failure when the API client aborts its own timed-out request', async () => {
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
+    requestMock.mockRejectedValue(new DOMException('The operation was aborted.', 'AbortError'));
+    render(NetworkSearchPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Search test failed');
+    expect(screen.getByRole('button', { name: 'Test' })).toBeEnabled();
+    expect(document.querySelector('.network-search-section > .toast.error')).toBeNull();
+  });
+
+  it.each([
+    ['structured authorization failure', new ApiError('untrusted provider text', 401, 'network_search_test_authorization_failed'), 'Search test authorization failed'],
+    ['no eligible model', new ApiError('safe backend fallback', 409, 'network_search_test_no_eligible_model'), 'No configured model has an enabled web.run search route'],
+    ['upstream failure', new ApiError('provider debug endpoint http://10.0.0.5:9000', 502, 'network_search_test_unavailable'), 'Search provider is unavailable'],
+  ])('localizes a controlled %s inside the result card without changing page-level state', async (_name, failure, expected) => {
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
+    requestMock.mockRejectedValue(failure);
+    render(NetworkSearchPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent(expected);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(failure.message);
+    expect(screen.queryByText('Web search settings saved')).not.toBeInTheDocument();
+    expect(document.querySelector('.network-search-section > .toast.error')).toBeNull();
+  });
+
+  it('prevents concurrent test requests and clears the previous result on the next click', async () => {
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
+    let resolveSecond!: (value: unknown) => void;
+    requestMock
+      .mockResolvedValueOnce({ result: 'old result' })
+      .mockImplementationOnce(() => new Promise((resolve) => { resolveSecond = resolve; }));
+    render(NetworkSearchPage);
+    const button = await screen.findByRole('button', { name: 'Test' });
+
+    await fireEvent.click(button);
+    expect(await screen.findByText(/old result/)).toBeInTheDocument();
+    await fireEvent.click(button);
+    expect(screen.queryByText(/old result/)).not.toBeInTheDocument();
+    await fireEvent.click(button);
+    expect(requestMock).toHaveBeenCalledTimes(2);
+    resolveSecond({ result: 'new result' });
+    expect(await screen.findByText(/new result/)).toBeInTheDocument();
+  });
+
+  it('silently aborts an in-flight test when the page unmounts', async () => {
+    mockConfig(configResponse([{ id: 'tv', provider: 'tavily', tavily_api_key: 'configured' }]));
+    let signal: AbortSignal | undefined;
+    requestMock.mockImplementation((_path, options) => {
+      signal = options.signal;
+      return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true }));
+    });
+    const page = render(NetworkSearchPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Test' }));
+
+    page.unmount();
+
+    expect(signal?.aborted).toBe(true);
+    await expect(requestMock.mock.results[0]?.value).rejects.toEqual(
+      expect.objectContaining({ name: 'AbortError' }),
+    );
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });
 
