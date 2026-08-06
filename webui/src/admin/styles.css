@@ -16,6 +16,22 @@
   --radius: 8px;
   --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --mono: 'SF Mono', 'Cascadia Code', 'Consolas', monospace;
+
+  /* Keep the shared UI package on the Admin theme's single source of truth. */
+  --suu-color-bg: var(--bg);
+  --suu-color-surface: var(--bg-card);
+  --suu-color-text: var(--text);
+  --suu-color-muted: var(--text-dim);
+  --suu-color-border: var(--border);
+  --suu-color-border-strong: var(--border);
+  --suu-color-accent: var(--accent);
+  --suu-color-accent-text: #fff;
+  --suu-color-success: var(--green);
+  --suu-color-error: var(--red);
+  --suu-color-warning: var(--orange);
+  --suu-color-info: var(--blue);
+  --suu-radius: var(--radius);
+  --suu-font: var(--font);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; }
