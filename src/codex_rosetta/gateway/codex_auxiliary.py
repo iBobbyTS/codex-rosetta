@@ -224,6 +224,11 @@ async def handle_codex_auxiliary(  # noqa: C901
     web_run_mapping = web_run_state == "modified"
     web_run_config = config.web_search
     search_candidates = tuple(getattr(config, "web_search_candidates", ()))
+    all_gpt_search_candidates = bool(search_candidates) and all(
+        getattr(getattr(candidate, "contract", None), "execution_mode", None)
+        == "alpha_search_passthrough"
+        for candidate in search_candidates
+    )
     search_coordinator = getattr(request.app, "search_provider_coordinator", None)
     if not isinstance(search_coordinator, SearchProviderChainCoordinator):
         search_coordinator = SearchProviderChainCoordinator()
@@ -232,14 +237,11 @@ async def handle_codex_auxiliary(  # noqa: C901
     use_chain_search = (
         upstream_path == "alpha/search"
         and web_run_mapping
-        and not (
-            isinstance(body.get("commands"), dict) and body["commands"].get("weather")
-        )
         and not isinstance(
             getattr(request.app, "search_provider_coordinator", None), type(None)
         )
         and isinstance(body.get("commands"), dict)
-        and bool(body["commands"].get("search_query"))
+        and (all_gpt_search_candidates or bool(body["commands"].get("search_query")))
     )
     configured_sidecar_client = _configured_sidecar_client(config)
     resolved_browser_client = browser_client or configured_sidecar_client

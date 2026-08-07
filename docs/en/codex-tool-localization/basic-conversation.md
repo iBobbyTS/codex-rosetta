@@ -102,6 +102,17 @@ endpoint using its credential and transport settings, and its final upstream
 conversation model route and upstream model alias therefore cannot leak into
 this explicit search route. All local providers are
 normalized to the same Codex-visible source format. Direct-URL
+Web Search Providers are an independent Rosetta feature module: the Tool
+Catalog owns ordinary tool declarations, but does not own search-provider
+sub-capabilities, request fields, validation, or invocation. An all-configured
+GPT chain forwards the complete `commands` object and request body unchanged
+to GPT's `alpha/search`; GPT validates that upstream wire contract and returns
+its complete response. Tavily and self-hosted providers instead use their
+code-owned query adapters and normalized local result/reference path. Future
+providers, including DeepSeek, must use an independent code adapter rather
+than extending the Tool Catalog.
+
+Direct-URL
 `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,
 rejects credentials and non-public addresses, permits at most five redirects,

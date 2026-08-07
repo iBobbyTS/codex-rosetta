@@ -265,14 +265,9 @@ async def execute_local_codex_search(  # noqa: C901
 
     passthrough_only = _all_alpha_search_passthrough(search_candidates)
     if passthrough_only:
-        queries = _parse_passthrough_search_queries(commands)
-        if not queries:
-            raise CodexSearchInvalidRequest(
-                "'commands' must contain at least one search_query"
-            )
         request_budget = request_budget or SearchProviderRequestBudget()
         search_execution = await _execute_search_queries(
-            queries,
+            [],
             body=body,
             search_client=client,
             search_provider="configured_responses_provider",
@@ -290,7 +285,7 @@ async def execute_local_codex_search(  # noqa: C901
             )
         return CodexSearchBridgeResult(
             output=str(passthrough.get("output") or ""),
-            search_count=len(queries),
+            search_count=0,
             open_count=0,
             time_count=0,
             search_result_count=(
@@ -497,68 +492,6 @@ def _all_alpha_search_passthrough(
     )
 
 
-_PASSTHROUGH_COMMAND_FIELDS: dict[str, frozenset[str] | None] = {
-    "search_query": frozenset({"q", "domains", "recency"}),
-    "image_query": frozenset({"q"}),
-    "finance": frozenset({"ticker", "type"}),
-    "weather": frozenset({"location"}),
-    "sports": frozenset({"fn", "league", "team", "opponent", "date_from", "date_to"}),
-    "open": frozenset({"ref_id", "lineno"}),
-    "click": frozenset({"ref_id", "id"}),
-    "find": frozenset({"ref_id", "pattern"}),
-    "screenshot": frozenset({"ref_id", "pageno"}),
-    "time": frozenset({"utc_offset"}),
-}
-
-
-def _parse_passthrough_search_queries(
-    commands: dict[str, Any],
-) -> list[tuple[str, WebSearchSettings]]:
-    """Validate source-known command keys while extracting only query settings."""
-    for command, items in commands.items():
-        if command not in _PASSTHROUGH_COMMAND_FIELDS and _has_value(items):
-            raise CodexSearchNotImplemented(
-                f"Codex search feature has no source schema for commands.{command}"
-            )
-        allowed = _PASSTHROUGH_COMMAND_FIELDS.get(command)
-        if allowed is None or not isinstance(items, list):
-            continue
-        for item in items:
-            if isinstance(item, dict):
-                unknown = {
-                    key
-                    for key, value in item.items()
-                    if key not in allowed and _has_value(value)
-                }
-                if unknown:
-                    raise CodexSearchNotImplemented(
-                        f"Codex search feature has no source schema for commands.{command}[]"
-                    )
-    raw_queries = commands.get("search_query")
-    if not isinstance(raw_queries, list):
-        return []
-    if len(raw_queries) > _MAX_SEARCH_QUERIES:
-        raise CodexSearchInvalidRequest(
-            f"'commands.search_query' supports at most {_MAX_SEARCH_QUERIES} entries"
-        )
-    parsed: list[tuple[str, WebSearchSettings]] = []
-    for index, item in enumerate(raw_queries):
-        if not isinstance(item, dict):
-            raise CodexSearchInvalidRequest(
-                f"'commands.search_query[{index}]' must be an object"
-            )
-        query = item.get("q")
-        if not isinstance(query, str) or not query.strip():
-            raise CodexSearchInvalidRequest(
-                f"'commands.search_query[{index}].q' must be a non-empty string"
-            )
-        domains = _parse_domains(
-            item.get("domains"), f"commands.search_query[{index}].domains"
-        )
-        parsed.append((query.strip(), WebSearchSettings(include_domains=domains)))
-    return parsed
-
-
 async def _execute_search_queries(  # noqa: C901
     queries: list[tuple[str, WebSearchSettings]],
     *,
@@ -572,7 +505,7 @@ async def _execute_search_queries(  # noqa: C901
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
 ) -> _SearchExecution:
-    if not queries:
+    if not queries and not _all_alpha_search_passthrough(search_candidates):
         return _SearchExecution((), 0, 0, False, None)
 
     fingerprint = _search_request_fingerprint(body)

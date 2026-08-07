@@ -648,7 +648,7 @@ def test_modified_responses_candidate_uses_app_auxiliary_transport(
     )
 
 
-def test_gpt_only_passthrough_accepts_recency_and_passthrough_command():
+def test_gpt_only_passthrough_forwards_non_search_commands_unchanged():
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -665,8 +665,9 @@ def test_gpt_only_passthrough_accepts_recency_and_passthrough_command():
     )
     body = _search_body(
         {
-            "search_query": [{"q": "Python documentation", "recency": 7}],
-            "image_query": [{"q": "Python logo"}],
+            "finance": [{"ticker": "AMD", "type": "equity", "market": "USA"}],
+            "weather": [{"location": "Paris", "duration": 3}],
+            "image_query": [{"q": "Python logo", "recency": 7}],
         }
     )
     request = _make_request(body)

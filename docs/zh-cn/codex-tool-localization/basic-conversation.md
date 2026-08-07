@@ -80,6 +80,13 @@ HTML 结果页。每个**从已配置的 Provider 中选择**行都要求选择�
 Provider 的相对 `alpha/search` 端点，使用其凭据和传输设置，并把最终上游请求的
 `model` 字段替换为所选搜索模型。因此当前会话模型路由及其 upstream model alias
 不会泄漏到这条显式搜索路由。所有本地搜索 Provider 都会被规范化为相同的 Codex 可见来源格式。
+Web Search Provider 是 Rosetta 的独立功能模块：Tool Catalog 只拥有普通工具声明，
+不拥有搜索 Provider 的子能力、请求字段、校验或调用方式。全 configured GPT 候选链会将完整
+`commands` 对象和请求 body 原样转发至 GPT 的 `alpha/search`；GPT 负责校验该上游 wire
+contract 并返回完整响应。Tavily 与自托管 Provider 则使用代码拥有的 query adapter 及本地
+规范化结果/reference 路径。未来 Provider（包括 DeepSeek）也必须采用独立代码 adapter，
+不能通过扩展 Tool Catalog 实现。
+
 直接 URL 的 `open` 获取公开静态 HTML 或纯文本，`time` 使用 Python 的固定
 UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
