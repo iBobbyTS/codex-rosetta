@@ -177,6 +177,7 @@
   }
 
   function replaceRow(id: string, update: (row: SearchRow) => SearchRow): void {
+    if (saving) return;
     rows = rows.map((row) => row.id === id ? update(row) : row);
     contractsCurrent = false;
   }
@@ -186,6 +187,7 @@
   }
 
   function addRow(): void {
+    if (saving) return;
     if (rows.length >= maxProviders) return;
     const provider = providerTypes[0];
     if (!provider) return;
@@ -194,11 +196,13 @@
   }
 
   function removeRow(id: string): void {
+    if (saving) return;
     rows = rows.filter((row) => row.id !== id);
     contractsCurrent = false;
   }
 
   function moveRow(id: string, offset: -1 | 1): void {
+    if (saving) return;
     const index = rows.findIndex((row) => row.id === id);
     const target = index + offset;
     if (index < 0 || target < 0 || target >= rows.length) return;
@@ -209,6 +213,7 @@
   }
 
   function moveToTargetIndex(sourceId: string, targetId: string): void {
+    if (saving) return;
     if (sourceId === targetId) return;
     const sourceIndex = rows.findIndex((row) => row.id === sourceId);
     const targetIndex = rows.findIndex((row) => row.id === targetId);
@@ -222,6 +227,11 @@
   }
 
   function startDrag(event: DragEvent, id: string): void {
+    if (saving) {
+      event.preventDefault();
+      draggedId = null;
+      return;
+    }
     draggedId = id;
     event.dataTransfer?.setData('text/plain', id);
     if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
@@ -229,6 +239,10 @@
 
   function dropRow(event: DragEvent, targetId: string): void {
     event.preventDefault();
+    if (saving) {
+      draggedId = null;
+      return;
+    }
     const sourceId = event.dataTransfer?.getData('text/plain') || draggedId;
     if (sourceId) moveToTargetIndex(sourceId, targetId);
     draggedId = null;
@@ -303,7 +317,9 @@
   const poll = createSerialPoll(loadStatus, 5000);
 
   async function save(): Promise<void> {
+    if (saving) return;
     saving = true;
+    draggedId = null;
     error = '';
     notice = '';
     try {
@@ -362,7 +378,7 @@
     <h2>{t('section.basicSearch')}</h2>
     <div class="search-actions">
       <span class="provider-limit">{t('network.providerCount', { count: rows.length, max: maxProviders })}</span>
-      <button class="btn btn-sm" disabled={loading || rows.length >= maxProviders || !providerTypes.length} onclick={addRow}>{t('btn.addSearchProvider')}</button>
+      <button class="btn btn-sm" disabled={loading || saving || rows.length >= maxProviders || !providerTypes.length} onclick={addRow}>{t('btn.addSearchProvider')}</button>
       <button class="btn btn-primary btn-sm" disabled={loading || saving || hasInvalidResponses} onclick={() => void save()}>{t('btn.save')}</button>
     </div>
   </div>
@@ -379,28 +395,28 @@
         <tbody>
           {#each rows as row, index (row.id)}
             {@const contract = rowContract(row.id)}
-            <tr data-row-id={row.id} class:dragging={draggedId === row.id} ondragover={(event) => event.preventDefault()} ondrop={(event) => dropRow(event, row.id)}>
+            <tr data-row-id={row.id} class:dragging={draggedId === row.id} ondragover={(event) => { if (!saving) event.preventDefault(); }} ondrop={(event) => dropRow(event, row.id)}>
               <td class="search-name-cell">
                 <div class="row-order-controls">
-                  <button class="drag-handle" draggable="true" aria-label={t('aria.dragSearchProvider')} title={t('aria.dragSearchProvider')} ondragstart={(event) => startDrag(event, row.id)} ondragend={() => draggedId = null}>⋮⋮</button>
-                  <button class="order-button" disabled={index === 0} aria-label={t('aria.moveSearchProviderUp')} onclick={() => moveRow(row.id, -1)}>↑</button>
-                  <button class="order-button" disabled={index === rows.length - 1} aria-label={t('aria.moveSearchProviderDown')} onclick={() => moveRow(row.id, 1)}>↓</button>
+                  <button class="drag-handle" draggable={!saving} disabled={saving} aria-label={t('aria.dragSearchProvider')} title={t('aria.dragSearchProvider')} ondragstart={(event) => startDrag(event, row.id)} ondragend={() => draggedId = null}>⋮⋮</button>
+                  <button class="order-button" disabled={saving || index === 0} aria-label={t('aria.moveSearchProviderUp')} onclick={() => moveRow(row.id, -1)}>↑</button>
+                  <button class="order-button" disabled={saving || index === rows.length - 1} aria-label={t('aria.moveSearchProviderDown')} onclick={() => moveRow(row.id, 1)}>↓</button>
                 </div>
                 <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
-                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
+                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} disabled={saving} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
                 {#if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
-                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={!responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
+                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={saving || !responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
                 {/if}
-                <button class="btn btn-sm btn-danger remove-row" onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
+                <button class="btn btn-sm btn-danger remove-row" disabled={saving} onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
               </td>
               <td class="search-config-cell">
                 {#if row.provider === 'tavily'}
                   <label class="sr-only" for={`tavily-key-${row.id}`}>{t('label.searchApiKey')}</label>
-                  <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
+                  <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} disabled={saving} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
                 {:else if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
-                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
+                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} disabled={saving} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
                 {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
                 {#if contract}
                   <div class="provider-contract" data-provider-family={contract.family}>

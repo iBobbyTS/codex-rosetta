@@ -135,6 +135,12 @@ describe('NetworkSearchPage', () => {
     };
   }
 
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((done) => { resolve = done; });
+    return { promise, resolve };
+  }
+
   it('loads and saves a canonical multi-row chain without changing order, IDs, or masked keys', async () => {
     const rows = [
       { id: 'tavily-a', provider: 'tavily', tavily_api_key: 'tav***key' },
@@ -320,6 +326,73 @@ describe('NetworkSearchPage', () => {
       expect(document.querySelector('[data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
     });
     expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/config')).toHaveLength(2);
+  });
+
+  it('locks every row editor mutation through deferred PUT and canonical GET', async () => {
+    const rows = [
+      { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
+      { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'sh', provider: 'self_hosted_bing' },
+    ];
+    const canonical = configResponse(rows, { search: { api_type: 'responses' } }, {
+      configured_providers: [
+        { id: 'tv', provider: 'tavily', family: 'tavily_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+        { id: 'rp', provider: 'configured_responses_provider', family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] },
+        { id: 'sh', provider: 'self_hosted_bing', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+      ],
+      chain: { mode: 'mixed_single_query', capabilities: ['search_query'], limitations: ['single_search_query'] },
+    });
+    const put = deferred<unknown>();
+    const get = deferred<typeof canonical>();
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return configReads++ === 0 ? Promise.resolve(canonical) : get.promise;
+      if (path.endsWith('/usage')) return Promise.resolve({ entries: [] });
+      return Promise.resolve({ configured: false });
+    });
+    apiMock.put.mockReturnValue(put.promise);
+    render(NetworkSearchPage);
+    const key = await screen.findByLabelText('API Key');
+    const originalOrder = ['tv', 'rp', 'sh'];
+    const currentOrder = () => Array.from(document.querySelectorAll('tr[data-row-id]'))
+      .map((row) => row.getAttribute('data-row-id'));
+    const expectLocked = () => {
+      expect(screen.getByRole('button', { name: '+ Add search provider' })).toBeDisabled();
+      expect(screen.getAllByLabelText('Search provider type').every((control) => control.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getByLabelText('Responses Provider')).toBeDisabled();
+      expect(screen.getByLabelText('Search Model')).toBeDisabled();
+      expect(screen.getByLabelText('API Key')).toBeDisabled();
+      expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('button', { name: 'Move search provider up' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('button', { name: 'Move search provider down' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'false' && button.hasAttribute('disabled'))).toBe(true);
+    };
+    const attemptProgrammaticMutations = async () => {
+      await fireEvent.input(key, { target: { value: 'request-in-flight-edit' } });
+      const dataTransfer = transfer();
+      dataTransfer.setData('text/plain', 'tv');
+      await fireEvent.drop(document.querySelector('tr[data-row-id="sh"]')!, { dataTransfer });
+      expect(currentOrder()).toEqual(originalOrder);
+      expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).not.toBeNull();
+    };
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledTimes(1));
+    expectLocked();
+    await attemptProgrammaticMutations();
+
+    put.resolve({ server: canonical.server });
+    await waitFor(() => expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/config')).toHaveLength(2));
+    expectLocked();
+    await attemptProgrammaticMutations();
+
+    get.resolve(canonical);
+    expect(await screen.findByText('Web search settings saved')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: '+ Add search provider' })).toBeEnabled());
+    expect(currentOrder()).toEqual(originalOrder);
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
+      web_search: { providers: rows },
+    });
   });
 
   it('loads usage once and binds clamped values and reset dates to stable Tavily row IDs', async () => {
