@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from .search_provider_contract import SearchProviderCapability
 from .tool_profiles import (
     apply_profile_tool_mutations,
     apply_view_image_detail_profile,
@@ -479,19 +480,21 @@ def plan_exec_tool_definitions(
                     search_available, browser_available = web_run_model_availability(
                         profile_route
                     )
-                    projection_kwargs: dict[str, Any] = {
-                        "search_available": search_available,
-                        "browser_available": browser_available,
-                    }
+                    search_capabilities: frozenset[SearchProviderCapability] | None = (
+                        None
+                    )
                     if (
                         getattr(profile_route, "web_run_search_capabilities", None)
                         is not None
                     ):
-                        projection_kwargs["search_capabilities"] = (
-                            web_run_search_projection_capabilities(profile_route)
+                        search_capabilities = web_run_search_projection_capabilities(
+                            profile_route
                         )
                     projected_function = project_modified_web_run_function(
-                        parsed["function"], **projection_kwargs
+                        parsed["function"],
+                        search_available=search_available,
+                        browser_available=browser_available,
+                        search_capabilities=search_capabilities,
                     )
                     if projected_function is None:
                         continue
@@ -1397,16 +1400,14 @@ def project_modified_exec_web_run_description(
         return exec_description[: heading.start()] + exec_description[section_end:]
 
     search_available, browser_available = web_run_model_availability(profile_route)
-    projection_kwargs: dict[str, Any] = {
-        "search_available": search_available,
-        "browser_available": browser_available,
-    }
+    search_capabilities: frozenset[SearchProviderCapability] | None = None
     if getattr(profile_route, "web_run_search_capabilities", None) is not None:
-        projection_kwargs["search_capabilities"] = (
-            web_run_search_projection_capabilities(profile_route)
-        )
+        search_capabilities = web_run_search_projection_capabilities(profile_route)
     projected_function = project_modified_web_run_function(
-        parsed["function"], **projection_kwargs
+        parsed["function"],
+        search_available=search_available,
+        browser_available=browser_available,
+        search_capabilities=search_capabilities,
     )
     declaration = _nested_declaration_match(section, projection.nested_name)
     declaration_label = section.find("exec tool declaration:")

@@ -127,6 +127,7 @@ from .tool_search_bridge import (
     tool_search_bridge_active,
     tool_search_bridge_projection,
 )
+from .search_provider_contract import SearchProviderCapability
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
@@ -833,15 +834,15 @@ def _apply_profile_runtime_adapter(
         and isinstance(adapted, dict)
     ):
         search_available, browser_available = web_run_model_availability(route)
-        projection_kwargs: dict[str, Any] = {
-            "search_available": search_available,
-            "browser_available": browser_available,
-        }
+        search_capabilities: frozenset[SearchProviderCapability] | None = None
         if route.web_run_search_capabilities is not None:
-            projection_kwargs["search_capabilities"] = (
-                web_run_search_projection_capabilities(route)
-            )
-        projected = project_modified_web_run_function(adapted, **projection_kwargs)
+            search_capabilities = web_run_search_projection_capabilities(route)
+        projected = project_modified_web_run_function(
+            adapted,
+            search_available=search_available,
+            browser_available=browser_available,
+            search_capabilities=search_capabilities,
+        )
         if projected is None:
             return None, {name} if isinstance(name, str) else set()
         return projected, set()
