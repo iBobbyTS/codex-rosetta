@@ -587,6 +587,9 @@ async def _execute_search_queries(  # noqa: C901
                     "output": merged.get("output", ""),
                     "results": merged.get("results", []),
                 },
+                output_is_answer=isinstance(
+                    successful_candidate, ConfiguredResponsesSearchProviderCandidate
+                ),
             )
             for index, (query, _) in enumerate(queries)
         )
@@ -1199,9 +1202,11 @@ def _search_request_fingerprint(body: dict[str, Any]) -> str:
     return hashlib.sha256(canonical).hexdigest()
 
 
-def _search_query_draft(query: str, raw: dict[str, Any]) -> SearchQueryDraft:
+def _search_query_draft(
+    query: str, raw: dict[str, Any], *, output_is_answer: bool = False
+) -> SearchQueryDraft:
     answer = raw.get("answer")
-    if not isinstance(answer, str) or not answer.strip():
+    if output_is_answer and (not isinstance(answer, str) or not answer.strip()):
         answer = raw.get("output")
     answer = (
         _trim_search_text(answer.strip(), 4_000)

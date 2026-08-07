@@ -751,6 +751,42 @@ def test_mixed_chain_rejects_recency_before_any_provider_call():
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "commands",
+    [
+        {"weather": [{"location": "Paris"}]},
+        {
+            "search_query": [{"q": "Python"}],
+            "weather": [{"location": "Paris"}],
+        },
+    ],
+)
+def test_offline_self_hosted_mixed_chain_rejects_unprojected_gpt_commands(
+    commands: dict[str, Any],
+) -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-offline", "provider": "self_hosted_google"},
+        ],
+    )
+    request = _make_request(_search_body(commands))
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
 def test_modified_responses_candidate_blocks_search_credential_collision() -> None:
     config = _make_config(
         "chat",
@@ -822,14 +858,17 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
 
     async def sidecar_search(_client: Any, _method: str, _url: str, **kwargs: Any):
         sidecar_payloads.append(kwargs["json"])
-        return BoundedHttpResponse(200, {}, b'{"results":[]}')
+        return BoundedHttpResponse(200, {}, b'{"results":[{"title":"A"}]}')
 
     monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_search)
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
     assert response.status_code == 200, response.body
-    assert set(json.loads(response.body)) == {"output", "results"}
+    result = json.loads(response.body)
+    assert set(result) == {"output", "results"}
+    assert result["output"].count("Web search query") == 1
+    assert result["output"].count("Sources:") == 1
     assert request.app.transport.send_passthrough.await_args.args[1] == (
         "https://search-provider.example/v1/alpha/search"
     )
