@@ -5,12 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import codex_rosetta.gateway.web_run_sidecar as sidecar_module
+from codex_rosetta.gateway.app import _resolve_request_tool_runtime_capabilities
 from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
@@ -23,6 +25,10 @@ from codex_rosetta.gateway.transport import UpstreamConnectionError
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.gateway.web_search import WebSearchSettings
+from codex_rosetta.gateway.web_run_capabilities import (
+    project_modified_web_run_function,
+    web_run_model_availability,
+)
 
 
 ENDPOINTS = ("alpha/search", "images/generations", "images/edits")
@@ -785,6 +791,115 @@ def test_offline_self_hosted_mixed_chain_rejects_unprojected_gpt_commands(
 
     assert response.status_code == 501
     request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across_readiness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Health:
+        browser_ready = False
+
+        async def status(self, _url: str) -> SimpleNamespace:
+            return SimpleNamespace(browser_ready=self.browser_ready)
+
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+        web_run_sidecar=True,
+    )
+    health = Health()
+    app = SimpleNamespace(web_run_health_state=health)
+    sidecar_request = AsyncMock()
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_request)
+    tool_definition = {
+        "type": "function",
+        "name": "web__run",
+        "description": "Use `search_query`. Use `weather`.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search_query": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                },
+                "weather": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                    },
+                },
+                "open": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"ref_id": {"type": "string"}},
+                    },
+                },
+                "time": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"utc_offset": {"type": "string"}},
+                    },
+                },
+                "response_length": {"type": "string"},
+            },
+        },
+    }
+
+    for browser_ready in (False, True, False):
+        health.browser_ready = browser_ready
+        route, _ = config.resolve("openai_responses", "gateway-model")
+        resolved = asyncio.run(
+            _resolve_request_tool_runtime_capabilities(
+                app,
+                config,
+                route,
+                {"tools": [tool_definition]},
+            )
+        )
+        search_available, browser_available = web_run_model_availability(resolved)
+        projected = project_modified_web_run_function(
+            tool_definition,
+            search_available=search_available,
+            browser_available=browser_available,
+            search_capabilities=resolved.web_run_search_capabilities,
+        )
+
+        assert projected is not None
+        assert "weather" not in projected["parameters"]["properties"]
+
+        for commands in (
+            {"weather": [{"location": "Paris"}]},
+            {
+                "search_query": [{"q": "Python"}],
+                "weather": [{"location": "Paris"}],
+            },
+        ):
+            request = _make_request(_search_body(commands))
+
+            response = asyncio.run(
+                handle_codex_auxiliary(request, config, "alpha/search")
+            )
+
+            assert response.status_code == 501
+            request.app.transport.send_passthrough.assert_not_awaited()
+            sidecar_request.assert_not_awaited()
 
 
 def test_modified_responses_candidate_blocks_search_credential_collision() -> None:
