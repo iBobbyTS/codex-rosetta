@@ -266,6 +266,8 @@ def _canonicalize_citation_url(
         return None
     try:
         parsed = urlsplit(value)
+        if not parsed.netloc.isascii():
+            return None
         port = parsed.port
         hostname = parsed.hostname
     except ValueError:

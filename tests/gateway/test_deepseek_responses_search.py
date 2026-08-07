@@ -933,6 +933,39 @@ def test_citation_url_rejects_unicode_hostname_and_cannot_duplicate_ascii_identi
     ]
 
 
+def test_kelvin_hostname_is_rejected_before_splitresult_lowercase() -> None:
+    result = _parse(
+        _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://K.com/", title="kelvin")],
+                )
+            ]
+        )
+    )
+
+    assert result == {"output": "answer", "results": [], "usage": {}}
+
+
+def test_kelvin_hostname_cannot_displace_ascii_canonical_citation() -> None:
+    annotations = [
+        _citation("https://K.com/", title="kelvin"),
+        _citation("https://k.com/", title="ascii"),
+    ]
+
+    results = cast(
+        list[dict[str, str]],
+        _parse(_completed_response(content=[_output_text("answer", annotations)]))[
+            "results"
+        ],
+    )
+
+    assert [(item["title"], item["url"]) for item in results] == [
+        ("ascii", "https://k.com/")
+    ]
+
+
 def test_canonical_citation_url_is_idempotent_and_reparseable() -> None:
     first = cast(
         list[dict[str, str]],
