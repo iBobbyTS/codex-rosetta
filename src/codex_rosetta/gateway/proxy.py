@@ -833,7 +833,7 @@ def _apply_profile_runtime_adapter(
         and isinstance(adapted, dict)
     ):
         search_available, browser_available = web_run_model_availability(route)
-        projection_kwargs = {
+        projection_kwargs: dict[str, Any] = {
             "search_available": search_available,
             "browser_available": browser_available,
         }

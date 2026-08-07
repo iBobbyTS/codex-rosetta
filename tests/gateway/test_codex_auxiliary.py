@@ -1089,6 +1089,7 @@ def test_mixed_chain_projection_execution_trace_and_cooldown_matrix(
         browser_available=sidecar_ready is True,
         search_capabilities=GPT_MIXED_MODE_CAPABILITIES,
     )
+    assert projected is not None
     assert projected["parameters"]["properties"]["search_query"]["maxItems"] == 1
 
     response = asyncio.run(

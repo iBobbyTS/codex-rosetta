@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import asyncio
 import pytest
@@ -52,7 +52,7 @@ def _candidate(contract, provider="configured_responses_provider"):
 
 
 def _schema() -> dict:
-    def array(**properties: dict[str, str]) -> dict[str, Any]:
+    def array(**properties: str) -> dict[str, Any]:
         return {
             "type": "array",
             "items": {
@@ -408,10 +408,9 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
     }
     route, _ = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
     assert route.web_run_search_capabilities == LOCAL_QUERY_CAPABILITIES
-    assert all(
-        isinstance(value, SearchProviderCapability)
-        for value in route.web_run_search_capabilities
-    )
+    capabilities = route.web_run_search_capabilities
+    assert capabilities is not None
+    assert all(isinstance(value, SearchProviderCapability) for value in capabilities)
 
 
 def test_request_time_replace_promotes_ready_self_hosted_typed_enum() -> None:
@@ -429,7 +428,7 @@ def test_request_time_replace_promotes_ready_self_hosted_typed_enum() -> None:
     resolved = asyncio.run(
         _resolve_request_tool_runtime_capabilities(
             SimpleNamespace(web_run_health_state=Health()),
-            config,
+            cast(GatewayConfig, config),
             _route(frozenset()),
             {"tools": [_function()]},
         )

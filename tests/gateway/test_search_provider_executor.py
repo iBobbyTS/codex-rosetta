@@ -9,6 +9,7 @@ import pytest
 
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
+    SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
 )
@@ -309,8 +310,13 @@ def test_contract_mismatch_is_terminal_and_does_not_cool_candidate():
 
 def test_unknown_candidate_is_terminal_without_external_call():
     request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
+    candidate = object()
     with pytest.raises(SearchProviderTerminalError):
-        run(SearchProviderExecutor().execute(cast(object, object()), request))
+        run(
+            SearchProviderExecutor().execute(
+                cast(SearchProviderCandidate, candidate), request
+            )
+        )
 
 
 @pytest.mark.parametrize(

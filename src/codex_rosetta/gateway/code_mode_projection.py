@@ -479,7 +479,7 @@ def plan_exec_tool_definitions(
                     search_available, browser_available = web_run_model_availability(
                         profile_route
                     )
-                    projection_kwargs = {
+                    projection_kwargs: dict[str, Any] = {
                         "search_available": search_available,
                         "browser_available": browser_available,
                     }
@@ -1397,7 +1397,7 @@ def project_modified_exec_web_run_description(
         return exec_description[: heading.start()] + exec_description[section_end:]
 
     search_available, browser_available = web_run_model_availability(profile_route)
-    projection_kwargs = {
+    projection_kwargs: dict[str, Any] = {
         "search_available": search_available,
         "browser_available": browser_available,
     }

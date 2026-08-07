@@ -223,9 +223,7 @@ class StreamTraceLogger:
             try:
                 pending_file.close()
             except OSError as exc:
-                logger.warning(
-                    "Failed to close deferred stream trace spool: %s", exc
-                )
+                logger.warning("Failed to close deferred stream trace spool: %s", exc)
 
     def log(
         self,

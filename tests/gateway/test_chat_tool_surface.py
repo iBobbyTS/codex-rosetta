@@ -6,6 +6,7 @@ import concurrent.futures
 import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 import pytest
 
@@ -36,8 +37,8 @@ from codex_rosetta.observability.tool_mapping_crypto import (
 from codex_rosetta.routing import ResolvedRoute
 
 
-def _route(**overrides) -> ResolvedRoute:
-    values = {
+def _route(**overrides: Any) -> ResolvedRoute:
+    values: dict[str, Any] = {
         "source_provider": "openai_responses",
         "target_provider": "openai_chat",
         "provider_name": "deepseek",
