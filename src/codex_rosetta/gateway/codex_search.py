@@ -35,6 +35,8 @@ from .search_provider_chain import (
     SearchProviderAttemptError,
     SearchProviderBudgetExceeded,
     SearchProviderRequestBudget,
+    SearchProviderChainUnavailable,
+    SearchProviderChainUnavailableReason,
 )
 from .search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
@@ -307,6 +309,10 @@ async def execute_local_codex_search(  # noqa: C901
             passthrough_body=passthrough,
         )
 
+    if search_candidates == () and commands.get("search_query"):
+        raise SearchProviderChainUnavailable(
+            SearchProviderChainUnavailableReason.EMPTY_CHAIN
+        )
     search_capabilities = (
         search_candidates_capabilities(
             search_candidates,

@@ -523,10 +523,14 @@ def test_self_hosted_google_preserves_codex_search_response_contract() -> None:
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_web_run_mapping_requires_a_configured_search_candidate() -> None:
+def test_web_run_mapping_requires_a_configured_search_candidate(tmp_path: Path) -> None:
     config = _make_config(tool_profile="test-web-run-mapping")
     request = _make_request(
         _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    trace_path = tmp_path / "empty-search-chain-trace.jsonl"
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
     )
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
@@ -535,6 +539,10 @@ def test_web_run_mapping_requires_a_configured_search_candidate() -> None:
     payload = json.loads(response.body)
     assert "未配置搜索能力" in payload["error"]["message"]
     request.app.transport.send_passthrough.assert_not_awaited()
+    assert request.app.search_provider_coordinator is not None
+    assert [
+        json.loads(line)["stage"] for line in trace_path.read_text().splitlines()
+    ] == ["codex_search_request"]
 
 
 def test_custom_pass_through_profile_keeps_search_native_with_tavily() -> None:
@@ -753,6 +761,75 @@ def test_mixed_chain_rejects_recency_before_any_provider_call():
 
     assert response.status_code == 501
     request.app.transport.send_passthrough.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "local_provider,sidecar_ready",
+    [
+        ("tavily", None),
+        ("self_hosted_google", False),
+        ("self_hosted_google", True),
+    ],
+)
+@pytest.mark.parametrize("gpt_first", [False, True])
+def test_mixed_chain_multi_query_fails_before_candidate_attempt_or_cooldown(
+    local_provider: str,
+    sidecar_ready: bool | None,
+    gpt_first: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    gpt_row = {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "responses_provider": "search-upstream",
+        "responses_model": "gpt-5.6-luna",
+    }
+    local_row: dict[str, Any] = {"id": "local", "provider": local_provider}
+    if local_provider == "tavily":
+        local_row["tavily_api_key"] = "tvly-test"
+    rows = [gpt_row, local_row] if gpt_first else [local_row, gpt_row]
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=rows,
+        tavily_api_key="tvly-test" if local_provider == "tavily" else None,
+        web_run_sidecar=local_provider == "self_hosted_google",
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "first"}, {"q": "second"}]})
+    )
+    if sidecar_ready is not None:
+        request.app.web_run_health_state = SimpleNamespace(
+            status=AsyncMock(return_value=SimpleNamespace(browser_ready=sidecar_ready))
+        )
+        monkeypatch.setattr(sidecar_module, "request_bounded_response", AsyncMock())
+    trace_path = tmp_path / f"mixed-{local_provider}-{gpt_first}-{sidecar_ready}.jsonl"
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    assert (
+        "search_query supports one query"
+        in json.loads(response.body)["error"]["message"]
+    )
+    request.app.transport.send_passthrough.assert_not_awaited()
+    coordinator = request.app.search_provider_coordinator
+    assert all(
+        not coordinator.is_cooling(candidate)
+        for candidate in config.web_search_candidates
+    )
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "codex_search_request",
+        "codex_search_not_implemented",
+    ]
+    assert all("candidate_id" not in record["data"] for record in records)
 
 
 @pytest.mark.parametrize(

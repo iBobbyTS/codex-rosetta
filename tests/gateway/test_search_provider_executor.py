@@ -66,8 +66,11 @@ class FakeSearch:
 
 def configured_responses_candidate():
     candidate = object.__new__(ConfiguredResponsesSearchProviderCandidate)
+    object.__setattr__(candidate, "row_id", "responses")
     object.__setattr__(candidate, "responses_model", "search-model")
     object.__setattr__(candidate, "responses_provider", "p")
+    object.__setattr__(candidate, "provider", "configured_responses_provider")
+    object.__setattr__(candidate, "identity", "responses-identity")
     object.__setattr__(candidate, "contract", GPT_PASSTHROUGH_CONTRACT)
     return candidate
 
@@ -138,15 +141,21 @@ def test_responses_single_query_accepts_formal_search_response_without_query_out
             "encrypted_output": "opaque",
         }
 
+    candidate = configured_responses_candidate()
+    coordinator = SearchProviderChainCoordinator()
     result = run(
-        SearchProviderExecutor(responses_client=call).execute(
-            configured_responses_candidate(),
-            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        coordinator.run(
+            (candidate,),
+            lambda admitted: SearchProviderExecutor(responses_client=call).execute(
+                admitted,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            ),
         )
     )
 
     assert result["output"] == "GPT answer"
     assert result["results"] == [{"title": "Result"}]
+    assert not coordinator.is_cooling(candidate)
 
 
 def test_local_unavailable_is_request_failover():

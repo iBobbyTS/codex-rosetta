@@ -13,6 +13,10 @@ from codex_rosetta.gateway.code_mode_projection import (
     project_exec_tool_definitions,
     project_modified_exec_web_run_description,
 )
+from codex_rosetta.gateway.codex_search import (
+    CodexSearchNotImplemented,
+    execute_local_codex_search,
+)
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.proxy import (
     _apply_profile_runtime_adapter,
@@ -219,7 +223,7 @@ def test_absent_typed_field_retains_legacy_compatibility() -> None:
 
 
 def test_top_level_and_nested_projection_surfaces_are_equal() -> None:
-    route = _route(LOCAL_QUERY_CAPABILITIES)
+    route = _route(GPT_MIXED_MODE_CAPABILITIES)
     top_level, removed = _apply_profile_runtime_adapter(
         _function(), "namespace.web.run", "modified", "web__run", route
     )
@@ -233,6 +237,7 @@ declare const tools: { web__run(args: { search_query?: Array<{ q: string; domain
     projected_description = project_modified_exec_web_run_description(
         description, route
     )
+    assert "`search_query` accepts at most 1 item." in projected_description
     nested = project_exec_tool_definitions(
         projected_description,
         {"web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")},
@@ -240,6 +245,25 @@ declare const tools: { web__run(args: { search_query?: Array<{ q: string; domain
     assert set(top_level["parameters"]["properties"]) == set(
         nested["parameters"]["properties"]
     )
+    assert top_level["parameters"]["properties"]["search_query"]["maxItems"] == 1
+    with pytest.raises(
+        CodexSearchNotImplemented, match="search_query supports one query"
+    ):
+        asyncio.run(
+            execute_local_codex_search(
+                {
+                    "id": "projection-oracle",
+                    "model": "gateway-model",
+                    "commands": {"search_query": [{"q": "one"}, {"q": "two"}]},
+                },
+                {},
+                search_candidates=(
+                    _candidate(GPT_PASSTHROUGH_CONTRACT),
+                    _candidate(SELF_HOSTED_LOCAL_CONTRACT),
+                ),
+                search_coordinator=object(),
+            )
+        )
 
 
 def test_gateway_config_resolve_carries_typed_enum() -> None:

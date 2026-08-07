@@ -1431,6 +1431,18 @@ def project_modified_exec_web_run_description(
         + section[declaration.end(2) :]
     ).rstrip()
     projected_description = str(projected_function.get("description") or "").strip()
+    search_query = (
+        projected_function["parameters"].get("properties", {}).get("search_query")
+    )
+    if isinstance(search_query, dict) and search_query.get("maxItems") == 1:
+        projected_description = "\n".join(
+            part
+            for part in (
+                projected_description,
+                "`search_query` accepts at most 1 item.",
+            )
+            if part
+        )
     body_parts = [part for part in (projected_description, declaration_block) if part]
     projected_body = "\n\n".join(body_parts)
     replacement = f"{heading.group()}\n{projected_body}{trailing}"
