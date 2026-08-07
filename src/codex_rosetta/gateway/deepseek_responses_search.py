@@ -224,8 +224,9 @@ def _bounded_exact_list(value: object, budget: _ParseBudget) -> list[object]:
 def _typed_item(
     value: object, budget: _ParseBudget
 ) -> tuple[str, dict[object, object]] | None:
-    if type(value) is not dict:
-        if isinstance(value, dict):
+    value_type = type(value)
+    if value_type is not dict:
+        if issubclass(value_type, dict):
             _raise_parse_error()
         return None
     item = _bounded_exact_dict(value, budget)

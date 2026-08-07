@@ -1371,6 +1371,95 @@ class _HostileList(list[object]):
         self._fail("iter")
 
 
+class _HostileClassProperty:
+    def __init__(self, hooks: list[str], behavior: str) -> None:
+        self.hooks = hooks
+        self.behavior = behavior
+
+    @property
+    def __class__(self) -> type:
+        self.hooks.append("__class__")
+        if self.behavior == "throw":
+            raise RuntimeError("caller-controlled-class-body")
+        return dict
+
+
+def _type_with_hostile_metaclass(
+    name: str,
+    bases: tuple[type, ...],
+    hooks: list[str],
+) -> type:
+    class _HostileMetaclass(type):
+        @property
+        def __mro__(self) -> Never:
+            hooks.append("mro-property")
+            raise RuntimeError("caller-controlled-metaclass-mro")
+
+        def __getattribute__(self, attribute: str) -> Any:
+            hooks.append(f"getattribute:{attribute}")
+            raise RuntimeError("caller-controlled-metaclass-access")
+
+        def __eq__(self, other: object) -> bool:
+            del other
+            hooks.append("eq")
+            raise RuntimeError("caller-controlled-metaclass-comparison")
+
+        __hash__ = type.__hash__
+
+    return _HostileMetaclass(name, bases, {})
+
+
+@pytest.mark.parametrize("location", ["output", "content", "annotation"])
+@pytest.mark.parametrize("behavior", ["throw", "spoof"])
+def test_arbitrary_item_class_property_is_never_executed_or_shape_relevant(
+    location: str,
+    behavior: str,
+) -> None:
+    hooks: list[str] = []
+    hostile = _HostileClassProperty(hooks, behavior)
+    response = _completed_response(content=[_output_text("answer")])
+    output = cast(list[object], response["output"])
+    message = cast(dict[str, object], output[2])
+    content = cast(list[dict[str, object]], message["content"])
+    if location == "output":
+        output.insert(0, hostile)
+    elif location == "content":
+        cast(list[object], message["content"]).insert(0, hostile)
+    else:
+        content[0]["annotations"] = [hostile]
+
+    assert _parse(response) == {
+        "output": "answer",
+        "results": [],
+        "usage": {},
+    }
+    assert hooks == []
+
+
+def test_unknown_item_ancestry_check_bypasses_custom_metaclass_hooks() -> None:
+    hooks: list[str] = []
+    hostile_type = _type_with_hostile_metaclass("UnknownItem", (object,), hooks)
+    response = _completed_response(content=[hostile_type(), _output_text("answer")])
+
+    assert _parse(response)["output"] == "answer"
+    assert hooks == []
+
+
+def test_dict_subclass_ancestry_check_bypasses_custom_metaclass_hooks() -> None:
+    hooks: list[str] = []
+    hostile_type = _type_with_hostile_metaclass("DictItem", (dict,), hooks)
+    response = _completed_response()
+    cast(list[object], response["output"]).insert(0, hostile_type())
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(response)
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+    assert "caller-controlled" not in str(caught.value)
+    assert hooks == []
+
+
 @pytest.mark.parametrize(
     "location", ["root", "output", "item", "content", "annotations", "usage"]
 )
