@@ -101,7 +101,7 @@ endpoint using its credential and transport settings, and its final upstream
 `model` field is replaced with the selected Search Model. The current
 conversation model route and upstream model alias therefore cannot leak into
 this explicit search route. All local providers are
-normalized to the same Codex-visible source format. Direct-URL
+normalized to the same Codex-visible source format.
 Web Search Providers are an independent Rosetta feature module: the Tool
 Catalog owns ordinary tool declarations, but does not own search-provider
 sub-capabilities, request fields, validation, or invocation. An all-configured

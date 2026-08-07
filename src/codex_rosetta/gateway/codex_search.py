@@ -264,6 +264,8 @@ async def execute_local_codex_search(  # noqa: C901
         raise CodexSearchInvalidRequest("'commands' must be an object")
 
     passthrough_only = _all_alpha_search_passthrough(search_candidates)
+    if passthrough_only and not commands:
+        raise CodexSearchInvalidRequest("'commands' must be an object")
     if passthrough_only:
         request_budget = request_budget or SearchProviderRequestBudget()
         search_execution = await _execute_search_queries(

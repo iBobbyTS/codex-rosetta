@@ -668,6 +668,7 @@ def test_gpt_only_passthrough_forwards_non_search_commands_unchanged():
             "finance": [{"ticker": "AMD", "type": "equity", "market": "USA"}],
             "weather": [{"location": "Paris", "duration": 3}],
             "image_query": [{"q": "Python logo", "recency": 7}],
+            "unknown_upstream_command": {"kept": True},
         }
     )
     request = _make_request(body)
@@ -688,6 +689,40 @@ def test_gpt_only_passthrough_forwards_non_search_commands_unchanged():
     assert request.app.transport.send_passthrough.await_args.args[2] == body | {
         "model": "gpt-5.6-luna"
     }
+
+
+@pytest.mark.parametrize(
+    ("commands", "missing"),
+    [({}, False), (None, False), ([], False), ("search", False), (None, True)],
+)
+def test_gpt_only_rejects_malformed_commands_before_provider_call(
+    commands: Any, missing: bool
+) -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-only",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            }
+        ],
+    )
+    body = _search_body({})
+    if missing:
+        del body["commands"]
+    else:
+        body["commands"] = commands
+    request = _make_request(body)
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 400
+    request.app.transport.send_passthrough.assert_not_awaited()
 
 
 def test_mixed_chain_rejects_recency_before_any_provider_call():

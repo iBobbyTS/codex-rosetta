@@ -240,8 +240,13 @@ async def handle_codex_auxiliary(  # noqa: C901
         and not isinstance(
             getattr(request.app, "search_provider_coordinator", None), type(None)
         )
-        and isinstance(body.get("commands"), dict)
-        and (all_gpt_search_candidates or bool(body["commands"].get("search_query")))
+        and (
+            all_gpt_search_candidates
+            or (
+                isinstance(body.get("commands"), dict)
+                and bool(body["commands"].get("search_query"))
+            )
+        )
     )
     configured_sidecar_client = _configured_sidecar_client(config)
     resolved_browser_client = browser_client or configured_sidecar_client
