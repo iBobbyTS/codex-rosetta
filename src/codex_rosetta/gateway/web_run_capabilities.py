@@ -12,6 +12,7 @@ from typing import Any
 from .search_provider_contract import (
     SearchProviderCapability,
     SearchProviderExecutionMode,
+    is_mixed_query_only_capability_set,
     WEB_RUN_BASE_COMMAND_FIELDS,
     WEB_RUN_DESCRIPTION_DROP_MARKERS,
     WEB_RUN_DESCRIPTION_REPLACEMENTS,
@@ -167,6 +168,10 @@ def project_modified_web_run_description(
                 flags=re.IGNORECASE,
             )
         retained.append(line)
+    if is_mixed_query_only_capability_set(search_capabilities):
+        retained.append(
+            "`search_query` cannot be combined with other executable commands."
+        )
     return "\n".join(retained).strip()
 
 

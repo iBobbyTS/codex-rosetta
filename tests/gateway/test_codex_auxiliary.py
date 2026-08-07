@@ -850,6 +850,136 @@ def test_mixed_chain_multi_query_fails_before_candidate_attempt_or_cooldown(
 
 
 @pytest.mark.parametrize(
+    "commands",
+    [
+        {"search_query": [{"q": "Python"}], "open": [{"ref_id": "turn0search0"}]},
+        {"search_query": [{"q": "Python"}], "time": [{"utc_offset": "+00:00"}]},
+        {
+            "search_query": [{"q": "Python"}],
+            "click": [{"ref_id": "turn0fetch0", "id": 1}],
+        },
+    ],
+)
+@pytest.mark.parametrize("gpt_first", [False, True])
+@pytest.mark.parametrize("gpt_status", [200, 500])
+def test_mixed_chain_rejects_combined_commands_before_any_execution(
+    commands: dict[str, Any],
+    gpt_first: bool,
+    gpt_status: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    gpt_row = {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "responses_provider": "search-upstream",
+        "responses_model": "gpt-5.6-luna",
+    }
+    local_row = {"id": "local", "provider": "self_hosted_google"}
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[gpt_row, local_row] if gpt_first else [local_row, gpt_row],
+        web_run_sidecar=True,
+    )
+    request = _make_request(_search_body(commands))
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=gpt_status,
+        body={"output": "must not be used"} if gpt_status == 200 else None,
+        raw_content=b"{}",
+    )
+    sidecar_request = AsyncMock()
+    monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_request)
+    trace_path = (
+        tmp_path / f"combined-{gpt_first}-{gpt_status}-{sorted(commands)}.jsonl"
+    )
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    assert (
+        "search_query cannot be combined"
+        in json.loads(response.body)["error"]["message"]
+    )
+    request.app.transport.send_passthrough.assert_not_awaited()
+    sidecar_request.assert_not_awaited()
+    coordinator = request.app.search_provider_coordinator
+    assert all(
+        coordinator.cooldown_reason(candidate) is None
+        for candidate in config.web_search_candidates
+    )
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "codex_search_request",
+        "codex_search_not_implemented",
+    ]
+
+
+def test_all_gpt_preserves_combined_commands_for_direct_passthrough() -> None:
+    commands = {
+        "search_query": [{"q": "Python"}],
+        "open": [{"ref_id": "turn0search0"}],
+    }
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            }
+        ],
+    )
+    body = _search_body(commands)
+    request = _make_request(body)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"output": "direct GPT response"},
+        raw_content=b'{"output":"direct GPT response"}',
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 200
+    assert request.app.transport.send_passthrough.await_args.args[2] == {
+        **body,
+        "model": "gpt-5.6-luna",
+    }
+
+
+def test_local_only_executes_combined_search_and_time_once() -> None:
+    config = _make_config(
+        tavily_api_key="tvly-test", tool_profile="test-web-run-mapping"
+    )
+    request = _make_request(
+        _search_body(
+            {
+                "search_query": [{"q": "Python documentation"}],
+                "time": [{"utc_offset": "+00:00"}],
+            }
+        )
+    )
+    client = _FakeTavilyClient()
+
+    response = asyncio.run(
+        handle_codex_auxiliary(request, config, "alpha/search", search_client=client)
+    )
+
+    assert response.status_code == 200
+    assert client.calls == [("Python documentation", WebSearchSettings())]
+    assert "Times:\n+00:00:" in json.loads(response.body)["output"]
+
+
+@pytest.mark.parametrize(
     "local_provider,sidecar_ready,gpt_first,first_fails",
     [
         ("tavily", None, False, False),

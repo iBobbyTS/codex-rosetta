@@ -155,6 +155,21 @@ def projection_capabilities(
     return contract.capabilities
 
 
+def is_mixed_query_only_capability_set(
+    capabilities: Collection[SearchProviderCapability | str] | None,
+) -> bool:
+    """Return whether a projection represents the GPT/local mixed subset."""
+    if capabilities is None:
+        return False
+    try:
+        parsed = frozenset(
+            SearchProviderCapability(capability) for capability in capabilities
+        )
+    except TypeError, ValueError:
+        return False
+    return parsed == GPT_MIXED_MODE_CAPABILITIES
+
+
 def contract_for_wire_provider(provider: str) -> SearchProviderContract:
     """Resolve one persisted wire provider value to its unique contract."""
     if provider == "configured_responses_provider":

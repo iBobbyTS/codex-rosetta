@@ -228,6 +228,10 @@ def test_top_level_and_nested_projection_surfaces_are_equal() -> None:
         _function(), "namespace.web.run", "modified", "web__run", route
     )
     assert top_level is not None and not removed
+    assert (
+        "`search_query` cannot be combined with other executable commands."
+        in top_level["description"]
+    )
     description = """### `web__run`
 Tool for accessing the internet.
 exec tool declaration:
@@ -243,6 +247,10 @@ declare const tools: { web__run(args: { search_query?: Array<{ q: string; domain
         {"web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")},
     )["web-run"]["function"]
     assert "`search_query` accepts at most 1 item." in nested["description"]
+    assert (
+        "`search_query` cannot be combined with other executable commands."
+        in nested["description"]
+    )
     assert set(top_level["parameters"]["properties"]) == set(
         nested["parameters"]["properties"]
     )

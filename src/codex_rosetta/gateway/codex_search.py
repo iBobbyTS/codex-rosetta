@@ -54,6 +54,7 @@ from .search_provider_contract import (
     LOCAL_QUERY_CAPABILITIES,
     SearchProviderCapability,
     SearchProviderExecutionMode,
+    is_mixed_query_only_capability_set,
 )
 from .transport._base import UpstreamSafetyError
 from .web_search import (
@@ -333,6 +334,14 @@ async def execute_local_codex_search(  # noqa: C901
         joined = ", ".join(sorted(unsupported))
         raise CodexSearchNotImplemented(
             f"Codex search feature not implemented by the local bridge: {joined}"
+        )
+
+    if _mixed_search_query_has_other_executable_commands(
+        commands, supported_fields, search_capabilities
+    ):
+        raise CodexSearchNotImplemented(
+            "Codex search feature not implemented by the local bridge: "
+            "search_query cannot be combined with other executable commands"
         )
 
     base_settings = _resolve_settings(commands, body.get("settings"))
@@ -941,6 +950,24 @@ def _unsupported_features(
     return _unsupported_command_features(
         commands, supported_fields=supported_fields
     ) | _unsupported_setting_features(settings)
+
+
+def _mixed_search_query_has_other_executable_commands(
+    commands: dict[str, Any],
+    supported_fields: dict[str, frozenset[str] | None],
+    search_capabilities: frozenset[SearchProviderCapability],
+) -> bool:
+    """Reject mixed GPT/local command ownership before any execution begins."""
+    if not (
+        is_mixed_query_only_capability_set(search_capabilities)
+        and _has_value(commands.get("search_query"))
+    ):
+        return False
+    return any(
+        command not in {"search_query", "response_length"}
+        and _has_value(commands.get(command))
+        for command in supported_fields
+    )
 
 
 def _unsupported_command_features(
