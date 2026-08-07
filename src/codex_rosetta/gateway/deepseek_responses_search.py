@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from ipaddress import IPv6Address
-from typing import Final, Never, cast
+from typing import Any, Final, Never, cast
 from urllib.parse import urlsplit, urlunsplit
 
 from codex_rosetta.observability.redaction import SecretRedactor
@@ -572,6 +572,18 @@ def _redactor_contains_exact(
     return collision
 
 
+def _finish_literal_detector(
+    detector: Any, memory_error: MemoryError | None
+) -> tuple[MemoryError | None, bool]:
+    try:
+        detector.finish()
+    except MemoryError as exc:
+        return memory_error or exc, False
+    except Exception:
+        return memory_error, memory_error is None
+    return memory_error, False
+
+
 def _literal_publication_sequence_contains_credential(
     redactor: SecretRedactor, normalized: dict[str, object]
 ) -> bool:
@@ -599,14 +611,10 @@ def _literal_publication_sequence_contains_credential(
         except Exception:
             failed = True
         finally:
-            try:
-                detector.finish()
-            except MemoryError as exc:
-                if memory_error is None:
-                    memory_error = exc
-            except Exception:
-                if memory_error is None:
-                    failed = True
+            memory_error, finish_failed = _finish_literal_detector(
+                detector, memory_error
+            )
+            failed = failed or finish_failed
     if memory_error is not None:
         raise memory_error
     if failed:
