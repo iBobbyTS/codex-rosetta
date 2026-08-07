@@ -584,6 +584,11 @@ def _finish_literal_detector(
     return memory_error, False
 
 
+def _encode_literal_detector_fragment(value: str) -> bytes:
+    """Encode a parser-bounded text fragment without rejecting lone surrogates."""
+    return value.encode("utf-8", errors="surrogatepass")
+
+
 def _literal_publication_sequence_contains_credential(
     redactor: SecretRedactor, normalized: dict[str, object]
 ) -> bool:
@@ -600,11 +605,13 @@ def _literal_publication_sequence_contains_credential(
         failed = True
     else:
         try:
-            if detector.feed(output.encode("utf-8")):
+            if detector.feed(_encode_literal_detector_fragment(output)):
                 collision = True
             for result in results:
                 for field in ("title", "url", "content"):
-                    if not collision and detector.feed(result[field].encode("utf-8")):
+                    if not collision and detector.feed(
+                        _encode_literal_detector_fragment(result[field])
+                    ):
                         collision = True
         except MemoryError as exc:
             memory_error = exc

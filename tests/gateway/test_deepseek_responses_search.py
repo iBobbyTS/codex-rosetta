@@ -1876,6 +1876,68 @@ def test_publish_zero_token_redactor_is_exact_parser_equivalent() -> None:
     assert _publish(response) == _parse(response)
 
 
+@pytest.mark.parametrize("field", ["output", "title", "content"])
+def test_publish_zero_token_preserves_parser_values_with_lone_surrogates(
+    field: str,
+) -> None:
+    surrogate = "\ud800"
+    if field == "output":
+        response = _completed_response(content=[_output_text(f"answer{surrogate}")])
+    elif field == "title":
+        response = _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://example.com", title=f"Title{surrogate}")],
+                )
+            ]
+        )
+    else:
+        text = f"answer{surrogate}"
+        response = _completed_response(
+            content=[
+                _output_text(
+                    text,
+                    [
+                        _citation(
+                            "https://example.com",
+                            start_index=0,
+                            end_index=len(text),
+                        )
+                    ],
+                )
+            ]
+        )
+
+    assert _publish(response, raw_response=b"not-json") == _parse(response)
+
+
+@pytest.mark.parametrize(
+    "output,title",
+    [("\ud800s01", "three"), ("s01", "three\ud800")],
+    ids=["surrogate-before-token", "token-before-surrogate"],
+)
+def test_publish_literal_detector_preserves_token_detection_around_surrogates(
+    output: str, title: str
+) -> None:
+    token = "s01three"
+    response = _completed_response(
+        content=[
+            _output_text(
+                output,
+                [_citation("https://example.com", title=title, end_index=0)],
+            )
+        ]
+    )
+    normalized = _parse(response)
+    assert not SecretRedactor((token,)).contains_exact(normalized)
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response, raw_response=b"not-json", tokens=(token,))
+
+    _assert_static_collision(caught)
+
+
 @pytest.mark.parametrize("token_index", [0, 1, 2])
 def test_publish_multiple_tokens_are_order_and_duplicate_independent(
     token_index: int,
