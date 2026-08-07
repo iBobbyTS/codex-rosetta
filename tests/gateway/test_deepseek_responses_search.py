@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import random
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Never, cast
@@ -13,9 +14,11 @@ import pytest
 from codex_rosetta.gateway.deepseek_responses_search import (
     DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
     DEEPSEEK_RESPONSES_SEARCH_MODEL,
+    DeepSeekResponsesSearchParseError,
     DeepSeekResponsesSearchRequest,
     build_deepseek_responses_search_request,
     normalize_deepseek_responses_origin,
+    parse_deepseek_responses_search_response,
 )
 
 _EXPECTED_PROMPT = (
@@ -566,3 +569,694 @@ def test_pre_io_module_has_no_forbidden_runtime_dependency_or_parameter() -> Non
         parameter.kind is inspect.Parameter.KEYWORD_ONLY
         for parameter in parameters.values()
     )
+
+
+def _output_text(
+    text: object = "Answer from the web.",
+    annotations: object = None,
+) -> dict[str, object]:
+    return {
+        "type": "output_text",
+        "text": text,
+        "annotations": [] if annotations is None else annotations,
+    }
+
+
+def _completed_response(
+    *,
+    content: object = None,
+    usage: object = None,
+) -> dict[str, object]:
+    response: dict[str, object] = {
+        "id": "opaque-response-id",
+        "status": "completed",
+        "output": [
+            {"type": "reasoning", "id": "opaque-reasoning-id"},
+            {
+                "type": "web_search_call",
+                "id": "opaque-search-call-id",
+                "status": "completed",
+            },
+            {
+                "type": "message",
+                "content": [_output_text()] if content is None else content,
+            },
+        ],
+    }
+    if usage is not None:
+        response["usage"] = usage
+    return response
+
+
+_DEFAULT_RESPONSE = object()
+
+
+def _parse(
+    response: object = _DEFAULT_RESPONSE, *, citation_limit: object = 5
+) -> dict[str, object]:
+    return parse_deepseek_responses_search_response(
+        _completed_response() if response is _DEFAULT_RESPONSE else response,
+        citation_limit=citation_limit,
+    )
+
+
+def _citation(url: object, **overrides: object) -> dict[str, object]:
+    return {
+        "type": "url_citation",
+        "url": url,
+        "title": "  Example title  ",
+        "start_index": 0,
+        "end_index": 6,
+        **overrides,
+    }
+
+
+def test_parse_documented_shape_returns_only_provider_neutral_values() -> None:
+    result = _parse(
+        _completed_response(
+            content=[
+                _output_text(
+                    "Source text",
+                    [_citation("HTTPS://Example.COM:443/path?q=1#fragment")],
+                )
+            ],
+            usage={
+                "input_tokens": 12,
+                "output_tokens": 7,
+                "total_tokens": 19,
+                "opaque_usage": "ignored",
+            },
+        )
+    )
+
+    assert result == {
+        "output": "Source text",
+        "results": [
+            {
+                "title": "Example title",
+                "url": "https://example.com/path?q=1",
+                "content": "Source",
+            }
+        ],
+        "usage": {"input_tokens": 12, "output_tokens": 7, "total_tokens": 19},
+    }
+    rendered = repr(result)
+    assert "opaque-response-id" not in rendered
+    assert "opaque-search-call-id" not in rendered
+    assert "opaque-reasoning-id" not in rendered
+
+
+def test_parse_preserves_wire_order_across_messages_and_output_text_items() -> None:
+    response = _completed_response()
+    response["output"] = [
+        {"type": "message", "content": [_output_text("  first ")]},
+        {"type": "unknown", "payload": "ignored"},
+        {"type": "web_search_call", "status": "completed"},
+        {
+            "type": "message",
+            "content": [
+                {"type": "unknown_content", "text": "ignored"},
+                _output_text("second"),
+                _output_text(" third  "),
+            ],
+        },
+    ]
+
+    assert _parse(response)["output"] == "first second third"
+
+
+def test_completed_search_with_non_empty_text_and_zero_citations_is_valid() -> None:
+    assert _parse() == {
+        "output": "Answer from the web.",
+        "results": [],
+        "usage": {},
+    }
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        None,
+        [],
+        {"status": "completed", "output": []},
+        {"status": "failed", "output": []},
+        {"status": "completed", "output": "not-a-list"},
+        _completed_response(content=[]),
+        _completed_response(content=[_output_text("")]),
+        _completed_response(content=[_output_text("   ")]),
+        {
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "status": "in_progress"},
+                {"type": "message", "content": [_output_text()]},
+            ],
+        },
+    ],
+)
+def test_parse_fails_closed_without_completed_search_and_final_text(
+    response: object,
+) -> None:
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(response)
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+
+
+def test_parse_ignores_unknown_item_content_and_annotation_types() -> None:
+    response = _completed_response(
+        content=[
+            42,
+            {"type": "unknown_content", "value": object()},
+            _output_text(
+                "answer",
+                [
+                    None,
+                    {"type": "unknown_annotation", "value": object()},
+                    _citation("https://example.com"),
+                ],
+            ),
+        ]
+    )
+    output = cast(list[object], response["output"])
+    output.insert(0, None)
+
+    assert cast(list[dict[str, str]], _parse(response)["results"])[0]["url"] == (
+        "https://example.com/"
+    )
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda body: body.update(status=1),
+        lambda body: body.update(output=()),
+        lambda body: cast(
+            dict[str, object], cast(list[object], body["output"])[1]
+        ).update(status=1),
+        lambda body: cast(
+            dict[str, object], cast(list[object], body["output"])[2]
+        ).update(content=()),
+        lambda body: cast(
+            dict[str, object],
+            cast(
+                list[object],
+                cast(dict[str, object], cast(list[object], body["output"])[2])[
+                    "content"
+                ],
+            )[0],
+        ).update(text=1),
+        lambda body: cast(
+            dict[str, object],
+            cast(
+                list[object],
+                cast(dict[str, object], cast(list[object], body["output"])[2])[
+                    "content"
+                ],
+            )[0],
+        ).update(annotations=()),
+        lambda body: cast(
+            list[object],
+            cast(
+                dict[str, object],
+                cast(
+                    list[object], cast(dict[str, object], body["output"][2])["content"]
+                )[0],
+            )["annotations"],
+        ).append(_citation(1)),
+    ],
+)
+def test_malformed_documented_containers_and_scalars_fail_closed(
+    mutate: Callable[[dict[str, object]], object],
+) -> None:
+    response = _completed_response(
+        content=[_output_text("answer", [_citation("https://example.com")])]
+    )
+    mutate(response)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("HTTP://Example.COM:80", "http://example.com/"),
+        ("https://Example.COM:443/a?b=2#frag", "https://example.com/a?b=2"),
+        ("https://Example.COM:8443", "https://example.com:8443/"),
+        ("https://[2001:DB8::1]:443", "https://[2001:db8::1]/"),
+    ],
+)
+def test_citation_url_canonicalization(url: str, expected: str) -> None:
+    result = _parse(
+        _completed_response(content=[_output_text("answer", [_citation(url)])])
+    )
+
+    assert cast(list[dict[str, str]], result["results"])[0]["url"] == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "ftp://example.com/file",
+        "https://user@example.com/",
+        "https://user:pass@example.com/",
+        "https:///missing-host",
+        "https://exa mple.com/",
+        "https://./",
+        "https://-bad.example/",
+        "https://bad_host.example/",
+        "https://example.com:invalid/",
+        " https://example.com/",
+    ],
+)
+def test_malformed_citation_url_is_skipped_without_losing_valid_answer(
+    url: str,
+) -> None:
+    result = _parse(
+        _completed_response(content=[_output_text("answer", [_citation(url)])])
+    )
+
+    assert result["output"] == "answer"
+    assert result["results"] == []
+
+
+def test_citations_dedupe_by_final_canonical_url_and_honor_limit() -> None:
+    annotations = [
+        _citation("HTTPS://EXAMPLE.COM:443#one", title="first"),
+        _citation("https://example.com/#two", title="duplicate"),
+        _citation("https://second.example", title="second"),
+        _citation("https://third.example", title="third"),
+    ]
+
+    results = cast(
+        list[dict[str, str]],
+        _parse(
+            _completed_response(content=[_output_text("answer", annotations)]),
+            citation_limit=2,
+        )["results"],
+    )
+
+    assert [(result["title"], result["url"]) for result in results] == [
+        ("first", "https://example.com/"),
+        ("second", "https://second.example/"),
+    ]
+
+
+def test_duplicate_citation_still_validates_documented_scalar_shape() -> None:
+    annotations = [
+        _citation("https://example.com", title="first"),
+        _citation("HTTPS://EXAMPLE.COM:443#duplicate", title=object()),
+    ]
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(_completed_response(content=[_output_text("answer", annotations)]))
+
+
+def test_title_fallback_and_content_slice_use_only_final_bounded_values() -> None:
+    hostname = f"{'a' * 600}.example"
+    text = "x" * 1300
+    result = _parse(
+        _completed_response(
+            content=[
+                _output_text(
+                    text,
+                    [
+                        _citation(
+                            f"https://{hostname}",
+                            title="  ",
+                            start_index=0,
+                            end_index=len(text),
+                        )
+                    ],
+                )
+            ]
+        )
+    )
+    citation = cast(list[dict[str, str]], result["results"])[0]
+
+    assert citation["title"] == hostname[:500]
+    assert len(citation["title"]) == 500
+    assert citation["content"] == text[:1200]
+    assert len(citation["content"]) == 1200
+
+
+@pytest.mark.parametrize(
+    ("indexes", "expected"),
+    [
+        ({}, ""),
+        ({"start_index": True, "end_index": 3}, ""),
+        ({"start_index": -1, "end_index": 3}, ""),
+        ({"start_index": 4, "end_index": 3}, ""),
+        ({"start_index": 0, "end_index": 7}, ""),
+        ({"start_index": 1, "end_index": 4}, "bcd"),
+    ],
+)
+def test_citation_indexes_are_exact_bounded_and_local_to_same_text(
+    indexes: dict[str, object], expected: str
+) -> None:
+    citation = _citation("https://example.com")
+    citation.pop("start_index")
+    citation.pop("end_index")
+    citation.update(indexes)
+    result = _parse(_completed_response(content=[_output_text("abcdef", [citation])]))
+
+    assert cast(list[dict[str, str]], result["results"])[0]["content"] == expected
+
+
+def test_pathless_url_at_raw_limit_is_checked_after_canonicalization() -> None:
+    prefix = "https://example.com?"
+    raw_at_limit = prefix + ("q" * (8192 - len(prefix)))
+    raw_below_limit = prefix + ("q" * (8191 - len(prefix)))
+    response = _completed_response(
+        content=[
+            _output_text(
+                "answer",
+                [_citation(raw_at_limit), _citation(raw_below_limit)],
+            )
+        ]
+    )
+
+    results = cast(list[dict[str, str]], _parse(response)["results"])
+
+    assert len(raw_at_limit) == 8192
+    assert len(results) == 1
+    assert len(results[0]["url"]) == 8192
+    assert results[0]["url"].startswith("https://example.com/?")
+
+
+@pytest.mark.parametrize("length", [1, 64_000])
+def test_final_output_accepts_exact_length_bounds(length: int) -> None:
+    result = _parse(_completed_response(content=[_output_text("x" * length)]))
+
+    assert len(cast(str, result["output"])) == length
+
+
+def test_final_output_rejects_over_bound_after_ordered_join_and_trim() -> None:
+    response = _completed_response(
+        content=[_output_text(" " + ("x" * 32_001)), _output_text("x" * 32_000 + " ")]
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+
+def test_final_output_bounds_apply_after_large_edge_whitespace_is_trimmed() -> None:
+    response = _completed_response(
+        content=[
+            _output_text((" " * 100_000) + "bounded"),
+            _output_text(" value" + ("\n" * 100_000)),
+        ]
+    )
+
+    assert _parse(response)["output"] == "bounded value"
+
+
+@pytest.mark.parametrize("container", ["output", "content", "annotations", "usage"])
+def test_recognized_containers_are_bounded_at_256_items(container: str) -> None:
+    response = _completed_response()
+    if container == "output":
+        response["output"] = [None] * 257
+    elif container == "content":
+        cast(dict[str, object], cast(list[object], response["output"])[2])[
+            "content"
+        ] = [None] * 257
+    elif container == "annotations":
+        content = cast(
+            list[dict[str, object]],
+            cast(dict[str, object], cast(list[object], response["output"])[2])[
+                "content"
+            ],
+        )
+        content[0]["annotations"] = [None] * 257
+    else:
+        response["usage"] = {f"unknown-{index}": index for index in range(257)}
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        [],
+        {"input_tokens": True},
+        {"output_tokens": -1},
+        {"total_tokens": 1_000_000_001},
+        {"input_tokens": 1.0},
+    ],
+)
+def test_usage_rejects_malformed_recognized_values(usage: object) -> None:
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(_completed_response(usage=usage))
+
+
+def test_usage_copies_only_exact_non_negative_bounded_integer_fields() -> None:
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 1_000_000_000,
+        "total_tokens": 100,
+        "input_tokens_details": {"cached_tokens": 99},
+    }
+
+    assert _parse(_completed_response(usage=usage))["usage"] == {
+        "input_tokens": 0,
+        "output_tokens": 1_000_000_000,
+        "total_tokens": 100,
+    }
+
+
+@pytest.mark.parametrize("citation_limit", [True, 0, 9, 5.0, "5"])
+def test_parser_reuses_exact_s01_1_citation_limit_contract(
+    citation_limit: object,
+) -> None:
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(citation_limit=citation_limit)
+
+
+class _HostileDict(dict[object, object]):
+    def __init__(self, value: dict[object, object], hooks: list[str]) -> None:
+        dict.__init__(self, value)
+        self.hooks = hooks
+
+    def _fail(self, hook: str) -> Never:
+        self.hooks.append(hook)
+        raise RuntimeError("caller-controlled-container")
+
+    def __len__(self) -> int:
+        self._fail("len")
+
+    def __iter__(self):
+        self._fail("iter")
+
+    def __getitem__(self, key: object) -> object:
+        del key
+        self._fail("getitem")
+
+    def get(self, key: object, default: object = None) -> object:
+        del key, default
+        self._fail("get")
+
+
+class _HostileList(list[object]):
+    def __init__(self, value: list[object], hooks: list[str]) -> None:
+        list.__init__(self, value)
+        self.hooks = hooks
+
+    def _fail(self, hook: str) -> Never:
+        self.hooks.append(hook)
+        raise RuntimeError("caller-controlled-container")
+
+    def __len__(self) -> int:
+        self._fail("len")
+
+    def __iter__(self):
+        self._fail("iter")
+
+
+@pytest.mark.parametrize(
+    "location", ["root", "output", "item", "content", "annotations", "usage"]
+)
+def test_hostile_container_subclasses_fail_without_executing_hooks(
+    location: str,
+) -> None:
+    hooks: list[str] = []
+    response: object = _completed_response()
+    body = response
+    if location == "root":
+        response = _HostileDict(cast(dict[object, object], body), hooks)
+    elif location == "output":
+        body["output"] = _HostileList(cast(list[object], body["output"]), hooks)
+    elif location == "item":
+        output = cast(list[object], body["output"])
+        output[1] = _HostileDict(cast(dict[object, object], output[1]), hooks)
+    elif location == "content":
+        message = cast(dict[str, object], cast(list[object], body["output"])[2])
+        message["content"] = _HostileList(cast(list[object], message["content"]), hooks)
+    elif location == "annotations":
+        content = cast(
+            list[dict[str, object]],
+            cast(dict[str, object], cast(list[object], body["output"])[2])["content"],
+        )
+        content[0]["annotations"] = _HostileList([], hooks)
+    else:
+        body["usage"] = _HostileDict({}, hooks)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(response)
+
+    assert hooks == []
+    assert "caller-controlled-container" not in str(caught.value)
+
+
+@pytest.mark.parametrize("location", ["status", "type", "text", "url", "title"])
+def test_hostile_string_subclasses_fail_without_executing_hooks(location: str) -> None:
+    hooks: list[str] = []
+    response = _completed_response(
+        content=[_output_text("answer", [_citation("https://example.com")])]
+    )
+    output = cast(list[dict[str, object]], response["output"])
+    content = cast(list[dict[str, object]], output[2]["content"])
+    annotation = cast(list[dict[str, object]], content[0]["annotations"])[0]
+    if location == "status":
+        response["status"] = _HookedStr("completed", hooks)
+    elif location == "type":
+        output[2]["type"] = _HookedStr("message", hooks)
+    elif location == "text":
+        content[0]["text"] = _HookedStr("answer", hooks)
+    elif location == "url":
+        annotation["url"] = _HookedStr("https://example.com", hooks)
+    else:
+        annotation["title"] = _HookedStr("title", hooks)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+    assert hooks == []
+
+
+def test_hostile_integer_subclasses_never_execute_hooks() -> None:
+    hooks: list[str] = []
+    response = _completed_response(
+        content=[
+            _output_text(
+                "answer",
+                [
+                    _citation(
+                        "https://example.com",
+                        start_index=_HookedInt(0, hooks),
+                        end_index=_HookedInt(2, hooks),
+                    )
+                ],
+            )
+        ],
+    )
+
+    citation = cast(list[dict[str, str]], _parse(response)["results"])[0]
+    assert citation["content"] == ""
+    assert hooks == []
+
+
+def test_hostile_usage_integer_subclass_fails_without_executing_hooks() -> None:
+    hooks: list[str] = []
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(_completed_response(usage={"input_tokens": _HookedInt(1, hooks)}))
+
+    assert hooks == []
+
+
+def test_hostile_citation_limit_fails_with_static_parse_error_and_no_hooks() -> None:
+    hooks: list[str] = []
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(citation_limit=_HookedInt(5, hooks))
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert hooks == []
+
+
+def test_deterministic_response_micro_fuzz_reasserts_final_invariants() -> None:
+    rng = random.Random(0x5012)
+    for index in range(512):
+        scheme = rng.choice(["http", "https", "HTTP", "HTTPS"])
+        host = f"Sub{rng.randrange(10)}.Example.COM"
+        default_port = ":80" if scheme.lower() == "http" else ":443"
+        port = rng.choice(["", default_port, ":8443"])
+        path = rng.choice(["", "/", f"/p/{index}"])
+        fragment = f"#fragment-{rng.randrange(20)}"
+        text = f"prefix-{index}-suffix"
+        start = rng.randrange(len(text) + 1)
+        end = rng.randrange(start, len(text) + 1)
+        title = rng.choice(["", "  ", f" title {index} ", "t" * 700])
+        annotation = _citation(
+            f"{scheme}://{host}{port}{path}?n={index}{fragment}",
+            title=title,
+            start_index=start,
+            end_index=end,
+        )
+
+        result = _parse(
+            _completed_response(
+                content=[_output_text(f" {text} ", [annotation])],
+                usage={"input_tokens": index, "unknown": object()},
+            ),
+            citation_limit=8,
+        )
+        output = result["output"]
+        results = cast(list[dict[str, str]], result["results"])
+        usage = cast(dict[str, int], result["usage"])
+
+        assert type(output) is str and 1 <= len(output) <= 64_000
+        assert len(results) <= 8
+        assert usage == {"input_tokens": index}
+        assert all(set(item) == {"title", "url", "content"} for item in results)
+        assert all(len(item["title"]) <= 500 for item in results)
+        assert all(len(item["url"]) <= 8192 for item in results)
+        assert all(len(item["content"]) <= 1200 for item in results)
+        assert all(
+            item["url"].split(":", 1)[0] in {"http", "https"} for item in results
+        )
+        assert all(
+            "#" not in item["url"] and "@" not in item["url"] for item in results
+        )
+
+
+def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
+    module_path = Path(inspect.getfile(parse_deepseek_responses_search_response))
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    imported = {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    imported.update(
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    )
+    assert imported.isdisjoint(
+        {
+            "asyncio",
+            "http.client",
+            "httpx",
+            "json",
+            "os",
+            "pathlib",
+            "socket",
+            "urllib.request",
+            "codex_rosetta.gateway.config",
+            "codex_rosetta.gateway.providers",
+            "codex_rosetta.gateway.transport",
+            "codex_rosetta.observability.redaction",
+        }
+    )
+
+    repository_root = module_path.parents[3]
+    import_text = "codex_rosetta.gateway.deepseek_responses_search"
+    production_importers = []
+    for source in (repository_root / "src").rglob("*.py"):
+        if source == module_path:
+            continue
+        if import_text in source.read_text(encoding="utf-8"):
+            production_importers.append(source)
+    assert production_importers == []

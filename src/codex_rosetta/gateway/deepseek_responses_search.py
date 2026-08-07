@@ -1,10 +1,12 @@
-"""Pure request contract for DeepSeek Responses hosted web search."""
+"""Pure request and response contracts for DeepSeek hosted web search."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from urllib.parse import urlsplit
+from ipaddress import IPv6Address
+from typing import Final, Never, cast
+from urllib.parse import urlsplit, urlunsplit
 
 DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN = "https://api.deepseek.com"
 DEEPSEEK_RESPONSES_SEARCH_MODEL = "deepseek-v4-flash"
@@ -12,10 +14,25 @@ DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS = frozenset({512, 1024, 1536})
 
 _QUERY_MAX_LENGTH = 4000
 _CITATION_LIMIT_RANGE = range(1, 9)
+_CONTAINER_MAX_ITEMS = 256
+_OUTPUT_MAX_LENGTH = 64_000
+_RESULT_TITLE_MAX_LENGTH = 500
+_RESULT_URL_MAX_LENGTH = 8192
+_RESULT_CONTENT_MAX_LENGTH = 1200
+_USAGE_TOKEN_MAX = 1_000_000_000
+_PARSE_ERROR_MESSAGE: Final = "DeepSeek Responses search response is invalid"
+_USAGE_FIELDS: Final = ("input_tokens", "output_tokens", "total_tokens")
 _SEARCH_PROMPT_PREFIX = (
     "Search the web for the following query. Return a concise factual answer and "
     "cite the sources you used.\n\nQuery: "
 )
+
+
+class DeepSeekResponsesSearchParseError(ValueError):
+    """A static, provider-neutral failure for an invalid hosted-search response."""
+
+    def __init__(self) -> None:
+        super().__init__(_PARSE_ERROR_MESSAGE)
 
 
 def normalize_deepseek_responses_origin(origin: object) -> str:
@@ -158,11 +175,317 @@ def build_deepseek_responses_search_request(
     )
 
 
+def _raise_parse_error() -> Never:
+    raise DeepSeekResponsesSearchParseError
+
+
+def _bounded_exact_dict(value: object) -> dict[object, object]:
+    if type(value) is not dict:
+        _raise_parse_error()
+    value = cast(dict[object, object], value)
+    if len(value) > _CONTAINER_MAX_ITEMS:
+        _raise_parse_error()
+    return value
+
+
+def _bounded_exact_list(value: object) -> list[object]:
+    if type(value) is not list:
+        _raise_parse_error()
+    value = cast(list[object], value)
+    if len(value) > _CONTAINER_MAX_ITEMS:
+        _raise_parse_error()
+    return value
+
+
+def _typed_item(value: object) -> tuple[str, dict[object, object]] | None:
+    if type(value) is not dict:
+        if isinstance(value, dict):
+            _raise_parse_error()
+        return None
+    item = _bounded_exact_dict(value)
+    item_type = item.get("type")
+    if type(item_type) is not str:
+        _raise_parse_error()
+    return item_type, item
+
+
+def _valid_citation_hostname(hostname: str) -> bool:
+    if ":" in hostname:
+        try:
+            IPv6Address(hostname)
+        except ValueError:
+            return False
+        return True
+    labels = hostname[:-1].split(".") if hostname.endswith(".") else hostname.split(".")
+    return bool(labels) and all(
+        label
+        and not label.startswith("-")
+        and not label.endswith("-")
+        and all(character.isalnum() or character == "-" for character in label)
+        for label in labels
+    )
+
+
+def _canonicalize_citation_url(value: object) -> tuple[str, str] | None:
+    if type(value) is not str:
+        _raise_parse_error()
+    if not value or value[0].isspace() or value[-1].isspace():
+        return None
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+        hostname = parsed.hostname
+    except ValueError:
+        return None
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or hostname is None
+        or not hostname
+        or not _valid_citation_hostname(hostname)
+        or parsed.username is not None
+        or parsed.password is not None
+        or any(
+            character.isspace()
+            or ord(character) < 0x20
+            or character in {"/", "\\", "@", "?", "#"}
+            for character in hostname
+        )
+    ):
+        return None
+
+    scheme = parsed.scheme.lower()
+    canonical_hostname = hostname.lower()
+    rendered_hostname = (
+        f"[{canonical_hostname}]" if ":" in canonical_hostname else canonical_hostname
+    )
+    default_port = (scheme == "http" and port == 80) or (
+        scheme == "https" and port == 443
+    )
+    netloc = (
+        rendered_hostname
+        if port is None or default_port
+        else f"{rendered_hostname}:{port}"
+    )
+    path = parsed.path or "/"
+    canonical_length = (
+        len(scheme)
+        + 3
+        + len(netloc)
+        + len(path)
+        + (1 + len(parsed.query) if parsed.query else 0)
+    )
+    if canonical_length > _RESULT_URL_MAX_LENGTH:
+        return None
+    canonical = urlunsplit((scheme, netloc, path, parsed.query, ""))
+    return canonical, canonical_hostname
+
+
+def _citation_content(annotation: dict[object, object], text: str) -> str:
+    start = annotation.get("start_index")
+    end = annotation.get("end_index")
+    if (
+        type(start) is not int
+        or type(end) is not int
+        or start < 0
+        or end < start
+        or end > len(text)
+    ):
+        return ""
+    return text[start : min(end, start + _RESULT_CONTENT_MAX_LENGTH)]
+
+
+def _trimmed_prefix(value: str, limit: int) -> str:
+    start = 0
+    end = len(value)
+    while start < end and value[start].isspace():
+        start += 1
+    while end > start and value[end - 1].isspace():
+        end -= 1
+    return value[start : min(end, start + limit)]
+
+
+def _citation_title(annotation: dict[object, object], hostname: str) -> str:
+    title = annotation.get("title")
+    if title is None:
+        normalized = hostname
+    elif type(title) is str:
+        normalized = _trimmed_prefix(title, _RESULT_TITLE_MAX_LENGTH) or hostname
+    else:
+        _raise_parse_error()
+    return normalized[:_RESULT_TITLE_MAX_LENGTH]
+
+
+def _parse_citations(
+    annotations_value: object,
+    *,
+    text: str,
+    citation_limit: int,
+    seen_urls: set[str],
+    results: list[dict[str, str]],
+) -> None:
+    annotations = _bounded_exact_list(annotations_value)
+    for value in annotations:
+        typed = _typed_item(value)
+        if typed is None:
+            continue
+        annotation_type, annotation = typed
+        if annotation_type != "url_citation":
+            continue
+        canonicalized = _canonicalize_citation_url(annotation.get("url"))
+        if canonicalized is None:
+            continue
+        url, hostname = canonicalized
+        title = _citation_title(annotation, hostname)
+        content = _citation_content(annotation, text)
+        if url in seen_urls or len(results) >= citation_limit:
+            continue
+        seen_urls.add(url)
+        results.append(
+            {
+                "title": title,
+                "url": url,
+                "content": content,
+            }
+        )
+
+
+def _parse_usage(response: dict[object, object]) -> dict[str, int]:
+    if "usage" not in response:
+        return {}
+    usage = _bounded_exact_dict(response["usage"])
+    normalized: dict[str, int] = {}
+    for field in _USAGE_FIELDS:
+        if field not in usage:
+            continue
+        value = usage[field]
+        if type(value) is not int or not 0 <= value <= _USAGE_TOKEN_MAX:
+            _raise_parse_error()
+        normalized[field] = value
+    return normalized
+
+
+def _bounded_joined_output(text_fragments: list[str]) -> str:
+    first_item = -1
+    first_offset = 0
+    for item_index, text in enumerate(text_fragments):
+        offset = 0
+        while offset < len(text) and text[offset].isspace():
+            offset += 1
+        if offset < len(text):
+            first_item = item_index
+            first_offset = offset
+            break
+    if first_item < 0:
+        _raise_parse_error()
+
+    last_item = -1
+    last_offset = 0
+    for item_index in range(len(text_fragments) - 1, first_item - 1, -1):
+        text = text_fragments[item_index]
+        offset = len(text)
+        while offset > 0 and text[offset - 1].isspace():
+            offset -= 1
+        if offset > 0:
+            last_item = item_index
+            last_offset = offset
+            break
+
+    if first_item == last_item:
+        final_length = last_offset - first_offset
+    else:
+        final_length = len(text_fragments[first_item]) - first_offset
+        final_length += sum(
+            len(text_fragments[index]) for index in range(first_item + 1, last_item)
+        )
+        final_length += last_offset
+    if not 1 <= final_length <= _OUTPUT_MAX_LENGTH:
+        _raise_parse_error()
+
+    if first_item == last_item:
+        return text_fragments[first_item][first_offset:last_offset]
+    pieces = [text_fragments[first_item][first_offset:]]
+    pieces.extend(text_fragments[first_item + 1 : last_item])
+    pieces.append(text_fragments[last_item][:last_offset])
+    return "".join(pieces)
+
+
+def parse_deepseek_responses_search_response(
+    response: object,
+    *,
+    citation_limit: object,
+) -> dict[str, object]:
+    """Parse one completed hosted-search response into a bounded neutral value.
+
+    The parser consumes only already-decoded Python/JSON values. It performs no
+    transport, credential, storage, logging, or filesystem work.
+    """
+    try:
+        validated_limit = _validate_citation_limit(citation_limit)
+    except ValueError:
+        raise DeepSeekResponsesSearchParseError from None
+
+    body = _bounded_exact_dict(response)
+    status = body.get("status")
+    if type(status) is not str or status != "completed":
+        _raise_parse_error()
+    output_items = _bounded_exact_list(body.get("output"))
+
+    completed_search = False
+    text_fragments: list[str] = []
+    results: list[dict[str, str]] = []
+    seen_urls: set[str] = set()
+
+    for value in output_items:
+        typed = _typed_item(value)
+        if typed is None:
+            continue
+        item_type, item = typed
+        if item_type == "reasoning":
+            continue
+        if item_type == "web_search_call":
+            search_status = item.get("status")
+            if type(search_status) is not str:
+                _raise_parse_error()
+            completed_search = completed_search or search_status == "completed"
+            continue
+        if item_type != "message":
+            continue
+
+        content_items = _bounded_exact_list(item.get("content"))
+        for content_value in content_items:
+            content_typed = _typed_item(content_value)
+            if content_typed is None:
+                continue
+            content_type, content = content_typed
+            if content_type != "output_text":
+                continue
+            text = content.get("text")
+            if type(text) is not str or not text:
+                _raise_parse_error()
+            text = cast(str, text)
+            text_fragments.append(text)
+            _parse_citations(
+                content.get("annotations"),
+                text=text,
+                citation_limit=validated_limit,
+                seen_urls=seen_urls,
+                results=results,
+            )
+
+    if not completed_search:
+        _raise_parse_error()
+    output = _bounded_joined_output(text_fragments)
+
+    return {"output": output, "results": results, "usage": _parse_usage(body)}
+
+
 __all__ = [
     "DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN",
     "DEEPSEEK_RESPONSES_SEARCH_MODEL",
     "DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS",
+    "DeepSeekResponsesSearchParseError",
     "DeepSeekResponsesSearchRequest",
     "build_deepseek_responses_search_request",
     "normalize_deepseek_responses_origin",
+    "parse_deepseek_responses_search_response",
 ]
