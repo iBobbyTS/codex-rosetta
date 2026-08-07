@@ -8,9 +8,12 @@ from ipaddress import IPv6Address
 from typing import Final, Never, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from codex_rosetta.observability.redaction import SecretRedactor
+
 DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN = "https://api.deepseek.com"
 DEEPSEEK_RESPONSES_SEARCH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS = frozenset({512, 1024, 1536})
+DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES = 4 * 1024 * 1024
 
 _QUERY_MAX_LENGTH = 4000
 _CITATION_LIMIT_RANGE = range(1, 9)
@@ -23,6 +26,10 @@ _RESULT_URL_MAX_LENGTH = 8192
 _RESULT_CONTENT_MAX_LENGTH = 1200
 _USAGE_TOKEN_MAX = 1_000_000_000
 _PARSE_ERROR_MESSAGE: Final = "DeepSeek Responses search response is invalid"
+_CREDENTIAL_COLLISION_ERROR_MESSAGE: Final = (
+    "DeepSeek Responses search response contains a configured credential; "
+    "response blocked"
+)
 _USAGE_FIELDS: Final = ("input_tokens", "output_tokens", "total_tokens")
 _SEARCH_PROMPT_PREFIX = (
     "Search the web for the following query. Return a concise factual answer and "
@@ -35,6 +42,13 @@ class DeepSeekResponsesSearchParseError(ValueError):
 
     def __init__(self) -> None:
         super().__init__(_PARSE_ERROR_MESSAGE)
+
+
+class DeepSeekResponsesSearchCredentialCollisionError(ValueError):
+    """A static failure when hosted-search output reconstructs a credential."""
+
+    def __init__(self) -> None:
+        super().__init__(_CREDENTIAL_COLLISION_ERROR_MESSAGE)
 
 
 def normalize_deepseek_responses_origin(origin: object) -> str:
@@ -526,13 +540,119 @@ def parse_deepseek_responses_search_response(
     }
 
 
+def _redactor_contains_json_semantic(
+    redactor: SecretRedactor, raw_response: bytes
+) -> bool:
+    failed = False
+    collision = False
+    try:
+        collision = SecretRedactor.contains_json_semantic(redactor, raw_response)
+    except MemoryError:
+        raise
+    except Exception:
+        failed = True
+    if failed:
+        _raise_parse_error()
+    return collision
+
+
+def _redactor_contains_exact(
+    redactor: SecretRedactor, normalized: dict[str, object]
+) -> bool:
+    failed = False
+    collision = False
+    try:
+        collision = SecretRedactor.contains_exact(redactor, normalized)
+    except MemoryError:
+        raise
+    except Exception:
+        failed = True
+    if failed:
+        _raise_parse_error()
+    return collision
+
+
+def _literal_publication_sequence_contains_credential(
+    redactor: SecretRedactor, normalized: dict[str, object]
+) -> bool:
+    output = cast(str, normalized["output"])
+    results = cast(list[dict[str, str]], normalized["results"])
+    collision = False
+    failed = False
+    memory_error: MemoryError | None = None
+    try:
+        detector = SecretRedactor.streaming_value_detector(redactor)
+    except MemoryError as exc:
+        memory_error = exc
+    except Exception:
+        failed = True
+    else:
+        try:
+            if detector.feed(output.encode("utf-8")):
+                collision = True
+            for result in results:
+                for field in ("title", "url", "content"):
+                    if not collision and detector.feed(result[field].encode("utf-8")):
+                        collision = True
+        except MemoryError as exc:
+            memory_error = exc
+        except Exception:
+            failed = True
+        finally:
+            try:
+                detector.finish()
+            except MemoryError as exc:
+                if memory_error is None:
+                    memory_error = exc
+            except Exception:
+                if memory_error is None:
+                    failed = True
+    if memory_error is not None:
+        raise memory_error
+    if failed:
+        _raise_parse_error()
+    return collision
+
+
+def publish_deepseek_responses_search_response(
+    *,
+    raw_response: object,
+    response: object,
+    citation_limit: object,
+    redactor: object,
+) -> dict[str, object]:
+    """Publish a parsed response only after raw and normalized secret gates."""
+    if type(redactor) is not SecretRedactor:
+        _raise_parse_error()
+    if type(raw_response) is not bytes:
+        _raise_parse_error()
+    if len(raw_response) > DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES:
+        _raise_parse_error()
+
+    if _redactor_contains_json_semantic(redactor, raw_response):
+        raise DeepSeekResponsesSearchCredentialCollisionError
+
+    normalized = parse_deepseek_responses_search_response(
+        response,
+        citation_limit=citation_limit,
+    )
+    if _redactor_contains_exact(redactor, normalized):
+        raise DeepSeekResponsesSearchCredentialCollisionError
+    if _literal_publication_sequence_contains_credential(redactor, normalized):
+        raise DeepSeekResponsesSearchCredentialCollisionError
+    return normalized
+
+
 __all__ = [
     "DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN",
     "DEEPSEEK_RESPONSES_SEARCH_MODEL",
+    "DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES",
     "DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS",
+    "DeepSeekResponsesSearchCredentialCollisionError",
     "DeepSeekResponsesSearchParseError",
     "DeepSeekResponsesSearchRequest",
     "build_deepseek_responses_search_request",
     "normalize_deepseek_responses_origin",
     "parse_deepseek_responses_search_response",
+    "publish_deepseek_responses_search_response",
 ]

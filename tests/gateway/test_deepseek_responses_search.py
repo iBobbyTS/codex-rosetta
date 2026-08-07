@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import json
 import random
 from collections.abc import Callable
 from pathlib import Path
@@ -15,12 +16,16 @@ import codex_rosetta.gateway.deepseek_responses_search as deepseek_search
 from codex_rosetta.gateway.deepseek_responses_search import (
     DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
     DEEPSEEK_RESPONSES_SEARCH_MODEL,
+    DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES,
+    DeepSeekResponsesSearchCredentialCollisionError,
     DeepSeekResponsesSearchParseError,
     DeepSeekResponsesSearchRequest,
     build_deepseek_responses_search_request,
     normalize_deepseek_responses_origin,
     parse_deepseek_responses_search_response,
+    publish_deepseek_responses_search_response,
 )
+from codex_rosetta.observability.redaction import SecretRedactor
 
 _EXPECTED_PROMPT = (
     "Search the web for the following query. Return a concise factual answer and "
@@ -555,7 +560,6 @@ def test_pre_io_module_has_no_forbidden_runtime_dependency_or_parameter() -> Non
         "codex_rosetta.gateway.config",
         "codex_rosetta.gateway.providers",
         "codex_rosetta.gateway.transport",
-        "codex_rosetta.observability.redaction",
     }
     assert imported.isdisjoint(forbidden_imports)
     assert set(parameters) == {
@@ -618,6 +622,24 @@ def _parse(
     return parse_deepseek_responses_search_response(
         _completed_response() if response is _DEFAULT_RESPONSE else response,
         citation_limit=citation_limit,
+    )
+
+
+def _publish(
+    response: object = _DEFAULT_RESPONSE,
+    *,
+    raw_response: object | None = None,
+    citation_limit: object = 5,
+    tokens: tuple[str, ...] = (),
+) -> dict[str, object]:
+    value = _completed_response() if response is _DEFAULT_RESPONSE else response
+    if raw_response is None:
+        raw_response = json.dumps(value, ensure_ascii=False).encode("utf-8")
+    return publish_deepseek_responses_search_response(
+        raw_response=raw_response,
+        response=value,
+        citation_limit=citation_limit,
+        redactor=SecretRedactor(tokens),
     )
 
 
@@ -1608,6 +1630,574 @@ def test_deterministic_response_micro_fuzz_reasserts_final_invariants() -> None:
         )
 
 
+_COLLISION_MESSAGE = (
+    "DeepSeek Responses search response contains a configured credential; "
+    "response blocked"
+)
+
+
+def _assert_static_collision(caught: pytest.ExceptionInfo[ValueError]) -> None:
+    assert type(caught.value) is DeepSeekResponsesSearchCredentialCollisionError
+    assert caught.value.args == (_COLLISION_MESSAGE,)
+    assert str(caught.value) == _COLLISION_MESSAGE
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+@pytest.mark.parametrize("location", ["key", "value", "text"])
+def test_publish_blocks_raw_exact_reflection_before_parser(
+    location: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    token = "".join(("s01", "three", "-raw"))
+    encoded = token.encode("utf-8")
+    if location == "key":
+        raw = b'{"' + encoded + b'":"safe"}'
+    elif location == "value":
+        raw = b'{"value":"' + encoded + b'"}'
+    else:
+        raw = b'{"text":"prefix-' + encoded + b'-suffix"}'
+    parser_calls = 0
+
+    def parser_must_not_run(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        nonlocal parser_calls
+        parser_calls += 1
+        raise AssertionError("parser ran after a raw collision")
+
+    monkeypatch.setattr(
+        deepseek_search,
+        "parse_deepseek_responses_search_response",
+        parser_must_not_run,
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response=None, raw_response=raw, tokens=(token,))
+
+    _assert_static_collision(caught)
+    assert parser_calls == 0
+
+
+@pytest.mark.parametrize(
+    "raw_builder",
+    [
+        lambda: b'{"value":"s01\\u0074hree-semantic"}',
+        lambda: b'{"value":"s01\\/three-semantic"}',
+        lambda: b'{"value":"s01\\u0074hree-semantic","value":"safe"}',
+        lambda: b'{"value":"s01-\\ud83d\\ude00-semantic"}',
+    ],
+    ids=["unicode-escape", "escaped-slash", "duplicate-member", "surrogate-pair"],
+)
+def test_publish_blocks_raw_json_semantic_reflection(
+    raw_builder: Callable[[], bytes],
+) -> None:
+    raw = raw_builder()
+    token = (
+        "s01/three-semantic"
+        if b"\\/" in raw
+        else ("s01-\U0001f600-semantic" if b"ud83d" in raw else "s01three-semantic")
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response=None, raw_response=raw, tokens=(token,))
+
+    _assert_static_collision(caught)
+
+
+@pytest.mark.parametrize(
+    "fragments",
+    [
+        ["s01", "three-", "joined"],
+        ["  s01", "three-", "joined  "],
+        ["ordinary s01", "three-", "joined suffix"],
+    ],
+    ids=["two-boundaries", "trimmed-edges", "ordinary-surrounding-text"],
+)
+def test_publish_blocks_token_reconstructed_by_ordered_output_join(
+    fragments: list[str],
+) -> None:
+    token = "".join(("s01", "three-", "joined"))
+    response = _completed_response(content=[_output_text(part) for part in fragments])
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response, tokens=(token,))
+
+    _assert_static_collision(caught)
+
+
+def test_publish_blocks_hostname_lowercase_synthesis_in_final_exact_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "".join(("secret", ".example"))
+    response = _completed_response(
+        content=[
+            _output_text(
+                "answer",
+                [_citation("HTTPS://SECRET.EXAMPLE:443#fragment", title="  ")],
+            )
+        ]
+    )
+
+    def detector_must_not_run(self: SecretRedactor) -> Never:
+        del self
+        raise AssertionError("literal detector ran after final exact collision")
+
+    monkeypatch.setattr(
+        SecretRedactor,
+        "streaming_value_detector",
+        detector_must_not_run,
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response, tokens=(token,))
+
+    _assert_static_collision(caught)
+
+
+def _cross_field_response(boundary: str) -> tuple[dict[str, object], str]:
+    if boundary == "output-title":
+        token = "".join(("answer", "Title"))
+        return _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://example.com", title="Title", end_index=0)],
+                )
+            ]
+        ), token
+    if boundary == "title-url":
+        token = "".join(("Title", "https://example.com/"))
+        return _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://example.com", title="Title", end_index=0)],
+                )
+            ]
+        ), token
+    if boundary == "url-content":
+        token = "".join(("https://example.com/", "answer"))
+        return _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://example.com", title="Title", end_index=6)],
+                )
+            ]
+        ), token
+    if boundary == "adjacent-results":
+        token = "".join(("piece", "Next"))
+        return _completed_response(
+            content=[
+                _output_text(
+                    "piece",
+                    [
+                        _citation(
+                            "https://first.example",
+                            title="First",
+                            end_index=5,
+                        ),
+                        _citation(
+                            "https://second.example",
+                            title="Next",
+                            end_index=0,
+                        ),
+                    ],
+                )
+            ]
+        ), token
+    token = "".join(('{"field":', "Title"))
+    return _completed_response(
+        content=[
+            _output_text(
+                '{"field":',
+                [_citation("https://example.com", title="Title", end_index=0)],
+            )
+        ]
+    ), token
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "output-title",
+        "title-url",
+        "url-content",
+        "adjacent-results",
+        "json-looking-output-title",
+    ],
+)
+def test_publish_blocks_literal_cross_field_reconstruction(boundary: str) -> None:
+    response, token = _cross_field_response(boundary)
+    direct = _parse(response)
+
+    assert not SecretRedactor((token,)).contains_exact(direct)
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        _publish(response, tokens=(token,))
+
+    _assert_static_collision(caught)
+
+
+@pytest.mark.parametrize(
+    ("token", "output", "title"),
+    [
+        ("s01three-safe", "s01three-saf", "ordinary"),
+        ("s01three-safe", "safe", "s01three-"),
+        ("s01three-safe", "s01three-", "middle-safe"),
+        ("CaseSensitive", "casesensitive", "ordinary"),
+    ],
+    ids=["similar-prefix", "reverse-order", "non-adjacent", "case-mismatch"],
+)
+def test_publish_safe_near_matches_do_not_false_positive(
+    token: str, output: str, title: str
+) -> None:
+    response = _completed_response(
+        content=[
+            _output_text(
+                output,
+                [_citation("https://example.com", title=title, end_index=0)],
+            )
+        ]
+    )
+
+    assert _publish(response, tokens=(token,)) == _parse(response)
+
+
+def test_publish_zero_token_redactor_is_exact_parser_equivalent() -> None:
+    response = _completed_response(
+        content=[
+            _output_text(
+                "answer",
+                [_citation("https://example.com/path#fragment", title="Title")],
+            )
+        ],
+        usage={"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+    )
+
+    assert _publish(response) == _parse(response)
+
+
+@pytest.mark.parametrize("token_index", [0, 1, 2])
+def test_publish_multiple_tokens_are_order_and_duplicate_independent(
+    token_index: int,
+) -> None:
+    tokens = (
+        "".join(("raw", "-token")),
+        "".join(("final", ".example")),
+        "".join(("answer", "Title")),
+    )
+    if token_index == 0:
+        response = _completed_response()
+        raw = b'{"value":"raw-token"}'
+    elif token_index == 1:
+        response = _completed_response(
+            content=[
+                _output_text(
+                    "answer",
+                    [_citation("https://FINAL.EXAMPLE", title="  ")],
+                )
+            ]
+        )
+        raw = None
+    else:
+        response, _ = _cross_field_response("output-title")
+        raw = None
+    configured = (tokens[2], tokens[token_index], tokens[0], tokens[token_index])
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError):
+        _publish(response, raw_response=raw, tokens=configured)
+
+
+class _HostileBytes(bytes):
+    hooks: list[str]
+
+    def __new__(cls, hooks: list[str]) -> _HostileBytes:
+        instance = bytes.__new__(cls, b"{}")
+        instance.hooks = hooks
+        return instance
+
+    def _fail(self, hook: str) -> Never:
+        self.hooks.append(hook)
+        raise RuntimeError("caller-controlled-bytes")
+
+    def __len__(self) -> int:
+        self._fail("len")
+
+    def __iter__(self):
+        self._fail("iter")
+
+    def __bytes__(self) -> bytes:
+        self._fail("bytes")
+
+    def __str__(self) -> str:
+        self._fail("str")
+
+    def __repr__(self) -> str:
+        self._fail("repr")
+
+
+class _HostileRedactor(SecretRedactor):
+    def __init__(self, hooks: list[str]) -> None:
+        super().__init__(())
+        self.hooks = hooks
+
+    def contains_json_semantic(self, value: str | bytes) -> bool:
+        del value
+        self.hooks.append("contains_json_semantic")
+        raise RuntimeError("caller-controlled-redactor")
+
+    def contains_exact(self, value: Any) -> bool:
+        del value
+        self.hooks.append("contains_exact")
+        raise RuntimeError("caller-controlled-redactor")
+
+    def streaming_value_detector(self):
+        self.hooks.append("streaming_value_detector")
+        raise RuntimeError("caller-controlled-redactor")
+
+
+class _FakeRedactor:
+    def __init__(self, hooks: list[str]) -> None:
+        self.hooks = hooks
+
+    def contains_json_semantic(self, value: object) -> bool:
+        del value
+        self.hooks.append("contains_json_semantic")
+        return False
+
+
+@pytest.mark.parametrize("kind", ["bytes-subclass", "redactor-subclass", "fake"])
+def test_publish_preflight_rejects_hostile_inputs_without_hooks(kind: str) -> None:
+    hooks: list[str] = []
+    raw: object = b"{}"
+    redactor: object = SecretRedactor(())
+    if kind == "bytes-subclass":
+        raw = _HostileBytes(hooks)
+    elif kind == "redactor-subclass":
+        redactor = _HostileRedactor(hooks)
+    else:
+        redactor = _FakeRedactor(hooks)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        publish_deepseek_responses_search_response(
+            raw_response=raw,
+            response=_completed_response(),
+            citation_limit=5,
+            redactor=redactor,
+        )
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert hooks == []
+
+
+def test_publish_raw_size_bound_runs_before_redactor_or_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def raw_gate(self: SecretRedactor, value: str | bytes) -> bool:
+        del self, value
+        calls.append("redactor")
+        return False
+
+    def parser(*args: object, **kwargs: object) -> dict[str, object]:
+        del args, kwargs
+        calls.append("parser")
+        return {}
+
+    monkeypatch.setattr(SecretRedactor, "contains_json_semantic", raw_gate)
+    monkeypatch.setattr(
+        deepseek_search, "parse_deepseek_responses_search_response", parser
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _publish(
+            raw_response=b"x" * (DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES + 1),
+        )
+
+    assert calls == []
+
+
+def test_publish_accepts_exact_raw_size_ceiling() -> None:
+    assert (
+        _publish(
+            raw_response=b"x" * DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES,
+        )
+        == _parse()
+    )
+
+
+def test_publish_preserves_hostile_response_parser_contract_without_hooks() -> None:
+    hooks: list[str] = []
+    response = _HostileDict(cast(dict[object, object], _completed_response()), hooks)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _publish(response, raw_response=b"not-json")
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+    assert hooks == []
+
+
+def test_publish_calls_two_gates_around_parser_in_exact_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    exact_depth = 0
+    raw_gate = SecretRedactor.contains_json_semantic
+    exact_gate = SecretRedactor.contains_exact
+    detector_gate = SecretRedactor.streaming_value_detector
+    parser = deepseek_search.parse_deepseek_responses_search_response
+
+    def wrapped_raw(self: SecretRedactor, value: str | bytes) -> bool:
+        calls.append("raw")
+        return raw_gate(self, value)
+
+    def wrapped_parser(
+        response: object, *, citation_limit: object
+    ) -> dict[str, object]:
+        calls.append("parser")
+        return parser(response, citation_limit=citation_limit)
+
+    def wrapped_exact(self: SecretRedactor, value: Any) -> bool:
+        nonlocal exact_depth
+        if exact_depth == 0:
+            calls.append("exact")
+        exact_depth += 1
+        try:
+            return exact_gate(self, value)
+        finally:
+            exact_depth -= 1
+
+    def wrapped_detector(self: SecretRedactor):
+        calls.append("literal")
+        return detector_gate(self)
+
+    monkeypatch.setattr(SecretRedactor, "contains_json_semantic", wrapped_raw)
+    monkeypatch.setattr(
+        deepseek_search, "parse_deepseek_responses_search_response", wrapped_parser
+    )
+    monkeypatch.setattr(SecretRedactor, "contains_exact", wrapped_exact)
+    monkeypatch.setattr(SecretRedactor, "streaming_value_detector", wrapped_detector)
+
+    assert _publish() == _parse()
+    assert calls == ["raw", "exact", "parser", "exact", "literal"]
+
+
+@pytest.mark.parametrize("operation", ["raw", "exact", "detector", "feed", "finish"])
+def test_publish_redactor_internal_failures_are_static_parse_errors(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    finish_calls = 0
+
+    class FailingDetector:
+        def feed(self, value: bytes) -> bool:
+            del value
+            if operation == "feed":
+                raise RuntimeError("sensitive-internal-detail")
+            return False
+
+        def finish(self) -> None:
+            nonlocal finish_calls
+            finish_calls += 1
+            if operation == "finish":
+                raise RuntimeError("sensitive-internal-detail")
+
+    if operation == "raw":
+        monkeypatch.setattr(
+            SecretRedactor,
+            "contains_json_semantic",
+            lambda self, value: (_ for _ in ()).throw(
+                RuntimeError("sensitive-internal-detail")
+            ),
+        )
+        raw = b"not-json"
+    elif operation == "exact":
+        monkeypatch.setattr(
+            SecretRedactor,
+            "contains_exact",
+            lambda self, value: (_ for _ in ()).throw(
+                RuntimeError("sensitive-internal-detail")
+            ),
+        )
+        raw = b"not-json"
+    else:
+        if operation == "detector":
+            monkeypatch.setattr(
+                SecretRedactor,
+                "streaming_value_detector",
+                lambda self: (_ for _ in ()).throw(
+                    RuntimeError("sensitive-internal-detail")
+                ),
+            )
+        else:
+            monkeypatch.setattr(
+                SecretRedactor,
+                "streaming_value_detector",
+                lambda self: FailingDetector(),
+            )
+        raw = b"not-json"
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _publish(raw_response=raw)
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert "sensitive-internal-detail" not in str(caught.value)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    if operation in {"feed", "finish"}:
+        assert finish_calls == 1
+
+
+@pytest.mark.parametrize("operation", ["raw", "exact", "detector"])
+def test_publish_redactor_memory_errors_propagate(
+    operation: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if operation == "raw":
+        monkeypatch.setattr(
+            SecretRedactor,
+            "contains_json_semantic",
+            lambda self, value: (_ for _ in ()).throw(MemoryError()),
+        )
+        raw = b"not-json"
+    elif operation == "exact":
+        monkeypatch.setattr(
+            SecretRedactor,
+            "contains_exact",
+            lambda self, value: (_ for _ in ()).throw(MemoryError()),
+        )
+        raw = b"not-json"
+    else:
+        monkeypatch.setattr(
+            SecretRedactor,
+            "streaming_value_detector",
+            lambda self: (_ for _ in ()).throw(MemoryError()),
+        )
+        raw = b"not-json"
+
+    with pytest.raises(MemoryError):
+        _publish(raw_response=raw)
+
+
+def test_publish_public_contract_is_keyword_only_and_bounded() -> None:
+    parameters = inspect.signature(
+        publish_deepseek_responses_search_response
+    ).parameters
+
+    assert list(parameters) == [
+        "raw_response",
+        "response",
+        "citation_limit",
+        "redactor",
+    ]
+    assert all(
+        parameter.kind is inspect.Parameter.KEYWORD_ONLY
+        for parameter in parameters.values()
+    )
+    assert DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES == 4_194_304
+
+
 def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
     module_path = Path(inspect.getfile(parse_deepseek_responses_search_response))
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
@@ -1633,9 +2223,9 @@ def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
             "codex_rosetta.gateway.config",
             "codex_rosetta.gateway.providers",
             "codex_rosetta.gateway.transport",
-            "codex_rosetta.observability.redaction",
         }
     )
+    assert "codex_rosetta.observability.redaction" in imported
 
     repository_root = module_path.parents[3]
     import_text = "codex_rosetta.gateway.deepseek_responses_search"
