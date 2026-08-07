@@ -552,7 +552,7 @@ async def _execute_search_queries(  # noqa: C901
             )
         successful_candidate = selected[-1]
         attribution = _candidate_attribution(successful_candidate)
-        if (
+        if _all_alpha_search_passthrough(search_candidates) and (
             successful_candidate.contract.execution_mode
             is SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH
         ):
@@ -1201,6 +1201,8 @@ def _search_request_fingerprint(body: dict[str, Any]) -> str:
 
 def _search_query_draft(query: str, raw: dict[str, Any]) -> SearchQueryDraft:
     answer = raw.get("answer")
+    if not isinstance(answer, str) or not answer.strip():
+        answer = raw.get("output")
     answer = (
         _trim_search_text(answer.strip(), 4_000)
         if isinstance(answer, str) and answer.strip()

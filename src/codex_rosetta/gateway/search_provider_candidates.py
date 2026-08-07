@@ -318,17 +318,15 @@ def search_candidates_capabilities(
     projection is the intersection of local capabilities so a failed GPT request
     cannot send an unsupported command to the fallback adapter.
     """
-    eligible = tuple(
-        candidate
+    if not any(
+        self_hosted_ready or candidate.provider not in SELF_HOSTED_PROVIDERS
         for candidate in candidates
-        if self_hosted_ready or candidate.provider not in SELF_HOSTED_PROVIDERS
-    )
-    if not eligible:
+    ):
         return frozenset()
     contracts = tuple(
         getattr(candidate, "contract", None)
         or _contract_for_legacy_candidate(candidate)
-        for candidate in eligible
+        for candidate in candidates
     )
     if any(
         contract is None

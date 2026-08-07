@@ -126,6 +126,25 @@ def test_local_candidate_and_self_hosted_readiness_are_explicit() -> None:
     )
 
 
+def test_gpt_and_self_hosted_capabilities_stay_local_across_readiness_changes() -> None:
+    candidates = [
+        _candidate(GPT_PASSTHROUGH_CONTRACT),
+        _candidate(SELF_HOSTED_LOCAL_CONTRACT, "self_hosted_google"),
+    ]
+    assert (
+        search_candidates_capabilities(candidates, self_hosted_ready=False)
+        == LOCAL_QUERY_CAPABILITIES
+    )
+    assert (
+        search_candidates_capabilities(candidates, self_hosted_ready=True)
+        == LOCAL_QUERY_CAPABILITIES
+    )
+    assert (
+        search_candidates_capabilities(candidates, self_hosted_ready=False)
+        == LOCAL_QUERY_CAPABILITIES
+    )
+
+
 @pytest.mark.parametrize(
     ("capabilities", "expected"),
     [

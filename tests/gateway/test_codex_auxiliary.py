@@ -862,6 +862,41 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
     assert records[-1]["data"]["candidate_provider"] == "self_hosted_google"
 
 
+def test_mixed_gpt_success_uses_normalized_local_result_contract() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=[
+            {
+                "id": "responses-first",
+                "provider": "configured_responses_provider",
+                "responses_provider": "search-upstream",
+                "responses_model": "gpt-5.6-luna",
+            },
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
+        ],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"output": "GPT answer", "results": [{"title": "Result"}]},
+        raw_content=b"{}",
+    )
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    result = json.loads(response.body)
+    assert response.status_code == 200
+    assert "GPT answer" in result["output"]
+    assert result["results"] == [
+        {"type": "text_result", "title": "Result", "url": "", "content": ""}
+    ]
+
+
 def test_each_self_hosted_candidate_selects_its_own_sidecar_engine(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
