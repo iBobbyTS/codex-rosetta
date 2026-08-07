@@ -242,6 +242,7 @@ declare const tools: { web__run(args: { search_query?: Array<{ q: string; domain
         projected_description,
         {"web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")},
     )["web-run"]["function"]
+    assert "`search_query` accepts at most 1 item." in nested["description"]
     assert set(top_level["parameters"]["properties"]) == set(
         nested["parameters"]["properties"]
     )

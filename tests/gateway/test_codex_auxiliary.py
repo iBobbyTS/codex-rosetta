@@ -20,13 +20,22 @@ from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
 from codex_rosetta.gateway.proxy import _apply_profile_runtime_adapter
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
+from codex_rosetta.gateway.search_provider_chain import SearchProviderAttemptCategory
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport import UpstreamConnectionError
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
-from codex_rosetta.gateway.web_search import WebSearchSettings
-from codex_rosetta.gateway.web_run_capabilities import web_run_model_availability
+from codex_rosetta.gateway.web_search import (
+    TavilyRequestError,
+    TavilyRequestErrorCategory,
+    WebSearchSettings,
+)
+from codex_rosetta.gateway.search_provider_contract import GPT_MIXED_MODE_CAPABILITIES
+from codex_rosetta.gateway.web_run_capabilities import (
+    project_modified_web_run_function,
+    web_run_model_availability,
+)
 
 
 ENDPOINTS = ("alpha/search", "images/generations", "images/edits")
@@ -409,6 +418,14 @@ class _FakeTavilyClient:
                 }
             ]
         }
+
+
+class _FailingTavilyClient:
+    async def search(
+        self, query: str, *, settings: WebSearchSettings
+    ) -> dict[str, Any]:
+        del query, settings
+        raise TavilyRequestError(TavilyRequestErrorCategory.HTTP_ERROR, status_code=503)
 
 
 class _FakePageClient:
@@ -830,6 +847,170 @@ def test_mixed_chain_multi_query_fails_before_candidate_attempt_or_cooldown(
         "codex_search_not_implemented",
     ]
     assert all("candidate_id" not in record["data"] for record in records)
+
+
+@pytest.mark.parametrize(
+    "local_provider,sidecar_ready,gpt_first,first_fails",
+    [
+        ("tavily", None, False, False),
+        ("tavily", None, True, False),
+        ("tavily", None, False, True),
+        ("tavily", None, True, True),
+        ("self_hosted_google", True, False, False),
+        ("self_hosted_google", True, True, False),
+        ("self_hosted_google", True, False, True),
+        ("self_hosted_google", True, True, True),
+        ("self_hosted_google", False, False, False),
+        ("self_hosted_google", False, True, False),
+    ],
+)
+def test_mixed_chain_projection_execution_trace_and_cooldown_matrix(
+    local_provider: str,
+    sidecar_ready: bool | None,
+    gpt_first: bool,
+    first_fails: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    gpt_row = {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "responses_provider": "search-upstream",
+        "responses_model": "gpt-5.6-luna",
+    }
+    local_row: dict[str, Any] = {"id": "local", "provider": local_provider}
+    if local_provider == "tavily":
+        local_row["tavily_api_key"] = "tvly-test"
+    rows = [gpt_row, local_row] if gpt_first else [local_row, gpt_row]
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        responses_search_provider="search-upstream",
+        tool_profile="test-web-run-mapping",
+        search_providers=rows,
+        tavily_api_key="tvly-test" if local_provider == "tavily" else None,
+        web_run_sidecar=local_provider == "self_hosted_google"
+        and sidecar_ready is True,
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    trace_path = (
+        tmp_path
+        / f"matrix-{local_provider}-{gpt_first}-{first_fails}-{sidecar_ready}.jsonl"
+    )
+    request.app.stream_trace_state = StreamTraceState(
+        StreamTraceConfig(enabled=True, path=str(trace_path))
+    )
+    request.app.metrics = MagicMock()
+    request.app.request_log = MagicMock()
+    gpt_payload = {
+        "output": "formal GPT search response",
+        "results": [{"title": "GPT result"}],
+        "encrypted_output": "opaque",
+    }
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=500 if first_fails and gpt_first else 200,
+        body=None if first_fails and gpt_first else gpt_payload,
+        raw_content=b'{"error":"failure"}'
+        if first_fails and gpt_first
+        else json.dumps(gpt_payload).encode(),
+    )
+    sidecar_request = AsyncMock()
+    sidecar_request.return_value = BoundedHttpResponse(
+        500 if first_fails and not gpt_first else 200,
+        {},
+        b'{"error":"failure"}'
+        if first_fails and not gpt_first
+        else b'{"results":[{"title":"sidecar result"}]}',
+    )
+    if local_provider == "self_hosted_google" and sidecar_ready is True:
+        monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_request)
+
+    if local_provider == "tavily":
+        search_client: Any = (
+            _FailingTavilyClient()
+            if first_fails and not gpt_first
+            else _FakeTavilyClient()
+        )
+    else:
+        search_client = None
+
+    projection_function = {
+        "type": "function",
+        "name": "web__run",
+        "description": "Use `search_query`.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "search_query": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {"q": {"type": "string"}},
+                    },
+                }
+            },
+        },
+    }
+    projected = project_modified_web_run_function(
+        projection_function,
+        search_available=True,
+        browser_available=sidecar_ready is True,
+        search_capabilities=GPT_MIXED_MODE_CAPABILITIES,
+    )
+    assert projected["parameters"]["properties"]["search_query"]["maxItems"] == 1
+
+    response = asyncio.run(
+        handle_codex_auxiliary(
+            request,
+            config,
+            "alpha/search",
+            search_client=search_client,
+        )
+    )
+
+    assert response.status_code == 200
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    result_record = records[-1]
+    assert result_record["stage"] == "codex_search_response"
+    selected_id = result_record["data"]["candidate_id"]
+    local_available = local_provider == "tavily" or sidecar_ready is True
+    expected_id = "responses" if gpt_first or not local_available else "local"
+    if first_fails:
+        expected_id = "local" if gpt_first else "responses"
+    assert selected_id == expected_id
+    assert result_record["data"]["candidate_provider"] == (
+        "configured_responses_provider"
+        if expected_id == "responses"
+        else local_provider
+    )
+    response_body = json.loads(response.body)
+    if selected_id == "responses":
+        assert "formal GPT search response" in response_body["output"]
+    else:
+        assert response_body["results"]
+    candidates = {
+        candidate.row_id: candidate for candidate in config.web_search_candidates
+    }
+    first_id = "responses" if gpt_first else "local"
+    if first_fails:
+        expected_cooldown = (
+            SearchProviderAttemptCategory.UPSTREAM_FAILURE
+            if first_id == "responses"
+            else SearchProviderAttemptCategory.HTTP_ERROR
+        )
+        assert (
+            request.app.search_provider_coordinator.cooldown_reason(
+                candidates[first_id]
+            )
+            is expected_cooldown
+        )
+    else:
+        assert all(
+            request.app.search_provider_coordinator.cooldown_reason(candidate) is None
+            for candidate in config.web_search_candidates
+        )
 
 
 @pytest.mark.parametrize(
