@@ -322,6 +322,7 @@
     draggedId = null;
     error = '';
     notice = '';
+    let saved = false;
     try {
       await api.put<{ server?: { web_search?: { providers?: SearchRow[] } } }>(
         '/admin/api/config/server',
@@ -330,12 +331,13 @@
       const config = await api.get<Config>('/admin/api/config');
       applyConfig(config);
       notice = t('toast.networkSearchSaved');
-      await poll.runNow();
+      saved = true;
     } catch (cause) {
       error = message(cause);
     } finally {
       saving = false;
     }
+    if (saved) void poll.runNow();
   }
 
   async function testSearch(): Promise<void> {

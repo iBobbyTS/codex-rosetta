@@ -135,10 +135,11 @@ describe('NetworkSearchPage', () => {
     };
   }
 
-  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
     let resolve!: (value: T) => void;
-    const promise = new Promise<T>((done) => { resolve = done; });
-    return { promise, resolve };
+    let reject!: (reason?: unknown) => void;
+    const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+    return { promise, resolve, reject };
   }
 
   it('loads and saves a canonical multi-row chain without changing order, IDs, or masked keys', async () => {
@@ -393,6 +394,64 @@ describe('NetworkSearchPage', () => {
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
       web_search: { providers: rows },
     });
+  });
+
+  it('unlocks the canonical editor while the post-save status refresh is still pending', async () => {
+    const before = configResponse(
+      [{ id: 'local', provider: 'self_hosted_google' }],
+      { search: { api_type: 'responses' } },
+    );
+    const rows = [
+      { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
+      { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'sh', provider: 'self_hosted_bing' },
+    ];
+    const after = configResponse(rows, { search: { api_type: 'responses' } }, {
+      configured_providers: [
+        { id: 'tv', provider: 'tavily', family: 'tavily_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+        { id: 'rp', provider: 'configured_responses_provider', family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] },
+        { id: 'sh', provider: 'self_hosted_bing', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+      ],
+      chain: { mode: 'mixed_single_query', capabilities: ['search_query'], limitations: ['single_search_query'] },
+    });
+    const status = deferred<unknown>();
+    let configReads = 0;
+    let statusReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return Promise.resolve(configReads++ === 0 ? before : after);
+      if (path.endsWith('/usage')) return Promise.resolve({ entries: [] });
+      if (path.endsWith('/status')) {
+        statusReads += 1;
+        return statusReads === 1 ? Promise.resolve({ configured: false }) : status.promise;
+      }
+      return Promise.resolve({});
+    });
+    apiMock.put.mockResolvedValue({ server: before.server });
+    render(NetworkSearchPage);
+    await screen.findByLabelText('No configuration required');
+    await waitFor(() => expect(statusReads).toBe(1));
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    expect(await screen.findByText('Web search settings saved')).toBeInTheDocument();
+    await waitFor(() => expect(statusReads).toBe(2));
+    expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).not.toBeNull();
+    expect(document.querySelector('[data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
+    expect(screen.getByRole('button', { name: '+ Add search provider' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
+    expect(screen.getAllByLabelText('Search provider type').every((control) => !control.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getByLabelText('Responses Provider')).toBeEnabled();
+    expect(screen.getByLabelText('Search Model')).toBeEnabled();
+    expect(screen.getByLabelText('API Key')).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
+    const middleRow = document.querySelector<HTMLElement>('tr[data-row-id="rp"]')!;
+    expect(within(middleRow).getByRole('button', { name: 'Move search provider up' })).toBeEnabled();
+    expect(within(middleRow).getByRole('button', { name: 'Move search provider down' })).toBeEnabled();
+    expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'true' && !button.hasAttribute('disabled'))).toBe(true);
+
+    status.reject(new Error('sidecar unavailable'));
+    expect(await screen.findByText('Offline')).toBeInTheDocument();
+    expect(screen.getByText('sidecar unavailable')).toBeInTheDocument();
   });
 
   it('loads usage once and binds clamped values and reset dates to stable Tavily row IDs', async () => {
