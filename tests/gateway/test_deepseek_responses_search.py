@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import inspect
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, Never, cast
 
 import pytest
 
@@ -30,9 +32,14 @@ _VALID_REQUEST = {
 }
 
 
-def _build_request(**overrides: object):
+def _build_request(**overrides: object) -> DeepSeekResponsesSearchRequest:
     values = {**_VALID_REQUEST, **overrides}
     return build_deepseek_responses_search_request(**values)
+
+
+def _direct_request(**overrides: object) -> DeepSeekResponsesSearchRequest:
+    values = {**_VALID_REQUEST, **overrides}
+    return DeepSeekResponsesSearchRequest(**cast(Any, values))
 
 
 @pytest.mark.parametrize("max_output_tokens", [512, 1024, 1536])
@@ -88,7 +95,7 @@ def test_request_body_is_fresh_and_cannot_mutate_validated_request() -> None:
     first["model"] = "changed"
     tools = first["tools"]
     assert isinstance(tools, list)
-    tools.append({"type": "unsupported"})
+    cast(list[object], tools).append({"type": "unsupported"})
 
     assert request.body == {
         "model": "deepseek-v4-flash",
@@ -113,6 +120,197 @@ def test_request_value_cannot_bypass_validation_by_direct_construction() -> None
 
 class _IntSubclass(int):
     pass
+
+
+class _HookedStr(str):
+    hooks: list[str]
+
+    def __new__(cls, value: str, hooks: list[str]) -> _HookedStr:
+        instance = str.__new__(cls, value)
+        instance.hooks = hooks
+        return instance
+
+    def _fail(self, hook: str) -> Never:
+        self.hooks.append(hook)
+        raise RuntimeError("caller-controlled-text")
+
+    def strip(self, chars: str | None = None, /) -> str:
+        self._fail("strip")
+
+    def __len__(self) -> int:
+        self._fail("len")
+
+    def __ne__(self, other: object) -> bool:
+        del other
+        self._fail("ne")
+
+    def __format__(self, format_spec: str) -> str:
+        del format_spec
+        self._fail("format")
+
+
+class _SpoofingStr(str):
+    hooks: list[str]
+
+    def __new__(cls, value: str, hooks: list[str]) -> _SpoofingStr:
+        instance = str.__new__(cls, value)
+        instance.hooks = hooks
+        return instance
+
+    def strip(self, chars: str | None = None, /) -> str:
+        del chars
+        self.hooks.append("strip")
+        return self
+
+    def __len__(self) -> int:
+        self.hooks.append("len")
+        return 1
+
+    def __ne__(self, other: object) -> bool:
+        del other
+        self.hooks.append("ne")
+        return False
+
+    def __format__(self, format_spec: str) -> str:
+        del format_spec
+        self.hooks.append("format")
+        return "rewritten-by-caller"
+
+
+class _HookedInt(int):
+    hooks: list[str]
+
+    def __new__(cls, value: int, hooks: list[str]) -> _HookedInt:
+        instance = int.__new__(cls, value)
+        instance.hooks = hooks
+        return instance
+
+    def __float__(self) -> float:
+        self.hooks.append("float")
+        raise RuntimeError("caller-controlled-text")
+
+
+class _HookedFloat(float):
+    hooks: list[str]
+
+    def __new__(cls, value: float, hooks: list[str]) -> _HookedFloat:
+        instance = float.__new__(cls, value)
+        instance.hooks = hooks
+        return instance
+
+    def __float__(self) -> float:
+        self.hooks.append("float")
+        raise RuntimeError("caller-controlled-text")
+
+
+@pytest.mark.parametrize("factory", [_build_request, _direct_request])
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "origin",
+            "https://api.deepseek.com",
+            "DeepSeek Responses origin must be the official HTTPS root",
+        ),
+        (
+            "model",
+            "deepseek-v4-pro",
+            "DeepSeek Responses search model is not supported",
+        ),
+        (
+            "query",
+            "x" * 4001,
+            "DeepSeek Responses search query must be a string",
+        ),
+    ],
+)
+def test_string_subclass_hooks_cannot_escape_or_run(
+    factory: Callable[..., DeepSeekResponsesSearchRequest],
+    field: str,
+    value: str,
+    message: str,
+) -> None:
+    hooks: list[str] = []
+    invalid = _HookedStr(value, hooks)
+
+    with pytest.raises(ValueError) as caught:
+        factory(**{field: invalid})
+
+    assert str(caught.value) == message
+    assert hooks == []
+
+
+@pytest.mark.parametrize("factory", [_build_request, _direct_request])
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("model", "deepseek-v4-pro"),
+        ("query", "x" * 4001),
+        ("query", "query whose formatting must stay fixed"),
+    ],
+)
+def test_string_subclass_cannot_spoof_model_query_or_prompt(
+    factory: Callable[..., DeepSeekResponsesSearchRequest], field: str, value: str
+) -> None:
+    hooks: list[str] = []
+    invalid = _SpoofingStr(value, hooks)
+
+    with pytest.raises(ValueError) as caught:
+        request = factory(**{field: invalid})
+        request.body
+
+    assert len(str(caught.value)) <= 80
+    assert "rewritten-by-caller" not in str(caught.value)
+    assert hooks == []
+
+
+@pytest.mark.parametrize("factory", [_build_request, _direct_request])
+@pytest.mark.parametrize("subclass", [_HookedInt, _HookedFloat])
+def test_numeric_subclass_timeout_hook_cannot_escape_or_run(
+    factory: Callable[..., DeepSeekResponsesSearchRequest],
+    subclass: Callable[[int, list[str]], int | float],
+) -> None:
+    hooks: list[str] = []
+    invalid = subclass(30, hooks)
+
+    with pytest.raises(ValueError) as caught:
+        factory(timeout=invalid)
+
+    assert str(caught.value) == (
+        "DeepSeek Responses timeout must be a finite positive number"
+    )
+    assert hooks == []
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("max_output_tokens", 1024), ("citation_limit", 5)],
+)
+def test_integer_subclass_control_hook_cannot_run(field: str, value: int) -> None:
+    hooks: list[str] = []
+    invalid = _HookedInt(value, hooks)
+
+    with pytest.raises(ValueError):
+        _build_request(**{field: invalid})
+
+    assert hooks == []
+
+
+def test_persisted_values_are_exact_builtin_canonical_scalars() -> None:
+    request = _build_request(
+        origin="HTTPS://API.DEEPSEEK.COM:443/",
+        query="  current release notes  ",
+        timeout=30,
+    )
+
+    assert request.origin == DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
+    assert request.model == DEEPSEEK_RESPONSES_SEARCH_MODEL
+    assert request.query == "current release notes"
+    assert request.timeout == 30.0
+    assert type(request.origin) is str
+    assert type(request.model) is str
+    assert type(request.query) is str
+    assert type(request.timeout) is float
 
 
 @pytest.mark.parametrize(

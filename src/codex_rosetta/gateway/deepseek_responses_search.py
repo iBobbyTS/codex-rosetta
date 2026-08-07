@@ -20,7 +20,7 @@ _SEARCH_PROMPT_PREFIX = (
 
 def normalize_deepseek_responses_origin(origin: object) -> str:
     """Validate an official DeepSeek root URL and return its canonical origin."""
-    if not isinstance(origin, str) or not origin or origin != origin.strip():
+    if type(origin) is not str or not origin or origin != origin.strip():
         raise ValueError("DeepSeek Responses origin must be the official HTTPS root")
     if any(ord(character) < 0x20 for character in origin):
         raise ValueError("DeepSeek Responses origin must be the official HTTPS root")
@@ -53,7 +53,7 @@ def normalize_deepseek_responses_origin(origin: object) -> str:
 
 
 def _normalize_query(query: object) -> str:
-    if not isinstance(query, str):
+    if type(query) is not str:
         raise ValueError("DeepSeek Responses search query must be a string")
     normalized = query.strip()
     if not 1 <= len(normalized) <= _QUERY_MAX_LENGTH:
@@ -64,9 +64,9 @@ def _normalize_query(query: object) -> str:
 
 
 def _validate_model(model: object) -> str:
-    if not isinstance(model, str) or model != DEEPSEEK_RESPONSES_SEARCH_MODEL:
+    if type(model) is not str or model != DEEPSEEK_RESPONSES_SEARCH_MODEL:
         raise ValueError("DeepSeek Responses search model is not supported")
-    return model
+    return DEEPSEEK_RESPONSES_SEARCH_MODEL
 
 
 def _validate_max_output_tokens(max_output_tokens: object) -> int:
@@ -85,7 +85,7 @@ def _validate_citation_limit(citation_limit: object) -> int:
 
 
 def _normalize_timeout(timeout: object) -> float:
-    if isinstance(timeout, bool) or not isinstance(timeout, int | float):
+    if type(timeout) is not int and type(timeout) is not float:
         raise ValueError("DeepSeek Responses timeout must be a finite positive number")
     try:
         normalized = float(timeout)
