@@ -11,6 +11,7 @@ from typing import Any, Never, cast
 
 import pytest
 
+import codex_rosetta.gateway.deepseek_responses_search as deepseek_search
 from codex_rosetta.gateway.deepseek_responses_search import (
     DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
     DEEPSEEK_RESPONSES_SEARCH_MODEL,
@@ -798,6 +799,76 @@ def test_malformed_documented_containers_and_scalars_fail_closed(
         _parse(response)
 
 
+class _HostileKey:
+    def __init__(self, target: str, hooks: list[str], *, spoof: bool) -> None:
+        self.target = target
+        self.hooks = hooks
+        self.spoof = spoof
+
+    def __hash__(self) -> int:
+        self.hooks.append("hash")
+        return hash(self.target)
+
+    def __eq__(self, other: object) -> bool:
+        self.hooks.append("eq")
+        if not self.spoof:
+            raise RuntimeError("caller-controlled-key")
+        return other == self.target
+
+
+def _replace_with_hostile_key(
+    mapping: dict[object, object],
+    key: str,
+    hooks: list[str],
+    *,
+    spoof: bool,
+) -> None:
+    value = mapping.pop(key)
+    mapping[_HostileKey(key, hooks, spoof=spoof)] = value
+    hooks.clear()
+
+
+@pytest.mark.parametrize(
+    "location", ["root", "output", "content", "annotation", "usage"]
+)
+@pytest.mark.parametrize("spoof", [False, True], ids=["raises", "spoofs"])
+def test_non_exact_dict_keys_fail_before_any_lookup_or_caller_hook(
+    location: str, spoof: bool
+) -> None:
+    hooks: list[str] = []
+    response = _completed_response(
+        content=[_output_text("answer", [_citation("https://example.com")])],
+        usage={"input_tokens": 1},
+    )
+    output = cast(list[dict[object, object]], response["output"])
+    content = cast(list[dict[object, object]], output[2]["content"])
+    annotation = cast(list[dict[object, object]], content[0]["annotations"])[0]
+    usage = cast(dict[object, object], response["usage"])
+    if location == "root":
+        target = cast(dict[object, object], response)
+        key = "status"
+    elif location == "output":
+        target = output[1]
+        key = "type"
+    elif location == "content":
+        target = content[0]
+        key = "type"
+    elif location == "annotation":
+        target = annotation
+        key = "url"
+    else:
+        target = usage
+        key = "input_tokens"
+    _replace_with_hostile_key(target, key, hooks, spoof=spoof)
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(response)
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+    assert hooks == []
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
@@ -813,6 +884,78 @@ def test_citation_url_canonicalization(url: str, expected: str) -> None:
     )
 
     assert cast(list[dict[str, str]], result["results"])[0]["url"] == expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/a b",
+        "https://example.com/a\tb",
+        "https://example.com/a\nb",
+        "https://example.com/a\rb",
+        "https://example.com/a\x00b",
+        "https://example.com/a\x1fb",
+        "https://example.com/a\x7fb",
+        "https://example.com/?q=a\u00a0b",
+    ],
+)
+def test_citation_url_rejects_whitespace_ascii_control_and_del_before_urlsplit(
+    url: str,
+) -> None:
+    result = _parse(
+        _completed_response(content=[_output_text("answer", [_citation(url)])])
+    )
+
+    assert result == {"output": "answer", "results": [], "usage": {}}
+
+
+@pytest.mark.parametrize(
+    "unicode_hostname",
+    ["ｅxample.com", "éxample.com", "e\u0301xample.com", "例子.测试"],
+)
+def test_citation_url_rejects_unicode_hostname_and_cannot_duplicate_ascii_identity(
+    unicode_hostname: str,
+) -> None:
+    annotations = [
+        _citation("https://example.com", title="ascii"),
+        _citation(f"https://{unicode_hostname}", title="unicode"),
+    ]
+
+    results = cast(
+        list[dict[str, str]],
+        _parse(_completed_response(content=[_output_text("answer", annotations)]))[
+            "results"
+        ],
+    )
+
+    assert [(item["title"], item["url"]) for item in results] == [
+        ("ascii", "https://example.com/")
+    ]
+
+
+def test_canonical_citation_url_is_idempotent_and_reparseable() -> None:
+    first = cast(
+        list[dict[str, str]],
+        _parse(
+            _completed_response(
+                content=[
+                    _output_text(
+                        "answer",
+                        [_citation("HTTPS://Example.COM:443/path?q=1#fragment")],
+                    )
+                ]
+            )
+        )["results"],
+    )[0]["url"]
+    second = cast(
+        list[dict[str, str]],
+        _parse(
+            _completed_response(content=[_output_text("answer", [_citation(first)])])
+        )["results"],
+    )[0]["url"]
+
+    assert first == "https://example.com/path?q=1"
+    assert second == first
 
 
 @pytest.mark.parametrize(
@@ -871,6 +1014,40 @@ def test_duplicate_citation_still_validates_documented_scalar_shape() -> None:
 
     with pytest.raises(DeepSeekResponsesSearchParseError):
         _parse(_completed_response(content=[_output_text("answer", annotations)]))
+
+
+@pytest.mark.parametrize("decision", ["invalid", "overlength", "duplicate", "limit"])
+def test_malformed_title_fails_before_any_url_publication_decision(
+    decision: str,
+) -> None:
+    first = _citation("https://example.com", title="first")
+    if decision == "invalid":
+        annotations = [_citation("ftp://example.com", title=object())]
+        citation_limit = 5
+    elif decision == "overlength":
+        annotations = [_citation("https://example.com/" + ("x" * 8192), title=object())]
+        citation_limit = 5
+    elif decision == "duplicate":
+        annotations = [
+            first,
+            _citation("HTTPS://EXAMPLE.COM:443#duplicate", title=object()),
+        ]
+        citation_limit = 5
+    else:
+        annotations = [
+            first,
+            _citation("https://second.example", title=object()),
+        ]
+        citation_limit = 1
+
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(
+            _completed_response(content=[_output_text("answer", annotations)]),
+            citation_limit=citation_limit,
+        )
+
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
 
 
 def test_title_fallback_and_content_slice_use_only_final_bounded_values() -> None:
@@ -994,6 +1171,93 @@ def test_recognized_containers_are_bounded_at_256_items(container: str) -> None:
 
     with pytest.raises(DeepSeekResponsesSearchParseError):
         _parse(response)
+
+
+def _response_with_aggregate_visits(annotation_count: int) -> dict[str, object]:
+    shared_content = [_output_text("x")] * 255
+    messages = [{"type": "message", "content": shared_content} for _ in range(15)]
+    special_message = {
+        "type": "message",
+        "content": [_output_text("x", [{"type": "unknown"}] * annotation_count)],
+    }
+    return {
+        "status": "completed",
+        "output": [
+            {"type": "web_search_call", "status": "completed"},
+            *messages,
+            special_message,
+        ],
+    }
+
+
+def test_aggregate_visit_budget_accepts_4096_and_rejects_4097_atomically() -> None:
+    accepted = _parse(_response_with_aggregate_visits(253))
+
+    assert accepted["output"] == "x" * 3826
+    assert accepted["results"] == []
+    with pytest.raises(DeepSeekResponsesSearchParseError) as caught:
+        _parse(_response_with_aggregate_visits(254))
+    assert str(caught.value) == "DeepSeek Responses search response is invalid"
+    assert caught.value.__cause__ is None
+
+
+def test_shared_reference_dag_cannot_bypass_aggregate_visit_budget() -> None:
+    shared_content = [_output_text("x")] * 256
+    shared_message = {"type": "message", "content": shared_content}
+    response = {
+        "status": "completed",
+        "output": [
+            {"type": "web_search_call", "status": "completed"},
+            *([shared_message] * 16),
+        ],
+    }
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+
+def test_exact_string_and_key_budget_accepts_1m_chars_and_rejects_next_char() -> None:
+    # The minimal valid shape below consumes 104 exact-string/key characters
+    # besides the unknown root key itself.
+    minimal = {
+        "status": "completed",
+        "output": [
+            {"type": "web_search_call", "status": "completed"},
+            {"type": "message", "content": [_output_text("x")]},
+        ],
+    }
+    accepted = {**minimal}
+    accepted["k" * (1_000_000 - 104)] = None
+    rejected = {**minimal}
+    rejected["k" * (1_000_001 - 104)] = None
+
+    assert _parse(accepted)["output"] == "x"
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(rejected)
+
+
+def test_string_budget_rejects_before_urlsplit_scans_over_limit_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    def unexpected_urlsplit(value: str):
+        nonlocal calls
+        del value
+        calls += 1
+        raise AssertionError("urlsplit must not run after the string budget is spent")
+
+    monkeypatch.setattr(deepseek_search, "urlsplit", unexpected_urlsplit)
+    response = _completed_response(
+        content=[
+            _output_text("x", [_citation("https://example.com/" + ("x" * 1_000_000))])
+        ]
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchParseError):
+        _parse(response)
+
+    assert calls == 0
 
 
 @pytest.mark.parametrize(

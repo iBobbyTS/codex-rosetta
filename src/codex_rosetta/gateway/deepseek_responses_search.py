@@ -15,6 +15,8 @@ DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS = frozenset({512, 1024, 1536})
 _QUERY_MAX_LENGTH = 4000
 _CITATION_LIMIT_RANGE = range(1, 9)
 _CONTAINER_MAX_ITEMS = 256
+_AGGREGATE_VISIT_MAX = 4096
+_EXACT_STRING_CHAR_MAX = 1_000_000
 _OUTPUT_MAX_LENGTH = 64_000
 _RESULT_TITLE_MAX_LENGTH = 500
 _RESULT_URL_MAX_LENGTH = 8192
@@ -179,33 +181,55 @@ def _raise_parse_error() -> Never:
     raise DeepSeekResponsesSearchParseError
 
 
-def _bounded_exact_dict(value: object) -> dict[object, object]:
+@dataclass(slots=True)
+class _ParseBudget:
+    visits: int = 0
+    exact_string_chars: int = 0
+
+    def consume_visits(self, count: int) -> None:
+        self.visits += count
+        if self.visits > _AGGREGATE_VISIT_MAX:
+            _raise_parse_error()
+
+    def consume_exact_string(self, value: object) -> str:
+        if type(value) is not str:
+            _raise_parse_error()
+        self.exact_string_chars += len(value)
+        if self.exact_string_chars > _EXACT_STRING_CHAR_MAX:
+            _raise_parse_error()
+        return value
+
+
+def _bounded_exact_dict(value: object, budget: _ParseBudget) -> dict[object, object]:
     if type(value) is not dict:
         _raise_parse_error()
     value = cast(dict[object, object], value)
     if len(value) > _CONTAINER_MAX_ITEMS:
         _raise_parse_error()
+    for key in value:
+        budget.consume_exact_string(key)
     return value
 
 
-def _bounded_exact_list(value: object) -> list[object]:
+def _bounded_exact_list(value: object, budget: _ParseBudget) -> list[object]:
     if type(value) is not list:
         _raise_parse_error()
     value = cast(list[object], value)
     if len(value) > _CONTAINER_MAX_ITEMS:
         _raise_parse_error()
+    budget.consume_visits(len(value))
     return value
 
 
-def _typed_item(value: object) -> tuple[str, dict[object, object]] | None:
+def _typed_item(
+    value: object, budget: _ParseBudget
+) -> tuple[str, dict[object, object]] | None:
     if type(value) is not dict:
         if isinstance(value, dict):
             _raise_parse_error()
         return None
-    item = _bounded_exact_dict(value)
-    item_type = item.get("type")
-    if type(item_type) is not str:
-        _raise_parse_error()
+    item = _bounded_exact_dict(value, budget)
+    item_type = budget.consume_exact_string(item.get("type"))
     return item_type, item
 
 
@@ -221,15 +245,24 @@ def _valid_citation_hostname(hostname: str) -> bool:
         label
         and not label.startswith("-")
         and not label.endswith("-")
-        and all(character.isalnum() or character == "-" for character in label)
+        and all(
+            "a" <= character.lower() <= "z"
+            or "0" <= character <= "9"
+            or character == "-"
+            for character in label
+        )
         for label in labels
     )
 
 
-def _canonicalize_citation_url(value: object) -> tuple[str, str] | None:
-    if type(value) is not str:
-        _raise_parse_error()
-    if not value or value[0].isspace() or value[-1].isspace():
+def _canonicalize_citation_url(
+    value: object, budget: _ParseBudget
+) -> tuple[str, str] | None:
+    value = budget.consume_exact_string(value)
+    if not value or any(
+        character.isspace() or ord(character) < 0x20 or ord(character) == 0x7F
+        for character in value
+    ):
         return None
     try:
         parsed = urlsplit(value)
@@ -304,38 +337,44 @@ def _trimmed_prefix(value: str, limit: int) -> str:
     return value[start : min(end, start + limit)]
 
 
-def _citation_title(annotation: dict[object, object], hostname: str) -> str:
+def _validated_citation_title(
+    annotation: dict[object, object], budget: _ParseBudget
+) -> str | None:
     title = annotation.get("title")
     if title is None:
-        normalized = hostname
-    elif type(title) is str:
-        normalized = _trimmed_prefix(title, _RESULT_TITLE_MAX_LENGTH) or hostname
-    else:
-        _raise_parse_error()
+        return None
+    title = budget.consume_exact_string(title)
+    return _trimmed_prefix(title, _RESULT_TITLE_MAX_LENGTH)
+
+
+def _citation_title(title: str | None, hostname: str) -> str:
+    normalized = title or hostname
     return normalized[:_RESULT_TITLE_MAX_LENGTH]
 
 
 def _parse_citations(
     annotations_value: object,
     *,
+    budget: _ParseBudget,
     text: str,
     citation_limit: int,
     seen_urls: set[str],
     results: list[dict[str, str]],
 ) -> None:
-    annotations = _bounded_exact_list(annotations_value)
+    annotations = _bounded_exact_list(annotations_value, budget)
     for value in annotations:
-        typed = _typed_item(value)
+        typed = _typed_item(value, budget)
         if typed is None:
             continue
         annotation_type, annotation = typed
         if annotation_type != "url_citation":
             continue
-        canonicalized = _canonicalize_citation_url(annotation.get("url"))
+        title_value = _validated_citation_title(annotation, budget)
+        canonicalized = _canonicalize_citation_url(annotation.get("url"), budget)
         if canonicalized is None:
             continue
         url, hostname = canonicalized
-        title = _citation_title(annotation, hostname)
+        title = _citation_title(title_value, hostname)
         content = _citation_content(annotation, text)
         if url in seen_urls or len(results) >= citation_limit:
             continue
@@ -349,10 +388,12 @@ def _parse_citations(
         )
 
 
-def _parse_usage(response: dict[object, object]) -> dict[str, int]:
+def _parse_usage(
+    response: dict[object, object], budget: _ParseBudget
+) -> dict[str, int]:
     if "usage" not in response:
         return {}
-    usage = _bounded_exact_dict(response["usage"])
+    usage = _bounded_exact_dict(response["usage"], budget)
     normalized: dict[str, int] = {}
     for field in _USAGE_FIELDS:
         if field not in usage:
@@ -424,11 +465,12 @@ def parse_deepseek_responses_search_response(
     except ValueError:
         raise DeepSeekResponsesSearchParseError from None
 
-    body = _bounded_exact_dict(response)
-    status = body.get("status")
-    if type(status) is not str or status != "completed":
+    budget = _ParseBudget()
+    body = _bounded_exact_dict(response, budget)
+    status = budget.consume_exact_string(body.get("status"))
+    if status != "completed":
         _raise_parse_error()
-    output_items = _bounded_exact_list(body.get("output"))
+    output_items = _bounded_exact_list(body.get("output"), budget)
 
     completed_search = False
     text_fragments: list[str] = []
@@ -436,36 +478,34 @@ def parse_deepseek_responses_search_response(
     seen_urls: set[str] = set()
 
     for value in output_items:
-        typed = _typed_item(value)
+        typed = _typed_item(value, budget)
         if typed is None:
             continue
         item_type, item = typed
         if item_type == "reasoning":
             continue
         if item_type == "web_search_call":
-            search_status = item.get("status")
-            if type(search_status) is not str:
-                _raise_parse_error()
+            search_status = budget.consume_exact_string(item.get("status"))
             completed_search = completed_search or search_status == "completed"
             continue
         if item_type != "message":
             continue
 
-        content_items = _bounded_exact_list(item.get("content"))
+        content_items = _bounded_exact_list(item.get("content"), budget)
         for content_value in content_items:
-            content_typed = _typed_item(content_value)
+            content_typed = _typed_item(content_value, budget)
             if content_typed is None:
                 continue
             content_type, content = content_typed
             if content_type != "output_text":
                 continue
-            text = content.get("text")
-            if type(text) is not str or not text:
+            text = budget.consume_exact_string(content.get("text"))
+            if not text:
                 _raise_parse_error()
-            text = cast(str, text)
             text_fragments.append(text)
             _parse_citations(
                 content.get("annotations"),
+                budget=budget,
                 text=text,
                 citation_limit=validated_limit,
                 seen_urls=seen_urls,
@@ -476,7 +516,11 @@ def parse_deepseek_responses_search_response(
         _raise_parse_error()
     output = _bounded_joined_output(text_fragments)
 
-    return {"output": output, "results": results, "usage": _parse_usage(body)}
+    return {
+        "output": output,
+        "results": results,
+        "usage": _parse_usage(body, budget),
+    }
 
 
 __all__ = [
