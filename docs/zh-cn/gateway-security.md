@@ -209,7 +209,15 @@ Tavily 凭据，或现有 sidecar 内的
 已配置 Responses 行还必须选择既有审核 Search Model。在后一模式中，Gateway 会使用
 该 Provider 既有的凭据、代理与重定向策略，把 Codex
 Search body 原样发送到它的 `alpha/search` 端点；已禁用或非 Responses Provider
-会在配置阶段被拒绝。页面内的**搜索测试**卡片使用固定查询
+会在配置阶段被拒绝。Admin 页面会从 Rosetta 的 Web Search Provider contract 实时推导每一行的
+Provider family、执行模式和能力摘要，而不会保存这些派生值。GPT 行只显示 Responses Provider
+与搜索模型；只有整条有序链都是 GPT 时，才保留完整的已配置 Responses `/alpha/search` 透传。
+Tavily 行只显示 Tavily key 与现有额度视图；自托管行不显示 GPT 或 Tavily 专属字段。纯本地链
+显示本地 query adapter 能力，GPT/local 混合链则显示并强制安全交集：只能包含一个
+`search_query`。这些派生摘要不会包含凭据、凭据指纹、sidecar 连接值或上游私有数据，也不会
+改变持久化的 Provider-row wire 格式。本版本不把 DeepSeek 作为搜索 Provider：未来接入必须
+提供独立的 native Responses family、adapter、capability contract，并针对官方 Responses
+web-search wire 单独验证。页面内的**搜索测试**卡片使用固定查询
 `latest python release version`，并通过与真实 `POST /v1/alpha/search` 请求相同的
 Gateway auxiliary handler 执行后只展示规范化结果卡片；它不会直接调用 Tavily、sidecar 或
 Provider-specific 搜索 client。Admin 边界不会显示 Provider 原始失败正文；认证、超时、

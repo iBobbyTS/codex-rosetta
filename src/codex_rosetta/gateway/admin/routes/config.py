@@ -39,6 +39,13 @@ from ...model_profiles import (
 )
 from ...provider_profiles import provider_catalog_for_admin, resolve_soft_interrupt
 from ...providers import normalize_provider_api_key
+from ...search_provider_contract import (
+    GPT_MIXED_MODE_CAPABILITIES,
+    GPT_PASSTHROUGH_CONTRACT,
+    SearchProviderCapability,
+    SearchProviderFamily,
+    contract_for_wire_provider,
+)
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
     TOOL_PROFILE_PASSTHROUGH_OPTION,
@@ -78,6 +85,82 @@ def _mask_web_search_config(value: Any) -> dict[str, Any]:
         for entry in masked["providers"]
     ]
     return masked
+
+
+def _search_capability_values(
+    capabilities: frozenset[SearchProviderCapability],
+) -> list[str]:
+    """Serialize code-owned search capabilities in a stable Admin DTO order."""
+    return sorted(capability.value for capability in capabilities)
+
+
+def _web_search_contract_for_admin(value: Any) -> dict[str, Any]:
+    """Return non-sensitive, derived Admin metadata for the saved search chain.
+
+    The provider-row wire schema remains the sole persisted configuration.  This
+    view intentionally derives families, execution modes, and safe aggregate
+    capabilities from the code-owned provider contract on every read.
+    """
+    normalized = normalize_web_search(value)
+    rows = list(normalized.providers)
+    row_contracts = [
+        (row, contract_for_wire_provider(str(row["provider"]))) for row in rows
+    ]
+    if not row_contracts:
+        chain = {
+            "mode": "unconfigured",
+            "capabilities": [],
+            "limitations": [],
+        }
+    elif all(
+        contract.family is SearchProviderFamily.GPT_PASSTHROUGH
+        for _, contract in row_contracts
+    ):
+        chain = {
+            "mode": "full_gpt_passthrough",
+            "capabilities": _search_capability_values(
+                GPT_PASSTHROUGH_CONTRACT.capabilities
+            ),
+            "limitations": [],
+        }
+    elif any(
+        contract.family is SearchProviderFamily.GPT_PASSTHROUGH
+        for _, contract in row_contracts
+    ):
+        chain = {
+            "mode": "mixed_single_query",
+            "capabilities": _search_capability_values(GPT_MIXED_MODE_CAPABILITIES),
+            "limitations": ["single_search_query"],
+        }
+    else:
+        shared_capabilities = set(row_contracts[0][1].capabilities)
+        for _, contract in row_contracts[1:]:
+            shared_capabilities.intersection_update(contract.capabilities)
+        chain = {
+            "mode": "local_query_adapter",
+            "capabilities": _search_capability_values(frozenset(shared_capabilities)),
+            "limitations": [],
+        }
+    return {
+        "provider_types": [
+            "tavily",
+            CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+            *sorted(SELF_HOSTED_WEB_SEARCH_PROVIDERS),
+        ],
+        "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
+        "max_providers": MAX_WEB_SEARCH_PROVIDERS,
+        "configured_providers": [
+            {
+                "id": str(row["id"]),
+                "provider": str(row["provider"]),
+                "family": contract.family.value,
+                "execution_mode": contract.execution_mode.value,
+                "capabilities": _search_capability_values(contract.capabilities),
+            }
+            for row, contract in row_contracts
+        ],
+        "chain": chain,
+    }
 
 
 def _mask_web_run_config(value: Any) -> dict[str, Any]:
@@ -712,15 +795,11 @@ async def get_config(request: Any) -> Response:
                 for slug, model in full_model_presets().items()
             ],
             "provider_catalog": provider_catalog_for_admin(),
-            "web_search_contract": {
-                "provider_types": [
-                    "tavily",
-                    CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
-                    *sorted(SELF_HOSTED_WEB_SEARCH_PROVIDERS),
-                ],
-                "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
-                "max_providers": MAX_WEB_SEARCH_PROVIDERS,
-            },
+            "web_search_contract": _web_search_contract_for_admin(
+                raw.get("server", {}).get("web_search")
+                if isinstance(raw.get("server"), dict)
+                else None
+            ),
             "codex": config.codex,
             "server": server,
             "credential_visible": config.credential_visible,

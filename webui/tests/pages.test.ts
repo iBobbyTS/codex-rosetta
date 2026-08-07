@@ -103,11 +103,35 @@ describe('NetworkSearchPage', () => {
     max_providers: 32,
   };
 
-  const configResponse = (rows: Array<Record<string, string | undefined>> = [], providers: Record<string, unknown> = {}) => ({
-    providers,
-    web_search_contract: contract,
-    server: { web_search: { providers: rows } },
-  });
+  const configResponse = (rows: Array<Record<string, string | undefined>> = [], providers: Record<string, unknown> = {}) => {
+    const configured_providers = rows.map((row) => {
+      if (row.provider === 'configured_responses_provider') {
+        return { id: row.id, provider: row.provider, family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] };
+      }
+      const isTavily = row.provider === 'tavily';
+      return {
+        id: row.id,
+        provider: row.provider,
+        family: isTavily ? 'tavily_local' : 'self_hosted_local',
+        execution_mode: 'local_query_adapter',
+        capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'],
+      };
+    });
+    const hasGpt = configured_providers.some((row) => row.family === 'gpt_passthrough');
+    const hasLocal = configured_providers.some((row) => row.family !== 'gpt_passthrough');
+    const chain = configured_providers.length === 0
+      ? { mode: 'unconfigured', capabilities: [], limitations: [] }
+      : hasGpt && hasLocal
+        ? { mode: 'mixed_single_query', capabilities: ['search_query', 'domain_filter', 'normalized_results', 'reference_storage'], limitations: ['single_search_query'] }
+        : hasGpt
+          ? { mode: 'full_gpt_passthrough', capabilities: ['full_web_run_passthrough'], limitations: [] }
+          : { mode: 'local_query_adapter', capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'], limitations: [] };
+    return {
+      providers,
+      web_search_contract: { ...contract, configured_providers, chain },
+      server: { web_search: { providers: rows } },
+    };
+  };
 
   function mockConfig(value: ReturnType<typeof configResponse>, usage: Record<string, unknown> = { entries: [] }): void {
     apiMock.get.mockImplementation((path: string) => {
@@ -203,6 +227,22 @@ describe('NetworkSearchPage', () => {
     expect(await screen.findByText('Quota unavailable')).toBeInTheDocument();
     expect(document.querySelector('tr[data-row-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
     expect(document.querySelector('tr[data-row-id="sh"] .search-quota-cell')).toBeEmptyDOMElement();
+  });
+
+  it('explains code-owned provider families and the mixed single-query projection', async () => {
+    mockConfig(configResponse([
+      { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
+      { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      { id: 'sh', provider: 'self_hosted_bing' },
+    ], { search: { api_type: 'responses' } }));
+    render(NetworkSearchPage);
+
+    expect(await screen.findByText(/mixed GPT\/local chain/)).toBeInTheDocument();
+    expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).toHaveTextContent('one search_query');
+    expect(document.querySelector('[data-row-id="rp"] [data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
+    expect(document.querySelector('[data-row-id="tv"] [data-provider-family="tavily_local"]')).toHaveTextContent('Tavily: local query adapter');
+    expect(document.querySelector('[data-row-id="sh"] [data-provider-family="self_hosted_local"]')).toHaveTextContent('Self-hosted: sidecar adapter');
+    expect(screen.getAllByText(/Capabilities:/)).toHaveLength(3);
   });
 
   it('loads usage once and binds clamped values and reset dates to stable Tavily row IDs', async () => {

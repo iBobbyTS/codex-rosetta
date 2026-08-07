@@ -795,7 +795,156 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
         ],
         "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
         "max_providers": MAX_WEB_SEARCH_PROVIDERS,
+        "configured_providers": [
+            {
+                "id": "primary",
+                "provider": "tavily",
+                "family": "tavily_local",
+                "execution_mode": "local_query_adapter",
+                "capabilities": [
+                    "domain_filter",
+                    "multi_query",
+                    "normalized_results",
+                    "reference_storage",
+                    "search_query",
+                ],
+            },
+            {
+                "id": "responses",
+                "provider": "configured_responses_provider",
+                "family": "gpt_passthrough",
+                "execution_mode": "alpha_search_passthrough",
+                "capabilities": ["full_web_run_passthrough"],
+            },
+            {
+                "id": "local",
+                "provider": "self_hosted_google",
+                "family": "self_hosted_local",
+                "execution_mode": "local_query_adapter",
+                "capabilities": [
+                    "domain_filter",
+                    "multi_query",
+                    "normalized_results",
+                    "reference_storage",
+                    "search_query",
+                ],
+            },
+            {
+                "id": "fallback",
+                "provider": "tavily",
+                "family": "tavily_local",
+                "execution_mode": "local_query_adapter",
+                "capabilities": [
+                    "domain_filter",
+                    "multi_query",
+                    "normalized_results",
+                    "reference_storage",
+                    "search_query",
+                ],
+            },
+        ],
+        "chain": {
+            "mode": "mixed_single_query",
+            "capabilities": [
+                "domain_filter",
+                "normalized_results",
+                "reference_storage",
+                "search_query",
+            ],
+            "limitations": ["single_search_query"],
+        },
     }
+
+
+@pytest.mark.parametrize(
+    ("rows", "expected_mode", "expected_capabilities", "expected_limitations"),
+    [
+        (
+            [
+                {
+                    "id": "gpt",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "search-upstream",
+                    "responses_model": "gpt-5.6-terra",
+                }
+            ],
+            "full_gpt_passthrough",
+            ["full_web_run_passthrough"],
+            [],
+        ),
+        (
+            [{"id": "tavily", "provider": "tavily", "tavily_api_key": "tvly-key"}],
+            "local_query_adapter",
+            [
+                "domain_filter",
+                "multi_query",
+                "normalized_results",
+                "reference_storage",
+                "search_query",
+            ],
+            [],
+        ),
+        (
+            [
+                {
+                    "id": "gpt",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "search-upstream",
+                    "responses_model": "gpt-5.6-terra",
+                },
+                {"id": "self-hosted", "provider": "self_hosted_bing"},
+            ],
+            "mixed_single_query",
+            [
+                "domain_filter",
+                "normalized_results",
+                "reference_storage",
+                "search_query",
+            ],
+            ["single_search_query"],
+        ),
+        ([], "unconfigured", [], []),
+    ],
+    ids=["gpt", "local", "mixed", "empty"],
+)
+def test_get_config_derives_search_contract_from_code_owned_provider_contract(
+    tmp_path, rows, expected_mode, expected_capabilities, expected_limitations
+):
+    """Admin metadata is derived and leaves the persisted rows unchanged."""
+    config = _config_data()
+    config["providers"]["search-upstream"] = {
+        "provider": "openai",
+        "api_type": "responses",
+        "base_url": "https://search.example.test/v1",
+        "api_key": "search-provider-key",
+    }
+    config["server"]["web_search"] = {"providers": rows}
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path), gateway_config=GatewayConfig(config)
+    )
+
+    response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["server"]["web_search"]["providers"] == [
+        {
+            **row,
+            **({"tavily_api_key": "***"} if row["provider"] == "tavily" else {}),
+        }
+        for row in rows
+    ]
+    assert body["web_search_contract"]["chain"] == {
+        "mode": expected_mode,
+        "capabilities": expected_capabilities,
+        "limitations": expected_limitations,
+    }
+    assert all(
+        set(contract) == {"id", "provider", "family", "execution_mode", "capabilities"}
+        for contract in body["web_search_contract"]["configured_providers"]
+    )
 
 
 @pytest.mark.parametrize(

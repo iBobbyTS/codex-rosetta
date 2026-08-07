@@ -258,6 +258,21 @@ Models; in that mode the Gateway sends the
 unchanged Codex Search body to the Provider's `alpha/search` endpoint with that
 Provider's existing credential, proxy, and redirect policy. Disabled and
 non-Responses Providers are rejected during configuration. The
+self-contained Admin view derives, rather than saves, each row's provider
+family, execution mode, and capability summary from Rosetta's Web Search
+Provider contract. GPT rows display only their Responses Provider and Search
+Model and preserve the complete configured Responses `/alpha/search`
+passthrough only when the entire ordered chain is GPT. Tavily rows display only
+their Tavily key and existing quota view; self-hosted rows display no GPT- or
+Tavily-specific fields. Local-only chains expose the local query-adapter
+capabilities, while mixed GPT/local chains display and enforce the safe
+single-`search_query` intersection. These derived summaries never include
+credentials, fingerprints, sidecar connection values, or upstream-private
+data, and do not alter the persisted Provider-row wire format. DeepSeek is not
+a search Provider in this release: a future integration requires its own native
+Responses family, adapter, capability contract, and separate validation against
+the official Responses web-search wire.
+
 self-contained **Search Test** card sends the fixed query
 `latest python release version` through the same Gateway auxiliary handler as a
 real `POST /v1/alpha/search` request and displays normalized result cards; it does not call

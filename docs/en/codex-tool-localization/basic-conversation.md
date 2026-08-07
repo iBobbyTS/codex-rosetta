@@ -112,6 +112,14 @@ code-owned query adapters and normalized local result/reference path. Future
 providers, including DeepSeek, must use an independent code adapter rather
 than extending the Tool Catalog.
 
+The Admin page's family, execution-mode, and capability labels are derived from
+this independent Provider contract, not from Tool Catalog data or saved
+Provider-row fields. An all-GPT configured Responses chain keeps the full live
+`/alpha/search` passthrough; local-only chains expose the local adapter subset;
+a mixed GPT/local chain is limited to one `search_query`. DeepSeek has no
+executable search path until a separately validated native Responses Provider
+family and adapter are introduced.
+
 Direct-URL
 `open` fetches public static HTML or plain text, and `time` uses
 Python fixed-UTC-offset calculation. Open validates every redirect target,

@@ -87,6 +87,12 @@ contract 并返回完整响应。Tavily 与自托管 Provider 则使用代码拥
 规范化结果/reference 路径。未来 Provider（包括 DeepSeek）也必须采用独立代码 adapter，
 不能通过扩展 Tool Catalog 实现。
 
+Admin 页面显示的 family、执行模式和能力标签由这一独立 Provider contract 推导，不来自 Tool
+Catalog 数据或保存的 Provider-row 字段。全 GPT 的已配置 Responses 链保留完整 live
+`/alpha/search` 透传；纯本地链暴露本地 adapter 子集；GPT/local 混合链限制为一个
+`search_query`。在独立 native Responses Provider family 和 adapter 完成验证前，DeepSeek
+没有可执行的搜索路径。
+
 直接 URL 的 `open` 获取公开静态 HTML 或纯文本，`time` 使用 Python 的固定
 UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公开地址，最多
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
