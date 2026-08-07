@@ -18,6 +18,7 @@ from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
+from codex_rosetta.gateway.proxy import _apply_profile_runtime_adapter
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
@@ -25,10 +26,7 @@ from codex_rosetta.gateway.transport import UpstreamConnectionError
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.gateway.web_search import WebSearchSettings
-from codex_rosetta.gateway.web_run_capabilities import (
-    project_modified_web_run_function,
-    web_run_model_availability,
-)
+from codex_rosetta.gateway.web_run_capabilities import web_run_model_availability
 
 
 ENDPOINTS = ("alpha/search", "images/generations", "images/edits")
@@ -825,7 +823,7 @@ def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across
     tool_definition = {
         "type": "function",
         "name": "web__run",
-        "description": "Use `search_query`. Use `weather`.",
+        "description": "Use `search_query`. Use `weather`. Use `click`.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -841,6 +839,16 @@ def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across
                     "items": {
                         "type": "object",
                         "properties": {"location": {"type": "string"}},
+                    },
+                },
+                "click": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "ref_id": {"type": "string"},
+                            "id": {"type": "number"},
+                        },
                     },
                 },
                 "open": {
@@ -862,7 +870,11 @@ def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across
         },
     }
 
-    for browser_ready in (False, True, False):
+    for browser_ready, expected_availability, click_available in (
+        (False, (True, False), False),
+        (True, (True, True), True),
+        (False, (True, False), False),
+    ):
         health.browser_ready = browser_ready
         route, _ = config.resolve("openai_responses", "gateway-model")
         resolved = asyncio.run(
@@ -873,16 +885,21 @@ def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across
                 {"tools": [tool_definition]},
             )
         )
-        search_available, browser_available = web_run_model_availability(resolved)
-        projected = project_modified_web_run_function(
+        assert web_run_model_availability(resolved) == expected_availability
+        projected, removed = _apply_profile_runtime_adapter(
             tool_definition,
-            search_available=search_available,
-            browser_available=browser_available,
-            search_capabilities=resolved.web_run_search_capabilities,
+            "namespace.web.run",
+            "modified",
+            "web__run",
+            resolved,
         )
 
         assert projected is not None
-        assert "weather" not in projected["parameters"]["properties"]
+        assert not removed
+        properties = projected["parameters"]["properties"]
+        assert "search_query" in properties
+        assert "weather" not in properties
+        assert ("click" in properties) is click_available
 
         for commands in (
             {"weather": [{"location": "Paris"}]},
