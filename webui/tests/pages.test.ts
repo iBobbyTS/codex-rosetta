@@ -103,32 +103,17 @@ describe('NetworkSearchPage', () => {
     max_providers: 32,
   };
 
-  const configResponse = (rows: Array<Record<string, string | undefined>> = [], providers: Record<string, unknown> = {}) => {
-    const configured_providers = rows.map((row) => {
-      if (row.provider === 'configured_responses_provider') {
-        return { id: row.id, provider: row.provider, family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] };
-      }
-      const isTavily = row.provider === 'tavily';
-      return {
-        id: row.id,
-        provider: row.provider,
-        family: isTavily ? 'tavily_local' : 'self_hosted_local',
-        execution_mode: 'local_query_adapter',
-        capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'],
-      };
-    });
-    const hasGpt = configured_providers.some((row) => row.family === 'gpt_passthrough');
-    const hasLocal = configured_providers.some((row) => row.family !== 'gpt_passthrough');
-    const chain = configured_providers.length === 0
-      ? { mode: 'unconfigured', capabilities: [], limitations: [] }
-      : hasGpt && hasLocal
-        ? { mode: 'mixed_single_query', capabilities: ['search_query', 'domain_filter', 'normalized_results', 'reference_storage'], limitations: ['single_search_query'] }
-        : hasGpt
-          ? { mode: 'full_gpt_passthrough', capabilities: ['full_web_run_passthrough'], limitations: [] }
-          : { mode: 'local_query_adapter', capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'], limitations: [] };
+  const configResponse = (
+    rows: Array<Record<string, string | undefined>> = [],
+    providers: Record<string, unknown> = {},
+    savedContract: Record<string, unknown> = {
+      configured_providers: [],
+      chain: { mode: 'unconfigured', capabilities: [], limitations: [] },
+    },
+  ) => {
     return {
       providers,
-      web_search_contract: { ...contract, configured_providers, chain },
+      web_search_contract: { ...contract, ...savedContract },
       server: { web_search: { providers: rows } },
     };
   };
@@ -234,7 +219,14 @@ describe('NetworkSearchPage', () => {
       { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
       { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
       { id: 'sh', provider: 'self_hosted_bing' },
-    ], { search: { api_type: 'responses' } }));
+    ], { search: { api_type: 'responses' } }, {
+      configured_providers: [
+        { id: 'tv', provider: 'tavily', family: 'tavily_local', execution_mode: 'local_query_adapter', capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'] },
+        { id: 'rp', provider: 'configured_responses_provider', family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] },
+        { id: 'sh', provider: 'self_hosted_bing', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query', 'domain_filter', 'multi_query', 'normalized_results', 'reference_storage'] },
+      ],
+      chain: { mode: 'mixed_single_query', capabilities: ['search_query', 'domain_filter', 'normalized_results', 'reference_storage'], limitations: ['single_search_query'] },
+    }));
     render(NetworkSearchPage);
 
     expect(await screen.findByText(/mixed GPT\/local chain/)).toBeInTheDocument();
@@ -243,6 +235,91 @@ describe('NetworkSearchPage', () => {
     expect(document.querySelector('[data-row-id="tv"] [data-provider-family="tavily_local"]')).toHaveTextContent('Tavily: local query adapter');
     expect(document.querySelector('[data-row-id="sh"] [data-provider-family="self_hosted_local"]')).toHaveTextContent('Self-hosted: sidecar adapter');
     expect(screen.getAllByText(/Capabilities:/)).toHaveLength(3);
+  });
+
+  it.each([
+    {
+      name: 'GPT to mixed after adding a local fallback',
+      rows: [{ id: 'gpt', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' }],
+      savedContract: {
+        configured_providers: [{ id: 'gpt', provider: 'configured_responses_provider', family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] }],
+        chain: { mode: 'full_gpt_passthrough', capabilities: ['full_web_run_passthrough'], limitations: [] },
+      },
+      mutate: async () => fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' })),
+    },
+    {
+      name: 'local to empty after deletion',
+      rows: [{ id: 'local', provider: 'self_hosted_google' }],
+      savedContract: {
+        configured_providers: [{ id: 'local', provider: 'self_hosted_google', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] }],
+        chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
+      },
+      mutate: async () => fireEvent.click(screen.getByRole('button', { name: 'Remove' })),
+    },
+    {
+      name: 'provider reorder',
+      rows: [
+        { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
+        { id: 'second', provider: 'self_hosted_google' },
+      ],
+      savedContract: {
+        configured_providers: [
+          { id: 'first', provider: 'tavily', family: 'tavily_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+          { id: 'second', provider: 'self_hosted_google', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] },
+        ],
+        chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
+      },
+      mutate: async () => fireEvent.click(screen.getAllByRole('button', { name: 'Move search provider down' })[0]),
+    },
+  ])('hides stale saved contracts during dirty edits: $name', async ({ rows, savedContract, mutate }) => {
+    mockConfig(configResponse(rows, { search: { api_type: 'responses' } }, savedContract));
+    render(NetworkSearchPage);
+    await waitFor(() => expect(document.querySelector('.chain-contract')).not.toBeNull());
+
+    await mutate();
+
+    expect(document.querySelector('.chain-contract')).toBeNull();
+    expect(document.querySelectorAll('.provider-contract')).toHaveLength(0);
+  });
+
+  it('refreshes rows and contracts together after saving a local to GPT edit', async () => {
+    const before = configResponse(
+      [{ id: 'same-row', provider: 'self_hosted_google' }],
+      { search: { api_type: 'responses' } },
+      {
+        configured_providers: [{ id: 'same-row', provider: 'self_hosted_google', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] }],
+        chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
+      },
+    );
+    const after = configResponse(
+      [{ id: 'same-row', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-sol' }],
+      { search: { api_type: 'responses' } },
+      {
+        configured_providers: [{ id: 'same-row', provider: 'configured_responses_provider', family: 'gpt_passthrough', execution_mode: 'alpha_search_passthrough', capabilities: ['full_web_run_passthrough'] }],
+        chain: { mode: 'full_gpt_passthrough', capabilities: ['full_web_run_passthrough'], limitations: [] },
+      },
+    );
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return Promise.resolve(configReads++ === 0 ? before : after);
+      if (path.endsWith('/usage')) return Promise.resolve({ entries: [] });
+      return Promise.resolve({ configured: false });
+    });
+    apiMock.put.mockResolvedValue({ server: before.server });
+    render(NetworkSearchPage);
+    const type = await screen.findByLabelText('Search provider type');
+    await chooseDropdown(type, 'configured_responses_provider');
+    expect(document.querySelector('.chain-contract')).toBeNull();
+    expect(document.querySelector('.provider-contract')).toBeNull();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Search provider type')).toHaveAttribute('data-value', 'configured_responses_provider');
+      expect(document.querySelector('[data-chain-mode="full_gpt_passthrough"]')).not.toBeNull();
+      expect(document.querySelector('[data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
+    });
+    expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/config')).toHaveLength(2);
   });
 
   it('loads usage once and binds clamped values and reset dates to stable Tavily row IDs', async () => {
@@ -317,12 +394,14 @@ describe('NetworkSearchPage', () => {
     await chooseDropdown(type, 'self_hosted_google');
     expect(screen.queryByLabelText('Responses Provider')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Search Model')).not.toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    expect(screen.getByText('No web search providers configured.')).toBeInTheDocument();
+    await fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' }));
+    await chooseDropdown(screen.getByLabelText('Search provider type'), 'self_hosted_google');
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     const savedRows = (apiMock.put.mock.calls[0][1] as { web_search: { providers: Array<Record<string, unknown>> } }).web_search.providers;
     expect(savedRows).toHaveLength(1);
     expect(savedRows[0]).toEqual({ id: expect.stringMatching(/^[A-Za-z0-9_-]{1,64}$/), provider: 'self_hosted_google' });
-    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
-    expect(screen.getByText('No web search providers configured.')).toBeInTheDocument();
   });
 
   it('caps additions at the backend-provided 32-row limit', async () => {

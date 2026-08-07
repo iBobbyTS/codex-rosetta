@@ -40,11 +40,9 @@ from ...model_profiles import (
 from ...provider_profiles import provider_catalog_for_admin, resolve_soft_interrupt
 from ...providers import normalize_provider_api_key
 from ...search_provider_contract import (
-    GPT_MIXED_MODE_CAPABILITIES,
-    GPT_PASSTHROUGH_CONTRACT,
     SearchProviderCapability,
-    SearchProviderFamily,
     contract_for_wire_provider,
+    search_provider_chain_contract,
 )
 from ...stream_trace import DEFAULT_MAX_CHARS
 from ...tool_profiles import (
@@ -106,41 +104,14 @@ def _web_search_contract_for_admin(value: Any) -> dict[str, Any]:
     row_contracts = [
         (row, contract_for_wire_provider(str(row["provider"]))) for row in rows
     ]
-    if not row_contracts:
-        chain = {
-            "mode": "unconfigured",
-            "capabilities": [],
-            "limitations": [],
-        }
-    elif all(
-        contract.family is SearchProviderFamily.GPT_PASSTHROUGH
-        for _, contract in row_contracts
-    ):
-        chain = {
-            "mode": "full_gpt_passthrough",
-            "capabilities": _search_capability_values(
-                GPT_PASSTHROUGH_CONTRACT.capabilities
-            ),
-            "limitations": [],
-        }
-    elif any(
-        contract.family is SearchProviderFamily.GPT_PASSTHROUGH
-        for _, contract in row_contracts
-    ):
-        chain = {
-            "mode": "mixed_single_query",
-            "capabilities": _search_capability_values(GPT_MIXED_MODE_CAPABILITIES),
-            "limitations": ["single_search_query"],
-        }
-    else:
-        shared_capabilities = set(row_contracts[0][1].capabilities)
-        for _, contract in row_contracts[1:]:
-            shared_capabilities.intersection_update(contract.capabilities)
-        chain = {
-            "mode": "local_query_adapter",
-            "capabilities": _search_capability_values(frozenset(shared_capabilities)),
-            "limitations": [],
-        }
+    chain_contract = search_provider_chain_contract(
+        tuple(contract for _, contract in row_contracts)
+    )
+    chain = {
+        "mode": chain_contract.mode.value,
+        "capabilities": _search_capability_values(chain_contract.capabilities),
+        "limitations": list(chain_contract.limitations),
+    }
     return {
         "provider_types": [
             "tavily",

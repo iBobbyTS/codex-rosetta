@@ -76,6 +76,7 @@
   let maxProviders = $state(0);
   let providerContracts = $state<SearchProviderContract[]>([]);
   let chainContract = $state<SearchChainContract | null>(null);
+  let contractsCurrent = $state(false);
   let draggedId = $state<string | null>(null);
   let status = $state<Status | null>(null);
   let usageById = $state<Map<string, UsageEntry>>(new Map());
@@ -116,16 +117,21 @@
     self_hosted_bing: t('network.provider.bingRss'),
     self_hosted_bing_browser: t('network.provider.bingBrowser'),
   })[value];
-  const providerDescription = (value: SearchProviderType): string => {
-    if (value === 'configured_responses_provider') return t('network.provider.gptDescription');
-    if (value === 'tavily') return t('network.provider.tavilyDescription');
-    return t('network.provider.selfHostedDescription');
+  const providerDescription = (contract: SearchProviderContract): string => {
+    const contractKey = `${contract.family}:${contract.execution_mode}`;
+    const descriptionKey: Record<string, string> = {
+      'gpt_passthrough:alpha_search_passthrough': 'network.provider.gptDescription',
+      'tavily_local:local_query_adapter': 'network.provider.tavilyDescription',
+      'self_hosted_local:local_query_adapter': 'network.provider.selfHostedDescription',
+    };
+    const key = descriptionKey[contractKey];
+    return key ? t(key) : '';
   };
   const capabilityLabel = (value: string): string => t(`network.capability.${value}`);
   const rowContract = (id: string): SearchProviderContract | undefined =>
-    providerContracts.find((contract) => contract.id === id);
+    contractsCurrent ? providerContracts.find((contract) => contract.id === id) : undefined;
   const chainDescription = (): string => {
-    if (!chainContract) return '';
+    if (!contractsCurrent || !chainContract) return '';
     return t(`network.chain.${chainContract.mode}`);
   };
 
@@ -172,6 +178,7 @@
 
   function replaceRow(id: string, update: (row: SearchRow) => SearchRow): void {
     rows = rows.map((row) => row.id === id ? update(row) : row);
+    contractsCurrent = false;
   }
 
   function changeType(id: string, provider: SearchProviderType): void {
@@ -183,10 +190,12 @@
     const provider = providerTypes[0];
     if (!provider) return;
     rows = [...rows, rowForType(createId(), provider)];
+    contractsCurrent = false;
   }
 
   function removeRow(id: string): void {
     rows = rows.filter((row) => row.id !== id);
+    contractsCurrent = false;
   }
 
   function moveRow(id: string, offset: -1 | 1): void {
@@ -196,6 +205,7 @@
     const next = [...rows];
     [next[index], next[target]] = [next[target], next[index]];
     rows = next;
+    contractsCurrent = false;
   }
 
   function moveToTargetIndex(sourceId: string, targetId: string): void {
@@ -208,6 +218,7 @@
     const [source] = next.splice(sourceIndex, 1);
     next.splice(targetIndex, 0, source);
     rows = next;
+    contractsCurrent = false;
   }
 
   function startDrag(event: DragEvent, id: string): void {
@@ -243,19 +254,27 @@
   async function loadConfig(signal: AbortSignal): Promise<void> {
     try {
       const config = await api.get<Config>('/admin/api/config', signal);
-      providers = config.providers ?? {};
-      providerTypes = config.web_search_contract?.provider_types ?? [];
-      responsesModels = config.web_search_contract?.responses_models ?? [];
-      maxProviders = config.web_search_contract?.max_providers ?? 0;
-      providerContracts = config.web_search_contract?.configured_providers ?? [];
-      chainContract = config.web_search_contract?.chain ?? null;
-      rows = (config.server?.web_search?.providers ?? []).map((row) => ({ ...row }));
+      applyConfig(config);
       error = '';
     } catch (cause) {
       if (!aborted(cause)) error = message(cause);
     } finally {
       loading = false;
     }
+  }
+
+  function applyConfig(config: Config): void {
+    const nextRows = (config.server?.web_search?.providers ?? []).map((row) => ({ ...row }));
+    const nextProviderContracts = config.web_search_contract?.configured_providers ?? [];
+    const nextChainContract = config.web_search_contract?.chain ?? null;
+    providers = config.providers ?? {};
+    providerTypes = config.web_search_contract?.provider_types ?? [];
+    responsesModels = config.web_search_contract?.responses_models ?? [];
+    maxProviders = config.web_search_contract?.max_providers ?? 0;
+    rows = nextRows;
+    providerContracts = nextProviderContracts;
+    chainContract = nextChainContract;
+    contractsCurrent = true;
   }
 
   async function loadStatus(signal: AbortSignal): Promise<void> {
@@ -288,11 +307,12 @@
     error = '';
     notice = '';
     try {
-      const result = await api.put<{ server?: { web_search?: { providers?: SearchRow[] } } }>(
+      await api.put<{ server?: { web_search?: { providers?: SearchRow[] } } }>(
         '/admin/api/config/server',
         { web_search: { providers: canonicalRows() } },
       );
-      rows = (result.server?.web_search?.providers ?? rows).map((row) => ({ ...row }));
+      const config = await api.get<Config>('/admin/api/config');
+      applyConfig(config);
       notice = t('toast.networkSearchSaved');
       await poll.runNow();
     } catch (cause) {
@@ -358,6 +378,7 @@
         <thead><tr><th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th></tr></thead>
         <tbody>
           {#each rows as row, index (row.id)}
+            {@const contract = rowContract(row.id)}
             <tr data-row-id={row.id} class:dragging={draggedId === row.id} ondragover={(event) => event.preventDefault()} ondrop={(event) => dropRow(event, row.id)}>
               <td class="search-name-cell">
                 <div class="row-order-controls">
@@ -381,12 +402,14 @@
                   <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
                   <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
                 {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
-                <div class="provider-contract" data-provider-family={rowContract(row.id)?.family}>
-                  <span>{providerDescription(row.provider)}</span>
-                  {#if rowContract(row.id)?.capabilities?.length}
-                    <span>{t('network.capabilities', { capabilities: rowContract(row.id)?.capabilities.map(capabilityLabel).join(', ') ?? '' })}</span>
-                  {/if}
-                </div>
+                {#if contract}
+                  <div class="provider-contract" data-provider-family={contract.family}>
+                    {#if providerDescription(contract)}<span>{providerDescription(contract)}</span>{/if}
+                    {#if contract.capabilities.length}
+                      <span>{t('network.capabilities', { capabilities: contract.capabilities.map(capabilityLabel).join(', ') })}</span>
+                    {/if}
+                  </div>
+                {/if}
               </td>
               <td class="search-quota-cell">
                 {#if row.provider === 'tavily'}

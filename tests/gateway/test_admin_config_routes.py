@@ -11,7 +11,7 @@ from typing import Any, cast
 
 import pytest
 
-from codex_rosetta.gateway.admin.routes import _shared
+from codex_rosetta.gateway.admin.routes import _shared, config as config_routes
 from codex_rosetta.gateway import web_run_health
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
@@ -33,6 +33,16 @@ from codex_rosetta.gateway.config import (
     MAX_WEB_SEARCH_PROVIDERS,
 )
 from codex_rosetta.gateway.logging import BodyLogState
+from codex_rosetta.gateway.search_provider_candidates import (
+    search_candidates_capabilities,
+)
+from codex_rosetta.gateway.search_provider_contract import (
+    GPT_PASSTHROUGH_CONTRACT,
+    SearchProviderCapability,
+    SearchProviderContract,
+    SearchProviderExecutionMode,
+    SearchProviderFamily,
+)
 from codex_rosetta.gateway.stream_trace import StreamTraceState
 from codex_rosetta.observability.metrics import MetricsCollector
 from codex_rosetta.observability.request_log import RequestLogEntry
@@ -944,6 +954,69 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
     assert all(
         set(contract) == {"id", "provider", "family", "execution_mode", "capabilities"}
         for contract in body["web_search_contract"]["configured_providers"]
+    )
+
+
+def test_admin_and_runtime_share_narrow_mixed_contract_intersection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A narrower future local contract constrains both projections identically."""
+    narrow_local = SearchProviderContract.create(
+        SearchProviderFamily.TAVILY_LOCAL,
+        SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER,
+        {
+            SearchProviderCapability.SEARCH_QUERY,
+            SearchProviderCapability.NORMALIZED_RESULTS,
+        },
+    )
+
+    def synthetic_contract(provider: str) -> SearchProviderContract:
+        if provider == "configured_responses_provider":
+            return GPT_PASSTHROUGH_CONTRACT
+        if provider == "tavily":
+            return narrow_local
+        raise ValueError(provider)
+
+    monkeypatch.setattr(config_routes, "contract_for_wire_provider", synthetic_contract)
+    admin_contract = config_routes._web_search_contract_for_admin(
+        {
+            "providers": [
+                {
+                    "id": "gpt",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": "search-upstream",
+                    "responses_model": "gpt-5.6-terra",
+                },
+                {
+                    "id": "narrow",
+                    "provider": "tavily",
+                    "tavily_api_key": "tvly-test",
+                },
+            ]
+        }
+    )
+    candidates: Any = [
+        SimpleNamespace(
+            provider="configured_responses_provider",
+            contract=GPT_PASSTHROUGH_CONTRACT,
+        ),
+        SimpleNamespace(provider="tavily", contract=narrow_local),
+    ]
+
+    runtime_capabilities = search_candidates_capabilities(
+        candidates, self_hosted_ready=False
+    )
+
+    assert admin_contract["chain"] == {
+        "mode": "mixed_single_query",
+        "capabilities": sorted(capability.value for capability in runtime_capabilities),
+        "limitations": ["single_search_query"],
+    }
+    assert runtime_capabilities == frozenset(
+        {
+            SearchProviderCapability.SEARCH_QUERY,
+            SearchProviderCapability.NORMALIZED_RESULTS,
+        }
     )
 
 

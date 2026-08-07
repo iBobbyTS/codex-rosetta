@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -65,6 +65,15 @@ class SearchProviderCapability(StrEnum):
     FULL_WEB_RUN_PASSTHROUGH = "full_web_run_passthrough"
 
 
+class SearchProviderChainMode(StrEnum):
+    """Aggregate execution mode for an ordered provider contract chain."""
+
+    UNCONFIGURED = "unconfigured"
+    FULL_GPT_PASSTHROUGH = "full_gpt_passthrough"
+    LOCAL_QUERY_ADAPTER = "local_query_adapter"
+    MIXED_SINGLE_QUERY = "mixed_single_query"
+
+
 @dataclass(frozen=True, slots=True)
 class SearchProviderContract:
     """Validated family, execution mode, and capability declaration."""
@@ -105,6 +114,15 @@ class SearchProviderContract:
         except (TypeError, ValueError) as exc:
             raise ValueError("invalid search provider contract") from exc
         return cls(parsed_family, parsed_mode, parsed_capabilities)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchProviderChainContract:
+    """Safe aggregate capabilities and limitations for a provider chain."""
+
+    mode: SearchProviderChainMode
+    capabilities: frozenset[SearchProviderCapability]
+    limitations: tuple[str, ...] = ()
 
 
 GPT_PASSTHROUGH_CONTRACT = SearchProviderContract.create(
@@ -153,6 +171,38 @@ def projection_capabilities(
     if contract.family is SearchProviderFamily.GPT_PASSTHROUGH:
         return GPT_MIXED_MODE_CAPABILITIES
     return contract.capabilities
+
+
+def search_provider_chain_contract(
+    contracts: Sequence[SearchProviderContract],
+) -> SearchProviderChainContract:
+    """Return the code-owned safe contract for an ordered provider chain."""
+    if not contracts:
+        return SearchProviderChainContract(
+            mode=SearchProviderChainMode.UNCONFIGURED,
+            capabilities=frozenset(),
+        )
+
+    full = SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH
+    if all(full in contract.capabilities for contract in contracts):
+        return SearchProviderChainContract(
+            mode=SearchProviderChainMode.FULL_GPT_PASSTHROUGH,
+            capabilities=frozenset({full}),
+        )
+
+    capabilities = set(projection_capabilities(contracts[0]))
+    for contract in contracts[1:]:
+        capabilities.intersection_update(projection_capabilities(contract))
+    mixed = any(full in contract.capabilities for contract in contracts)
+    return SearchProviderChainContract(
+        mode=(
+            SearchProviderChainMode.MIXED_SINGLE_QUERY
+            if mixed
+            else SearchProviderChainMode.LOCAL_QUERY_ADAPTER
+        ),
+        capabilities=frozenset(capabilities),
+        limitations=("single_search_query",) if mixed else (),
+    )
 
 
 def is_mixed_query_only_capability_set(
