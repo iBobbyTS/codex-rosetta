@@ -22,6 +22,7 @@ from codex_rosetta.gateway.search_provider_candidates import (
     search_candidates_capabilities,
 )
 from codex_rosetta.gateway.search_provider_contract import (
+    GPT_MIXED_MODE_CAPABILITIES,
     GPT_PASSTHROUGH_CONTRACT,
     LOCAL_QUERY_CAPABILITIES,
     SELF_HOSTED_LOCAL_CONTRACT,
@@ -107,7 +108,7 @@ def test_candidate_chain_capabilities_preserve_gpt_and_intersect_mixed() -> None
             ],
             self_hosted_ready=False,
         )
-        == LOCAL_QUERY_CAPABILITIES
+        == GPT_MIXED_MODE_CAPABILITIES
     )
 
 
@@ -133,15 +134,15 @@ def test_gpt_and_self_hosted_capabilities_stay_local_across_readiness_changes() 
     ]
     assert (
         search_candidates_capabilities(candidates, self_hosted_ready=False)
-        == LOCAL_QUERY_CAPABILITIES
+        == GPT_MIXED_MODE_CAPABILITIES
     )
     assert (
         search_candidates_capabilities(candidates, self_hosted_ready=True)
-        == LOCAL_QUERY_CAPABILITIES
+        == GPT_MIXED_MODE_CAPABILITIES
     )
     assert (
         search_candidates_capabilities(candidates, self_hosted_ready=False)
-        == LOCAL_QUERY_CAPABILITIES
+        == GPT_MIXED_MODE_CAPABILITIES
     )
 
 
@@ -159,6 +160,9 @@ def test_gpt_and_self_hosted_capabilities_stay_local_across_readiness_changes() 
                 "open",
                 "time",
                 "response_length",
+                "click",
+                "find",
+                "screenshot",
             },
         ),
         (LOCAL_QUERY_CAPABILITIES, {"search_query", "open", "time", "response_length"}),
@@ -176,6 +180,17 @@ def test_schema_and_description_match_typed_projection(capabilities, expected) -
     assert set(projected["parameters"]["properties"]) == expected
     for command in set(_schema()["properties"]) - expected:
         assert f"`{command}`" not in projected["description"]
+
+
+def test_mixed_projection_limits_search_query_to_one_item() -> None:
+    projected = project_modified_web_run_function(
+        _function(),
+        search_available=True,
+        browser_available=False,
+        search_capabilities=GPT_MIXED_MODE_CAPABILITIES,
+    )
+    assert projected is not None
+    assert projected["parameters"]["properties"]["search_query"]["maxItems"] == 1
 
 
 @pytest.mark.parametrize(

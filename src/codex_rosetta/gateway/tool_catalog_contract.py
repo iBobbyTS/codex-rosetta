@@ -120,7 +120,6 @@ ITEM_FIELDS = frozenset(
         "availability",
         "delivery",
         "description_variants",
-        "capability_projection",
         "history_aliases",
         "state_api_types",
         "source_binding",
@@ -361,13 +360,6 @@ def _validate_runtime_fields(item: dict[str, Any]) -> tuple[str, ...]:
         )
     _validate_catalog_definition(item)
     _validate_delivery(item)
-    capability_projection = item.get("capability_projection")
-    if capability_projection is not None and not isinstance(
-        capability_projection, dict
-    ):
-        raise ValueError(
-            f"catalog item {item_id!r} capability_projection must be an object"
-        )
     _validate_description_variants(item)
     return adapters
 

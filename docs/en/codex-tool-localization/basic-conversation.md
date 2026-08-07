@@ -134,9 +134,11 @@ use PyMuPDF embedded-text extraction. PDF `screenshot` renders the requested
 page with PyMuPDF and uses Tesseract when the rendered page has no embedded
 text. The Codex Search endpoint returns text rather than a multimodal image
 item, so screenshot results contain rendered dimensions and extracted/OCR text;
-they do not inject PDF pixels into the model conversation. Without the sidecar,
-the model-facing Modified schema omits `click`, `find`, and `screenshot`, and
-static `open` remains the bounded Python implementation. Configuring the
+they do not inject PDF pixels into the model conversation. In a local or mixed
+Provider chain without the sidecar, the model-facing Modified schema omits
+`click`, `find`, and `screenshot`, and static `open` remains the bounded Python
+implementation. An all-configured-GPT chain preserves the complete live
+`/alpha/search` command surface without a sidecar. Configuring the
 sidecar is not enough to advertise browser commands: its bounded health status
 must report both an online service and `browser_ready=true`.
 
@@ -160,9 +162,12 @@ direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
 search. A configured Responses row or a Tavily row with a valid Key qualifies
 regardless of its list position; a self-hosted row qualifies only while the
 sidecar reports ready. Candidate order therefore controls execution, not
-whether a later eligible candidate is visible to the model. The definition adds
-`click`, `find`, and `screenshot` only while the optional sidecar reports
-`browser_ready=true`. The Hosted `web_search` tool remains independent:
+whether a later eligible candidate is visible to the model. A mixed chain is
+currently single-query: its schema limits `search_query` to one item and the
+local bridge rejects larger requests before any Provider call or cooldown. The
+definition adds `click`, `find`, and `screenshot` only while the optional
+sidecar reports `browser_ready=true`, except that an all-configured-GPT chain
+preserves its complete upstream surface. The Hosted `web_search` tool remains independent:
 its Provider, Token, and guidance continue to belong to the selected Profile.
 
 `/v1/alpha/search` above is the Codex-facing Gateway route. Passthrough does not

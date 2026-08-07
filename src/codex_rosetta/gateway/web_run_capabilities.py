@@ -9,10 +9,15 @@ import re
 from collections.abc import Collection, Mapping
 from typing import Any
 
-from .admin.tool_catalog import load_tool_catalog
 from .search_provider_contract import (
     SearchProviderCapability,
     SearchProviderExecutionMode,
+    WEB_RUN_BASE_COMMAND_FIELDS,
+    WEB_RUN_DESCRIPTION_DROP_MARKERS,
+    WEB_RUN_DESCRIPTION_REPLACEMENTS,
+    WEB_RUN_SEARCH_COMMAND_FIELDS,
+    WEB_RUN_SIDECAR_COMMAND_FIELDS,
+    WEB_RUN_UNSUPPORTED_COMMANDS,
 )
 
 WEB_RUN_PROFILE_ITEM_ID = "namespace.web.run"
@@ -23,43 +28,6 @@ WEB_RUN_TRACE_MAX_PROJECTED_COMMANDS = 64
 WEB_RUN_TRACE_MAX_COMMAND_BYTES = 128
 
 
-def _web_run_projection() -> dict[str, Any]:
-    matches = [
-        item["capability_projection"]
-        for item in load_tool_catalog()["items"]
-        if "web_run" in item.get("runtime_adapters", [])
-    ]
-    if len(matches) != 1 or not isinstance(matches[0], dict):
-        raise ValueError("web_run adapter must own one capability_projection")
-    return matches[0]
-
-
-def _command_fields(section: str) -> dict[str, frozenset[str] | None]:
-    projection = _web_run_projection()[section]
-    commands = projection.get("commands", {})
-    if not isinstance(commands, dict):
-        raise ValueError(f"web_run capability section {section!r} is invalid")
-    result: dict[str, frozenset[str] | None] = {}
-    for command, fields in commands.items():
-        if (
-            not isinstance(command, str)
-            or not isinstance(fields, list)
-            or any(not isinstance(field, str) for field in fields)
-        ):
-            raise ValueError(f"web_run capability section {section!r} is invalid")
-        result[command] = frozenset(field for field in fields if isinstance(field, str))
-    top_level_fields = projection.get("top_level_fields", [])
-    if not isinstance(top_level_fields, list) or any(
-        not isinstance(field, str) for field in top_level_fields
-    ):
-        raise ValueError(f"web_run capability section {section!r} is invalid")
-    result.update({field: None for field in top_level_fields})
-    return result
-
-
-WEB_RUN_BASE_COMMAND_FIELDS = _command_fields("base")
-WEB_RUN_SEARCH_COMMAND_FIELDS = _command_fields(WEB_RUN_BASIC_SEARCH_CAPABILITY)
-WEB_RUN_SIDECAR_COMMAND_FIELDS = _command_fields(WEB_RUN_SIDECAR_CAPABILITY)
 WEB_RUN_SUPPORTED_COMMAND_FIELDS = {
     **WEB_RUN_BASE_COMMAND_FIELDS,
     **WEB_RUN_SEARCH_COMMAND_FIELDS,
@@ -69,7 +37,7 @@ WEB_RUN_KNOWN_COMMANDS = frozenset(
     set(WEB_RUN_BASE_COMMAND_FIELDS)
     | set(WEB_RUN_SEARCH_COMMAND_FIELDS)
     | set(WEB_RUN_SIDECAR_COMMAND_FIELDS)
-    | set(_web_run_projection().get("unsupported_commands", []))
+    | set(WEB_RUN_UNSUPPORTED_COMMANDS)
 )
 WEB_RUN_UNSUPPORTED_COMMANDS = WEB_RUN_KNOWN_COMMANDS - WEB_RUN_SUPPORTED_COMMANDS
 
@@ -142,6 +110,12 @@ def project_modified_web_run_schema(
             projected_properties[command] = copy.deepcopy(command_schema)
             continue
         projected_command = _project_array_command(command_schema, allowed_fields)
+        if (
+            command == "search_query"
+            and projected_command is not None
+            and not _supports_multi_query(search_capabilities)
+        ):
+            projected_command["maxItems"] = 1
         if projected_command is not None:
             projected_properties[command] = projected_command
 
@@ -179,23 +153,18 @@ def project_modified_web_run_description(
         for command in sorted(unsupported_commands)
         for marker in (f"`{command}`", f'"{command}"')
     )
-    rules = _web_run_projection().get("description_rules", {})
-    drop_markers = tuple(
-        str(marker).lower() for marker in rules.get("drop_lines_containing", [])
-    )
-    replacements = rules.get("replace_text", [])
+    drop_markers = tuple(marker.lower() for marker in WEB_RUN_DESCRIPTION_DROP_MARKERS)
     for line in description.splitlines():
         if any(marker in line for marker in unsupported_markers):
             continue
         if any(marker in line.lower() for marker in drop_markers):
             continue
-        for replacement in replacements:
-            flags = re.IGNORECASE if replacement.get("case_insensitive") else 0
+        for source, target in WEB_RUN_DESCRIPTION_REPLACEMENTS:
             line = re.sub(
-                re.escape(replacement["from"]),
-                replacement["to"],
+                re.escape(source),
+                target,
                 line,
-                flags=flags,
+                flags=re.IGNORECASE,
             )
         retained.append(line)
     return "\n".join(retained).strip()
@@ -225,16 +194,9 @@ def web_run_supported_command_fields(
                 parsed_values.clear()
     parsed = frozenset(parsed_values) if typed_valid else frozenset()
     if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in parsed:
-        # Preserve the complete upstream alpha/search command surface.  Browser
-        # sidecar commands remain independently gated below.
+        # The all-GPT executor relays the complete live alpha/search wire.
         if source_properties is not None:
-            supported.update(
-                {
-                    name: None
-                    for name in source_properties
-                    if name not in WEB_RUN_SIDECAR_COMMAND_FIELDS
-                }
-            )
+            supported.update({name: None for name in source_properties})
         else:
             supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
     elif (not typed_present and search_available) or (
@@ -244,6 +206,19 @@ def web_run_supported_command_fields(
     if browser_available:
         supported.update(WEB_RUN_SIDECAR_COMMAND_FIELDS)
     return supported
+
+
+def _supports_multi_query(
+    capabilities: Collection[SearchProviderCapability | str] | None,
+) -> bool:
+    if capabilities is None:
+        return True
+    try:
+        return SearchProviderCapability.MULTI_QUERY in {
+            SearchProviderCapability(value) for value in capabilities
+        }
+    except TypeError, ValueError:
+        return False
 
 
 def web_run_model_availability(route: Any) -> tuple[bool, bool]:

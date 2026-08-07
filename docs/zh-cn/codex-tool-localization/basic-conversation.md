@@ -102,8 +102,9 @@ Gateway 重启会清空全部冷却；修改某行的配置或凭据会形成新
 提取内嵌文本；PDF `screenshot` 使用 PyMuPDF 渲染指定页面，并在页面没有内嵌
 文本时使用 Tesseract。Codex Search 端点返回的是文本，而不是多模态图片项，
 因此 screenshot 结果包含渲染尺寸和提取/OCR 文本，不会把 PDF 像素注入模型
-对话。未启用 sidecar 时，Modified 模式发给模型的 schema 会移除 `click`、
-`find` 和 `screenshot`，`open` 继续使用受限的 Python 静态实现。仅配置 sidecar
+对话。在本地或 mixed Provider 链未启用 sidecar 时，Modified 模式发给模型的 schema 会移除
+`click`、`find` 和 `screenshot`，`open` 继续使用受限的 Python 静态实现；全 configured
+GPT 链则即使没有 sidecar 也会保留完整 live `/alpha/search` command surface。仅配置 sidecar
 还不足以向模型声明浏览器命令；有界健康状态必须同时报告服务在线且
 `browser_ready=true`。
 
@@ -121,9 +122,10 @@ Modified 模式的受支持命令统一由 Rosetta Provider 链 coordinator 执�
 和 `response_length`；只要标准 Provider 列表中任一候选能够提供基础搜索，就会增加
 `search_query`。已配置 Responses 行或具有有效 Key 的 Tavily 行无论位于列表何处都
 符合条件；self-hosted 行则仅在 sidecar 报告就绪时符合条件。因此候选顺序只控制
-执行次序，不会让模型看不到后续可用候选；
-只有可选 sidecar 报告 `browser_ready=true` 时才增加 `click`、`find` 和
-`screenshot`。Hosted
+执行次序，不会让模型看不到后续可用候选。mixed 链目前只支持单个 query：schema 将
+`search_query` 限制为一个 item，local bridge 会在任何 Provider 调用或 cooldown 前拒绝更多
+query。只有可选 sidecar 报告 `browser_ready=true` 时才增加 `click`、`find` 和
+`screenshot`；全 configured GPT 链保留其完整 upstream surface。Hosted
 `web_search` 保持独立，其 Provider、Token 和 guidance 仍属于所选 Profile。
 
 这里的 `/v1/alpha/search` 是 Codex 调用 Gateway 的入口。Passthrough 不会假设

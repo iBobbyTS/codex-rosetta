@@ -16,6 +16,7 @@ from .search_provider_contract import (
     SearchProviderContract,
     SearchProviderCapability,
     contract_for_wire_provider,
+    projection_capabilities,
 )
 
 if TYPE_CHECKING:
@@ -341,14 +342,9 @@ def search_candidates_capabilities(
     full = SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH
     if all(full in contract.capabilities for contract in contracts):
         return frozenset({full})
-    local_contracts = tuple(
-        contract for contract in contracts if full not in contract.capabilities
-    )
-    if not local_contracts:
-        return frozenset()
-    capabilities = set(local_contracts[0].capabilities)
-    for contract in local_contracts[1:]:
-        capabilities.intersection_update(contract.capabilities)
+    capabilities = set(projection_capabilities(contracts[0]))
+    for contract in contracts[1:]:
+        capabilities.intersection_update(projection_capabilities(contract))
     return frozenset(capabilities)
 
 

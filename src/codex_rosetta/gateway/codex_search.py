@@ -41,6 +41,7 @@ from .search_provider_candidates import (
     SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
+    search_candidates_capabilities,
 )
 from .search_provider_executor import (
     SearchProviderExecutor,
@@ -48,6 +49,7 @@ from .search_provider_executor import (
     SearchRequest,
 )
 from .search_provider_contract import (
+    LOCAL_QUERY_CAPABILITIES,
     SearchProviderCapability,
     SearchProviderExecutionMode,
 )
@@ -305,9 +307,18 @@ async def execute_local_codex_search(  # noqa: C901
             passthrough_body=passthrough,
         )
 
+    search_capabilities = (
+        search_candidates_capabilities(
+            search_candidates,
+            self_hosted_ready=browser_client is not None,
+        )
+        if search_candidates is not None
+        else LOCAL_QUERY_CAPABILITIES
+    )
     supported_fields = web_run_supported_command_fields(
         search_available=True,
         browser_available=browser_client is not None,
+        search_capabilities=search_capabilities,
     )
     unsupported = _unsupported_features(
         commands, body.get("settings"), supported_fields=supported_fields
@@ -320,6 +331,13 @@ async def execute_local_codex_search(  # noqa: C901
 
     base_settings = _resolve_settings(commands, body.get("settings"))
     queries = _parse_search_queries(commands.get("search_query"), base_settings)
+    if (
+        len(queries) > 1
+        and SearchProviderCapability.MULTI_QUERY not in search_capabilities
+    ):
+        raise CodexSearchNotImplemented(
+            "Codex search feature not implemented by the local bridge: search_query supports one query"
+        )
     open_operations = _parse_open_operations(commands.get("open"))
     click_operations = _parse_click_operations(commands.get("click"))
     find_operations = _parse_find_operations(commands.get("find"))

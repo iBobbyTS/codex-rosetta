@@ -129,6 +129,26 @@ def test_responses_rejects_invalid_encrypted_output_and_result_values():
         )
 
 
+def test_responses_single_query_accepts_formal_search_response_without_query_outputs():
+    async def call(candidate, body):
+        del candidate, body
+        return {
+            "output": "GPT answer",
+            "results": [{"title": "Result"}],
+            "encrypted_output": "opaque",
+        }
+
+    result = run(
+        SearchProviderExecutor(responses_client=call).execute(
+            configured_responses_candidate(),
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        )
+    )
+
+    assert result["output"] == "GPT answer"
+    assert result["results"] == [{"title": "Result"}]
+
+
 def test_local_unavailable_is_request_failover():
     request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
     with pytest.raises(SearchProviderRequestFailover) as caught:

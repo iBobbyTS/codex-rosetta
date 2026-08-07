@@ -1611,64 +1611,6 @@
       "runtime_adapters": [
         "web_run"
       ],
-      "capability_projection": {
-        "base": {
-          "commands": {
-            "open": [
-              "ref_id",
-              "lineno"
-            ],
-            "time": [
-              "utc_offset"
-            ]
-          },
-          "top_level_fields": [
-            "response_length"
-          ]
-        },
-        "web_run_basic_search": {
-          "commands": {
-            "search_query": [
-              "q",
-              "domains"
-            ]
-          }
-        },
-        "web_run_sidecar": {
-          "commands": {
-            "click": [
-              "ref_id",
-              "id"
-            ],
-            "find": [
-              "ref_id",
-              "pattern"
-            ],
-            "screenshot": [
-              "ref_id",
-              "pageno"
-            ]
-          }
-        },
-        "unsupported_commands": [
-          "image_query",
-          "finance",
-          "weather",
-          "sports"
-        ],
-        "description_rules": {
-          "drop_lines_containing": [
-            "empty query"
-          ],
-          "replace_text": [
-            {
-              "from": " (and optionally with a domain or recency filter)",
-              "to": " (optionally by domain)",
-              "case_insensitive": true
-            }
-          ]
-        }
-      },
       "state_descriptions_i18n": {
         "passthrough": "tools.description.web_run_passthrough",
         "modified": "tools.description.web_run_modified"

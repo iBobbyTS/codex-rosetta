@@ -7,6 +7,36 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 
+# The search provider module owns the local ``/alpha/search`` subset.  These
+# are intentionally not derived from the Tool Catalog: the catalog identifies
+# and binds ``web.run``, while provider adapters own request semantics.
+WEB_RUN_BASE_COMMAND_FIELDS = {
+    "open": frozenset({"ref_id", "lineno"}),
+    "time": frozenset({"utc_offset"}),
+    "response_length": None,
+}
+WEB_RUN_SEARCH_COMMAND_FIELDS = {
+    "search_query": frozenset({"q", "domains"}),
+}
+WEB_RUN_SIDECAR_COMMAND_FIELDS = {
+    "click": frozenset({"ref_id", "id"}),
+    "find": frozenset({"ref_id", "pattern"}),
+    "screenshot": frozenset({"ref_id", "pageno"}),
+}
+WEB_RUN_UNSUPPORTED_COMMANDS = frozenset(
+    {
+        "image_query",
+        "finance",
+        "weather",
+        "sports",
+    }
+)
+WEB_RUN_DESCRIPTION_DROP_MARKERS = frozenset({"empty query"})
+WEB_RUN_DESCRIPTION_REPLACEMENTS = (
+    (" (and optionally with a domain or recency filter)", " (optionally by domain)"),
+)
+
+
 class SearchProviderFamily(StrEnum):
     """Provider family selected by a canonical search candidate."""
 
@@ -82,6 +112,14 @@ GPT_PASSTHROUGH_CONTRACT = SearchProviderContract.create(
     SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH,
     (SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH,),
 )
+GPT_MIXED_MODE_CAPABILITIES = frozenset(
+    {
+        SearchProviderCapability.SEARCH_QUERY,
+        SearchProviderCapability.DOMAIN_FILTER,
+        SearchProviderCapability.NORMALIZED_RESULTS,
+        SearchProviderCapability.REFERENCE_STORAGE,
+    }
+)
 LOCAL_QUERY_CAPABILITIES = frozenset(
     {
         SearchProviderCapability.SEARCH_QUERY,
@@ -101,6 +139,20 @@ SELF_HOSTED_LOCAL_CONTRACT = SearchProviderContract.create(
     SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER,
     LOCAL_QUERY_CAPABILITIES,
 )
+
+
+def projection_capabilities(
+    contract: SearchProviderContract,
+) -> frozenset[SearchProviderCapability]:
+    """Return the safe model-visible subset for a possibly mixed chain.
+
+    Configured GPT supports the complete wire only when every candidate is
+    passthrough.  Its aggregate response has no per-query adapter, so mixed
+    chains deliberately remain single-query until one exists.
+    """
+    if contract.family is SearchProviderFamily.GPT_PASSTHROUGH:
+        return GPT_MIXED_MODE_CAPABILITIES
+    return contract.capabilities
 
 
 def contract_for_wire_provider(provider: str) -> SearchProviderContract:
