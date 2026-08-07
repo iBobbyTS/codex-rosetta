@@ -114,6 +114,7 @@ def project_modified_web_run_schema(
         if (
             command == "search_query"
             and projected_command is not None
+            and not _supports_full_web_run_passthrough(search_capabilities)
             and not _supports_multi_query(search_capabilities)
         ):
             projected_command["maxItems"] = 1
@@ -139,6 +140,8 @@ def project_modified_web_run_description(
     search_capabilities: Collection[SearchProviderCapability | str] | None = None,
 ) -> str:
     """Remove unsupported command guidance from the live Codex description."""
+    if _supports_full_web_run_passthrough(search_capabilities):
+        return description
     retained: list[str] = []
     supported_commands = frozenset(
         web_run_supported_command_fields(
@@ -204,7 +207,8 @@ def web_run_supported_command_fields(
             supported.update({name: None for name in source_properties})
         else:
             supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
-    elif (not typed_present and search_available) or (
+        return supported
+    if (not typed_present and search_available) or (
         typed_valid and SearchProviderCapability.SEARCH_QUERY in parsed
     ):
         supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
@@ -220,6 +224,20 @@ def _supports_multi_query(
         return True
     try:
         return SearchProviderCapability.MULTI_QUERY in {
+            SearchProviderCapability(value) for value in capabilities
+        }
+    except TypeError, ValueError:
+        return False
+
+
+def _supports_full_web_run_passthrough(
+    capabilities: Collection[SearchProviderCapability | str] | None,
+) -> bool:
+    """Return whether the all-GPT executor relays the complete live surface."""
+    if capabilities is None:
+        return False
+    try:
+        return SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in {
             SearchProviderCapability(value) for value in capabilities
         }
     except TypeError, ValueError:

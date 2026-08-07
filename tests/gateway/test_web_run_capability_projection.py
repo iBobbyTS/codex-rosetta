@@ -186,6 +186,94 @@ def test_schema_and_description_match_typed_projection(capabilities, expected) -
         assert f"`{command}`" not in projected["description"]
 
 
+@pytest.mark.parametrize("browser_available", [False, True])
+def test_full_passthrough_preserves_exact_top_level_and_nested_surface(
+    browser_available: bool,
+) -> None:
+    live_description = (
+        "Use `search_query` (and optionally with a domain or recency filter).\n"
+        "If you sent an empty query, retry with a non-empty query."
+    )
+    function = _function()
+    function["description"] = live_description
+    full_capabilities = frozenset({SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH})
+    top_level = project_modified_web_run_function(
+        function,
+        search_available=True,
+        browser_available=browser_available,
+        search_capabilities=full_capabilities,
+    )
+    assert top_level is not None
+    assert top_level["description"] == live_description
+    assert top_level["parameters"]["properties"] == function["parameters"]["properties"]
+    assert "`search_query` accepts at most 1 item." not in top_level["description"]
+    assert "cannot be combined" not in top_level["description"]
+
+    declaration = """declare const tools: { web__run(args: { search_query?: Array<{ q: string; domains?: Array<string>; recency?: number; }>; image_query?: Array<{ q: string; }>; finance?: Array<{ ticker: string; type?: string; market?: string; }>; weather?: Array<{ location: string; duration?: number; }>; sports?: Array<{ fn: string; league: string; }>; open?: Array<{ ref_id: string; lineno?: number; }>; time?: Array<{ utc_offset: string; }>; click?: Array<{ ref_id: string; id: number; }>; find?: Array<{ ref_id: string; pattern: string; }>; screenshot?: Array<{ ref_id: string; pageno: number; }>; response_length?: string; }): Promise<unknown>; };"""
+    nested_source = f"""### `web__run`
+{live_description}
+exec tool declaration:
+```ts
+{declaration}
+```"""
+    nested_route = _route(
+        full_capabilities,
+        runtime=(
+            frozenset({WEB_RUN_SIDECAR_CAPABILITY})
+            if browser_available
+            else frozenset()
+        ),
+    )
+    nested_description = project_modified_exec_web_run_description(
+        nested_source, nested_route
+    )
+    nested = project_exec_tool_definitions(
+        nested_description,
+        {"web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")},
+    )["web-run"]["function"]
+    assert nested["description"] == live_description
+    assert set(nested["parameters"]["properties"]) == set(
+        function["parameters"]["properties"]
+    )
+    assert nested["parameters"]["properties"]["search_query"]["items"][
+        "properties"
+    ] == {
+        "q": {"type": "string"},
+        "domains": {"type": "array", "items": {"type": "string"}},
+        "recency": {"type": "number"},
+    }
+    assert "`search_query` accepts at most 1 item." not in nested["description"]
+    assert "cannot be combined" not in nested["description"]
+
+
+def test_local_and_mixed_descriptions_remain_sanitized() -> None:
+    live_description = (
+        "Use `search_query` (and optionally with a domain or recency filter).\n"
+        "If you sent an empty query, retry with a non-empty query."
+    )
+    function = _function()
+    function["description"] = live_description
+    local = project_modified_web_run_function(
+        function,
+        search_available=True,
+        browser_available=False,
+        search_capabilities=LOCAL_QUERY_CAPABILITIES,
+    )
+    mixed = project_modified_web_run_function(
+        function,
+        search_available=True,
+        browser_available=False,
+        search_capabilities=GPT_MIXED_MODE_CAPABILITIES,
+    )
+    assert local is not None and mixed is not None
+    assert "recency filter" not in local["description"]
+    assert "empty query" not in local["description"]
+    assert "recency filter" not in mixed["description"]
+    assert "empty query" not in mixed["description"]
+    assert "cannot be combined" not in local["description"]
+    assert "cannot be combined" in mixed["description"]
+
+
 def test_mixed_projection_limits_search_query_to_one_item() -> None:
     projected = project_modified_web_run_function(
         _function(),
