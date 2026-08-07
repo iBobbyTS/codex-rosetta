@@ -91,6 +91,8 @@ def project_modified_web_run_schema(
     search_capabilities: Collection[SearchProviderCapability | str] | None = None,
 ) -> dict[str, Any] | None:
     """Keep only live schema branches implemented by Rosetta's local bridge."""
+    if _supports_full_web_run_passthrough(search_capabilities):
+        return copy.deepcopy(schema)
     properties = schema.get("properties")
     if schema.get("type") != "object" or not isinstance(properties, dict):
         return None

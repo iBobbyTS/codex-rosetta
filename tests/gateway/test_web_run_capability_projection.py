@@ -10,6 +10,7 @@ import pytest
 from codex_rosetta.gateway.app import _resolve_request_tool_runtime_capabilities
 from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
+    plan_exec_tool_definitions,
     project_exec_tool_definitions,
     project_modified_exec_web_run_description,
 )
@@ -197,15 +198,24 @@ def test_full_passthrough_preserves_exact_top_level_and_nested_surface(
     function = _function()
     function["description"] = live_description
     full_capabilities = frozenset({SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH})
-    top_level = project_modified_web_run_function(
-        function,
-        search_available=True,
-        browser_available=browser_available,
-        search_capabilities=full_capabilities,
+    top_level_route = _route(
+        full_capabilities,
+        runtime=(
+            frozenset({WEB_RUN_SIDECAR_CAPABILITY})
+            if browser_available
+            else frozenset()
+        ),
     )
-    assert top_level is not None
+    top_level, removed = _apply_profile_runtime_adapter(
+        function,
+        "namespace.web.run",
+        "modified",
+        "web__run",
+        top_level_route,
+    )
+    assert top_level is not None and not removed
     assert top_level["description"] == live_description
-    assert top_level["parameters"]["properties"] == function["parameters"]["properties"]
+    assert top_level["parameters"] == function["parameters"]
     assert "`search_query` accepts at most 1 item." not in top_level["description"]
     assert "cannot be combined" not in top_level["description"]
 
@@ -227,14 +237,19 @@ exec tool declaration:
     nested_description = project_modified_exec_web_run_description(
         nested_source, nested_route
     )
-    nested = project_exec_tool_definitions(
+    projections = {
+        "web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")
+    }
+    live_nested = plan_exec_tool_definitions(nested_source, projections).definitions[
+        "web-run"
+    ]["function"]
+    nested = plan_exec_tool_definitions(
         nested_description,
-        {"web-run": ExecToolProjection("namespace.web.run", "web-run", "web__run")},
-    )["web-run"]["function"]
+        projections,
+        profile_route=nested_route,
+    ).definitions["web-run"]["function"]
     assert nested["description"] == live_description
-    assert set(nested["parameters"]["properties"]) == set(
-        function["parameters"]["properties"]
-    )
+    assert nested["parameters"] == live_nested["parameters"]
     assert nested["parameters"]["properties"]["search_query"]["items"][
         "properties"
     ] == {
