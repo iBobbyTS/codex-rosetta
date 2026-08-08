@@ -19,7 +19,7 @@ from .transport._base import (
     UpstreamNetworkError,
     UpstreamResponseTooLargeError,
 )
-from .transport.http.transport import request_bounded_response
+from .transport.http.transport import BoundedHttpResponse, request_bounded_response
 
 DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN = "https://api.deepseek.com"
 DEEPSEEK_RESPONSES_SEARCH_MODEL = "deepseek-v4-flash"
@@ -824,6 +824,8 @@ async def _execute_deepseek_request(
                 allow_redirects=False,
             )
 
+        if not isinstance(response, BoundedHttpResponse):
+            return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
         raw_response = response.content
         if type(raw_response) is not bytes:
             return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
