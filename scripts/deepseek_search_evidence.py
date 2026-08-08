@@ -1,14 +1,17 @@
-"""Pure preparation contract for private DeepSeek search evidence.
+"""Preparation and harness publication for private DeepSeek search evidence.
 
 This module validates and serializes a deliberately small evidence manifest.
-It performs no filesystem, configuration, credential, client, or runtime work;
-the prepared value is consumed by the separate publication section.
+It also publishes prevalidated exact bytes for an explicit local harness. It
+performs no configuration, credential, client, network, or runtime work.
 """
 
 from __future__ import annotations
 
 import json
-from typing import Final, cast
+import os
+import tempfile
+from pathlib import Path
+from typing import BinaryIO, Final, cast
 
 EVIDENCE_SCHEMA: Final = "codex-rosetta.deepseek-search-evidence"
 EVIDENCE_VERSION: Final = 1
@@ -23,6 +26,7 @@ MAX_COUNTER: Final = 1_000_000_000
 MAX_LATENCY_MS: Final = 3_600_000
 
 _PREPARATION_ERROR_MESSAGE: Final = "DeepSeek search evidence preparation failed"
+_PUBLICATION_ERROR_MESSAGE: Final = "DeepSeek search evidence publication failed"
 _PREPARED_TOKEN: Final = object()
 _HEX_DIGITS: Final = frozenset("0123456789abcdef")
 _ROOT_KEYS: Final = frozenset(
@@ -60,6 +64,16 @@ class DeepSeekEvidencePreparationError(ValueError):
 
     def __init__(self) -> None:
         super().__init__(_PREPARATION_ERROR_MESSAGE)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
+
+class DeepSeekEvidencePublicationError(RuntimeError):
+    """Static failure for private harness evidence publication."""
+
+    def __init__(self) -> None:
+        super().__init__(_PUBLICATION_ERROR_MESSAGE)
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
@@ -525,8 +539,168 @@ def prepare_evidence_publication(
     return prepared
 
 
+def _open_temp_file(file_descriptor: int) -> BinaryIO:
+    """Open one exclusively created temporary descriptor for binary writing."""
+    return os.fdopen(file_descriptor, "wb", closefd=True)
+
+
+def _fsync_temp_file(stream: BinaryIO) -> None:
+    """Synchronize one fully flushed temporary evidence file."""
+    os.fsync(stream.fileno())
+
+
+def _replace_temp(temporary_path: Path, final_path: Path) -> None:
+    """Publish one complete temporary file through same-directory replace."""
+    os.replace(temporary_path, final_path)
+
+
+def _close_best_effort(stream: BinaryIO | None) -> None:
+    """Best-effort close one publication stream during cleanup."""
+    if stream is None:
+        return
+    try:
+        stream.close()
+    except BaseException:
+        pass
+
+
+def _close_descriptor_best_effort(file_descriptor: int | None) -> None:
+    """Best-effort close a descriptor not yet transferred to a stream."""
+    if file_descriptor is None:
+        return
+    try:
+        os.close(file_descriptor)
+    except BaseException:
+        pass
+
+
+def _unlink_best_effort(path: Path | None) -> None:
+    """Best-effort remove one known publication path."""
+    if path is None:
+        return
+    try:
+        path.unlink(missing_ok=True)
+    except BaseException:
+        pass
+
+
+def _rmdir_best_effort(path: Path | None) -> None:
+    """Best-effort remove one writer-created directory when it is empty."""
+    if path is None:
+        return
+    try:
+        path.rmdir()
+    except BaseException:
+        pass
+
+
+def _cleanup_private_publication(
+    stream: BinaryIO | None,
+    file_descriptor: int | None,
+    temporary_path: Path | None,
+    final_path: Path | None,
+    run_directory: Path | None,
+) -> None:
+    """Best-effort cleanup paths and handles owned by one writer invocation."""
+    _close_best_effort(stream)
+    _close_descriptor_best_effort(file_descriptor)
+    _unlink_best_effort(temporary_path)
+    _unlink_best_effort(final_path)
+    _rmdir_best_effort(run_directory)
+
+
+def _fsync_directory_best_effort(run_directory: Path) -> None:
+    """Best-effort synchronize the directory after atomic publication."""
+    directory_descriptor: int | None = None
+    try:
+        directory_descriptor = os.open(run_directory, os.O_RDONLY)
+        os.fsync(directory_descriptor)
+    except Exception as error:
+        if isinstance(error, MemoryError):
+            raise
+    finally:
+        if directory_descriptor is not None:
+            try:
+                os.close(directory_descriptor)
+            except Exception as error:
+                if isinstance(error, MemoryError):
+                    raise
+
+
+def write_private_evidence_bytes(manifest_bytes: bytes, trusted_parent: str) -> Path:
+    """Atomically publish sanitized bytes below one trusted harness parent.
+
+    Args:
+        manifest_bytes: Exact prevalidated and presanitized manifest bytes.
+        trusted_parent: Existing trusted parent directory selected by the harness.
+
+    Returns:
+        The final ``summary.json`` path in a new private run directory.
+
+    Raises:
+        DeepSeekEvidencePublicationError: If validation or ordinary I/O fails.
+    """
+    if (
+        type(manifest_bytes) is not bytes
+        or not manifest_bytes
+        or len(manifest_bytes) > MAX_MANIFEST_BYTES
+        or type(trusted_parent) is not str
+        or not trusted_parent
+        or "\x00" in trusted_parent
+    ):
+        raise DeepSeekEvidencePublicationError() from None
+
+    run_directory: Path | None = None
+    temporary_path: Path | None = None
+    final_path: Path | None = None
+    file_descriptor: int | None = None
+    stream: BinaryIO | None = None
+    ordinary_failure = False
+    try:
+        run_directory = Path(
+            tempfile.mkdtemp(prefix="deepseek-search-", dir=trusted_parent)
+        )
+        os.chmod(run_directory, 0o700)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".summary-", suffix=".tmp", dir=run_directory
+        )
+        file_descriptor = descriptor
+        temporary_path = Path(temporary_name)
+        os.chmod(temporary_path, 0o600)
+        final_path = run_directory / EVIDENCE_FILENAME
+
+        stream = _open_temp_file(file_descriptor)
+        file_descriptor = None
+        written = stream.write(manifest_bytes)
+        if written != len(manifest_bytes):
+            raise OSError("short evidence write")
+        stream.flush()
+        _fsync_temp_file(stream)
+        stream.close()
+        stream = None
+        _replace_temp(temporary_path, final_path)
+        _fsync_directory_best_effort(run_directory)
+    except Exception as error:
+        _cleanup_private_publication(
+            stream, file_descriptor, temporary_path, final_path, run_directory
+        )
+        if isinstance(error, MemoryError):
+            raise
+        ordinary_failure = True
+    except BaseException:
+        _cleanup_private_publication(
+            stream, file_descriptor, temporary_path, final_path, run_directory
+        )
+        raise
+
+    if ordinary_failure or final_path is None:
+        raise DeepSeekEvidencePublicationError() from None
+    return final_path
+
+
 __all__ = [
     "DeepSeekEvidencePreparationError",
+    "DeepSeekEvidencePublicationError",
     "EVIDENCE_FILENAME",
     "EVIDENCE_SCHEMA",
     "EVIDENCE_VERSION",
@@ -540,4 +714,5 @@ __all__ = [
     "PreparedEvidencePublication",
     "prepare_evidence_publication",
     "serialize_evidence_manifest",
+    "write_private_evidence_bytes",
 ]

@@ -10,8 +10,13 @@ import inspect
 import json
 import os
 import random
+import shutil
+import stat
 import subprocess
 import sys
+import tempfile
+import tomllib
+import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Never, cast
@@ -43,9 +48,11 @@ assert _EVIDENCE_SPEC is not None and _EVIDENCE_SPEC.loader is not None
 _EVIDENCE_MODULE = importlib.util.module_from_spec(_EVIDENCE_SPEC)
 _EVIDENCE_SPEC.loader.exec_module(_EVIDENCE_MODULE)
 DeepSeekEvidencePreparationError = _EVIDENCE_MODULE.DeepSeekEvidencePreparationError
+DeepSeekEvidencePublicationError = _EVIDENCE_MODULE.DeepSeekEvidencePublicationError
 PreparedEvidencePublication = _EVIDENCE_MODULE.PreparedEvidencePublication
 prepare_evidence_publication = _EVIDENCE_MODULE.prepare_evidence_publication
 serialize_evidence_manifest = _EVIDENCE_MODULE.serialize_evidence_manifest
+write_private_evidence_bytes = _EVIDENCE_MODULE.write_private_evidence_bytes
 
 _PURE_ORIGIN_PATH = Path(__file__).parents[2] / "scripts" / "deepseek_search_origin.py"
 
@@ -3435,7 +3442,7 @@ def test_evidence_collision_second_cast_signal_scrubs_derived_locals(
     assert "protected-collision-secret" not in rendered
 
 
-def test_evidence_import_is_stdlib_only_and_inert() -> None:
+def test_evidence_writer_production_isolation() -> None:
     tree = ast.parse(_EVIDENCE_PATH.read_text(encoding="utf-8"))
     imported: set[str] = set()
     for node in ast.walk(tree):
@@ -3443,19 +3450,295 @@ def test_evidence_import_is_stdlib_only_and_inert() -> None:
             imported.update(alias.name.split(".", 1)[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".", 1)[0])
-    assert imported <= {"__future__", "json", "typing"}
+    assert imported <= {
+        "__future__",
+        "json",
+        "os",
+        "pathlib",
+        "tempfile",
+        "typing",
+    }
     assert not imported & {
         "codex_rosetta",
         "asyncio",
         "httpx",
-        "pathlib",
         "socket",
         "subprocess",
     }
-    forbidden_calls = {"open", "mkdir", "write", "write_text", "unlink", "rmdir"}
+
+    repository = Path(__file__).parents[2]
     assert not any(
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id in forbidden_calls
-        for node in ast.walk(tree)
+        "deepseek_search_evidence" in path.read_text(encoding="utf-8")
+        for path in (repository / "src").rglob("*.py")
     )
+
+    configuration = tomllib.loads(
+        (repository / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    assert configuration["tool"]["setuptools"]["packages"]["find"]["where"] == ["src"]
+    assert "deepseek_search_evidence" not in repr(
+        configuration["tool"]["setuptools"].get("package-data", {})
+    )
+    assert "deepseek_search_evidence" not in repr(configuration["project"]["scripts"])
+
+    with tempfile.TemporaryDirectory(
+        prefix="codex-rosetta-wheel-isolation-", dir=repository.parent
+    ) as temporary_directory:
+        task_root = Path(temporary_directory).resolve()
+        assert task_root.parent == repository.parent.resolve()
+        assert task_root.name.startswith("codex-rosetta-wheel-isolation-")
+        source_copy = task_root / "source"
+        source_copy.mkdir()
+        shutil.copy2(repository / "pyproject.toml", source_copy)
+        shutil.copy2(repository / "README.md", source_copy)
+        shutil.copy2(repository / "LICENSE", source_copy)
+        shutil.copytree(
+            repository / "src",
+            source_copy / "src",
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
+        )
+        wheel_directory = task_root / "wheel"
+        unpack_directory = task_root / "unpack"
+        build_log = task_root / "build.log"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "build",
+                "--wheel",
+                "--no-isolation",
+                "--outdir",
+                str(wheel_directory),
+            ],
+            cwd=source_copy,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        build_log.write_text(completed.stdout + completed.stderr, encoding="utf-8")
+        assert completed.returncode == 0, build_log.read_text(encoding="utf-8")
+        wheels = tuple(wheel_directory.glob("*.whl"))
+        assert len(wheels) == 1
+        with zipfile.ZipFile(wheels[0]) as wheel:
+            wheel_names = tuple(wheel.namelist())
+            wheel.extractall(unpack_directory)
+        assert not any(
+            name.endswith("deepseek_search_evidence.py") for name in wheel_names
+        )
+
+        cleanup_targets = [
+            wheel_directory,
+            unpack_directory,
+            source_copy / "build",
+            *source_copy.glob("src/*.egg-info"),
+            *source_copy.rglob("__pycache__"),
+            *source_copy.rglob("*.pyc"),
+        ]
+        for target in cleanup_targets:
+            resolved_target = target.resolve()
+            assert resolved_target != task_root
+            assert resolved_target.is_relative_to(task_root)
+            if target.is_dir():
+                shutil.rmtree(target)
+            elif target.exists():
+                target.unlink()
+        assert build_log.is_file()
+        assert not wheel_directory.exists()
+        assert not unpack_directory.exists()
+        assert not (source_copy / "build").exists()
+        assert not tuple(source_copy.glob("src/*.egg-info"))
+        assert not tuple(source_copy.rglob("__pycache__"))
+        assert not tuple(source_copy.rglob("*.pyc"))
+
+
+class _FaultingEvidenceFile:
+    def __init__(self, wrapped: Any, stage: str) -> None:
+        self._wrapped = wrapped
+        self._stage = stage
+        self._close_failed = False
+
+    def write(self, value: bytes) -> int:
+        if self._stage == "write":
+            raise OSError("injected write failure")
+        if self._stage == "short_write":
+            partial = value[: max(1, len(value) // 2)]
+            return self._wrapped.write(partial)
+        return self._wrapped.write(value)
+
+    def flush(self) -> None:
+        if self._stage == "flush":
+            raise OSError("injected flush failure")
+        self._wrapped.flush()
+
+    def fileno(self) -> int:
+        return self._wrapped.fileno()
+
+    def close(self) -> None:
+        if self._stage == "close" and not self._close_failed:
+            self._close_failed = True
+            self._wrapped.close()
+            raise OSError("injected close failure")
+        self._wrapped.close()
+
+
+def test_evidence_writer_writes_exact_private_random_publications(
+    tmp_path: Path,
+) -> None:
+    manifest_bytes = serialize_evidence_manifest(_evidence_manifest())
+    maximum_bytes = b"x" * _EVIDENCE_MODULE.MAX_MANIFEST_BYTES
+
+    first = write_private_evidence_bytes(manifest_bytes, str(tmp_path))
+    second = write_private_evidence_bytes(manifest_bytes, str(tmp_path))
+    maximum = write_private_evidence_bytes(maximum_bytes, str(tmp_path))
+
+    assert isinstance(first, Path)
+    assert first.name == "summary.json"
+    assert first.read_bytes() == manifest_bytes
+    assert second.read_bytes() == manifest_bytes
+    assert maximum.read_bytes() == maximum_bytes
+    assert first.parent != second.parent
+    assert first.parent.parent == tmp_path
+    assert second.parent.parent == tmp_path
+    assert stat.S_IMODE(first.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(first.stat().st_mode) == 0o600
+
+
+class _BytesSubclass(bytes):
+    pass
+
+
+class _StrSubclass(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    ("manifest_bytes", "parent_factory"),
+    [
+        (bytearray(b"manifest"), lambda path: str(path)),
+        (_BytesSubclass(b"manifest"), lambda path: str(path)),
+        (b"", lambda path: str(path)),
+        (b"x" * (_EVIDENCE_MODULE.MAX_MANIFEST_BYTES + 1), lambda path: str(path)),
+        (b"manifest", lambda path: _StrSubclass(str(path))),
+        (b"manifest", lambda path: ""),
+        (b"manifest", lambda path: f"{path}\x00invalid"),
+    ],
+    ids=[
+        "bytearray",
+        "bytes-subclass",
+        "empty-bytes",
+        "oversized-bytes",
+        "str-subclass",
+        "empty-parent",
+        "nul-parent",
+    ],
+)
+def test_evidence_writer_rejects_invalid_input_before_directory_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    manifest_bytes: object,
+    parent_factory: Callable[[Path], object],
+) -> None:
+    calls: list[str] = []
+
+    def unexpected_mkdtemp(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        calls.append("mkdtemp")
+        raise AssertionError("directory creation must not occur")
+
+    monkeypatch.setattr(_EVIDENCE_MODULE.tempfile, "mkdtemp", unexpected_mkdtemp)
+    with pytest.raises(DeepSeekEvidencePublicationError) as caught:
+        write_private_evidence_bytes(
+            cast(Any, manifest_bytes), cast(Any, parent_factory(tmp_path))
+        )
+    assert str(caught.value) == "DeepSeek search evidence publication failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert calls == []
+
+
+def test_atomic_publication_hides_final_until_same_directory_replace(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    manifest_bytes = serialize_evidence_manifest(_evidence_manifest())
+    original_replace = _EVIDENCE_MODULE._replace_temp
+    observations: list[tuple[Path, Path]] = []
+
+    def observe_replace(temporary_path: Path, final_path: Path) -> None:
+        assert temporary_path.parent == final_path.parent
+        assert temporary_path.read_bytes() == manifest_bytes
+        assert not final_path.exists()
+        observations.append((temporary_path, final_path))
+        original_replace(temporary_path, final_path)
+
+    monkeypatch.setattr(_EVIDENCE_MODULE, "_replace_temp", observe_replace)
+    final_path = write_private_evidence_bytes(manifest_bytes, str(tmp_path))
+    assert observations == [(observations[0][0], final_path)]
+    assert final_path.read_bytes() == manifest_bytes
+
+
+@pytest.mark.parametrize(
+    "stage", ["open", "write", "short_write", "flush", "file_fsync", "close", "replace"]
+)
+def test_evidence_writer_ordinary_failure_is_static_and_cleans_owned_paths(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, stage: str
+) -> None:
+    manifest_bytes = serialize_evidence_manifest(_evidence_manifest())
+    original_open = _EVIDENCE_MODULE._open_temp_file
+
+    def open_with_failure(file_descriptor: int):
+        if stage == "open":
+            raise OSError("injected open failure")
+        return _FaultingEvidenceFile(original_open(file_descriptor), stage)
+
+    monkeypatch.setattr(_EVIDENCE_MODULE, "_open_temp_file", open_with_failure)
+    if stage == "file_fsync":
+        monkeypatch.setattr(
+            _EVIDENCE_MODULE,
+            "_fsync_temp_file",
+            lambda stream: (_ for _ in ()).throw(OSError("injected fsync failure")),
+        )
+    if stage == "replace":
+        monkeypatch.setattr(
+            _EVIDENCE_MODULE,
+            "_replace_temp",
+            lambda temporary_path, final_path: (_ for _ in ()).throw(
+                OSError("injected replace failure")
+            ),
+        )
+
+    with pytest.raises(DeepSeekEvidencePublicationError) as caught:
+        write_private_evidence_bytes(manifest_bytes, str(tmp_path))
+    assert str(caught.value) == "DeepSeek search evidence publication failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+class _SyntheticEvidenceSignal(BaseException):
+    pass
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        KeyboardInterrupt("control"),
+        SystemExit("control"),
+        asyncio.CancelledError("control"),
+        MemoryError("resource"),
+        _SyntheticEvidenceSignal("control"),
+    ],
+)
+def test_evidence_writer_control_signal_identity_and_cleanup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: BaseException
+) -> None:
+    manifest_bytes = serialize_evidence_manifest(_evidence_manifest())
+
+    def raise_signal(temporary_path: Path, final_path: Path) -> Never:
+        del temporary_path, final_path
+        raise failure
+
+    monkeypatch.setattr(_EVIDENCE_MODULE, "_replace_temp", raise_signal)
+    with pytest.raises(type(failure)) as caught:
+        write_private_evidence_bytes(manifest_bytes, str(tmp_path))
+    assert caught.value is failure
+    assert tuple(tmp_path.iterdir()) == ()
