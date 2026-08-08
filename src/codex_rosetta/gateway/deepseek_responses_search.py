@@ -11,7 +11,7 @@ from ipaddress import IPv6Address
 from typing import Any, Final, Never, cast
 from urllib.parse import urlsplit, urlunsplit
 
-from codex_rosetta._vendor.httpclient import AsyncClient
+from codex_rosetta._vendor.httpclient import AsyncClient, HttpTimeoutError
 from codex_rosetta.observability.redaction import SecretRedactor
 
 from .transport._base import (
@@ -770,9 +770,26 @@ def _decode_deepseek_response(raw_response: bytes) -> object:
     )
 
 
+def _contains_http_timeout_cause(error: BaseException) -> bool:
+    """Recognize a vendored timeout anywhere in a bounded exception chain."""
+    seen: set[int] = set()
+    current: BaseException | None = error
+    for _ in range(16):
+        if current is None or id(current) in seen:
+            return False
+        seen.add(id(current))
+        if isinstance(current, HttpTimeoutError):
+            return True
+        cause = current.__cause__
+        current = cause if cause is not None else current.__context__
+    return False
+
+
 def _classify_transport_failure(error: BaseException) -> DeepSeekSearchErrorCategory:
     """Map transport exceptions without inspecting or retaining their text."""
     if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return DeepSeekSearchErrorCategory.TIMEOUT
+    if _contains_http_timeout_cause(error):
         return DeepSeekSearchErrorCategory.TIMEOUT
     if isinstance(error, UpstreamNetworkError):
         return (

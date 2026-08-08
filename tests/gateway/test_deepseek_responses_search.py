@@ -27,6 +27,7 @@ from codex_rosetta.gateway.deepseek_responses_search import (
     publish_deepseek_responses_search_response,
 )
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
+from codex_rosetta._vendor.httpclient import HttpTimeoutError
 from codex_rosetta.observability.redaction import SecretRedactor
 
 _EXPECTED_PROMPT = (
@@ -2452,6 +2453,123 @@ async def test_client_uses_one_response_for_raw_decode_and_publication_in_order(
     ]
 
 
+@pytest.mark.asyncio
+async def test_client_raw_collision_short_circuits_decode_and_publication(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = "test-secret"
+    raw = b'{"value":"test-secret"}'
+    transport_calls = 0
+    decode_calls = 0
+    publication_calls = 0
+
+    async def bounded(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        nonlocal transport_calls
+        del args, kwargs
+        transport_calls += 1
+        return BoundedHttpResponse(200, {}, raw)
+
+    def decode_must_not_run(value: bytes) -> Never:
+        nonlocal decode_calls
+        del value
+        decode_calls += 1
+        raise AssertionError("decode ran after a raw credential collision")
+
+    def publication_must_not_run(**kwargs: object) -> Never:
+        nonlocal publication_calls
+        del kwargs
+        publication_calls += 1
+        raise AssertionError("publication ran after a raw credential collision")
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+    monkeypatch.setattr(
+        deepseek_search, "_decode_deepseek_response", decode_must_not_run
+    )
+    monkeypatch.setattr(
+        deepseek_search, "_publish_after_raw_gate", publication_must_not_run
+    )
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        await deepseek_search.DeepSeekResponsesSearchClient(credential).execute("q")
+
+    _assert_static_collision(caught)
+    assert transport_calls == 1
+    assert decode_calls == 0
+    assert publication_calls == 0
+    module_path = Path(inspect.getfile(deepseek_search))
+    frame = caught.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == str(module_path):
+            values = tuple(frame.tb_frame.f_locals.values())
+            assert credential not in values
+            assert raw not in values
+        frame = frame.tb_next
+
+
+@pytest.mark.asyncio
+async def test_client_final_collision_is_static_and_has_no_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    credential = "secret.example"
+    response = _completed_response(
+        content=[
+            _output_text(
+                "answer",
+                [_citation("HTTPS://SECRET.EXAMPLE:443#fragment", title="  ")],
+            )
+        ]
+    )
+    raw = _response_bytes(response)
+    assert credential.encode() not in raw
+    events: list[str] = []
+    transport_calls = 0
+    original_raw_gate = deepseek_search._redactor_contains_json_semantic
+    original_parser = deepseek_search.parse_deepseek_responses_search_response
+    original_exact_gate = deepseek_search._redactor_contains_exact
+
+    async def bounded(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        nonlocal transport_calls
+        del args, kwargs
+        transport_calls += 1
+        return BoundedHttpResponse(200, {}, raw)
+
+    def raw_gate(redactor: SecretRedactor, value: bytes) -> bool:
+        events.append("raw_gate")
+        return original_raw_gate(redactor, value)
+
+    def parser(value: object, *, citation_limit: object) -> dict[str, object]:
+        events.append("parser")
+        return original_parser(value, citation_limit=citation_limit)
+
+    def exact_gate(redactor: SecretRedactor, value: dict[str, object]) -> bool:
+        events.append("final_exact_gate")
+        return original_exact_gate(redactor, value)
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+    monkeypatch.setattr(deepseek_search, "_redactor_contains_json_semantic", raw_gate)
+    monkeypatch.setattr(
+        deepseek_search, "parse_deepseek_responses_search_response", parser
+    )
+    monkeypatch.setattr(deepseek_search, "_redactor_contains_exact", exact_gate)
+
+    with pytest.raises(DeepSeekResponsesSearchCredentialCollisionError) as caught:
+        await deepseek_search.DeepSeekResponsesSearchClient(credential).execute("q")
+
+    _assert_static_collision(caught)
+    assert transport_calls == 1
+    assert events == ["raw_gate", "parser", "final_exact_gate"]
+    module_path = Path(inspect.getfile(deepseek_search))
+    frame = caught.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == str(module_path):
+            values = tuple(frame.tb_frame.f_locals.values())
+            assert credential not in values
+            assert raw not in values
+        frame = frame.tb_next
+
+
 class _NonBoundedResponsesEnvelope:
     """A lookalike response that must not cross the bounded transport seam."""
 
@@ -2469,6 +2587,11 @@ class _NonBoundedResponsesEnvelope:
             None,
         ),
         ("timeout", deepseek_search.DeepSeekSearchErrorCategory.TIMEOUT, None),
+        (
+            "wrapped_timeout",
+            deepseek_search.DeepSeekSearchErrorCategory.TIMEOUT,
+            None,
+        ),
         ("body_limit", deepseek_search.DeepSeekSearchErrorCategory.BODY_LIMIT, None),
         (
             "oversized_content",
@@ -2511,6 +2634,15 @@ async def test_client_fake_transport_failure_matrix_is_bounded_and_single_attemp
             raise deepseek_search.UpstreamConnectionError("upstream test-secret")
         if case == "timeout":
             raise TimeoutError("timed out test-secret")
+        if case == "wrapped_timeout":
+            timeout = HttpTimeoutError(
+                "timed out test-secret",
+                url="https://api.deepseek.com/responses",
+                timeout=120.0,
+            )
+            raise deepseek_search.UpstreamConnectionError(
+                "wrapped timeout test-secret"
+            ) from timeout
         if case == "body_limit":
             raise deepseek_search.UpstreamResponseTooLargeError("test-secret too large")
         if case == "oversized_content":
