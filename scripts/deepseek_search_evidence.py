@@ -421,6 +421,8 @@ def _prepare_paths(directory: object) -> tuple[str, str, bytes, bytes] | None:
 
 def _contains_collision(targets: object, protected: object) -> bool:
     """Return whether any exact protected bytes occur in any target."""
+    byte_targets: tuple[bytes, ...] | None = None
+    byte_protected: tuple[bytes, ...] | None = None
     try:
         if type(targets) is not tuple or type(protected) is not tuple:
             return True
@@ -436,7 +438,7 @@ def _contains_collision(targets: object, protected: object) -> bool:
         del signal
         raise
     finally:
-        del targets, protected
+        del targets, protected, byte_targets, byte_protected
 
 
 def prepare_evidence_publication(

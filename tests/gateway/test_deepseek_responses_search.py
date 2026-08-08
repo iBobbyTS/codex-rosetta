@@ -3404,6 +3404,37 @@ def test_evidence_helpers_preserve_signal_identity_and_scrub_graph(
     assert secret not in _evidence_error_text(caught.value)
 
 
+def test_evidence_collision_second_cast_signal_scrubs_derived_locals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    secret = "collision-secret"
+    failure = RuntimeError(secret)
+    calls = 0
+    original_cast = _EVIDENCE_MODULE.cast
+
+    def second_cast_signal(type_hint: object, value: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            del type_hint, value
+            raise failure
+        return original_cast(type_hint, value)
+
+    monkeypatch.setattr(_EVIDENCE_MODULE, "cast", second_cast_signal)
+    with pytest.raises(RuntimeError) as caught:
+        _EVIDENCE_MODULE._contains_collision(
+            (b"manifest-collision-secret",), (b"protected-collision-secret",)
+        )
+    assert caught.value is failure
+    assert caught.value.args == ()
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    rendered = _evidence_error_text(caught.value)
+    assert secret not in rendered
+    assert "manifest-collision-secret" not in rendered
+    assert "protected-collision-secret" not in rendered
+
+
 def test_evidence_import_is_stdlib_only_and_inert() -> None:
     tree = ast.parse(_EVIDENCE_PATH.read_text(encoding="utf-8"))
     imported: set[str] = set()
