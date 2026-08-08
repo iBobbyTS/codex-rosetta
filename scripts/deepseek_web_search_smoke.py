@@ -1,17 +1,21 @@
-"""Offline provider qualification for the explicit DeepSeek search smoke CLI.
+"""Offline fake composition for the explicit DeepSeek search smoke CLI.
 
-The module is intentionally an inert boundary.  It consumes only the accepted
-stdlib origin validator and an injected configuration loader; no gateway,
-client, transport, filesystem, or runtime code is imported or executed.
+The module consumes only adjacent accepted harness primitives plus injected
+configuration and client fakes. It never imports the gateway, a real client,
+transport code, or runtime configuration.
 """
 
 from __future__ import annotations
 
+import argparse
+import asyncio
+import hashlib
 import importlib.util
-from collections.abc import Callable
+import json
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from types import ModuleType
-from typing import Final
+from typing import Any, Final
 
 
 def _load_origin_contract() -> ModuleType:
@@ -29,13 +33,34 @@ _ORIGIN_CONTRACT = _load_origin_contract()
 _normalize_origin = _ORIGIN_CONTRACT.normalize_deepseek_origin
 _OFFICIAL_ORIGIN = _ORIGIN_CONTRACT.DEEPSEEK_OFFICIAL_ORIGIN
 
+
+def _load_evidence_contract() -> ModuleType:
+    """Load the adjacent evidence primitives without importing the application."""
+    path = Path(__file__).with_name("deepseek_search_evidence.py")
+    spec = importlib.util.spec_from_file_location("deepseek_search_evidence", path)
+    if spec is None or spec.loader is None:
+        raise ImportError("DeepSeek evidence contract is unavailable") from None
+    evidence_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(evidence_module)
+    return evidence_module
+
+
+_EVIDENCE_CONTRACT = _load_evidence_contract()
+prepare_evidence_publication = _EVIDENCE_CONTRACT.prepare_evidence_publication
+write_private_evidence_bytes = _EVIDENCE_CONTRACT.write_private_evidence_bytes
+
 SMOKE_PROVIDER_ID: Final = "deepseek"
 SMOKE_QUERY: Final = "latest python release version"
 SMOKE_MODES: Final = ("direct",)
 SMOKE_MAX_UPSTREAM_CALLS: Final = 1
+SMOKE_MODEL: Final = "deepseek-v4-flash"
+SMOKE_MAX_OUTPUT_TOKENS: Final = 1024
+SMOKE_CITATION_LIMIT: Final = 5
 
 _QUALIFICATION_ERROR: Final = "DeepSeek search smoke qualification failed"
 _ADMISSION_ERROR: Final = "DeepSeek search smoke call admission denied"
+_HARNESS_ERROR: Final = "DeepSeek offline search harness failed"
+_OFFLINE_FAKE_CREDENTIAL: Final = "offline-fake-credential"
 _MISSING: Final = object()
 
 
@@ -54,6 +79,16 @@ class DeepSeekSmokeCallAdmissionError(ValueError):
 
     def __init__(self) -> None:
         super().__init__(_ADMISSION_ERROR)
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}()"
+
+
+class DeepSeekOfflineHarnessError(RuntimeError):
+    """Static ordinary failure for the explicit offline fake composition."""
+
+    def __init__(self) -> None:
+        super().__init__(_HARNESS_ERROR)
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}()"
@@ -237,8 +272,219 @@ def qualify_deepseek_provider(
     return result
 
 
+def _sha256(value: str) -> str:
+    """Hash one synthetic UTF-8 value for the allowlisted evidence manifest."""
+    return hashlib.sha256(value.encode("utf-8", "strict")).hexdigest()
+
+
+def _result_material(
+    result: object,
+) -> tuple[str, tuple[dict[str, str], ...], dict[str, int], str]:
+    """Validate and serialize the accepted fake result shape."""
+    output = getattr(result, "output")
+    results = getattr(result, "results")
+    usage = getattr(result, "usage")
+    if type(output) is not str or not output:
+        raise ValueError("invalid fake output")
+    if type(results) is not tuple or not all(
+        type(item) is dict
+        and all(type(key) is str and type(value) is str for key, value in item.items())
+        for item in results
+    ):
+        raise ValueError("invalid fake results")
+    if (
+        type(usage) is not dict
+        or set(usage) != {"input_tokens", "output_tokens", "total_tokens"}
+        or not all(type(value) is int for value in usage.values())
+    ):
+        raise ValueError("invalid fake usage")
+    result_json = json.dumps(
+        {"output": output, "results": results},
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return output, results, usage, result_json
+
+
+def _build_offline_manifest(
+    result: object,
+) -> tuple[dict[str, object], tuple[str, ...]]:
+    """Build one exact generation-2 offline evidence manifest."""
+    output, results, usage, result_json = _result_material(result)
+    request_json = json.dumps(
+        {
+            "citation_limit": SMOKE_CITATION_LIMIT,
+            "max_output_tokens": SMOKE_MAX_OUTPUT_TOKENS,
+            "model": SMOKE_MODEL,
+            "query": SMOKE_QUERY,
+        },
+        ensure_ascii=False,
+        allow_nan=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    manifest: dict[str, object] = {
+        "schema": "codex-rosetta.deepseek-search-evidence",
+        "version": 1,
+        "mode": "direct",
+        "status": "completed",
+        "category": "success",
+        "execution": {
+            "provider_family": "DEEPSEEK_NATIVE_RESPONSES",
+            "execution_mode": "NATIVE_RESPONSES_HOSTED_SEARCH",
+            "model": SMOKE_MODEL,
+        },
+        "provenance": {
+            "implementation_generation": 2,
+            "generation_2_live_proof": False,
+            "generation_0_evidence": "referenced-only",
+        },
+        "hashes": {
+            "request_sha256": _sha256(request_json),
+            "query_sha256": _sha256(SMOKE_QUERY),
+            "result_sha256": _sha256(result_json),
+        },
+        "counts": {
+            "upstream_calls": 1,
+            "search_calls": 1,
+            "result_count": len(results),
+            "citation_count": len(results),
+        },
+        "latency_ms": 0,
+        "usage": dict(usage),
+    }
+    return manifest, (SMOKE_QUERY, output, result_json)
+
+
+async def run_offline_deepseek_search_harness(
+    *,
+    config_loader: Callable[[], object],
+    client_factory: Callable[[str, str], object],
+    trusted_parent: str,
+) -> Path:
+    """Run one explicit fake search and publish its sanitized evidence bytes.
+
+    Ordinary composition failures collapse to one static error. Control and
+    resource signals propagate naturally, preserving their original identity.
+    """
+    try:
+        qualified = qualify_deepseek_provider(
+            provider_id=SMOKE_PROVIDER_ID,
+            query=SMOKE_QUERY,
+            modes=list(SMOKE_MODES),
+            max_upstream_calls=SMOKE_MAX_UPSTREAM_CALLS,
+            config_loader=config_loader,
+        )
+        if (
+            qualified.provider_id != SMOKE_PROVIDER_ID
+            or qualified.origin != _OFFICIAL_ORIGIN
+        ):
+            raise ValueError("invalid qualified identity")
+
+        admission = CallAdmission(SMOKE_MAX_UPSTREAM_CALLS)
+        admission.reserve()
+        client: Any = client_factory(qualified.credential, qualified.origin)
+        result = await client.execute(
+            SMOKE_QUERY,
+            model=SMOKE_MODEL,
+            max_output_tokens=SMOKE_MAX_OUTPUT_TOKENS,
+            citation_limit=SMOKE_CITATION_LIMIT,
+        )
+        manifest, protected_bodies = _build_offline_manifest(result)
+        prepared = prepare_evidence_publication(
+            manifest,
+            trusted_parent,
+            protected_tokens=(qualified.credential,),
+            protected_bodies=protected_bodies,
+        )
+        return write_private_evidence_bytes(prepared.manifest_bytes, trusted_parent)
+    except MemoryError:
+        raise
+    except Exception:
+        raise DeepSeekOfflineHarnessError() from None
+
+
+class _OfflineFakeResult:
+    """Fixed accepted-shape result used only by the explicit offline CLI."""
+
+    __slots__ = ("output", "results", "usage")
+
+    def __init__(self) -> None:
+        self.output = "Synthetic offline search result."
+        self.results = (
+            {
+                "title": "Synthetic result",
+                "url": "https://example.invalid/offline-result",
+                "snippet": "No live provider was contacted",
+            },
+        )
+        self.usage = {"input_tokens": 12, "output_tokens": 8, "total_tokens": 20}
+
+
+class _OfflineFakeClient:
+    """Socket-free fixed client used only by ``--offline-fake``."""
+
+    async def execute(
+        self,
+        query: object,
+        *,
+        model: object,
+        max_output_tokens: object,
+        citation_limit: object,
+    ) -> _OfflineFakeResult:
+        if (
+            query != SMOKE_QUERY
+            or model != SMOKE_MODEL
+            or max_output_tokens != SMOKE_MAX_OUTPUT_TOKENS
+            or citation_limit != SMOKE_CITATION_LIMIT
+        ):
+            raise ValueError("invalid offline controls")
+        return _OfflineFakeResult()
+
+
+def _offline_config_loader() -> object:
+    """Return one fixed synthetic official-provider row."""
+    return {
+        "providers": {
+            "offline-fake": {
+                "enabled": True,
+                "provider": SMOKE_PROVIDER_ID,
+                "base_url": _OFFICIAL_ORIGIN,
+                "api_key": _OFFLINE_FAKE_CREDENTIAL,
+            }
+        }
+    }
+
+
+def _offline_client_factory(credential: str, origin: str) -> object:
+    """Construct the fixed fake only after exact synthetic qualification."""
+    if credential != _OFFLINE_FAKE_CREDENTIAL or origin != _OFFICIAL_ORIGIN:
+        raise ValueError("invalid offline qualification")
+    return _OfflineFakeClient()
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run only the explicit offline fake composition command."""
+    parser = argparse.ArgumentParser(allow_abbrev=False)
+    parser.add_argument("--offline-fake", action="store_true", required=True)
+    parser.add_argument("--evidence-parent", required=True)
+    arguments = parser.parse_args(argv)
+    final_path = asyncio.run(
+        run_offline_deepseek_search_harness(
+            config_loader=_offline_config_loader,
+            client_factory=_offline_client_factory,
+            trusted_parent=arguments.evidence_parent,
+        )
+    )
+    print(final_path)
+    return 0
+
+
 __all__ = [
     "CallAdmission",
+    "DeepSeekOfflineHarnessError",
     "DeepSeekSmokeCallAdmissionError",
     "DeepSeekSmokeQualificationError",
     "QualifiedDeepSeekProvider",
@@ -246,5 +492,11 @@ __all__ = [
     "SMOKE_MODES",
     "SMOKE_PROVIDER_ID",
     "SMOKE_QUERY",
+    "main",
     "qualify_deepseek_provider",
+    "run_offline_deepseek_search_harness",
 ]
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -66,10 +66,12 @@ assert _SMOKE_SPEC is not None and _SMOKE_SPEC.loader is not None
 _SMOKE_MODULE = importlib.util.module_from_spec(_SMOKE_SPEC)
 _SMOKE_SPEC.loader.exec_module(_SMOKE_MODULE)
 CallAdmission = _SMOKE_MODULE.CallAdmission
+DeepSeekOfflineHarnessError = _SMOKE_MODULE.DeepSeekOfflineHarnessError
 DeepSeekSmokeCallAdmissionError = _SMOKE_MODULE.DeepSeekSmokeCallAdmissionError
 DeepSeekSmokeQualificationError = _SMOKE_MODULE.DeepSeekSmokeQualificationError
 QualifiedDeepSeekProvider = _SMOKE_MODULE.QualifiedDeepSeekProvider
 qualify_deepseek_provider = _SMOKE_MODULE.qualify_deepseek_provider
+run_offline_deepseek_search_harness = _SMOKE_MODULE.run_offline_deepseek_search_harness
 
 
 def _load_pure_origin_module():
@@ -3159,10 +3161,14 @@ def test_smoke_import_surface_excludes_runtime_and_side_effects() -> None:
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".", 1)[0])
     assert imported <= {
+        "argparse",
+        "asyncio",
         "collections",
         "deepseek_search_origin",
         "__future__",
+        "hashlib",
         "importlib",
+        "json",
         "pathlib",
         "sys",
         "types",
@@ -3467,19 +3473,21 @@ def test_evidence_writer_production_isolation() -> None:
     }
 
     repository = Path(__file__).parents[2]
+    helper_names = ("deepseek_search_evidence", "deepseek_web_search_smoke")
     assert not any(
-        "deepseek_search_evidence" in path.read_text(encoding="utf-8")
+        helper_name in path.read_text(encoding="utf-8")
         for path in (repository / "src").rglob("*.py")
+        for helper_name in helper_names
     )
 
     configuration = tomllib.loads(
         (repository / "pyproject.toml").read_text(encoding="utf-8")
     )
     assert configuration["tool"]["setuptools"]["packages"]["find"]["where"] == ["src"]
-    assert "deepseek_search_evidence" not in repr(
-        configuration["tool"]["setuptools"].get("package-data", {})
-    )
-    assert "deepseek_search_evidence" not in repr(configuration["project"]["scripts"])
+    package_data = repr(configuration["tool"]["setuptools"].get("package-data", {}))
+    project_scripts = repr(configuration["project"]["scripts"])
+    assert not any(helper_name in package_data for helper_name in helper_names)
+    assert not any(helper_name in project_scripts for helper_name in helper_names)
 
     with tempfile.TemporaryDirectory(
         prefix="codex-rosetta-wheel-isolation-", dir=repository.parent
@@ -3523,7 +3531,9 @@ def test_evidence_writer_production_isolation() -> None:
             wheel_names = tuple(wheel.namelist())
             wheel.extractall(unpack_directory)
         assert not any(
-            name.endswith("deepseek_search_evidence.py") for name in wheel_names
+            name.endswith(f"{helper_name}.py")
+            for name in wheel_names
+            for helper_name in helper_names
         )
 
         cleanup_targets = [
@@ -3742,3 +3752,387 @@ def test_evidence_writer_control_signal_identity_and_cleanup(
         write_private_evidence_bytes(manifest_bytes, str(tmp_path))
     assert caught.value is failure
     assert tuple(tmp_path.iterdir()) == ()
+
+
+class _OfflineHarnessResult:
+    __slots__ = ("output", "results", "usage")
+
+    def __init__(self) -> None:
+        self.output = "Python 3.14.7 is the latest stable release."
+        self.results = (
+            {
+                "title": "Python 3.14.7",
+                "url": "https://www.python.org/downloads/release/python-3147/",
+                "snippet": "Python 3.14.7 release page",
+            },
+            {
+                "title": "Python downloads",
+                "url": "https://www.python.org/downloads/",
+                "snippet": "Official Python downloads",
+            },
+        )
+        self.usage = {"input_tokens": 12, "output_tokens": 8, "total_tokens": 20}
+
+
+class _OfflineHarnessClient:
+    def __init__(
+        self,
+        events: list[str],
+        *,
+        failure: BaseException | None = None,
+    ) -> None:
+        self.events = events
+        self.failure = failure
+        self.calls: list[tuple[object, object, object, object]] = []
+
+    async def execute(
+        self,
+        query: object,
+        *,
+        model: object,
+        max_output_tokens: object,
+        citation_limit: object,
+    ) -> _OfflineHarnessResult:
+        self.events.append("execute")
+        self.calls.append((query, model, max_output_tokens, citation_limit))
+        if self.failure is not None:
+            raise self.failure
+        return _OfflineHarnessResult()
+
+
+@pytest.mark.asyncio
+async def test_harness_composition_happy_path_is_ordered_single_call_and_sanitized(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    events: list[str] = []
+    factory_inputs: list[tuple[str, str]] = []
+    writer_inputs: list[tuple[bytes, str]] = []
+    client = _OfflineHarnessClient(events)
+    original_qualify = _SMOKE_MODULE.qualify_deepseek_provider
+    original_admission = _SMOKE_MODULE.CallAdmission
+    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
+    original_write = _SMOKE_MODULE.write_private_evidence_bytes
+
+    def qualify(**kwargs: object) -> QualifiedDeepSeekProvider:
+        events.append("qualification")
+        return original_qualify(**kwargs)
+
+    class RecordingAdmission:
+        def __init__(self, maximum: object) -> None:
+            events.append("admission")
+            self.delegate = original_admission(maximum)
+
+        def reserve(self) -> None:
+            events.append("reserve")
+            self.delegate.reserve()
+
+    def factory(credential: str, origin: str) -> _OfflineHarnessClient:
+        events.append("client_factory")
+        factory_inputs.append((credential, origin))
+        return client
+
+    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
+        events.append("prepare")
+        return original_prepare(*args, **kwargs)
+
+    def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
+        events.append("write")
+        writer_inputs.append((manifest_bytes, trusted_parent))
+        return original_write(manifest_bytes, trusted_parent)
+
+    monkeypatch.setattr(_SMOKE_MODULE, "qualify_deepseek_provider", qualify)
+    monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", RecordingAdmission)
+    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
+    monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
+
+    final_path = await run_offline_deepseek_search_harness(
+        config_loader=lambda: _smoke_config("offline-fake-credential"),
+        client_factory=factory,
+        trusted_parent=str(tmp_path),
+    )
+
+    assert events == [
+        "qualification",
+        "admission",
+        "reserve",
+        "client_factory",
+        "execute",
+        "prepare",
+        "write",
+    ]
+    assert factory_inputs == [("offline-fake-credential", "https://api.deepseek.com")]
+    assert client.calls == [
+        ("latest python release version", "deepseek-v4-flash", 1024, 5)
+    ]
+    assert len(writer_inputs) == 1
+    manifest_bytes, parent = writer_inputs[0]
+    assert type(manifest_bytes) is bytes
+    assert parent == str(tmp_path)
+    assert final_path.read_bytes() == manifest_bytes
+    manifest = json.loads(manifest_bytes)
+    assert manifest["counts"] == {
+        "citation_count": 2,
+        "result_count": 2,
+        "search_calls": 1,
+        "upstream_calls": 1,
+    }
+    assert manifest["provenance"] == {
+        "generation_0_evidence": "referenced-only",
+        "generation_2_live_proof": False,
+        "implementation_generation": 2,
+    }
+    assert manifest["usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20,
+    }
+    assert b"offline-fake-credential" not in manifest_bytes
+    assert b"latest python release version" not in manifest_bytes
+    assert b"Python 3.14.7 is the latest stable release" not in manifest_bytes
+    assert b"python.org" not in manifest_bytes
+
+
+@pytest.mark.asyncio
+async def test_harness_composition_qualification_failure_has_zero_effects(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    effects: list[str] = []
+
+    def unexpected_factory(credential: str, origin: str) -> Never:
+        del credential, origin
+        effects.append("client")
+        raise AssertionError("client must not be constructed")
+
+    class UnexpectedAdmission:
+        def __init__(self, maximum: object) -> None:
+            del maximum
+            effects.append("admission")
+
+    monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", UnexpectedAdmission)
+    monkeypatch.setattr(
+        _SMOKE_MODULE,
+        "prepare_evidence_publication",
+        lambda *args, **kwargs: effects.append("prepare"),
+    )
+    monkeypatch.setattr(
+        _SMOKE_MODULE,
+        "write_private_evidence_bytes",
+        lambda *args, **kwargs: effects.append("write"),
+    )
+
+    with pytest.raises(DeepSeekOfflineHarnessError) as caught:
+        await run_offline_deepseek_search_harness(
+            config_loader=lambda: {"providers": {}},
+            client_factory=unexpected_factory,
+            trusted_parent=str(tmp_path),
+        )
+    assert str(caught.value) == "DeepSeek offline search harness failed"
+    assert repr(caught.value) == "DeepSeekOfflineHarnessError()"
+    assert effects == []
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_stage", ["factory", "client", "prepare", "writer"])
+async def test_harness_composition_ordinary_failure_is_static_and_never_retries(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    events: list[str] = []
+    original_admission = _SMOKE_MODULE.CallAdmission
+
+    class RecordingAdmission:
+        def __init__(self, maximum: object) -> None:
+            events.append("admission")
+            self.delegate = original_admission(maximum)
+
+        def reserve(self) -> None:
+            events.append("reserve")
+            self.delegate.reserve()
+
+    client = _OfflineHarnessClient(
+        events,
+        failure=RuntimeError("fake client body") if failure_stage == "client" else None,
+    )
+
+    def factory(credential: str, origin: str) -> _OfflineHarnessClient:
+        del credential, origin
+        events.append("client_factory")
+        if failure_stage == "factory":
+            raise RuntimeError("fake factory body")
+        return client
+
+    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
+
+    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
+        events.append("prepare")
+        if failure_stage == "prepare":
+            raise ValueError("synthetic result body")
+        return original_prepare(*args, **kwargs)
+
+    def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
+        del manifest_bytes, trusted_parent
+        events.append("write")
+        raise OSError("synthetic path")
+
+    monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", RecordingAdmission)
+    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
+    monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
+
+    with pytest.raises(DeepSeekOfflineHarnessError) as caught:
+        await run_offline_deepseek_search_harness(
+            config_loader=lambda: _smoke_config(),
+            client_factory=factory,
+            trusted_parent=str(tmp_path),
+        )
+    assert str(caught.value) == "DeepSeek offline search harness failed"
+    assert caught.value.__cause__ is None
+    assert events.count("reserve") == 1
+    assert events.count("client_factory") == 1
+    assert events.count("execute") == (0 if failure_stage == "factory" else 1)
+    assert events.count("prepare") == (
+        0 if failure_stage in {"factory", "client"} else 1
+    )
+    assert events.count("write") == (1 if failure_stage == "writer" else 0)
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+class _OfflineHarnessControlSignal(BaseException):
+    pass
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["qualification", "client", "prepare", "writer"])
+@pytest.mark.parametrize(
+    "signal_type",
+    [
+        asyncio.CancelledError,
+        KeyboardInterrupt,
+        SystemExit,
+        MemoryError,
+        _OfflineHarnessControlSignal,
+    ],
+)
+async def test_harness_composition_cancellation_and_resource_signals_preserve_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    stage: str,
+    signal_type: type[BaseException],
+) -> None:
+    signal = signal_type("control")
+    events: list[str] = []
+    client = _OfflineHarnessClient(
+        events, failure=signal if stage == "client" else None
+    )
+
+    def config_loader() -> object:
+        events.append("qualification")
+        if stage == "qualification":
+            raise signal
+        return _smoke_config()
+
+    def factory(credential: str, origin: str) -> _OfflineHarnessClient:
+        del credential, origin
+        events.append("client_factory")
+        return client
+
+    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
+
+    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
+        events.append("prepare")
+        if stage == "prepare":
+            raise signal
+        return original_prepare(*args, **kwargs)
+
+    def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
+        del manifest_bytes, trusted_parent
+        events.append("write")
+        raise signal
+
+    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
+    monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
+
+    with pytest.raises(signal_type) as caught:
+        await run_offline_deepseek_search_harness(
+            config_loader=config_loader,
+            client_factory=factory,
+            trusted_parent=str(tmp_path),
+        )
+    assert caught.value is signal
+    assert events.count("client_factory") == (0 if stage == "qualification" else 1)
+    assert events.count("execute") == (0 if stage == "qualification" else 1)
+    assert events.count("prepare") == (1 if stage in {"prepare", "writer"} else 0)
+    assert events.count("write") == (1 if stage == "writer" else 0)
+    assert tuple(tmp_path.iterdir()) == ()
+
+
+@pytest.mark.asyncio
+async def test_harness_composition_network_guard_keeps_path_offline(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import socket
+
+    events: list[str] = []
+    client = _OfflineHarnessClient(events)
+
+    def blocked(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        raise AssertionError("network or process access is forbidden")
+
+    monkeypatch.setattr(socket, "socket", blocked)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", blocked)
+    monkeypatch.setattr(asyncio, "create_subprocess_shell", blocked)
+
+    final_path = await run_offline_deepseek_search_harness(
+        config_loader=lambda: _smoke_config(),
+        client_factory=lambda credential, origin: client,
+        trusted_parent=str(tmp_path),
+    )
+    assert final_path.is_file()
+    assert events == ["execute"]
+
+
+def test_smoke_cli_runs_only_explicit_offline_fake_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    exit_code = _SMOKE_MODULE.main(
+        ["--offline-fake", "--evidence-parent", str(tmp_path)]
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert captured.err == ""
+    lines = captured.out.splitlines()
+    assert len(lines) == 1
+    assert Path(lines[0]).is_file()
+    assert Path(lines[0]).parent.parent == tmp_path
+
+
+@pytest.mark.parametrize(
+    "unsupported",
+    ["--config", "--api-key", "--query", "--origin", "--url", "--live", "--port"],
+)
+def test_smoke_cli_rejects_runtime_and_live_options_before_composition(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, unsupported: str
+) -> None:
+    calls: list[str] = []
+
+    async def unexpected(**kwargs: object) -> Never:
+        del kwargs
+        calls.append("composition")
+        raise AssertionError("composition must not run")
+
+    monkeypatch.setattr(
+        _SMOKE_MODULE, "run_offline_deepseek_search_harness", unexpected
+    )
+    with pytest.raises(SystemExit):
+        _SMOKE_MODULE.main(
+            [
+                "--offline-fake",
+                "--evidence-parent",
+                str(tmp_path),
+                unsupported,
+                "value",
+            ]
+        )
+    assert calls == []
