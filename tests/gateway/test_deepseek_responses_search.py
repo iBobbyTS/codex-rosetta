@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import importlib.util
 import inspect
 import json
 import random
+import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Never, cast
@@ -29,6 +32,19 @@ from codex_rosetta.gateway.deepseek_responses_search import (
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta._vendor.httpclient import HttpTimeoutError
 from codex_rosetta.observability.redaction import SecretRedactor
+
+_PURE_ORIGIN_PATH = Path(__file__).parents[2] / "scripts" / "deepseek_search_origin.py"
+
+
+def _load_pure_origin_module():
+    spec = importlib.util.spec_from_file_location(
+        "deepseek_search_origin_test", _PURE_ORIGIN_PATH
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
 
 _EXPECTED_PROMPT = (
     "Search the web for the following query. Return a concise factual answer and "
@@ -2796,3 +2812,118 @@ async def test_client_error_traceback_does_not_retain_raw_or_decoded_values(
         assert "test-secret" not in locals_.values()
         assert all(value is not raw for value in locals_.values())
         frame = frame.tb_next
+
+
+@pytest.mark.parametrize(
+    ("origin", "accepted"),
+    [
+        ("https://api.deepseek.com", True),
+        ("https://api.deepseek.com/", True),
+        ("https://api.deepseek.com:443", True),
+        ("https://api.deepseek.com:443/", True),
+        ("HTTPS://API.DEEPSEEK.COM:443/", True),
+        (None, False),
+        (True, False),
+        ("", False),
+        (" https://api.deepseek.com", False),
+        ("https://api.deepseek.com ", False),
+        ("https://api.deepseek.com\n/", False),
+        ("http://api.deepseek.com", False),
+        ("https://deepseek.com", False),
+        ("https://api.deepseek.com.evil.example", False),
+        ("https://api.deepseek.com:444", False),
+        ("https://api.deepseek.com:0443", False),
+        ("https://user@api.deepseek.com", False),
+        ("https://api.deepseek.com/responses", False),
+        ("https://api.deepseek.com?mode=search", False),
+        ("https://api.deepseek.com#fragment", False),
+        ("https://api.deepseek.com?", False),
+        ("https://api.deepseek.com#", False),
+        ("https://api.deepseek.com/%2F", False),
+        ("https://[invalid", False),
+    ],
+)
+def test_pure_origin_validator_matches_s01_4_semantics(
+    origin: object, accepted: bool
+) -> None:
+    pure_origin = _load_pure_origin_module()
+    if accepted:
+        expected = DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
+        assert pure_origin.normalize_deepseek_origin(origin) == expected
+        assert pure_origin.normalize_deepseek_responses_origin(origin) == expected
+        assert pure_origin.normalize_deepseek_search_origin(origin) == expected
+        assert deepseek_search.normalize_deepseek_responses_origin(origin) == expected
+        return
+
+    with pytest.raises(ValueError) as pure_error:
+        pure_origin.normalize_deepseek_origin(origin)
+    with pytest.raises(ValueError) as adapter_error:
+        deepseek_search.normalize_deepseek_responses_origin(origin)
+    assert str(pure_error.value) == "DeepSeek origin must be the official HTTPS root"
+    assert pure_error.value.__cause__ is None
+    assert pure_error.value.__context__ is None
+    assert len(str(pure_error.value)) <= 80
+    if isinstance(origin, str) and origin:
+        assert origin not in str(pure_error.value)
+    frame = pure_error.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == str(_PURE_ORIGIN_PATH):
+            assert all(value != origin for value in frame.tb_frame.f_locals.values())
+        frame = frame.tb_next
+    assert str(adapter_error.value) == (
+        "DeepSeek Responses origin must be the official HTTPS root"
+    )
+
+
+def test_pure_origin_module_has_only_stdlib_imports() -> None:
+    tree = ast.parse(_PURE_ORIGIN_PATH.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".", 1)[0])
+    assert imported == {"urllib"}
+    forbidden = {
+        "codex_rosetta",
+        "deepseek_web_search_smoke",
+        "httpx",
+        "requests",
+        "socket",
+        "pathlib",
+    }
+    assert imported.isdisjoint(forbidden)
+
+
+def test_pure_origin_import_isolated_from_runtime_modules() -> None:
+    probe = "\n".join(
+        [
+            "import importlib.util",
+            "import sys",
+            f"path = {str(_PURE_ORIGIN_PATH)!r}",
+            "spec = importlib.util.spec_from_file_location('isolated_origin', path)",
+            "assert spec is not None and spec.loader is not None",
+            "module = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(module)",
+            "assert module.normalize_deepseek_origin('HTTPS://API.DEEPSEEK.COM:443/') == 'https://api.deepseek.com'",
+            "blocked = (",
+            "    'codex_rosetta',",
+            "    'codex_rosetta.gateway.deepseek_responses_search',",
+            "    'codex_rosetta._vendor.httpclient',",
+            "    'codex_rosetta.gateway.transport.http.transport',",
+            "    'codex_rosetta.observability.redaction',",
+            "    'codex_rosetta.gateway.config',",
+            "    'codex_rosetta.gateway.providers',",
+            "    'deepseek_web_search_smoke',",
+            ")",
+            "assert not any(name in sys.modules for name in blocked)",
+        ]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
