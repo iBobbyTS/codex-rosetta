@@ -35,6 +35,21 @@ from codex_rosetta.observability.redaction import SecretRedactor
 
 _PURE_ORIGIN_PATH = Path(__file__).parents[2] / "scripts" / "deepseek_search_origin.py"
 
+_SMOKE_MODULE_PATH = (
+    Path(__file__).parents[2] / "scripts" / "deepseek_web_search_smoke.py"
+)
+_SMOKE_SPEC = importlib.util.spec_from_file_location(
+    "deepseek_web_search_smoke", _SMOKE_MODULE_PATH
+)
+assert _SMOKE_SPEC is not None and _SMOKE_SPEC.loader is not None
+_SMOKE_MODULE = importlib.util.module_from_spec(_SMOKE_SPEC)
+_SMOKE_SPEC.loader.exec_module(_SMOKE_MODULE)
+CallAdmission = _SMOKE_MODULE.CallAdmission
+DeepSeekSmokeCallAdmissionError = _SMOKE_MODULE.DeepSeekSmokeCallAdmissionError
+DeepSeekSmokeQualificationError = _SMOKE_MODULE.DeepSeekSmokeQualificationError
+QualifiedDeepSeekProvider = _SMOKE_MODULE.QualifiedDeepSeekProvider
+qualify_deepseek_provider = _SMOKE_MODULE.qualify_deepseek_provider
+
 
 def _load_pure_origin_module():
     spec = importlib.util.spec_from_file_location(
@@ -2908,6 +2923,248 @@ def test_pure_origin_import_isolated_from_runtime_modules() -> None:
             "assert module.normalize_deepseek_origin('HTTPS://API.DEEPSEEK.COM:443/') == 'https://api.deepseek.com'",
             "blocked = (",
             "    'codex_rosetta',",
+            "    'codex_rosetta.gateway.deepseek_responses_search',",
+            "    'codex_rosetta._vendor.httpclient',",
+            "    'codex_rosetta.gateway.transport.http.transport',",
+            "    'codex_rosetta.observability.redaction',",
+            "    'codex_rosetta.gateway.config',",
+            "    'codex_rosetta.gateway.providers',",
+            "    'deepseek_web_search_smoke',",
+            ")",
+            "assert not any(name in sys.modules for name in blocked)",
+        ]
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=Path(__file__).parents[2],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def _smoke_config(
+    credential: str = "deepseek-smoke-secret", **overrides: object
+) -> dict[str, Any]:
+    row: dict[str, Any] = {
+        "enabled": True,
+        "provider": "deepseek",
+        "base_url": "https://api.deepseek.com",
+        "api_key": credential,
+    }
+    row.update(overrides)
+    return {"providers": {"official-row": row}}
+
+
+def _qualify_smoke(
+    config: object,
+    *,
+    provider_id: object = "deepseek",
+    query: object = "latest python release version",
+    modes: object = ["direct"],
+    max_upstream_calls: object = 1,
+    calls: list[int] | None = None,
+) -> QualifiedDeepSeekProvider:
+    def load() -> object:
+        if calls is not None:
+            calls.append(1)
+        return config
+
+    return qualify_deepseek_provider(
+        provider_id=provider_id,
+        query=query,
+        modes=modes,
+        max_upstream_calls=max_upstream_calls,
+        config_loader=load,
+    )
+
+
+def _smoke_error_text(error: BaseException) -> str:
+    values: list[str] = [str(error), repr(error)]
+    values.extend(repr(value) for value in error.args)
+    traceback_obj = error.__traceback__
+    while traceback_obj is not None:
+        if traceback_obj.tb_frame.f_code.co_filename.endswith(
+            "scripts/deepseek_web_search_smoke.py"
+        ):
+            values.extend(
+                repr(value) for value in traceback_obj.tb_frame.f_locals.values()
+            )
+        traceback_obj = traceback_obj.tb_next
+    return "\n".join(values)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("provider_id", "deepseek-other"),
+        ("query", "latest python release version with secret"),
+        ("modes", ["direct", "direct"]),
+        ("max_upstream_calls", True),
+    ],
+)
+def test_smoke_literal_controls_reject_before_config_loader(
+    field: str, value: object
+) -> None:
+    calls: list[int] = []
+    kwargs: dict[str, object] = {field: value}
+    with pytest.raises(DeepSeekSmokeQualificationError) as caught:
+        _qualify_smoke(_smoke_config(), calls=calls, **kwargs)
+    assert calls == []
+    assert str(caught.value) == "DeepSeek search smoke qualification failed"
+    assert "latest python release version with secret" not in _smoke_error_text(
+        caught.value
+    )
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"providers": []},
+        {"providers": {"bad-name": []}},
+        {"providers": {1: {}}},
+        {"providers": {"row": {"provider": "deepseek"}}},
+        _smoke_config(enabled="yes"),
+        _smoke_config(provider="openai_chat"),
+        _smoke_config(base_url="https://relay.example"),
+        _smoke_config(api_key=""),
+        _smoke_config(api_key="one,two"),
+        _smoke_config(api_key="${DEEPSEEK_KEY}"),
+    ],
+)
+def test_smoke_provider_qualification_fails_closed_without_echo(config: object) -> None:
+    with pytest.raises(DeepSeekSmokeQualificationError) as caught:
+        _qualify_smoke(config)
+    assert str(caught.value) == "DeepSeek search smoke qualification failed"
+    rendered = _smoke_error_text(caught.value)
+    assert "deepseek-smoke-secret" not in rendered
+    assert "latest python release version" not in rendered
+    assert "relay.example" not in rendered
+
+
+def test_smoke_provider_identity_requires_one_eligible_row_and_credential() -> None:
+    config = {
+        "providers": {
+            "first": _smoke_config("first-secret")["providers"]["official-row"],
+            "second": _smoke_config("second-secret")["providers"]["official-row"],
+        }
+    }
+    with pytest.raises(DeepSeekSmokeQualificationError) as caught:
+        _qualify_smoke(config)
+    rendered = _smoke_error_text(caught.value)
+    assert "first-secret" not in rendered
+    assert "second-secret" not in rendered
+
+
+def test_smoke_qualified_provider_is_opaque_but_retains_credential() -> None:
+    credential = "deepseek-valid-secret"
+    full_row = repr(_smoke_config(credential))
+    result = _qualify_smoke(_smoke_config(credential))
+    assert result.credential == credential
+    assert result.provider_id == "deepseek"
+    assert result.origin == "https://api.deepseek.com"
+    assert repr(result) == "<QualifiedDeepSeekProvider>"
+    assert str(result) == "<QualifiedDeepSeekProvider>"
+    assert credential not in repr(result)
+    assert full_row not in repr(result)
+    assert result == result
+    assert result != QualifiedDeepSeekProvider("other-secret")
+    assert isinstance(hash(result), int)
+
+
+@pytest.mark.parametrize("value", [True, False, 1.0, "1", None])
+def test_smoke_call_budget_admission_accepts_only_exact_one(value: object) -> None:
+    with pytest.raises(DeepSeekSmokeCallAdmissionError) as caught:
+        CallAdmission(value)
+    assert str(caught.value) == "DeepSeek search smoke call admission denied"
+
+
+def test_smoke_call_budget_admission_allows_one_reservation_only() -> None:
+    admission = CallAdmission(1)
+    admission.reserve()
+    with pytest.raises(DeepSeekSmokeCallAdmissionError) as caught:
+        admission.reserve()
+    assert str(caught.value) == "DeepSeek search smoke call admission denied"
+
+
+def test_smoke_loader_exception_is_static_and_secret_free() -> None:
+    secret = "loader-secret-value"
+
+    def load() -> object:
+        raise RuntimeError(secret)
+
+    with pytest.raises(DeepSeekSmokeQualificationError) as caught:
+        qualify_deepseek_provider(
+            provider_id="deepseek",
+            query="latest python release version",
+            modes=["direct"],
+            max_upstream_calls=1,
+            config_loader=load,
+        )
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    rendered = _smoke_error_text(caught.value)
+    assert secret not in rendered
+    assert "latest python release version" not in rendered
+
+
+@pytest.mark.parametrize(
+    "signal", [asyncio.CancelledError, KeyboardInterrupt, SystemExit, MemoryError]
+)
+def test_smoke_qualification_propagates_non_exception_signals(
+    signal: type[BaseException],
+) -> None:
+    def load() -> object:
+        raise signal("control-signal")
+
+    with pytest.raises(signal):
+        qualify_deepseek_provider(
+            provider_id="deepseek",
+            query="latest python release version",
+            modes=["direct"],
+            max_upstream_calls=1,
+            config_loader=load,
+        )
+
+
+def test_smoke_import_surface_excludes_runtime_and_side_effects() -> None:
+    module_path = Path(__file__).parents[2] / "scripts" / "deepseek_web_search_smoke.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".", 1)[0])
+    assert imported <= {
+        "collections",
+        "deepseek_search_origin",
+        "__future__",
+        "importlib",
+        "pathlib",
+        "sys",
+        "types",
+        "typing",
+    }
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"open", "connect", "mkdir", "write_text"}
+        for node in ast.walk(tree)
+    )
+
+    probe = "\n".join(
+        [
+            "import importlib.util",
+            "import sys",
+            f"path = {str(module_path)!r}",
+            "spec = importlib.util.spec_from_file_location('smoke_probe', path)",
+            "assert spec is not None and spec.loader is not None",
+            "module = importlib.util.module_from_spec(spec)",
+            "spec.loader.exec_module(module)",
+            "assert 'deepseek_search_origin' in sys.modules",
+            "blocked = (",
             "    'codex_rosetta.gateway.deepseek_responses_search',",
             "    'codex_rosetta._vendor.httpclient',",
             "    'codex_rosetta.gateway.transport.http.transport',",
