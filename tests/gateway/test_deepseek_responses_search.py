@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import builtins
 import importlib.util
 import inspect
 import json
+import os
 import random
 import subprocess
 import sys
@@ -32,6 +34,18 @@ from codex_rosetta.gateway.deepseek_responses_search import (
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta._vendor.httpclient import HttpTimeoutError
 from codex_rosetta.observability.redaction import SecretRedactor
+
+_EVIDENCE_PATH = Path(__file__).parents[2] / "scripts" / "deepseek_search_evidence.py"
+_EVIDENCE_SPEC = importlib.util.spec_from_file_location(
+    "deepseek_search_evidence", _EVIDENCE_PATH
+)
+assert _EVIDENCE_SPEC is not None and _EVIDENCE_SPEC.loader is not None
+_EVIDENCE_MODULE = importlib.util.module_from_spec(_EVIDENCE_SPEC)
+_EVIDENCE_SPEC.loader.exec_module(_EVIDENCE_MODULE)
+DeepSeekEvidencePreparationError = _EVIDENCE_MODULE.DeepSeekEvidencePreparationError
+PreparedEvidencePublication = _EVIDENCE_MODULE.PreparedEvidencePublication
+prepare_evidence_publication = _EVIDENCE_MODULE.prepare_evidence_publication
+serialize_evidence_manifest = _EVIDENCE_MODULE.serialize_evidence_manifest
 
 _PURE_ORIGIN_PATH = Path(__file__).parents[2] / "scripts" / "deepseek_search_origin.py"
 
@@ -3205,3 +3219,212 @@ def test_smoke_import_surface_excludes_runtime_and_side_effects() -> None:
         check=False,
     )
     assert completed.returncode == 0, completed.stderr
+
+
+def _evidence_manifest() -> dict[str, Any]:
+    digest = "a" * 64
+    return {
+        "schema": "codex-rosetta.deepseek-search-evidence",
+        "version": 1,
+        "mode": "direct",
+        "status": "completed",
+        "category": "success",
+        "execution": {
+            "provider_family": "DEEPSEEK_NATIVE_RESPONSES",
+            "execution_mode": "NATIVE_RESPONSES_HOSTED_SEARCH",
+            "model": "deepseek-v4-flash",
+        },
+        "provenance": {
+            "implementation_generation": 2,
+            "generation_2_live_proof": False,
+            "generation_0_evidence": "referenced-only",
+        },
+        "hashes": {
+            "request_sha256": digest,
+            "query_sha256": "b" * 64,
+            "result_sha256": "c" * 64,
+        },
+        "counts": {
+            "upstream_calls": 1,
+            "search_calls": 1,
+            "result_count": 2,
+            "citation_count": 2,
+        },
+        "latency_ms": 42,
+        "usage": {"input_tokens": 12, "output_tokens": 8, "total_tokens": 20},
+    }
+
+
+def _evidence_error_text(error: BaseException) -> str:
+    values = [str(error), repr(error), repr(error.args)]
+    frame = error.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename == str(_EVIDENCE_PATH):
+            values.extend(repr(value) for value in frame.tb_frame.f_locals.values())
+        frame = frame.tb_next
+    return "\n".join(values)
+
+
+def test_evidence_schema_is_exact_and_deterministic() -> None:
+    manifest = _evidence_manifest()
+    first = serialize_evidence_manifest(manifest)
+    second = serialize_evidence_manifest(dict(reversed(tuple(manifest.items()))))
+    assert first == second
+    assert (
+        first
+        == json.dumps(
+            manifest,
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    )
+    assert len(first) <= _EVIDENCE_MODULE.MAX_MANIFEST_BYTES
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda value: value.update({"unexpected": "opaque"}),
+        lambda value: value["hashes"].update({"credential_sha256": "a" * 64}),
+        lambda value: value["execution"].update({"response_id": "opaque"}),
+        lambda value: value["hashes"].update({"query_sha256": "query text"}),
+        lambda value: value["counts"].update({"result_count": True}),
+        lambda value: value["usage"].update({"total_tokens": 21}),
+        lambda value: value.update({"query": "raw query"}),
+    ],
+)
+def test_evidence_schema_rejects_unknown_opaque_and_invalid_values(mutator) -> None:
+    manifest = _evidence_manifest()
+    mutator(manifest)
+    with pytest.raises(DeepSeekEvidencePreparationError) as caught:
+        serialize_evidence_manifest(manifest)
+    assert str(caught.value) == "DeepSeek search evidence preparation failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+
+
+def test_evidence_preflight_returns_minimal_immutable_prepared_value() -> None:
+    prepared = prepare_evidence_publication(
+        _evidence_manifest(),
+        "evidence/run-1",
+        protected_tokens=("deepseek-secret",),
+        protected_bodies=("raw response body",),
+    )
+    assert isinstance(prepared, PreparedEvidencePublication)
+    assert prepared.directory == "evidence/run-1"
+    assert prepared.final_path == "evidence/run-1/summary.json"
+    assert prepared.manifest_bytes == serialize_evidence_manifest(_evidence_manifest())
+    assert not hasattr(prepared, "__dict__")
+    with pytest.raises(AttributeError):
+        prepared.directory = "other"  # type: ignore[misc]
+    assert repr(prepared) == "<PreparedEvidencePublication>"
+
+
+@pytest.mark.parametrize(
+    ("directory", "tokens", "bodies"),
+    [
+        ("evidence/run-1", ("completed",), ()),
+        ("deepseek-secret-dir", ("safe-token",), ()),
+        ("evidence/run-1", ("safe-token",), ("completed",)),
+        ("evidence/run-1", ("safe-token",), ("summary.json",)),
+        ("evidence/run-1", ("\ud800",), ()),
+        ("evidence/run-1\x00", ("safe-token",), ()),
+        ("evidence/run-1/", ("safe-token",), ()),
+    ],
+)
+def test_evidence_preflight_collision_and_invalid_paths_are_zero_io(
+    monkeypatch: pytest.MonkeyPatch,
+    directory: str,
+    tokens: tuple[str, ...],
+    bodies: tuple[str, ...],
+) -> None:
+    calls: list[str] = []
+
+    def fail_open(*args: Any, **kwargs: Any) -> Never:
+        calls.append("open")
+        raise AssertionError("filesystem operation")
+
+    def fail_mkdir(*args: Any, **kwargs: Any) -> Never:
+        calls.append("mkdir")
+        raise AssertionError("filesystem operation")
+
+    monkeypatch.setattr(builtins, "open", fail_open)
+    monkeypatch.setattr(os, "mkdir", fail_mkdir)
+    with pytest.raises(DeepSeekEvidencePreparationError):
+        prepare_evidence_publication(
+            _evidence_manifest(),
+            directory,
+            protected_tokens=tokens or ("safe-token",),
+            protected_bodies=bodies,
+        )
+    assert calls == []
+
+
+@pytest.mark.parametrize("helper", ["manifest", "scan", "serialize", "preflight"])
+@pytest.mark.parametrize(
+    "signal_type", [MemoryError, asyncio.CancelledError, KeyboardInterrupt, SystemExit]
+)
+def test_evidence_helpers_preserve_signal_identity_and_scrub_graph(
+    monkeypatch: pytest.MonkeyPatch, helper: str, signal_type: type[BaseException]
+) -> None:
+    secret = "evidence-secret-token"
+    failure = signal_type(secret)
+
+    def explode(*args: object, **kwargs: object) -> Never:
+        del args, kwargs
+        raise failure
+
+    target = {
+        "manifest": "_keys_are_exact",
+        "scan": "_encode_text",
+        "serialize": "_json_dumps",
+        "preflight": "_contains_collision",
+    }[helper]
+    monkeypatch.setattr(_EVIDENCE_MODULE, target, explode)
+    with pytest.raises(signal_type) as caught:
+        if helper == "manifest":
+            _EVIDENCE_MODULE._manifest_is_allowed(_evidence_manifest())
+        elif helper == "scan":
+            _EVIDENCE_MODULE._encode_scan_values((secret,))
+        elif helper == "serialize":
+            serialize_evidence_manifest(_evidence_manifest())
+        else:
+            prepare_evidence_publication(
+                _evidence_manifest(),
+                "evidence/secret-path",
+                protected_tokens=(secret,),
+                protected_bodies=("body",),
+            )
+    assert caught.value is failure
+    assert caught.value.args == ()
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert secret not in _evidence_error_text(caught.value)
+
+
+def test_evidence_import_is_stdlib_only_and_inert() -> None:
+    tree = ast.parse(_EVIDENCE_PATH.read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".", 1)[0])
+    assert imported <= {"__future__", "json", "typing"}
+    assert not imported & {
+        "codex_rosetta",
+        "asyncio",
+        "httpx",
+        "pathlib",
+        "socket",
+        "subprocess",
+    }
+    forbidden_calls = {"open", "mkdir", "write", "write_text", "unlink", "rmdir"}
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in forbidden_calls
+        for node in ast.walk(tree)
+    )
