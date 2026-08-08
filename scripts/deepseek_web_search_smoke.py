@@ -8,7 +8,6 @@ client, transport, filesystem, or runtime code is imported or executed.
 from __future__ import annotations
 
 import importlib.util
-import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
@@ -22,7 +21,6 @@ def _load_origin_contract() -> ModuleType:
     if spec is None or spec.loader is None:
         raise ImportError("DeepSeek origin contract is unavailable") from None
     origin_module = importlib.util.module_from_spec(spec)
-    sys.modules["deepseek_search_origin"] = origin_module
     spec.loader.exec_module(origin_module)
     return origin_module
 
