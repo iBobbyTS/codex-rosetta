@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import inspect
 import json
 import random
@@ -25,6 +26,7 @@ from codex_rosetta.gateway.deepseek_responses_search import (
     parse_deepseek_responses_search_response,
     publish_deepseek_responses_search_response,
 )
+from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
 from codex_rosetta.observability.redaction import SecretRedactor
 
 _EXPECTED_PROMPT = (
@@ -535,7 +537,7 @@ def test_request_builder_rejects_caller_supplied_extra_fields(forbidden: str) ->
         )
 
 
-def test_pre_io_module_has_no_forbidden_runtime_dependency_or_parameter() -> None:
+def test_adapter_module_has_no_unowned_runtime_dependency_or_parameter() -> None:
     module_path = Path(inspect.getfile(build_deepseek_responses_search_request))
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
     imported = {
@@ -550,7 +552,6 @@ def test_pre_io_module_has_no_forbidden_runtime_dependency_or_parameter() -> Non
     parameters = inspect.signature(build_deepseek_responses_search_request).parameters
 
     forbidden_imports = {
-        "asyncio",
         "http.client",
         "httpx",
         "os",
@@ -559,7 +560,8 @@ def test_pre_io_module_has_no_forbidden_runtime_dependency_or_parameter() -> Non
         "urllib.request",
         "codex_rosetta.gateway.config",
         "codex_rosetta.gateway.providers",
-        "codex_rosetta.gateway.transport",
+        "codex_rosetta.gateway.config",
+        "codex_rosetta.gateway.providers",
     }
     assert imported.isdisjoint(forbidden_imports)
     assert set(parameters) == {
@@ -2260,7 +2262,7 @@ def test_publish_public_contract_is_keyword_only_and_bounded() -> None:
     assert DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES == 4_194_304
 
 
-def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
+def test_parser_module_has_no_unowned_runtime_importer() -> None:
     module_path = Path(inspect.getfile(parse_deepseek_responses_search_response))
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
     imported = {
@@ -2274,17 +2276,16 @@ def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
     )
     assert imported.isdisjoint(
         {
-            "asyncio",
             "http.client",
             "httpx",
-            "json",
             "os",
             "pathlib",
             "socket",
             "urllib.request",
             "codex_rosetta.gateway.config",
             "codex_rosetta.gateway.providers",
-            "codex_rosetta.gateway.transport",
+            "codex_rosetta.gateway.config",
+            "codex_rosetta.gateway.providers",
         }
     )
     assert "codex_rosetta.observability.redaction" in imported
@@ -2298,3 +2299,175 @@ def test_parser_module_remains_pure_and_has_no_production_importer() -> None:
         if import_text in source.read_text(encoding="utf-8"):
             production_importers.append(source)
     assert production_importers == []
+
+
+class _FakeResponsesClient:
+    instances: list[_FakeResponsesClient] = []
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.args = args
+        self.kwargs = kwargs
+        self.closed = False
+        self.__class__.instances.append(self)
+
+    async def __aenter__(self) -> _FakeResponsesClient:
+        return self
+
+    async def __aexit__(self, *args: object) -> None:
+        del args
+        self.closed = True
+
+
+def _response_bytes(response: object | None = None) -> bytes:
+    value = _completed_response() if response is None else response
+    return json.dumps(value, ensure_ascii=False).encode("utf-8")
+
+
+@pytest.mark.asyncio
+async def test_client_composes_one_official_bounded_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _FakeResponsesClient.instances = []
+    calls: list[dict[str, object]] = []
+
+    async def bounded(
+        client: object, method: str, url: str, **kwargs: object
+    ) -> BoundedHttpResponse:
+        calls.append({"client": client, "method": method, "url": url, **kwargs})
+        return BoundedHttpResponse(200, {}, _response_bytes())
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+
+    result = await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search(
+        " current release notes "
+    )
+
+    assert result["output"] == "Answer from the web."
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["method"] == "POST"
+    assert call["url"] == "https://api.deepseek.com/responses"
+    assert call["headers"] == {
+        "Authorization": "Bearer test-secret",
+        "Content-Type": "application/json",
+    }
+    assert call["max_success_bytes"] == DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES
+    assert call["max_error_bytes"] == DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES
+    assert call["allow_redirects"] is False
+    assert _FakeResponsesClient.instances[0].kwargs == {
+        "timeout": 120.0,
+        "max_redirects": 0,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 422, 429, 500, 503])
+async def test_client_maps_status_to_bounded_static_error(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    _FakeResponsesClient.instances = []
+
+    async def bounded(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(status, {}, b'{"upstream":"private"}')
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+    with pytest.raises(deepseek_search.DeepSeekSearchError) as caught:
+        await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search("q")
+    assert (
+        caught.value.category is deepseek_search.DeepSeekSearchErrorCategory.HTTP_ERROR
+    )
+    assert caught.value.status_code == status
+    assert caught.value.args == ("http_error",)
+    assert caught.value.__cause__ is None
+    assert caught.value.__context__ is None
+    assert "private" not in str(caught.value)
+    assert "test-secret" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"model": "deepseek-v4-pro"},
+        {"max_output_tokens": 1024.0},
+        {"citation_limit": 0},
+        {"citation_limit": 9},
+    ],
+)
+async def test_client_rejects_invalid_controls_before_client_or_transport(
+    monkeypatch: pytest.MonkeyPatch, kwargs: dict[str, object]
+) -> None:
+    _FakeResponsesClient.instances = []
+    calls: list[object] = []
+
+    async def bounded(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        calls.append((args, kwargs))
+        return BoundedHttpResponse(200, {}, _response_bytes())
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+    with pytest.raises(ValueError):
+        await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search(
+            "q", **kwargs
+        )
+    assert _FakeResponsesClient.instances == []
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_client_preserves_cancelled_error_and_memory_error_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+
+    async def cancelled(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        del args, kwargs
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", cancelled)
+    with pytest.raises(asyncio.CancelledError) as cancelled_error:
+        await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search("q")
+    assert cancelled_error.value.__class__ is asyncio.CancelledError
+
+    memory_error = MemoryError("allocation")
+
+    async def exhausted(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        del args, kwargs
+        raise memory_error
+
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", exhausted)
+    with pytest.raises(MemoryError) as caught:
+        await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search("q")
+    assert caught.value is memory_error
+
+
+@pytest.mark.asyncio
+async def test_client_error_traceback_does_not_retain_raw_or_decoded_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _response_bytes()
+
+    async def bounded(*args: object, **kwargs: object) -> BoundedHttpResponse:
+        del args, kwargs
+        return BoundedHttpResponse(500, {}, raw)
+
+    monkeypatch.setattr(deepseek_search, "AsyncClient", _FakeResponsesClient)
+    monkeypatch.setattr(deepseek_search, "request_bounded_response", bounded)
+    with pytest.raises(deepseek_search.DeepSeekSearchError) as caught:
+        await deepseek_search.DeepSeekResponsesSearchClient("test-secret").search("q")
+
+    frame = caught.value.__traceback__
+    while frame is not None:
+        if frame.tb_frame.f_code.co_filename != str(
+            Path(inspect.getfile(deepseek_search))
+        ):
+            frame = frame.tb_next
+            continue
+        locals_ = frame.tb_frame.f_locals
+        assert raw not in locals_.values()
+        assert "test-secret" not in locals_.values()
+        assert all(value is not raw for value in locals_.values())
+        frame = frame.tb_next

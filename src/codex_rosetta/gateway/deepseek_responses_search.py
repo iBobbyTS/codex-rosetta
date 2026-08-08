@@ -2,18 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import math
 from dataclasses import dataclass
+from enum import StrEnum
 from ipaddress import IPv6Address
 from typing import Any, Final, Never, cast
 from urllib.parse import urlsplit, urlunsplit
 
+from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta.observability.redaction import SecretRedactor
+
+from .transport._base import (
+    UpstreamConnectionError,
+    UpstreamNetworkError,
+    UpstreamResponseTooLargeError,
+)
+from .transport.http.transport import request_bounded_response
 
 DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN = "https://api.deepseek.com"
 DEEPSEEK_RESPONSES_SEARCH_MODEL = "deepseek-v4-flash"
 DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS = frozenset({512, 1024, 1536})
 DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES = 4 * 1024 * 1024
+DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT = 120.0
+DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS = 1024
+DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT = 5
 
 _QUERY_MAX_LENGTH = 4000
 _CITATION_LIMIT_RANGE = range(1, 9)
@@ -37,6 +51,13 @@ _SEARCH_PROMPT_PREFIX = (
 )
 
 
+def _bounded_status_code(value: object) -> int | None:
+    """Keep only ordinary HTTP status integers useful to downstream mapping."""
+    if type(value) is int and 100 <= value <= 599:
+        return value
+    return None
+
+
 class DeepSeekResponsesSearchParseError(ValueError):
     """A static, provider-neutral failure for an invalid hosted-search response."""
 
@@ -49,6 +70,38 @@ class DeepSeekResponsesSearchCredentialCollisionError(ValueError):
 
     def __init__(self) -> None:
         super().__init__(_CREDENTIAL_COLLISION_ERROR_MESSAGE)
+
+
+class DeepSeekSearchErrorCategory(StrEnum):
+    """Bounded categories exposed to the later search-chain owner."""
+
+    CONNECTION_ERROR = "connection_error"
+    TRANSPORT_ERROR = "transport_error"
+    TIMEOUT = "timeout"
+    HTTP_ERROR = "http_error"
+    INVALID_JSON = "invalid_json"
+    INVALID_SHAPE = "invalid_shape"
+    BODY_LIMIT = "body_limit"
+    RESPONSE_TOO_LARGE = "body_limit"
+    CREDENTIAL_COLLISION = "credential_collision"
+
+
+class DeepSeekSearchError(RuntimeError):
+    """A bounded, provider-neutral DeepSeek adapter error."""
+
+    def __init__(
+        self,
+        category: DeepSeekSearchErrorCategory,
+        *,
+        status_code: int | None = None,
+    ) -> None:
+        self.category = category
+        self.status_code = _bounded_status_code(status_code)
+        super().__init__(category.value)
+
+
+# Kept as a compatibility spelling for the accepted publication seam.
+DeepSeekCredentialCollisionError = DeepSeekResponsesSearchCredentialCollisionError
 
 
 def normalize_deepseek_responses_origin(origin: object) -> str:
@@ -647,6 +700,20 @@ def publish_deepseek_responses_search_response(
     if _redactor_contains_json_semantic(redactor, raw_response):
         raise DeepSeekResponsesSearchCredentialCollisionError
 
+    return _publish_after_raw_gate(
+        response=response,
+        citation_limit=citation_limit,
+        redactor=redactor,
+    )
+
+
+def _publish_after_raw_gate(
+    *,
+    response: object,
+    citation_limit: object,
+    redactor: SecretRedactor,
+) -> dict[str, object]:
+    """Compose the accepted parser and final gate after one raw scan."""
     normalized = parse_deepseek_responses_search_response(
         response,
         citation_limit=citation_limit,
@@ -658,14 +725,284 @@ def publish_deepseek_responses_search_response(
     return normalized
 
 
+@dataclass(frozen=True, slots=True)
+class DeepSeekSearchResult:
+    """Provider-neutral result returned by the explicit adapter seam."""
+
+    output: str
+    results: tuple[dict[str, str], ...]
+    usage: dict[str, int]
+
+    def as_search_response(self) -> dict[str, object]:
+        """Return a fresh result mapping without provider-specific state."""
+        return {
+            "output": self.output,
+            "results": [dict(result) for result in self.results],
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class _AdapterFailure:
+    """Exception-free transfer object crossing the sensitive operation boundary."""
+
+    category: DeepSeekSearchErrorCategory
+    status_code: int | None = None
+
+
+def _reject_non_finite_json_constant(value: str) -> Never:
+    del value
+    raise ValueError
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError
+    return parsed
+
+
+def _decode_deepseek_response(raw_response: bytes) -> object:
+    """Decode one bounded body with strict UTF-8 and standard JSON numbers."""
+    return json.loads(
+        raw_response.decode("utf-8"),
+        parse_constant=_reject_non_finite_json_constant,
+        parse_float=_parse_finite_json_float,
+    )
+
+
+def _classify_transport_failure(error: BaseException) -> DeepSeekSearchErrorCategory:
+    """Map transport exceptions without inspecting or retaining their text."""
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        return DeepSeekSearchErrorCategory.TIMEOUT
+    if isinstance(error, UpstreamNetworkError):
+        return (
+            DeepSeekSearchErrorCategory.TIMEOUT
+            if "timeout" in type(error).__name__.lower()
+            else DeepSeekSearchErrorCategory.TRANSPORT_ERROR
+        )
+    if isinstance(error, UpstreamConnectionError):
+        return DeepSeekSearchErrorCategory.TRANSPORT_ERROR
+    return DeepSeekSearchErrorCategory.CONNECTION_ERROR
+
+
+def _raise_adapter_failure(failure: _AdapterFailure) -> Never:
+    """Raise a fresh public error after sensitive operation locals are gone."""
+    if failure.category is DeepSeekSearchErrorCategory.CREDENTIAL_COLLISION:
+        raise DeepSeekResponsesSearchCredentialCollisionError from None
+    raise DeepSeekSearchError(
+        failure.category,
+        status_code=failure.status_code,
+    ) from None
+
+
+async def _execute_deepseek_request(
+    *,
+    credential: str,
+    request: DeepSeekResponsesSearchRequest,
+    redactor: SecretRedactor,
+) -> DeepSeekSearchResult | _AdapterFailure:
+    """Run one bounded request and return only safe values or a failure token."""
+    raw_response: bytes | None = None
+    decoded_response: object | None = None
+    try:
+        headers = {
+            "Authorization": f"Bearer {credential}",
+            "Content-Type": "application/json",
+        }
+        async with AsyncClient(
+            timeout=request.timeout,
+            max_redirects=0,
+        ) as client:
+            response = await request_bounded_response(
+                client,
+                "POST",
+                f"{request.origin}/responses",
+                headers=headers,
+                json=request.body,
+                max_success_bytes=DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES,
+                max_error_bytes=DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES,
+                allow_redirects=False,
+            )
+
+        raw_response = response.content
+        if type(raw_response) is not bytes:
+            return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
+        if len(raw_response) > DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES:
+            return _AdapterFailure(DeepSeekSearchErrorCategory.BODY_LIMIT)
+
+        status_code = _bounded_status_code(response.status_code)
+        # The raw publication gate intentionally precedes status/JSON reporting.
+        if _redactor_contains_json_semantic(redactor, raw_response):
+            return _AdapterFailure(DeepSeekSearchErrorCategory.CREDENTIAL_COLLISION)
+        if status_code is None:
+            return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
+        if not 200 <= status_code < 300:
+            return _AdapterFailure(
+                DeepSeekSearchErrorCategory.HTTP_ERROR,
+                status_code=status_code,
+            )
+
+        try:
+            decoded_response = _decode_deepseek_response(raw_response)
+        except MemoryError:
+            raise
+        except Exception:
+            return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_JSON)
+        normalized = _publish_after_raw_gate(
+            response=decoded_response,
+            citation_limit=request.citation_limit,
+            redactor=redactor,
+        )
+        return _normalize_adapter_result(normalized)
+    except asyncio.CancelledError:
+        raise
+    except MemoryError:
+        raise
+    except DeepSeekResponsesSearchCredentialCollisionError:
+        return _AdapterFailure(DeepSeekSearchErrorCategory.CREDENTIAL_COLLISION)
+    except DeepSeekResponsesSearchParseError:
+        return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
+    except UpstreamResponseTooLargeError:
+        return _AdapterFailure(DeepSeekSearchErrorCategory.BODY_LIMIT)
+    except Exception as error:
+        return _AdapterFailure(_classify_transport_failure(error))
+    finally:
+        # Do not leave large/sensitive values in this frame if a debugger keeps it.
+        raw_response = None
+        decoded_response = None
+        credential = ""
+        redactor = cast(SecretRedactor, None)
+        request = cast(DeepSeekResponsesSearchRequest, None)
+        response = None
+        headers = None
+        client = None
+
+
+def _normalize_adapter_result(
+    normalized: dict[str, object],
+) -> DeepSeekSearchResult | _AdapterFailure:
+    """Copy the accepted publication value into the explicit result type."""
+    output = normalized["output"]
+    results_value = normalized["results"]
+    usage_value = normalized["usage"]
+    if (
+        type(output) is not str
+        or type(results_value) is not list
+        or type(usage_value) is not dict
+    ):
+        return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
+    results: list[dict[str, str]] = []
+    for result in results_value:
+        if type(result) is not dict or any(
+            type(result.get(field)) is not str for field in ("title", "url", "content")
+        ):
+            return _AdapterFailure(DeepSeekSearchErrorCategory.INVALID_SHAPE)
+        result = cast(dict[str, object], result)
+        results.append(
+            {
+                "title": cast(str, result["title"]),
+                "url": cast(str, result["url"]),
+                "content": cast(str, result["content"]),
+            }
+        )
+    usage = {
+        key: value
+        for key, value in usage_value.items()
+        if type(key) is str and type(value) is int
+    }
+    return DeepSeekSearchResult(
+        output=output,
+        results=tuple(results),
+        usage=usage,
+    )
+
+
+class DeepSeekResponsesSearchClient:
+    """Explicit, single-attempt client for official DeepSeek Responses search."""
+
+    def __init__(
+        self,
+        credential: object = None,
+        *,
+        api_key: object | None = None,
+        origin: object = DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
+        base_url: object | None = None,
+        timeout: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT,
+    ) -> None:
+        if api_key is not None:
+            if credential is not None:
+                raise ValueError("DeepSeek Responses credential was supplied twice")
+            credential = api_key
+        if type(credential) is not str or not credential.strip():
+            raise ValueError("DeepSeek Responses credential must be a non-empty string")
+        if base_url is not None:
+            origin = base_url
+        self._credential = credential
+        self._origin = normalize_deepseek_responses_origin(origin)
+        self._timeout = _normalize_timeout(timeout)
+        self._redactor = SecretRedactor((credential,))
+
+    async def execute(
+        self,
+        query: object,
+        *,
+        model: object = DEEPSEEK_RESPONSES_SEARCH_MODEL,
+        max_output_tokens: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS,
+        citation_limit: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+    ) -> DeepSeekSearchResult:
+        """Perform at most one request and return a normalized result."""
+        # Constructing the request is deliberately before client/transport creation.
+        request = build_deepseek_responses_search_request(
+            query=query,
+            origin=self._origin,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            citation_limit=citation_limit,
+            timeout=self._timeout,
+        )
+        outcome = await _execute_deepseek_request(
+            credential=self._credential,
+            request=request,
+            redactor=self._redactor,
+        )
+        if isinstance(outcome, _AdapterFailure):
+            _raise_adapter_failure(outcome)
+        return outcome
+
+    async def search(
+        self,
+        query: object,
+        *,
+        model: object = DEEPSEEK_RESPONSES_SEARCH_MODEL,
+        max_output_tokens: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS,
+        citation_limit: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+    ) -> dict[str, object]:
+        """Perform one request and return the provider-neutral search mapping."""
+        result = await self.execute(
+            query,
+            model=model,
+            max_output_tokens=max_output_tokens,
+            citation_limit=citation_limit,
+        )
+        return result.as_search_response()
+
+
 __all__ = [
     "DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN",
     "DEEPSEEK_RESPONSES_SEARCH_MODEL",
     "DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES",
     "DEEPSEEK_RESPONSES_SEARCH_TOKEN_LIMITS",
+    "DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT",
+    "DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS",
+    "DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT",
+    "DeepSeekCredentialCollisionError",
     "DeepSeekResponsesSearchCredentialCollisionError",
     "DeepSeekResponsesSearchParseError",
     "DeepSeekResponsesSearchRequest",
+    "DeepSeekSearchError",
+    "DeepSeekSearchErrorCategory",
+    "DeepSeekSearchResult",
+    "DeepSeekResponsesSearchClient",
     "build_deepseek_responses_search_request",
     "normalize_deepseek_responses_origin",
     "parse_deepseek_responses_search_response",
