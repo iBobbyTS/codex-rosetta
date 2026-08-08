@@ -17,18 +17,13 @@ from typing import Final
 
 def _load_origin_contract() -> ModuleType:
     """Load the adjacent pure origin module without importing the application."""
-    try:
-        import deepseek_search_origin as imported_origin
-
-        origin_module: ModuleType = imported_origin
-    except ModuleNotFoundError:
-        path = Path(__file__).with_name("deepseek_search_origin.py")
-        spec = importlib.util.spec_from_file_location("deepseek_search_origin", path)
-        if spec is None or spec.loader is None:
-            raise ImportError("DeepSeek origin contract is unavailable") from None
-        origin_module = importlib.util.module_from_spec(spec)
-        sys.modules.setdefault("deepseek_search_origin", origin_module)
-        spec.loader.exec_module(origin_module)
+    path = Path(__file__).with_name("deepseek_search_origin.py")
+    spec = importlib.util.spec_from_file_location("deepseek_search_origin", path)
+    if spec is None or spec.loader is None:
+        raise ImportError("DeepSeek origin contract is unavailable") from None
+    origin_module = importlib.util.module_from_spec(spec)
+    sys.modules["deepseek_search_origin"] = origin_module
+    spec.loader.exec_module(origin_module)
     return origin_module
 
 
