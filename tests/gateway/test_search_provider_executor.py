@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import socket
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -14,6 +16,7 @@ from codex_rosetta.gateway.search_provider_candidates import (
     SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
+    build_search_provider_candidates,
 )
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderAttemptCategory,
@@ -45,6 +48,7 @@ from codex_rosetta.gateway.search_provider_executor import (
     _map_local_error,
 )
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamTransport
+from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
 from codex_rosetta.gateway.web_search import (
     TavilyRequestError,
     TavilyRequestErrorCategory,
@@ -114,6 +118,75 @@ class FakeDeepSeekClient:
         if isinstance(self.value, BaseException):
             raise self.value
         return self.value
+
+
+def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
+    provider = ProviderInfo(
+        "deepseek",
+        api_key="deepseek-secret",
+        base_url="https://api.deepseek.com",
+        auth_header_fn=openai_auth,
+        url_template="{base_url}/responses",
+    )
+    (candidate,) = build_search_provider_candidates(
+        [
+            {
+                "id": "deepseek",
+                "provider": "deepseek_native_responses",
+                "deepseek_provider": "official",
+            }
+        ],
+        {"official": provider},
+        {},
+        allowed_responses_models=(),
+    )
+    expected = {"output": "Offline answer", "results": []}
+    client = FakeDeepSeekClient(DeepSeekSearchResult("Offline answer", (), {}))
+    factory_calls = []
+    guard_trips = []
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+
+    def factory(credential, origin):
+        factory_calls.append((credential, origin))
+        return client
+
+    def blocked_primitive(name):
+        def blocked(*_args, **_kwargs):
+            guard_trips.append(name)
+            raise AssertionError(f"offline guard blocked {name}")
+
+        return blocked
+
+    async def execute_under_guard():
+        with monkeypatch.context() as guard:
+            guard.setattr(socket, "socket", blocked_primitive("socket.socket"))
+            guard.setattr(socket, "socketpair", blocked_primitive("socket.socketpair"))
+            guard.setattr(subprocess, "Popen", blocked_primitive("subprocess.Popen"))
+            guard.setattr(
+                asyncio,
+                "create_subprocess_exec",
+                blocked_primitive("asyncio.create_subprocess_exec"),
+            )
+            guard.setattr(
+                asyncio,
+                "create_subprocess_shell",
+                blocked_primitive("asyncio.create_subprocess_shell"),
+            )
+            return await SearchProviderExecutor(
+                deepseek_client_factory=factory
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}, [("offline query", WebSearchSettings())]),
+                request_budget=budget,
+            )
+
+    result = run(execute_under_guard())
+
+    assert factory_calls == [("deepseek-secret", "https://api.deepseek.com")]
+    assert len(client.calls) == 1
+    assert budget.external_calls == 1
+    assert result == expected
+    assert guard_trips == []
 
 
 def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
