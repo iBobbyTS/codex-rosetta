@@ -14,6 +14,7 @@ from codex_rosetta.gateway import (
     search_provider_chain_state as search_provider_chain_state_module,
 )
 from codex_rosetta.gateway.search_provider_candidates import (
+    DeepSeekNativeResponsesSearchProviderCandidate,
     TavilySearchProviderCandidate,
 )
 from codex_rosetta.gateway.search_provider_chain import (
@@ -45,6 +46,58 @@ class Clock:
 
 def run(coro: Awaitable[Any]) -> Any:
     return asyncio.run(coro)
+
+
+def _deepseek_candidate(row_id: str) -> DeepSeekNativeResponsesSearchProviderCandidate:
+    return DeepSeekNativeResponsesSearchProviderCandidate(
+        row_id=row_id,
+        deepseek_provider="official",
+        provider_info=object(),
+        identity=f"identity-{row_id}",
+    )
+
+
+def test_deepseek_attempt_failure_cools_once_and_tries_next_candidate():
+    first = _deepseek_candidate("deepseek")
+    second = TavilySearchProviderCandidate("tavily", api_key="secret", identity="two")
+    coordinator = SearchProviderChainCoordinator()
+    calls = []
+
+    async def runner(candidate):
+        calls.append(candidate.row_id)
+        if candidate is first:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.CONNECTION_ERROR
+            )
+        return "ok"
+
+    assert run(coordinator.run((first, second), runner)) == "ok"
+    assert calls == ["deepseek", "tavily"]
+    assert (
+        coordinator.cooldown_reason(first)
+        is SearchProviderAttemptCategory.CONNECTION_ERROR
+    )
+    assert not coordinator.is_cooling(second)
+
+
+def test_deepseek_unknown_control_signal_is_neutral_and_does_not_fail_over():
+    first = _deepseek_candidate("deepseek")
+    second = TavilySearchProviderCandidate("tavily", api_key="secret", identity="two")
+    coordinator = SearchProviderChainCoordinator()
+    signal = MemoryError("stop")
+    calls = []
+
+    async def runner(candidate):
+        calls.append(candidate.row_id)
+        raise signal
+
+    with pytest.raises(MemoryError) as caught:
+        run(coordinator.run((first, second), runner))
+
+    assert caught.value is signal
+    assert calls == ["deepseek"]
+    assert not coordinator.is_cooling(first)
+    assert not coordinator.is_cooling(second)
 
 
 def format_traceback_with_locals(error: BaseException) -> str:

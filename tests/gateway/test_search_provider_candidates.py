@@ -1,16 +1,19 @@
 """Tests for pure web-search candidate construction."""
 
 from dataclasses import FrozenInstanceError
+from types import SimpleNamespace
 
 import pytest
 
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
+    DeepSeekNativeResponsesSearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
     build_search_provider_candidates,
 )
 from codex_rosetta.gateway.search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_PASSTHROUGH_CONTRACT,
     SELF_HOSTED_LOCAL_CONTRACT,
     TAVILY_LOCAL_CONTRACT,
@@ -115,6 +118,206 @@ def test_builds_mixed_candidates_in_exact_order_and_empty_is_immutable():
 )
 def test_persisted_wire_provider_maps_to_one_typed_contract(wire_provider, contract):
     assert contract_for_wire_provider(wire_provider) is contract
+
+
+def test_deepseek_contract_declares_only_hosted_single_query_semantics():
+    assert (
+        contract_for_wire_provider("deepseek_native_responses")
+        is DEEPSEEK_NATIVE_RESPONSES_CONTRACT
+    )
+    assert (
+        DEEPSEEK_NATIVE_RESPONSES_CONTRACT.family
+        is SearchProviderFamily.DEEPSEEK_NATIVE_RESPONSES
+    )
+    assert (
+        DEEPSEEK_NATIVE_RESPONSES_CONTRACT.execution_mode
+        is SearchProviderExecutionMode.NATIVE_RESPONSES_HOSTED_SEARCH
+    )
+    assert DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities == {
+        SearchProviderCapability.SEARCH_QUERY,
+        SearchProviderCapability.NORMALIZED_RESULTS,
+        SearchProviderCapability.REFERENCE_STORAGE,
+    }
+
+
+def test_builds_immutable_secret_safe_deepseek_candidate_in_input_order():
+    provider = _provider(
+        "deepseek",
+        "deepseek-secret",
+        base_url="https://api.deepseek.com/",
+    )
+    rows = [
+        {"id": "tavily", "provider": "tavily", "tavily_api_key": "tvly-key"},
+        {
+            "id": "deepseek",
+            "provider": "deepseek_native_responses",
+            "deepseek_provider": "official",
+        },
+        {"id": "google", "provider": "self_hosted_google"},
+    ]
+
+    candidates = _build(rows, {"official": provider})
+
+    assert [candidate.row_id for candidate in candidates] == [
+        "tavily",
+        "deepseek",
+        "google",
+    ]
+    candidate = candidates[1]
+    assert isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate)
+    assert candidate.deepseek_provider == "official"
+    assert candidate.provider_info is provider
+    assert candidate.model == "deepseek-v4-flash"
+    assert candidate.contract is DEEPSEEK_NATIVE_RESPONSES_CONTRACT
+    assert candidate.safe_view() == {
+        "id": "deepseek",
+        "provider": "deepseek_native_responses",
+        "family": "deepseek_native_responses",
+        "execution_mode": "native_responses_hosted_search",
+    }
+    public = repr(candidate) + repr(candidate.safe_view())
+    assert "deepseek-secret" not in public
+    assert candidate.identity not in public
+    with pytest.raises(FrozenInstanceError):
+        candidate.row_id = "changed"
+
+
+@pytest.mark.parametrize(
+    ("providers", "message"),
+    [
+        ({}, "enabled DeepSeek provider"),
+        (
+            {
+                "official": _provider(
+                    "openai", "secret", base_url="https://api.deepseek.com"
+                )
+            },
+            "literal DeepSeek provider",
+        ),
+        (
+            {
+                "official": _provider(
+                    "deepseek", "secret", base_url="https://proxy.example/v1"
+                )
+            },
+            "official DeepSeek origin",
+        ),
+    ],
+)
+def test_rejects_invalid_deepseek_provider_identity_without_secret_leak(
+    providers, message
+):
+    row = {
+        "id": "deepseek-row",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official",
+    }
+
+    with pytest.raises(ValueError, match=message) as caught:
+        _build([row], providers)
+
+    rendered = str(caught.value)
+    assert "secret" not in rendered
+    assert "hmac-sha256" not in rendered
+
+
+def test_rejects_deepseek_zero_or_multiple_credentials_locally():
+    row = {
+        "id": "deepseek-row",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official",
+    }
+    for credentials in ((), ("one", "two")):
+        provider = SimpleNamespace(
+            name="deepseek",
+            base_url="https://api.deepseek.com",
+            proxy_url=None,
+            allow_redirects=False,
+            credential_values=credentials,
+        )
+        with pytest.raises(ValueError, match="exactly one provider credential"):
+            _build([row], {"official": provider})
+
+
+def test_rejects_duplicate_deepseek_provider_and_cross_family_overlap():
+    provider = _provider("deepseek", "shared", base_url="https://api.deepseek.com")
+    first = {
+        "id": "first",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official",
+    }
+    duplicate = {**first, "id": "second"}
+    with pytest.raises(ValueError, match="repeat DeepSeek provider.*second") as caught:
+        _build([first, duplicate], {"official": provider})
+    assert "shared" not in str(caught.value)
+
+    tavily = {"id": "tavily", "provider": "tavily", "tavily_api_key": "shared"}
+    with pytest.raises(ValueError, match="tavily.*first") as caught:
+        _build([tavily, first], {"official": provider})
+    assert "shared" not in str(caught.value)
+
+    responses = {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "responses_provider": "gpt",
+        "responses_model": "gpt-5.6-sol",
+    }
+    with pytest.raises(ValueError, match="responses.*first") as caught:
+        _build(
+            [responses, first],
+            {"gpt": _provider("openai", "shared"), "official": provider},
+            {"gpt": "responses"},
+        )
+    assert "shared" not in str(caught.value)
+
+    second_provider = _provider(
+        "deepseek", "shared", base_url="https://api.deepseek.com"
+    )
+    second = {**first, "id": "second", "deepseek_provider": "official-two"}
+    with pytest.raises(ValueError, match="first.*second") as caught:
+        _build(
+            [first, second],
+            {"official": provider, "official-two": second_provider},
+        )
+    assert "shared" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "changed_provider",
+    [
+        _provider(
+            "deepseek",
+            "key",
+            base_url="https://api.deepseek.com",
+            proxy_url="http://proxy.example:8080",
+        ),
+        _provider(
+            "deepseek", "key", base_url="https://api.deepseek.com", allow_redirects=True
+        ),
+    ],
+)
+def test_deepseek_identity_binds_effective_transport_configuration(changed_provider):
+    row = {
+        "id": "deepseek",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official",
+    }
+    baseline = _build(
+        [row],
+        {"official": _provider("deepseek", "key", base_url="https://api.deepseek.com")},
+    )[0]
+    equivalent = _build(
+        [row],
+        {
+            "official": _provider(
+                "deepseek", "key", base_url="https://api.deepseek.com/"
+            )
+        },
+    )[0]
+    changed = _build([row], {"official": changed_provider})[0]
+
+    assert baseline.identity == equivalent.identity
+    assert baseline.identity != changed.identity
 
 
 def test_provider_contracts_declare_only_their_supported_semantics():

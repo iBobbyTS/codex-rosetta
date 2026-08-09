@@ -19,10 +19,16 @@ from codex_rosetta.gateway.codex_search import (
     should_use_local_codex_search,
 )
 from codex_rosetta.gateway.downstream_errors import CodexRosettaBlockedError
+from codex_rosetta.gateway.deepseek_responses_search import DeepSeekSearchResult
+from codex_rosetta.gateway.search_provider_candidates import (
+    DeepSeekNativeResponsesSearchProviderCandidate,
+)
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetExceeded,
+    SearchProviderChainCoordinator,
     SearchProviderRequestBudget,
 )
+from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
 from codex_rosetta.gateway.transport._base import (
     UpstreamContentEncodingError,
     UpstreamCredentialCollisionError,
@@ -138,6 +144,105 @@ class _FakeSelfHostedGoogleClient(_FakeBrowserClient):
                 }
             ]
         }
+
+
+class _FakeDeepSeekClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def execute(self, query: str, **kwargs: Any) -> DeepSeekSearchResult:
+        self.calls.append((query, kwargs))
+        return DeepSeekSearchResult(
+            output="DeepSeek answer",
+            results=(
+                {
+                    "title": "Python documentation",
+                    "url": "https://docs.python.org/3/",
+                    "content": "Official Python documentation.",
+                },
+            ),
+            usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+        )
+
+
+def _deepseek_candidate() -> DeepSeekNativeResponsesSearchProviderCandidate:
+    provider_info = type(
+        "ProviderInfoStub",
+        (),
+        {
+            "name": "deepseek",
+            "base_url": "https://api.deepseek.com",
+            "credential_values": ("deepseek-secret",),
+        },
+    )()
+    return DeepSeekNativeResponsesSearchProviderCandidate(
+        row_id="deepseek-row",
+        deepseek_provider="official-deepseek",
+        provider_info=provider_info,
+        identity="deepseek-identity",
+    )
+
+
+def test_deepseek_chain_publishes_answer_references_attribution_and_cache():
+    candidate = _deepseek_candidate()
+    client = _FakeDeepSeekClient()
+    executor = SearchProviderExecutor(deepseek_client_factory=lambda *_: client)
+    coordinator = SearchProviderChainCoordinator()
+    store = CodexSearchReferenceStore()
+    query = "private-query-marker"
+    body = _body({"search_query": [{"q": query}]})
+
+    first = asyncio.run(
+        execute_local_codex_search(
+            body,
+            {},
+            reference_store=store,
+            principal_id="client-a",
+            search_candidates=(candidate,),
+            search_coordinator=coordinator,
+            search_executor=executor,
+        )
+    )
+    second = asyncio.run(
+        execute_local_codex_search(
+            body,
+            {},
+            reference_store=store,
+            principal_id="client-a",
+            search_candidates=(candidate,),
+            search_coordinator=coordinator,
+            search_executor=executor,
+        )
+    )
+
+    assert client.calls == [
+        (
+            query,
+            {
+                "model": "deepseek-v4-flash",
+                "max_output_tokens": 1024,
+                "citation_limit": 5,
+            },
+        )
+    ]
+    assert "DeepSeek answer" in first.output
+    assert "[turn0search0] Python documentation" in first.output
+    assert first.search_reference_count == 1
+    assert first.search_cache_hit is False
+    assert second.output == first.output
+    assert second.search_cache_hit is True
+    assert first.attribution is not None
+    assert first.attribution.provider_name == "official-deepseek"
+    assert first.attribution.target_provider == "openai_responses"
+    assert first.attribution.model == "deepseek-v4-flash"
+    trace = first.trace_summary()
+    assert trace["executor"] == "deepseek_native_responses"
+    assert trace["candidate_id"] == "deepseek-row"
+    assert trace["candidate_provider"] == "deepseek_native_responses"
+    rendered = repr(trace)
+    assert "deepseek-secret" not in rendered
+    assert "deepseek-identity" not in rendered
+    assert query not in rendered
 
 
 def _body(commands: dict[str, Any], **extra: Any) -> dict[str, Any]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -9,6 +10,7 @@ import pytest
 
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
+    DeepSeekNativeResponsesSearchProviderCandidate,
     SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
@@ -24,11 +26,17 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderRequestBudget,
 )
 from codex_rosetta.gateway.search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_PASSTHROUGH_CONTRACT,
     SearchProviderCapability,
     SearchProviderContract,
     SearchProviderExecutionMode,
     SearchProviderFamily,
+)
+from codex_rosetta.gateway.deepseek_responses_search import (
+    DeepSeekSearchError,
+    DeepSeekSearchErrorCategory,
+    DeepSeekSearchResult,
 )
 from codex_rosetta.gateway.search_provider_executor import (
     SearchProviderExecutor,
@@ -74,6 +82,424 @@ def configured_responses_candidate():
     object.__setattr__(candidate, "identity", "responses-identity")
     object.__setattr__(candidate, "contract", GPT_PASSTHROUGH_CONTRACT)
     return candidate
+
+
+def deepseek_candidate(*, credential: str = "deepseek-secret"):
+    candidate = object.__new__(DeepSeekNativeResponsesSearchProviderCandidate)
+    object.__setattr__(candidate, "row_id", "deepseek")
+    object.__setattr__(candidate, "deepseek_provider", "official")
+    object.__setattr__(
+        candidate,
+        "provider_info",
+        SimpleNamespace(
+            name="deepseek",
+            base_url="https://api.deepseek.com",
+            credential_values=(credential,),
+        ),
+    )
+    object.__setattr__(candidate, "provider", "deepseek_native_responses")
+    object.__setattr__(candidate, "model", "deepseek-v4-flash")
+    object.__setattr__(candidate, "identity", "deepseek-identity")
+    object.__setattr__(candidate, "contract", DEEPSEEK_NATIVE_RESPONSES_CONTRACT)
+    return candidate
+
+
+class FakeDeepSeekClient:
+    def __init__(self, value):
+        self.value = value
+        self.calls = []
+
+    async def execute(self, query, **kwargs):
+        self.calls.append((query, kwargs))
+        if isinstance(self.value, BaseException):
+            raise self.value
+        return self.value
+
+
+def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
+    result_value = DeepSeekSearchResult(
+        output="DeepSeek answer",
+        results=(
+            {
+                "title": "Python",
+                "url": "https://python.org/",
+                "content": "Official site",
+            },
+        ),
+        usage={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+    )
+    client = FakeDeepSeekClient(result_value)
+    factories = []
+
+    def factory(credential, origin):
+        factories.append((credential, origin))
+        return client
+
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+    body = {
+        "model": "caller",
+        "commands": [{"type": "private", "payload": "never-forward"}],
+        "history": ["private"],
+    }
+    request = SearchRequest.from_body(
+        body,
+        [("latest Python", WebSearchSettings())],
+        requires_reference_storage=True,
+    )
+
+    result = run(
+        SearchProviderExecutor(deepseek_client_factory=factory).execute(
+            deepseek_candidate(), request, request_budget=budget
+        )
+    )
+
+    assert factories == [("deepseek-secret", "https://api.deepseek.com")]
+    assert client.calls == [
+        (
+            "latest Python",
+            {
+                "model": "deepseek-v4-flash",
+                "max_output_tokens": 1024,
+                "citation_limit": 5,
+            },
+        )
+    ]
+    assert budget.external_calls == 1
+    assert result == {
+        "output": "DeepSeek answer",
+        "results": [
+            {
+                "title": "Python",
+                "url": "https://python.org/",
+                "content": "Official site",
+            }
+        ],
+    }
+    assert request.body == body
+
+
+@pytest.mark.parametrize(
+    "search_request",
+    [
+        SearchRequest.from_body({}, []),
+        SearchRequest.from_body(
+            {}, [("one", WebSearchSettings()), ("two", WebSearchSettings())]
+        ),
+        SearchRequest.from_body(
+            {}, [("one", WebSearchSettings(include_domains=("python.org",)))]
+        ),
+    ],
+)
+def test_deepseek_local_request_conflicts_are_terminal_before_effects(search_request):
+    factories = []
+    budget = SearchProviderRequestBudget()
+
+    with pytest.raises(SearchProviderTerminalError):
+        run(
+            SearchProviderExecutor(
+                deepseek_client_factory=lambda *args: factories.append(args)
+            ).execute(deepseek_candidate(), search_request, request_budget=budget)
+        )
+
+    assert factories == []
+    assert budget.external_calls == 0
+
+
+def test_deepseek_contract_substitution_is_terminal_before_effects():
+    candidate = deepseek_candidate()
+    object.__setattr__(candidate, "contract", GPT_PASSTHROUGH_CONTRACT)
+    budget = SearchProviderRequestBudget()
+    factories = []
+
+    with pytest.raises(SearchProviderTerminalError):
+        run(
+            SearchProviderExecutor(
+                deepseek_client_factory=lambda *args: factories.append(args)
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                request_budget=budget,
+            )
+        )
+
+    assert factories == []
+    assert budget.external_calls == 0
+
+
+@pytest.mark.parametrize(
+    "provider_info",
+    [
+        SimpleNamespace(
+            name="openai",
+            base_url="https://api.deepseek.com",
+            credential_values=("secret",),
+        ),
+        SimpleNamespace(
+            name="deepseek",
+            base_url="https://proxy.example/v1",
+            credential_values=("secret",),
+        ),
+        SimpleNamespace(
+            name="deepseek",
+            base_url="https://api.deepseek.com",
+            credential_values=(),
+        ),
+        SimpleNamespace(
+            name="deepseek",
+            base_url="https://api.deepseek.com",
+            credential_values=("one", "two"),
+        ),
+    ],
+)
+def test_deepseek_invalid_candidate_state_is_terminal_before_effects(provider_info):
+    candidate = deepseek_candidate()
+    object.__setattr__(candidate, "provider_info", provider_info)
+    factories = []
+    budget = SearchProviderRequestBudget()
+
+    with pytest.raises(SearchProviderTerminalError):
+        run(
+            SearchProviderExecutor(
+                deepseek_client_factory=lambda *args: factories.append(args)
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                request_budget=budget,
+            )
+        )
+
+    assert factories == []
+    assert budget.external_calls == 0
+
+
+def test_deepseek_exhausted_budget_does_not_enter_client_or_retry():
+    client = FakeDeepSeekClient(DeepSeekSearchResult("unused", (), {"total_tokens": 0}))
+    factories = []
+
+    def factory(*args):
+        factories.append(args)
+        return client
+
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+
+    async def consume() -> None:
+        return None
+
+    run(budget.run_external_call(consume))
+    with pytest.raises(SearchProviderBudgetExceeded):
+        run(
+            SearchProviderExecutor(deepseek_client_factory=factory).execute(
+                deepseek_candidate(),
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                request_budget=budget,
+            )
+        )
+
+    assert len(factories) == 1
+    assert client.calls == []
+    assert budget.external_calls == 1
+
+
+def test_deepseek_invalid_normalized_mapping_is_attempt_failure():
+    client = FakeDeepSeekClient(
+        SimpleNamespace(as_search_response=lambda: {"output": 123, "results": []})
+    )
+    budget = SearchProviderRequestBudget()
+
+    with pytest.raises(SearchProviderAttemptError) as caught:
+        run(
+            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+                deepseek_candidate(),
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                request_budget=budget,
+            )
+        )
+
+    assert caught.value.category is SearchProviderAttemptCategory.INVALID_RESPONSE
+    assert budget.external_calls == 1
+    assert len(client.calls) == 1
+
+
+def test_deepseek_factory_signal_and_unknown_client_error_propagate_unchanged():
+    factory_signal = KeyboardInterrupt("factory")
+
+    def failed_factory(*_args):
+        raise factory_signal
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        run(
+            SearchProviderExecutor(deepseek_client_factory=failed_factory).execute(
+                deepseek_candidate(),
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            )
+        )
+    assert caught.value is factory_signal
+
+    client_error = RuntimeError("unknown")
+    client = FakeDeepSeekClient(client_error)
+    with pytest.raises(RuntimeError) as caught:
+        run(
+            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+                deepseek_candidate(),
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            )
+        )
+    assert caught.value is client_error
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("category", "status", "expected", "quota"),
+    [
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            400,
+            SearchProviderTerminalError,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            422,
+            SearchProviderTerminalError,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            402,
+            SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            True,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            401,
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            403,
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            429,
+            SearchProviderAttemptCategory.HTTP_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            500,
+            SearchProviderAttemptCategory.UPSTREAM_FAILURE,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.CONNECTION_ERROR,
+            None,
+            SearchProviderAttemptCategory.CONNECTION_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.TRANSPORT_ERROR,
+            None,
+            SearchProviderAttemptCategory.CONNECTION_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.TIMEOUT,
+            None,
+            SearchProviderAttemptCategory.CONNECTION_ERROR,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.INVALID_JSON,
+            None,
+            SearchProviderAttemptCategory.INVALID_RESPONSE,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.INVALID_SHAPE,
+            None,
+            SearchProviderAttemptCategory.INVALID_RESPONSE,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.BODY_LIMIT,
+            None,
+            SearchProviderAttemptCategory.INVALID_RESPONSE,
+            False,
+        ),
+        (
+            DeepSeekSearchErrorCategory.CREDENTIAL_COLLISION,
+            None,
+            SearchProviderAttemptCategory.INVALID_RESPONSE,
+            False,
+        ),
+    ],
+)
+def test_deepseek_adapter_error_mapping(category, status, expected, quota):
+    client = FakeDeepSeekClient(DeepSeekSearchError(category, status_code=status))
+    budget = SearchProviderRequestBudget()
+
+    if expected is SearchProviderTerminalError:
+        with pytest.raises(
+            SearchProviderTerminalError, match="Search request rejected"
+        ):
+            run(
+                SearchProviderExecutor(
+                    deepseek_client_factory=lambda *_: client
+                ).execute(
+                    deepseek_candidate(),
+                    SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                    request_budget=budget,
+                )
+            )
+    else:
+        with pytest.raises(SearchProviderAttemptError) as caught:
+            run(
+                SearchProviderExecutor(
+                    deepseek_client_factory=lambda *_: client
+                ).execute(
+                    deepseek_candidate(),
+                    SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                    request_budget=budget,
+                )
+            )
+        assert caught.value.category is expected
+        assert caught.value.quota_exhausted is quota
+    assert budget.external_calls == 1
+    assert len(client.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "signal",
+    [
+        asyncio.CancelledError("cancel"),
+        KeyboardInterrupt("keyboard"),
+        SystemExit("exit"),
+        MemoryError("memory"),
+    ],
+)
+def test_deepseek_control_signals_propagate_identity_without_retry(signal):
+    client = FakeDeepSeekClient(signal)
+    with pytest.raises(type(signal)) as caught:
+        run(
+            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+                deepseek_candidate(),
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            )
+        )
+    assert caught.value is signal
+    assert len(client.calls) == 1
+
+
+def test_deepseek_runtime_integration_does_not_import_offline_harness_helpers():
+    combined = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in Path("src/codex_rosetta").rglob("*.py")
+    )
+    assert "deepseek_search_evidence" not in combined
+    assert "deepseek_web_search_smoke" not in combined
 
 
 def test_self_hosted_replays_all_queries_and_merges_results():

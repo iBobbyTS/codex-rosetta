@@ -157,6 +157,15 @@ SELF_HOSTED_LOCAL_CONTRACT = SearchProviderContract.create(
     SearchProviderExecutionMode.LOCAL_QUERY_ADAPTER,
     LOCAL_QUERY_CAPABILITIES,
 )
+DEEPSEEK_NATIVE_RESPONSES_CONTRACT = SearchProviderContract.create(
+    SearchProviderFamily.DEEPSEEK_NATIVE_RESPONSES,
+    SearchProviderExecutionMode.NATIVE_RESPONSES_HOSTED_SEARCH,
+    (
+        SearchProviderCapability.SEARCH_QUERY,
+        SearchProviderCapability.NORMALIZED_RESULTS,
+        SearchProviderCapability.REFERENCE_STORAGE,
+    ),
+)
 
 
 def projection_capabilities(
@@ -232,4 +241,6 @@ def contract_for_wire_provider(provider: str) -> SearchProviderContract:
         "self_hosted_bing_browser",
     }:
         return SELF_HOSTED_LOCAL_CONTRACT
+    if provider == "deepseek_native_responses":
+        return DEEPSEEK_NATIVE_RESPONSES_CONTRACT
     raise ValueError(f"unknown web search provider type: {provider!r}")

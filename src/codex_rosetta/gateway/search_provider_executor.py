@@ -11,11 +11,23 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Never, Protocol
 
 from .downstream_errors import CodexRosettaBlockedError
+from .deepseek_responses_search import (
+    DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
+    DEEPSEEK_RESPONSES_SEARCH_MODEL,
+    DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+    DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS,
+    DeepSeekResponsesSearchClient,
+    DeepSeekSearchError,
+    DeepSeekSearchErrorCategory,
+    DeepSeekSearchResult,
+    normalize_deepseek_responses_origin,
+)
 from .search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
+    DeepSeekNativeResponsesSearchProviderCandidate,
     SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
@@ -29,6 +41,7 @@ from .search_provider_chain import (
     SearchProviderRequestBudget,
 )
 from .search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_PASSTHROUGH_CONTRACT,
     SELF_HOSTED_LOCAL_CONTRACT,
     TAVILY_LOCAL_CONTRACT,
@@ -101,6 +114,27 @@ class SearchResponseClient(Protocol):
     ) -> Any: ...
 
 
+class _DeepSeekSearchClient(Protocol):
+    async def execute(
+        self,
+        query: object,
+        *,
+        model: object,
+        max_output_tokens: object,
+        citation_limit: object,
+    ) -> DeepSeekSearchResult: ...
+
+
+class _DeepSeekSearchClientFactory(Protocol):
+    def __call__(self, credential: str, origin: str) -> _DeepSeekSearchClient: ...
+
+
+def _default_deepseek_client_factory(
+    credential: str, origin: str
+) -> _DeepSeekSearchClient:
+    return DeepSeekResponsesSearchClient(credential, origin=origin)
+
+
 def _validate_response(value: Any) -> dict[str, Any]:
     if not isinstance(value, dict) or not isinstance(value.get("output"), str):
         raise SearchProviderAttemptError(SearchProviderAttemptCategory.INVALID_RESPONSE)
@@ -133,7 +167,7 @@ def _validate_query_outputs(value: dict[str, Any], expected: int) -> dict[str, A
 
 
 class SearchProviderExecutor:
-    """Execute Tavily, self-hosted, or configured Responses candidates once."""
+    """Execute one admitted search-provider candidate."""
 
     def __init__(
         self,
@@ -144,6 +178,7 @@ class SearchProviderExecutor:
         responses_client: SearchResponseClient | None = None,
         responses_transport: UpstreamTransport | None = None,
         responses_extra_headers: Mapping[str, str] | None = None,
+        deepseek_client_factory: _DeepSeekSearchClientFactory | None = None,
     ) -> None:
         self._tavily_client = tavily_client
         self._self_hosted_client = self_hosted_client
@@ -155,6 +190,9 @@ class SearchProviderExecutor:
             else None
         )
         self._responses_extra_headers = dict(responses_extra_headers or {})
+        self._deepseek_client_factory = (
+            deepseek_client_factory or _default_deepseek_client_factory
+        )
 
     async def execute(
         self,
@@ -178,6 +216,12 @@ class SearchProviderExecutor:
             client = self._self_hosted_client
             candidate_client = self._candidate_self_hosted_client
             self_hosted_provider = candidate.provider
+        elif isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate):
+            return await self._execute_deepseek(
+                candidate,
+                snapshot,
+                request_budget=request_budget,
+            )
         else:
             body = copy.deepcopy(snapshot.body)
             body["model"] = candidate.responses_model
@@ -238,6 +282,38 @@ class SearchProviderExecutor:
         if not outputs:
             return {"output": "", "results": []}
         return _merge_results(outputs)
+
+    async def _execute_deepseek(
+        self,
+        candidate: DeepSeekNativeResponsesSearchProviderCandidate,
+        request: SearchRequest,
+        *,
+        request_budget: SearchProviderRequestBudget | None,
+    ) -> dict[str, Any]:
+        """Execute one already-validated DeepSeek hosted-search candidate."""
+        credential = candidate.provider_info.credential_values[0]
+        client = self._deepseek_client_factory(
+            credential, DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
+        )
+        query = request.queries[0][0]
+
+        async def operation() -> DeepSeekSearchResult:
+            return await client.execute(
+                query,
+                model=DEEPSEEK_RESPONSES_SEARCH_MODEL,
+                max_output_tokens=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS,
+                citation_limit=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+            )
+
+        try:
+            result = await (
+                request_budget.run_external_call(operation)
+                if request_budget
+                else operation()
+            )
+        except DeepSeekSearchError as exc:
+            _map_deepseek_error(exc)
+        return _validate_response(result.as_search_response())
 
     async def _call_responses(
         self,
@@ -340,6 +416,44 @@ def _validate_candidate_execution_contract(  # noqa: C901
             required_capabilities = required_capabilities | frozenset(
                 {SearchProviderCapability.MULTI_QUERY}
             )
+    elif isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate):
+        expected = DEEPSEEK_NATIVE_RESPONSES_CONTRACT
+        required_capabilities = frozenset(
+            {
+                SearchProviderCapability.SEARCH_QUERY,
+                SearchProviderCapability.NORMALIZED_RESULTS,
+            }
+        )
+        if request.requires_reference_storage:
+            required_capabilities = required_capabilities | frozenset(
+                {SearchProviderCapability.REFERENCE_STORAGE}
+            )
+        if len(request.queries) != 1:
+            raise SearchProviderTerminalError(
+                "DeepSeek search requires exactly one query"
+            )
+        query, settings = request.queries[0]
+        if not isinstance(query, str) or not isinstance(settings, WebSearchSettings):
+            raise SearchProviderTerminalError("Search request is invalid")
+        provider_info = candidate.provider_info
+        try:
+            credentials = provider_info.credential_values
+            official_origin = normalize_deepseek_responses_origin(
+                provider_info.base_url
+            )
+        except AttributeError, TypeError, ValueError:
+            raise SearchProviderTerminalError(
+                "DeepSeek search provider is invalid"
+            ) from None
+        if (
+            provider_info.name != "deepseek"
+            or official_origin != DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
+            or len(credentials) != 1
+            or type(credentials[0]) is not str
+            or not credentials[0].strip()
+            or candidate.model != DEEPSEEK_RESPONSES_SEARCH_MODEL
+        ):
+            raise SearchProviderTerminalError("DeepSeek search provider is invalid")
     else:
         raise SearchProviderTerminalError("Unsupported search provider candidate")
 
@@ -354,6 +468,10 @@ def _validate_candidate_execution_contract(  # noqa: C901
         raise SearchProviderTerminalError(
             "Search provider capabilities are insufficient"
         )
+    if isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate) and (
+        contract is not DEEPSEEK_NATIVE_RESPONSES_CONTRACT
+    ):
+        raise SearchProviderTerminalError("Search provider contract is invalid")
     if any(settings.include_domains for _, settings in request.queries):
         if SearchProviderCapability.DOMAIN_FILTER not in contract.capabilities:
             raise SearchProviderTerminalError(
@@ -373,6 +491,44 @@ def _validate_candidate_execution_contract(  # noqa: C901
                 settings, WebSearchSettings
             ):
                 raise SearchProviderTerminalError("Search request is invalid")
+
+
+def _map_deepseek_error(exc: DeepSeekSearchError) -> Never:
+    """Map one accepted adapter failure to existing chain categories."""
+    if exc.category is DeepSeekSearchErrorCategory.HTTP_ERROR:
+        status = exc.status_code
+        if status in {400, 422}:
+            raise SearchProviderTerminalError("Search request rejected") from None
+        if status == 402:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                quota_exhausted=True,
+            ) from None
+        if status is not None and status >= 500:
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.UPSTREAM_FAILURE
+            ) from None
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.HTTP_ERROR
+        ) from None
+    if exc.category in {
+        DeepSeekSearchErrorCategory.CONNECTION_ERROR,
+        DeepSeekSearchErrorCategory.TRANSPORT_ERROR,
+        DeepSeekSearchErrorCategory.TIMEOUT,
+    }:
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.CONNECTION_ERROR
+        ) from None
+    if exc.category in {
+        DeepSeekSearchErrorCategory.INVALID_JSON,
+        DeepSeekSearchErrorCategory.INVALID_SHAPE,
+        DeepSeekSearchErrorCategory.BODY_LIMIT,
+        DeepSeekSearchErrorCategory.CREDENTIAL_COLLISION,
+    }:
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.INVALID_RESPONSE
+        ) from None
+    raise exc
 
 
 def _map_local_error(exc: Exception) -> None:

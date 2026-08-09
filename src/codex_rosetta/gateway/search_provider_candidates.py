@@ -9,7 +9,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 
 from codex_rosetta.observability.redaction import secret_fingerprint
 
+from .deepseek_responses_search import (
+    DEEPSEEK_RESPONSES_SEARCH_MODEL,
+    normalize_deepseek_responses_origin,
+)
 from .search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_PASSTHROUGH_CONTRACT,
     SELF_HOSTED_LOCAL_CONTRACT,
     TAVILY_LOCAL_CONTRACT,
@@ -109,10 +114,36 @@ class SelfHostedSearchProviderCandidate:
         return _safe_view(self.row_id, self.provider, self.contract)
 
 
+@dataclass(frozen=True, slots=True)
+class DeepSeekNativeResponsesSearchProviderCandidate:
+    """One official DeepSeek Responses hosted-search candidate."""
+
+    row_id: str
+    deepseek_provider: str
+    provider_info: ProviderInfo = field(repr=False, compare=False)
+    provider: Literal["deepseek_native_responses"] = "deepseek_native_responses"
+    model: Literal["deepseek-v4-flash"] = "deepseek-v4-flash"
+    identity: str = field(repr=False, default="")
+    contract: SearchProviderContract = field(
+        repr=False, compare=False, default=DEEPSEEK_NATIVE_RESPONSES_CONTRACT
+    )
+
+    def __post_init__(self) -> None:
+        if self.contract is not DEEPSEEK_NATIVE_RESPONSES_CONTRACT:
+            raise ValueError("DeepSeek candidate has an incompatible provider contract")
+        if self.model != DEEPSEEK_RESPONSES_SEARCH_MODEL:
+            raise ValueError("DeepSeek candidate has an incompatible search model")
+
+    def safe_view(self) -> dict[str, str]:
+        """Return the candidate fields safe for diagnostic serialization."""
+        return _safe_view(self.row_id, self.provider, self.contract)
+
+
 type SearchProviderCandidate = (
     TavilySearchProviderCandidate
     | ConfiguredResponsesSearchProviderCandidate
     | SelfHostedSearchProviderCandidate
+    | DeepSeekNativeResponsesSearchProviderCandidate
 )
 type SelfHostedProviderType = Literal[
     "self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"
@@ -231,6 +262,60 @@ def _self_hosted_candidate(
     )
 
 
+def _deepseek_native_responses_candidate(
+    row: Mapping[str, Any],
+    row_id: str,
+    providers: Mapping[str, ProviderInfo],
+    seen_providers: set[str],
+) -> tuple[DeepSeekNativeResponsesSearchProviderCandidate, tuple[str, ...]]:
+    """Build one official DeepSeek candidate without activating a client."""
+    provider_name = str(row["deepseek_provider"])
+    if provider_name in seen_providers:
+        raise ValueError(
+            "config: web search provider rows must not repeat DeepSeek "
+            f"provider {provider_name!r}; duplicate row {row_id!r}"
+        )
+    seen_providers.add(provider_name)
+    provider_info = providers.get(provider_name)
+    if provider_info is None:
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must name an enabled DeepSeek provider"
+        )
+    if provider_info.name != "deepseek":
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must name a literal DeepSeek provider"
+        )
+    try:
+        normalize_deepseek_responses_origin(provider_info.base_url)
+    except ValueError:
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must use the official DeepSeek origin"
+        ) from None
+    credentials = provider_info.credential_values
+    if (
+        len(credentials) != 1
+        or type(credentials[0]) is not str
+        or not credentials[0].strip()
+    ):
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must resolve exactly one provider credential"
+        )
+    candidate = DeepSeekNativeResponsesSearchProviderCandidate(
+        row_id=row_id,
+        deepseek_provider=provider_name,
+        provider_info=provider_info,
+        identity=secret_fingerprint(
+            _identity_domain(row, provider_info=provider_info), credentials
+        ),
+        contract=contract_for_wire_provider("deepseek_native_responses"),
+    )
+    return candidate, credentials
+
+
 def build_search_provider_candidates(
     rows: Sequence[Mapping[str, Any]],
     providers: Mapping[str, ProviderInfo],
@@ -257,6 +342,7 @@ def build_search_provider_candidates(
     credential_owners: dict[str, str] = {}
     seen_self_hosted: set[str] = set()
     seen_responses_providers: set[str] = set()
+    seen_deepseek_providers: set[str] = set()
 
     for row in rows:
         row_id = str(row["id"])
@@ -280,6 +366,13 @@ def build_search_provider_candidates(
                 provider_api_types,
                 allowed_responses_models,
                 seen_responses_providers,
+            )
+        elif provider_type == "deepseek_native_responses":
+            candidate, credentials = _deepseek_native_responses_candidate(
+                row,
+                row_id,
+                providers,
+                seen_deepseek_providers,
             )
         else:
             candidate = _self_hosted_candidate(

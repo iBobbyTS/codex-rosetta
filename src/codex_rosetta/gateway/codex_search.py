@@ -40,6 +40,7 @@ from .search_provider_chain import (
 )
 from .search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
+    DeepSeekNativeResponsesSearchProviderCandidate,
     SearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
     TavilySearchProviderCandidate,
@@ -179,6 +180,8 @@ class CodexSearchBridgeResult:
         )
         if self.search_provider == "configured_responses_provider":
             executor = "configured_responses"
+        elif self.search_provider == "deepseek_native_responses":
+            executor = "deepseek_native_responses"
         elif (
             self.search_provider in SELF_HOSTED_WEB_SEARCH_PROVIDERS
             and self.search_count
@@ -621,7 +624,11 @@ async def _execute_search_queries(  # noqa: C901
                     "results": merged.get("results", []),
                 },
                 output_is_answer=isinstance(
-                    successful_candidate, ConfiguredResponsesSearchProviderCandidate
+                    successful_candidate,
+                    (
+                        ConfiguredResponsesSearchProviderCandidate,
+                        DeepSeekNativeResponsesSearchProviderCandidate,
+                    ),
                 ),
             )
             for index, (query, _) in enumerate(queries)
@@ -767,6 +774,9 @@ def _candidate_attribution(
     if isinstance(candidate, ConfiguredResponsesSearchProviderCandidate):
         provider_name = candidate.responses_provider
         model = candidate.responses_model
+    elif isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate):
+        provider_name = candidate.deepseek_provider
+        model = candidate.model
     elif isinstance(candidate, TavilySearchProviderCandidate):
         provider_name = "tavily"
         model = "tavily"
