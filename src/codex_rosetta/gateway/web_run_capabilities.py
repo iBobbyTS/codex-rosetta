@@ -12,7 +12,7 @@ from typing import Any
 from .search_provider_contract import (
     SearchProviderCapability,
     SearchProviderExecutionMode,
-    is_mixed_query_only_capability_set,
+    requires_exclusive_search_command,
     WEB_RUN_BASE_COMMAND_FIELDS,
     WEB_RUN_DESCRIPTION_DROP_MARKERS,
     WEB_RUN_DESCRIPTION_REPLACEMENTS,
@@ -165,15 +165,28 @@ def project_modified_web_run_description(
             continue
         if any(marker in line.lower() for marker in drop_markers):
             continue
+        supports_domain_filter = (
+            search_capabilities is None and search_available
+        ) or _supports_capability(
+            search_capabilities,
+            SearchProviderCapability.DOMAIN_FILTER,
+        )
         for source, target in WEB_RUN_DESCRIPTION_REPLACEMENTS:
             line = re.sub(
                 re.escape(source),
-                target,
+                target if supports_domain_filter else "",
+                line,
+                flags=re.IGNORECASE,
+            )
+        if not _supports_multi_query(search_capabilities):
+            line = re.sub(
+                r"\bone or more queries\b",
+                "one query",
                 line,
                 flags=re.IGNORECASE,
             )
         retained.append(line)
-    if is_mixed_query_only_capability_set(search_capabilities):
+    if requires_exclusive_search_command(search_capabilities):
         retained.append(
             "`search_query` cannot be combined with other executable commands."
         )
@@ -213,7 +226,10 @@ def web_run_supported_command_fields(
     if (not typed_present and search_available) or (
         typed_valid and SearchProviderCapability.SEARCH_QUERY in parsed
     ):
-        supported.update(WEB_RUN_SEARCH_COMMAND_FIELDS)
+        search_fields = WEB_RUN_SEARCH_COMMAND_FIELDS["search_query"]
+        if typed_valid and SearchProviderCapability.DOMAIN_FILTER not in parsed:
+            search_fields = search_fields - {"domains"}
+        supported["search_query"] = search_fields
     if browser_available:
         supported.update(WEB_RUN_SIDECAR_COMMAND_FIELDS)
     return supported
@@ -228,6 +244,18 @@ def _supports_multi_query(
         return SearchProviderCapability.MULTI_QUERY in {
             SearchProviderCapability(value) for value in capabilities
         }
+    except TypeError, ValueError:
+        return False
+
+
+def _supports_capability(
+    capabilities: Collection[SearchProviderCapability | str] | None,
+    capability: SearchProviderCapability,
+) -> bool:
+    if capabilities is None:
+        return False
+    try:
+        return capability in {SearchProviderCapability(value) for value in capabilities}
     except TypeError, ValueError:
         return False
 

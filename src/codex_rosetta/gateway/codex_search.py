@@ -55,7 +55,7 @@ from .search_provider_contract import (
     LOCAL_QUERY_CAPABILITIES,
     SearchProviderCapability,
     SearchProviderExecutionMode,
-    is_mixed_query_only_capability_set,
+    requires_exclusive_search_command,
 )
 from .transport._base import UpstreamSafetyError
 from .web_search import (
@@ -331,7 +331,10 @@ async def execute_local_codex_search(  # noqa: C901
         search_capabilities=search_capabilities,
     )
     unsupported = _unsupported_features(
-        commands, body.get("settings"), supported_fields=supported_fields
+        commands,
+        body.get("settings"),
+        supported_fields=supported_fields,
+        search_capabilities=search_capabilities,
     )
     if unsupported:
         joined = ", ".join(sorted(unsupported))
@@ -339,7 +342,7 @@ async def execute_local_codex_search(  # noqa: C901
             f"Codex search feature not implemented by the local bridge: {joined}"
         )
 
-    if _mixed_search_query_has_other_executable_commands(
+    if _search_query_has_other_executable_commands(
         commands, supported_fields, search_capabilities
     ):
         raise CodexSearchNotImplemented(
@@ -956,20 +959,21 @@ def _unsupported_features(
     settings: Any,
     *,
     supported_fields: dict[str, frozenset[str] | None],
+    search_capabilities: frozenset[SearchProviderCapability],
 ) -> set[str]:
     return _unsupported_command_features(
         commands, supported_fields=supported_fields
-    ) | _unsupported_setting_features(settings)
+    ) | _unsupported_setting_features(settings, search_capabilities=search_capabilities)
 
 
-def _mixed_search_query_has_other_executable_commands(
+def _search_query_has_other_executable_commands(
     commands: dict[str, Any],
     supported_fields: dict[str, frozenset[str] | None],
     search_capabilities: frozenset[SearchProviderCapability],
 ) -> bool:
-    """Reject mixed GPT/local command ownership before any execution begins."""
+    """Reject unsupported command composition before any execution begins."""
     if not (
-        is_mixed_query_only_capability_set(search_capabilities)
+        requires_exclusive_search_command(search_capabilities)
         and _has_value(commands.get("search_query"))
     ):
         return False
@@ -1027,7 +1031,11 @@ def _unsupported_array_item_features(
     return unsupported
 
 
-def _unsupported_setting_features(settings: Any) -> set[str]:
+def _unsupported_setting_features(
+    settings: Any,
+    *,
+    search_capabilities: frozenset[SearchProviderCapability],
+) -> set[str]:
     unsupported: set[str] = set()
     if settings is None:
         return unsupported
@@ -1039,6 +1047,11 @@ def _unsupported_setting_features(settings: Any) -> set[str]:
 
     filters = settings.get("filters")
     if isinstance(filters, dict):
+        if (
+            _has_value(filters.get("allowed_domains"))
+            and SearchProviderCapability.DOMAIN_FILTER not in search_capabilities
+        ):
+            unsupported.add("settings.filters.allowed_domains")
         if _has_value(filters.get("blocked_domains")):
             unsupported.add("settings.filters.blocked_domains")
         for key, value in filters.items():

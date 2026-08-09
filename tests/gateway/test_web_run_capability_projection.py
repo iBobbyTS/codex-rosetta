@@ -27,6 +27,7 @@ from codex_rosetta.gateway.search_provider_candidates import (
     search_candidates_capabilities,
 )
 from codex_rosetta.gateway.search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_MIXED_MODE_CAPABILITIES,
     GPT_PASSTHROUGH_CONTRACT,
     LOCAL_QUERY_CAPABILITIES,
@@ -298,6 +299,30 @@ def test_mixed_projection_limits_search_query_to_one_item() -> None:
     )
     assert projected is not None
     assert projected["parameters"]["properties"]["search_query"]["maxItems"] == 1
+
+
+def test_q_only_projection_keeps_schema_and_description_in_sync() -> None:
+    function = _function()
+    function["description"] = (
+        "Search the internet for one or more queries "
+        "(and optionally with a domain or recency filter)."
+    )
+
+    projected = project_modified_web_run_function(
+        function,
+        search_available=True,
+        browser_available=False,
+        search_capabilities=DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities,
+    )
+
+    assert projected is not None
+    search_query = projected["parameters"]["properties"]["search_query"]
+    assert search_query["maxItems"] == 1
+    assert set(search_query["items"]["properties"]) == {"q"}
+    assert "one query" in projected["description"]
+    assert "one or more queries" not in projected["description"]
+    assert "domain" not in projected["description"]
+    assert "recency" not in projected["description"]
 
 
 @pytest.mark.parametrize(

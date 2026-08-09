@@ -22,6 +22,7 @@ from codex_rosetta.gateway.downstream_errors import CodexRosettaBlockedError
 from codex_rosetta.gateway.deepseek_responses_search import DeepSeekSearchResult
 from codex_rosetta.gateway.search_provider_candidates import (
     DeepSeekNativeResponsesSearchProviderCandidate,
+    TavilySearchProviderCandidate,
 )
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetExceeded,
@@ -35,7 +36,10 @@ from codex_rosetta.gateway.transport._base import (
     UpstreamResponseContractError,
     UpstreamResponseTooLargeError,
 )
-from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
+from codex_rosetta.gateway.codex_search_references import (
+    CodexSearchReferenceScope,
+    CodexSearchReferenceStore,
+)
 from codex_rosetta.gateway.web_run_sidecar import (
     WebRunSidecarInvalidRequest,
     WebRunSidecarSearchError,
@@ -243,6 +247,54 @@ def test_deepseek_chain_publishes_answer_references_attribution_and_cache():
     assert "deepseek-secret" not in rendered
     assert "deepseek-identity" not in rendered
     assert query not in rendered
+
+
+def test_q_only_allowed_domains_rejects_before_chain_and_reference_side_effects():
+    class NeverRunCoordinator:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run(self, *_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            self.calls += 1
+            raise AssertionError("candidate chain must not run")
+
+    coordinator = NeverRunCoordinator()
+    client = _FakeTavilyClient()
+    store = CodexSearchReferenceStore()
+    budget = SearchProviderRequestBudget()
+    candidates = (
+        TavilySearchProviderCandidate(
+            "tavily-row", api_key="tvly-test", identity="tavily-identity"
+        ),
+        _deepseek_candidate(),
+    )
+
+    with pytest.raises(
+        CodexSearchNotImplemented, match="settings.filters.allowed_domains"
+    ):
+        asyncio.run(
+            execute_local_codex_search(
+                _body(
+                    {"search_query": [{"q": "python"}]},
+                    settings={"filters": {"allowed_domains": ["python.org"]}},
+                ),
+                {},
+                client=client,
+                reference_store=store,
+                principal_id="client-a",
+                request_budget=budget,
+                search_candidates=candidates,
+                search_coordinator=coordinator,
+            )
+        )
+
+    assert coordinator.calls == 0
+    assert client.calls == []
+    assert budget.external_calls == 0
+    assert (
+        store.provider_affinity(CodexSearchReferenceScope("client-a", "search-session"))
+        is None
+    )
 
 
 def _body(commands: dict[str, Any], **extra: Any) -> dict[str, Any]:

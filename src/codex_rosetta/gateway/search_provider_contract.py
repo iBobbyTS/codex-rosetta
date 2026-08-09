@@ -62,6 +62,7 @@ class SearchProviderCapability(StrEnum):
     MULTI_QUERY = "multi_query"
     NORMALIZED_RESULTS = "normalized_results"
     REFERENCE_STORAGE = "reference_storage"
+    LOCAL_COMMAND_COMPOSITION = "local_command_composition"
     FULL_WEB_RUN_PASSTHROUGH = "full_web_run_passthrough"
 
 
@@ -145,6 +146,7 @@ LOCAL_QUERY_CAPABILITIES = frozenset(
         SearchProviderCapability.MULTI_QUERY,
         SearchProviderCapability.NORMALIZED_RESULTS,
         SearchProviderCapability.REFERENCE_STORAGE,
+        SearchProviderCapability.LOCAL_COMMAND_COMPOSITION,
     }
 )
 TAVILY_LOCAL_CONTRACT = SearchProviderContract.create(
@@ -164,6 +166,7 @@ DEEPSEEK_NATIVE_RESPONSES_CONTRACT = SearchProviderContract.create(
         SearchProviderCapability.SEARCH_QUERY,
         SearchProviderCapability.NORMALIZED_RESULTS,
         SearchProviderCapability.REFERENCE_STORAGE,
+        SearchProviderCapability.LOCAL_COMMAND_COMPOSITION,
     ),
 )
 
@@ -227,6 +230,25 @@ def is_mixed_query_only_capability_set(
     except TypeError, ValueError:
         return False
     return parsed == GPT_MIXED_MODE_CAPABILITIES
+
+
+def requires_exclusive_search_command(
+    capabilities: Collection[SearchProviderCapability | str] | None,
+) -> bool:
+    """Return whether search cannot compose with other local commands."""
+    if capabilities is None:
+        return False
+    try:
+        parsed = frozenset(
+            SearchProviderCapability(capability) for capability in capabilities
+        )
+    except TypeError, ValueError:
+        return False
+    return (
+        SearchProviderCapability.SEARCH_QUERY in parsed
+        and SearchProviderCapability.LOCAL_COMMAND_COMPOSITION not in parsed
+        and SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH not in parsed
+    )
 
 
 def contract_for_wire_provider(provider: str) -> SearchProviderContract:

@@ -89,7 +89,11 @@ def _search_capability_values(
     capabilities: frozenset[SearchProviderCapability],
 ) -> list[str]:
     """Serialize code-owned search capabilities in a stable Admin DTO order."""
-    return sorted(capability.value for capability in capabilities)
+    return sorted(
+        capability.value
+        for capability in capabilities
+        if capability is not SearchProviderCapability.LOCAL_COMMAND_COMPOSITION
+    )
 
 
 def _web_search_contract_for_admin(value: Any) -> dict[str, Any]:

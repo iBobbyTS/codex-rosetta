@@ -137,6 +137,7 @@ def test_deepseek_contract_declares_only_hosted_single_query_semantics():
         SearchProviderCapability.SEARCH_QUERY,
         SearchProviderCapability.NORMALIZED_RESULTS,
         SearchProviderCapability.REFERENCE_STORAGE,
+        SearchProviderCapability.LOCAL_COMMAND_COMPOSITION,
     }
 
 
@@ -336,6 +337,7 @@ def test_provider_contracts_declare_only_their_supported_semantics():
         SearchProviderCapability.MULTI_QUERY,
         SearchProviderCapability.NORMALIZED_RESULTS,
         SearchProviderCapability.REFERENCE_STORAGE,
+        SearchProviderCapability.LOCAL_COMMAND_COMPOSITION,
     }
     for contract, family in (
         (TAVILY_LOCAL_CONTRACT, SearchProviderFamily.TAVILY_LOCAL),

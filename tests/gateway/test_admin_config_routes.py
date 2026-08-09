@@ -1009,7 +1009,11 @@ def test_admin_and_runtime_share_narrow_mixed_contract_intersection(
 
     assert admin_contract["chain"] == {
         "mode": "mixed_single_query",
-        "capabilities": sorted(capability.value for capability in runtime_capabilities),
+        "capabilities": sorted(
+            capability.value
+            for capability in runtime_capabilities
+            if capability is not SearchProviderCapability.LOCAL_COMMAND_COMPOSITION
+        ),
         "limitations": ["single_search_query"],
     }
     assert runtime_capabilities == frozenset(
