@@ -121,29 +121,11 @@ class FakeDeepSeekClient:
 
 
 def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
-    provider = ProviderInfo(
-        "deepseek",
-        api_key="deepseek-secret",
-        base_url="https://api.deepseek.com",
-        auth_header_fn=openai_auth,
-        url_template="{base_url}/responses",
-    )
-    (candidate,) = build_search_provider_candidates(
-        [
-            {
-                "id": "deepseek",
-                "provider": "deepseek_native_responses",
-                "deepseek_provider": "official",
-            }
-        ],
-        {"official": provider},
-        {},
-        allowed_responses_models=(),
-    )
     expected = {"output": "Offline answer", "results": []}
     client = FakeDeepSeekClient(DeepSeekSearchResult("Offline answer", (), {}))
     factory_calls = []
     guard_trips = []
+    builder_guard_states = []
     budget = SearchProviderRequestBudget(max_external_calls=1)
 
     def factory(credential, origin):
@@ -157,21 +139,51 @@ def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
 
         return blocked
 
+    blocked_socket = blocked_primitive("socket.socket")
+    blocked_socketpair = blocked_primitive("socket.socketpair")
+    blocked_popen = blocked_primitive("subprocess.Popen")
+    blocked_subprocess_exec = blocked_primitive("asyncio.create_subprocess_exec")
+    blocked_subprocess_shell = blocked_primitive("asyncio.create_subprocess_shell")
+
+    def build_candidate():
+        builder_guard_states.append(
+            (
+                socket.socket is blocked_socket,
+                socket.socketpair is blocked_socketpair,
+                subprocess.Popen is blocked_popen,
+                asyncio.create_subprocess_exec is blocked_subprocess_exec,
+                asyncio.create_subprocess_shell is blocked_subprocess_shell,
+            )
+        )
+        provider = ProviderInfo(
+            "deepseek",
+            api_key="deepseek-secret",
+            base_url="https://api.deepseek.com",
+            auth_header_fn=openai_auth,
+            url_template="{base_url}/responses",
+        )
+        (candidate,) = build_search_provider_candidates(
+            [
+                {
+                    "id": "deepseek",
+                    "provider": "deepseek_native_responses",
+                    "deepseek_provider": "official",
+                }
+            ],
+            {"official": provider},
+            {},
+            allowed_responses_models=(),
+        )
+        return candidate
+
     async def execute_under_guard():
         with monkeypatch.context() as guard:
-            guard.setattr(socket, "socket", blocked_primitive("socket.socket"))
-            guard.setattr(socket, "socketpair", blocked_primitive("socket.socketpair"))
-            guard.setattr(subprocess, "Popen", blocked_primitive("subprocess.Popen"))
-            guard.setattr(
-                asyncio,
-                "create_subprocess_exec",
-                blocked_primitive("asyncio.create_subprocess_exec"),
-            )
-            guard.setattr(
-                asyncio,
-                "create_subprocess_shell",
-                blocked_primitive("asyncio.create_subprocess_shell"),
-            )
+            guard.setattr(socket, "socket", blocked_socket)
+            guard.setattr(socket, "socketpair", blocked_socketpair)
+            guard.setattr(subprocess, "Popen", blocked_popen)
+            guard.setattr(asyncio, "create_subprocess_exec", blocked_subprocess_exec)
+            guard.setattr(asyncio, "create_subprocess_shell", blocked_subprocess_shell)
+            candidate = build_candidate()
             return await SearchProviderExecutor(
                 deepseek_client_factory=factory
             ).execute(
@@ -187,6 +199,7 @@ def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
     assert budget.external_calls == 1
     assert result == expected
     assert guard_trips == []
+    assert builder_guard_states == [(True, True, True, True, True)]
 
 
 def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
