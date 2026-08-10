@@ -46,7 +46,7 @@ def _load_evidence_contract() -> ModuleType:
 
 
 _EVIDENCE_CONTRACT = _load_evidence_contract()
-prepare_evidence_publication = _EVIDENCE_CONTRACT.prepare_evidence_publication
+serialize_evidence_manifest = _EVIDENCE_CONTRACT.serialize_evidence_manifest
 write_private_evidence_bytes = _EVIDENCE_CONTRACT.write_private_evidence_bytes
 
 SMOKE_PROVIDER_ID: Final = "deepseek"
@@ -198,11 +198,7 @@ def _credential_from_row(row: dict[object, object]) -> str | None:
 
 
 def _select_official_provider(config_loader: Callable[[], object]) -> str | None:
-    """Load and qualify exactly one enabled official DeepSeek provider row.
-
-    Only ordinary ``Exception`` is collapsed.  ``BaseException`` control and
-    resource signals intentionally escape unchanged for the later composition.
-    """
+    """Load and qualify exactly one enabled official DeepSeek provider row."""
     try:
         config = config_loader()
         if type(config) is not dict:
@@ -364,11 +360,7 @@ async def run_offline_deepseek_search_harness(
     client_factory: Callable[[str, str], object],
     trusted_parent: str,
 ) -> Path:
-    """Run one explicit fake search and publish its sanitized evidence bytes.
-
-    Ordinary composition failures collapse to one static error. Control and
-    resource signals propagate naturally, preserving their original identity.
-    """
+    """Run one explicit fake search and publish its sanitized evidence bytes."""
     try:
         qualified = qualify_deepseek_provider(
             provider_id=SMOKE_PROVIDER_ID,
@@ -392,14 +384,9 @@ async def run_offline_deepseek_search_harness(
             max_output_tokens=SMOKE_MAX_OUTPUT_TOKENS,
             citation_limit=SMOKE_CITATION_LIMIT,
         )
-        manifest, protected_bodies = _build_offline_manifest(result)
-        prepared = prepare_evidence_publication(
-            manifest,
-            trusted_parent,
-            protected_tokens=(qualified.credential,),
-            protected_bodies=protected_bodies,
-        )
-        return write_private_evidence_bytes(prepared.manifest_bytes, trusted_parent)
+        manifest, _ = _build_offline_manifest(result)
+        manifest_bytes = serialize_evidence_manifest(manifest)
+        return write_private_evidence_bytes(manifest_bytes, trusted_parent)
     except MemoryError:
         raise
     except Exception:

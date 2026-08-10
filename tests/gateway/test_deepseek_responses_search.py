@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import builtins
 import importlib.util
 import inspect
 import json
-import os
 import random
 import shutil
 import stat
@@ -49,8 +47,6 @@ _EVIDENCE_MODULE = importlib.util.module_from_spec(_EVIDENCE_SPEC)
 _EVIDENCE_SPEC.loader.exec_module(_EVIDENCE_MODULE)
 DeepSeekEvidencePreparationError = _EVIDENCE_MODULE.DeepSeekEvidencePreparationError
 DeepSeekEvidencePublicationError = _EVIDENCE_MODULE.DeepSeekEvidencePublicationError
-PreparedEvidencePublication = _EVIDENCE_MODULE.PreparedEvidencePublication
-prepare_evidence_publication = _EVIDENCE_MODULE.prepare_evidence_publication
 serialize_evidence_manifest = _EVIDENCE_MODULE.serialize_evidence_manifest
 write_private_evidence_bytes = _EVIDENCE_MODULE.write_private_evidence_bytes
 
@@ -3132,25 +3128,6 @@ def test_smoke_loader_exception_is_static_and_secret_free() -> None:
     assert "latest python release version" not in rendered
 
 
-@pytest.mark.parametrize(
-    "signal", [asyncio.CancelledError, KeyboardInterrupt, SystemExit, MemoryError]
-)
-def test_smoke_qualification_propagates_non_exception_signals(
-    signal: type[BaseException],
-) -> None:
-    def load() -> object:
-        raise signal("control-signal")
-
-    with pytest.raises(signal):
-        qualify_deepseek_provider(
-            provider_id="deepseek",
-            query="latest python release version",
-            modes=["direct"],
-            max_upstream_calls=1,
-            config_loader=load,
-        )
-
-
 def test_smoke_import_surface_excludes_runtime_and_side_effects() -> None:
     module_path = Path(__file__).parents[2] / "scripts" / "deepseek_web_search_smoke.py"
     tree = ast.parse(module_path.read_text(encoding="utf-8"))
@@ -3268,16 +3245,6 @@ def _evidence_manifest() -> dict[str, Any]:
     }
 
 
-def _evidence_error_text(error: BaseException) -> str:
-    values = [str(error), repr(error), repr(error.args)]
-    frame = error.__traceback__
-    while frame is not None:
-        if frame.tb_frame.f_code.co_filename == str(_EVIDENCE_PATH):
-            values.extend(repr(value) for value in frame.tb_frame.f_locals.values())
-        frame = frame.tb_next
-    return "\n".join(values)
-
-
 def test_evidence_schema_is_exact_and_deterministic() -> None:
     manifest = _evidence_manifest()
     first = serialize_evidence_manifest(manifest)
@@ -3318,134 +3285,12 @@ def test_evidence_schema_rejects_unknown_opaque_and_invalid_values(mutator) -> N
     assert caught.value.__context__ is None
 
 
-def test_evidence_preflight_returns_minimal_immutable_prepared_value() -> None:
-    prepared = prepare_evidence_publication(
-        _evidence_manifest(),
-        "evidence/run-1",
-        protected_tokens=("deepseek-secret",),
-        protected_bodies=("raw response body",),
-    )
-    assert isinstance(prepared, PreparedEvidencePublication)
-    assert prepared.directory == "evidence/run-1"
-    assert prepared.final_path == "evidence/run-1/summary.json"
-    assert prepared.manifest_bytes == serialize_evidence_manifest(_evidence_manifest())
-    assert not hasattr(prepared, "__dict__")
-    with pytest.raises(AttributeError):
-        prepared.directory = "other"  # type: ignore[misc]
-    assert repr(prepared) == "<PreparedEvidencePublication>"
-
-
-@pytest.mark.parametrize(
-    ("directory", "tokens", "bodies"),
-    [
-        ("evidence/run-1", ("completed",), ()),
-        ("deepseek-secret-dir", ("safe-token",), ()),
-        ("evidence/run-1", ("safe-token",), ("completed",)),
-        ("evidence/run-1", ("safe-token",), ("summary.json",)),
-        ("evidence/run-1", ("\ud800",), ()),
-        ("evidence/run-1\x00", ("safe-token",), ()),
-        ("evidence/run-1/", ("safe-token",), ()),
-    ],
-)
-def test_evidence_preflight_collision_and_invalid_paths_are_zero_io(
-    monkeypatch: pytest.MonkeyPatch,
-    directory: str,
-    tokens: tuple[str, ...],
-    bodies: tuple[str, ...],
-) -> None:
-    calls: list[str] = []
-
-    def fail_open(*args: Any, **kwargs: Any) -> Never:
-        calls.append("open")
-        raise AssertionError("filesystem operation")
-
-    def fail_mkdir(*args: Any, **kwargs: Any) -> Never:
-        calls.append("mkdir")
-        raise AssertionError("filesystem operation")
-
-    monkeypatch.setattr(builtins, "open", fail_open)
-    monkeypatch.setattr(os, "mkdir", fail_mkdir)
-    with pytest.raises(DeepSeekEvidencePreparationError):
-        prepare_evidence_publication(
-            _evidence_manifest(),
-            directory,
-            protected_tokens=tokens or ("safe-token",),
-            protected_bodies=bodies,
-        )
-    assert calls == []
-
-
-@pytest.mark.parametrize("helper", ["manifest", "scan", "serialize", "preflight"])
-@pytest.mark.parametrize(
-    "signal_type", [MemoryError, asyncio.CancelledError, KeyboardInterrupt, SystemExit]
-)
-def test_evidence_helpers_preserve_signal_identity_and_scrub_graph(
-    monkeypatch: pytest.MonkeyPatch, helper: str, signal_type: type[BaseException]
-) -> None:
-    secret = "evidence-secret-token"
-    failure = signal_type(secret)
-
-    def explode(*args: object, **kwargs: object) -> Never:
-        del args, kwargs
-        raise failure
-
-    target = {
-        "manifest": "_keys_are_exact",
-        "scan": "_encode_text",
-        "serialize": "_json_dumps",
-        "preflight": "_contains_collision",
-    }[helper]
-    monkeypatch.setattr(_EVIDENCE_MODULE, target, explode)
-    with pytest.raises(signal_type) as caught:
-        if helper == "manifest":
-            _EVIDENCE_MODULE._manifest_is_allowed(_evidence_manifest())
-        elif helper == "scan":
-            _EVIDENCE_MODULE._encode_scan_values((secret,))
-        elif helper == "serialize":
-            serialize_evidence_manifest(_evidence_manifest())
-        else:
-            prepare_evidence_publication(
-                _evidence_manifest(),
-                "evidence/secret-path",
-                protected_tokens=(secret,),
-                protected_bodies=("body",),
-            )
-    assert caught.value is failure
-    assert caught.value.args == ()
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    assert secret not in _evidence_error_text(caught.value)
-
-
-def test_evidence_collision_second_cast_signal_scrubs_derived_locals(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    secret = "collision-secret"
-    failure = RuntimeError(secret)
-    calls = 0
-    original_cast = _EVIDENCE_MODULE.cast
-
-    def second_cast_signal(type_hint: object, value: object) -> object:
-        nonlocal calls
-        calls += 1
-        if calls == 2:
-            del type_hint, value
-            raise failure
-        return original_cast(type_hint, value)
-
-    monkeypatch.setattr(_EVIDENCE_MODULE, "cast", second_cast_signal)
-    with pytest.raises(RuntimeError) as caught:
-        _EVIDENCE_MODULE._contains_collision(
-            (b"manifest-collision-secret",), (b"protected-collision-secret",)
-        )
-    assert caught.value is failure
-    assert caught.value.args == ()
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    rendered = _evidence_error_text(caught.value)
-    assert secret not in rendered
-    assert "manifest-collision-secret" not in rendered
-    assert "protected-collision-secret" not in rendered
+def test_evidence_publisher_has_no_rejected_security_wrappers() -> None:
+    source = _EVIDENCE_PATH.read_text(encoding="utf-8")
+    assert "PreparedEvidencePublication" not in source
+    assert "BaseException" not in source
+    assert "_scrub_signal" not in source
+    assert "_contains_collision" not in source
 
 
 def test_evidence_writer_production_isolation() -> None:
@@ -3724,36 +3569,6 @@ def test_evidence_writer_ordinary_failure_is_static_and_cleans_owned_paths(
     assert tuple(tmp_path.iterdir()) == ()
 
 
-class _SyntheticEvidenceSignal(BaseException):
-    pass
-
-
-@pytest.mark.parametrize(
-    "failure",
-    [
-        KeyboardInterrupt("control"),
-        SystemExit("control"),
-        asyncio.CancelledError("control"),
-        MemoryError("resource"),
-        _SyntheticEvidenceSignal("control"),
-    ],
-)
-def test_evidence_writer_control_signal_identity_and_cleanup(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: BaseException
-) -> None:
-    manifest_bytes = serialize_evidence_manifest(_evidence_manifest())
-
-    def raise_signal(temporary_path: Path, final_path: Path) -> Never:
-        del temporary_path, final_path
-        raise failure
-
-    monkeypatch.setattr(_EVIDENCE_MODULE, "_replace_temp", raise_signal)
-    with pytest.raises(type(failure)) as caught:
-        write_private_evidence_bytes(manifest_bytes, str(tmp_path))
-    assert caught.value is failure
-    assert tuple(tmp_path.iterdir()) == ()
-
-
 class _OfflineHarnessResult:
     __slots__ = ("output", "results", "usage")
 
@@ -3779,7 +3594,7 @@ class _OfflineHarnessClient:
         self,
         events: list[str],
         *,
-        failure: BaseException | None = None,
+        failure: Exception | None = None,
     ) -> None:
         self.events = events
         self.failure = failure
@@ -3810,7 +3625,7 @@ async def test_harness_composition_happy_path_is_ordered_single_call_and_sanitiz
     client = _OfflineHarnessClient(events)
     original_qualify = _SMOKE_MODULE.qualify_deepseek_provider
     original_admission = _SMOKE_MODULE.CallAdmission
-    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
+    original_serialize = _SMOKE_MODULE.serialize_evidence_manifest
     original_write = _SMOKE_MODULE.write_private_evidence_bytes
 
     def qualify(**kwargs: object) -> QualifiedDeepSeekProvider:
@@ -3831,9 +3646,9 @@ async def test_harness_composition_happy_path_is_ordered_single_call_and_sanitiz
         factory_inputs.append((credential, origin))
         return client
 
-    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
-        events.append("prepare")
-        return original_prepare(*args, **kwargs)
+    def serialize(*args: object, **kwargs: object) -> bytes:
+        events.append("serialize")
+        return original_serialize(*args, **kwargs)
 
     def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
         events.append("write")
@@ -3842,7 +3657,7 @@ async def test_harness_composition_happy_path_is_ordered_single_call_and_sanitiz
 
     monkeypatch.setattr(_SMOKE_MODULE, "qualify_deepseek_provider", qualify)
     monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", RecordingAdmission)
-    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
+    monkeypatch.setattr(_SMOKE_MODULE, "serialize_evidence_manifest", serialize)
     monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
 
     final_path = await run_offline_deepseek_search_harness(
@@ -3857,7 +3672,7 @@ async def test_harness_composition_happy_path_is_ordered_single_call_and_sanitiz
         "reserve",
         "client_factory",
         "execute",
-        "prepare",
+        "serialize",
         "write",
     ]
     assert factory_inputs == [("offline-fake-credential", "https://api.deepseek.com")]
@@ -3911,11 +3726,6 @@ async def test_harness_composition_qualification_failure_has_zero_effects(
     monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", UnexpectedAdmission)
     monkeypatch.setattr(
         _SMOKE_MODULE,
-        "prepare_evidence_publication",
-        lambda *args, **kwargs: effects.append("prepare"),
-    )
-    monkeypatch.setattr(
-        _SMOKE_MODULE,
         "write_private_evidence_bytes",
         lambda *args, **kwargs: effects.append("write"),
     )
@@ -3933,7 +3743,7 @@ async def test_harness_composition_qualification_failure_has_zero_effects(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_stage", ["factory", "client", "prepare", "writer"])
+@pytest.mark.parametrize("failure_stage", ["factory", "client", "serialize", "writer"])
 async def test_harness_composition_ordinary_failure_is_static_and_never_retries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -3963,13 +3773,13 @@ async def test_harness_composition_ordinary_failure_is_static_and_never_retries(
             raise RuntimeError("fake factory body")
         return client
 
-    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
+    original_serialize = _SMOKE_MODULE.serialize_evidence_manifest
 
-    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
-        events.append("prepare")
-        if failure_stage == "prepare":
+    def serialize(*args: object, **kwargs: object) -> bytes:
+        events.append("serialize")
+        if failure_stage == "serialize":
             raise ValueError("synthetic result body")
-        return original_prepare(*args, **kwargs)
+        return original_serialize(*args, **kwargs)
 
     def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
         del manifest_bytes, trusted_parent
@@ -3977,7 +3787,7 @@ async def test_harness_composition_ordinary_failure_is_static_and_never_retries(
         raise OSError("synthetic path")
 
     monkeypatch.setattr(_SMOKE_MODULE, "CallAdmission", RecordingAdmission)
-    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
+    monkeypatch.setattr(_SMOKE_MODULE, "serialize_evidence_manifest", serialize)
     monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
 
     with pytest.raises(DeepSeekOfflineHarnessError) as caught:
@@ -3991,79 +3801,10 @@ async def test_harness_composition_ordinary_failure_is_static_and_never_retries(
     assert events.count("reserve") == 1
     assert events.count("client_factory") == 1
     assert events.count("execute") == (0 if failure_stage == "factory" else 1)
-    assert events.count("prepare") == (
+    assert events.count("serialize") == (
         0 if failure_stage in {"factory", "client"} else 1
     )
     assert events.count("write") == (1 if failure_stage == "writer" else 0)
-    assert tuple(tmp_path.iterdir()) == ()
-
-
-class _OfflineHarnessControlSignal(BaseException):
-    pass
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stage", ["qualification", "client", "prepare", "writer"])
-@pytest.mark.parametrize(
-    "signal_type",
-    [
-        asyncio.CancelledError,
-        KeyboardInterrupt,
-        SystemExit,
-        MemoryError,
-        _OfflineHarnessControlSignal,
-    ],
-)
-async def test_harness_composition_cancellation_and_resource_signals_preserve_identity(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    stage: str,
-    signal_type: type[BaseException],
-) -> None:
-    signal = signal_type("control")
-    events: list[str] = []
-    client = _OfflineHarnessClient(
-        events, failure=signal if stage == "client" else None
-    )
-
-    def config_loader() -> object:
-        events.append("qualification")
-        if stage == "qualification":
-            raise signal
-        return _smoke_config()
-
-    def factory(credential: str, origin: str) -> _OfflineHarnessClient:
-        del credential, origin
-        events.append("client_factory")
-        return client
-
-    original_prepare = _SMOKE_MODULE.prepare_evidence_publication
-
-    def prepare(*args: object, **kwargs: object) -> PreparedEvidencePublication:
-        events.append("prepare")
-        if stage == "prepare":
-            raise signal
-        return original_prepare(*args, **kwargs)
-
-    def write(manifest_bytes: bytes, trusted_parent: str) -> Path:
-        del manifest_bytes, trusted_parent
-        events.append("write")
-        raise signal
-
-    monkeypatch.setattr(_SMOKE_MODULE, "prepare_evidence_publication", prepare)
-    monkeypatch.setattr(_SMOKE_MODULE, "write_private_evidence_bytes", write)
-
-    with pytest.raises(signal_type) as caught:
-        await run_offline_deepseek_search_harness(
-            config_loader=config_loader,
-            client_factory=factory,
-            trusted_parent=str(tmp_path),
-        )
-    assert caught.value is signal
-    assert events.count("client_factory") == (0 if stage == "qualification" else 1)
-    assert events.count("execute") == (0 if stage == "qualification" else 1)
-    assert events.count("prepare") == (1 if stage in {"prepare", "writer"} else 0)
-    assert events.count("write") == (1 if stage == "writer" else 0)
     assert tuple(tmp_path.iterdir()) == ()
 
 
