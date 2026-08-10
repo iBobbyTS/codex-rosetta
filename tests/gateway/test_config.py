@@ -27,6 +27,7 @@ from codex_rosetta.gateway.config import (
     default_tool_profile_for_provider,
     discover_config,
     load_config,
+    normalize_web_search,
     resolve_codex_home,
 )
 from codex_rosetta.gateway.web_run_capabilities import (
@@ -874,7 +875,7 @@ class TestWebSearchConfig:
             (
                 {"provider": "other"},
                 "config: server.web_search.provider must be one of "
-                "['configured_responses_provider', 'deepseek_native_responses', 'self_hosted_bing', "
+                "['configured_responses_provider', 'self_hosted_bing', "
                 "'self_hosted_bing_browser', 'self_hosted_google', 'tavily']",
             ),
             (
@@ -910,6 +911,10 @@ class TestWebSearchConfig:
             GatewayConfig(_minimal_raw(web_search=value))
 
         assert str(exc_info.value) == message
+
+    def test_legacy_shape_rejects_deepseek_native_provider(self):
+        with pytest.raises(ValueError, match="provider must be one of"):
+            normalize_web_search({"provider": "deepseek_native_responses"})
 
     @pytest.mark.parametrize("provider_id", ["", "has space", "dot.id", "a" * 65, 42])
     def test_rejects_invalid_provider_ids(self, provider_id):

@@ -97,6 +97,11 @@ WEB_SEARCH_PROVIDERS = frozenset(
         *SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     }
 )
+LEGACY_WEB_SEARCH_PROVIDERS = frozenset(
+    provider
+    for provider in WEB_SEARCH_PROVIDERS
+    if provider != "deepseek_native_responses"
+)
 MAX_WEB_SEARCH_PROVIDERS = 32
 WEB_SEARCH_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 CODEX_MEMORY_MODEL_FIELDS = ("extract_model", "consolidation_model")
@@ -363,10 +368,10 @@ def _normalize_legacy_web_search(mapping: dict[str, Any]) -> list[WebSearchProvi
     )
     responses_provider = mapping.get("responses_provider", "")
     api_key = mapping.get("tavily_api_key", "")
-    if not isinstance(provider, str) or provider not in WEB_SEARCH_PROVIDERS:
+    if not isinstance(provider, str) or provider not in LEGACY_WEB_SEARCH_PROVIDERS:
         raise ValueError(
             "config: server.web_search.provider must be one of "
-            f"{sorted(WEB_SEARCH_PROVIDERS)}"
+            f"{sorted(LEGACY_WEB_SEARCH_PROVIDERS)}"
         )
     if not isinstance(api_key, str):
         raise ValueError("config: server.web_search.tavily_api_key must be a string")
