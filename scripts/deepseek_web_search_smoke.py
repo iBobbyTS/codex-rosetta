@@ -332,11 +332,6 @@ def _build_offline_manifest(
             "execution_mode": "NATIVE_RESPONSES_HOSTED_SEARCH",
             "model": SMOKE_MODEL,
         },
-        "provenance": {
-            "implementation_generation": 2,
-            "generation_2_live_proof": False,
-            "generation_0_evidence": "referenced-only",
-        },
         "hashes": {
             "request_sha256": _sha256(request_json),
             "query_sha256": _sha256(SMOKE_QUERY),
