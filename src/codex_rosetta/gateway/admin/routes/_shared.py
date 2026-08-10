@@ -607,11 +607,11 @@ def _handle_provider_rename(
     if isinstance(web_search, dict):
         if isinstance(web_search.get("providers"), list):
             for row in web_search["providers"]:
-                if (
-                    isinstance(row, dict)
-                    and row.get("responses_provider") == rename_from
-                ):
-                    row["responses_provider"] = name
+                if isinstance(row, dict):
+                    if row.get("responses_provider") == rename_from:
+                        row["responses_provider"] = name
+                    if row.get("deepseek_provider") == rename_from:
+                        row["deepseek_provider"] = name
         elif web_search.get("responses_provider") == rename_from:
             web_search["responses_provider"] = name
     return None

@@ -2115,6 +2115,49 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
     )
 
 
+def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
+    config = _config_data()
+    config["providers"]["official-deepseek"] = {
+        "api_key": "deepseek-key",
+        "base_url": "https://api.deepseek.com",
+        "provider": "deepseek",
+        "api_type": "responses",
+    }
+    config["server"]["web_search"] = {
+        "providers": [
+            {
+                "id": "deepseek-row",
+                "provider": "deepseek_native_responses",
+                "deepseek_provider": "official-deepseek",
+            }
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial, auth_state=None
+        ),
+        path_params={"name": "renamed-deepseek"},
+        json=lambda: {
+            "rename_from": "official-deepseek",
+            "provider": "deepseek",
+            "api_type": "responses",
+            "base_url": "https://api.deepseek.com",
+        },
+    )
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert (
+        saved["server"]["web_search"]["providers"][0]["deepseek_provider"]
+        == "renamed-deepseek"
+    )
+
+
 def test_delete_provider_rejects_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["search"] = {

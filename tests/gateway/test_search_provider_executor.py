@@ -171,7 +171,7 @@ def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
                 }
             ],
             {"official": provider},
-            {},
+            {"official": "responses"},
             allowed_responses_models=(),
         )
         return candidate
