@@ -8,6 +8,7 @@
   type SearchProviderType =
     | 'tavily'
     | 'configured_responses_provider'
+    | 'deepseek_native_responses'
     | 'self_hosted_google'
     | 'self_hosted_bing'
     | 'self_hosted_bing_browser';
@@ -17,11 +18,13 @@
     tavily_api_key?: string;
     responses_provider?: string;
     responses_model?: string;
+    deepseek_provider?: string;
   };
   type Provider = { api_type?: string; enabled?: boolean };
   type SearchContract = {
     provider_types?: SearchProviderType[];
     responses_models?: string[];
+    deepseek_providers?: string[];
     max_providers?: number;
     configured_providers?: SearchProviderContract[];
     chain?: SearchChainContract;
@@ -29,8 +32,8 @@
   type SearchProviderContract = {
     id: string;
     provider: SearchProviderType;
-    family: 'gpt_passthrough' | 'tavily_local' | 'self_hosted_local';
-    execution_mode: 'alpha_search_passthrough' | 'local_query_adapter';
+    family: 'gpt_passthrough' | 'tavily_local' | 'self_hosted_local' | 'deepseek_native_responses';
+    execution_mode: 'alpha_search_passthrough' | 'local_query_adapter' | 'native_responses_hosted_search';
     capabilities: string[];
   };
   type SearchChainContract = {
@@ -73,6 +76,7 @@
   let providers = $state<Record<string, Provider>>({});
   let providerTypes = $state<SearchProviderType[]>([]);
   let responsesModels = $state<string[]>([]);
+  let deepseekProviders = $state<string[]>([]);
   let maxProviders = $state(0);
   let providerContracts = $state<SearchProviderContract[]>([]);
   let chainContract = $state<SearchChainContract | null>(null);
@@ -97,7 +101,10 @@
       .sort(),
   );
   const hasInvalidResponses = $derived(
-    rows.some((row) => row.provider === 'configured_responses_provider' && !row.responses_provider),
+    rows.some((row) => (
+      (row.provider === 'configured_responses_provider' && !row.responses_provider)
+      || (row.provider === 'deepseek_native_responses' && !row.deepseek_provider)
+    )),
   );
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
@@ -113,6 +120,7 @@
   const providerLabel = (value: SearchProviderType): string => ({
     tavily: t('network.provider.tavily'),
     configured_responses_provider: t('network.provider.configuredResponses'),
+    deepseek_native_responses: t('network.provider.deepseekNativeResponses'),
     self_hosted_google: t('network.provider.google'),
     self_hosted_bing: t('network.provider.bingRss'),
     self_hosted_bing_browser: t('network.provider.bingBrowser'),
@@ -123,6 +131,7 @@
       'gpt_passthrough:alpha_search_passthrough': 'network.provider.gptDescription',
       'tavily_local:local_query_adapter': 'network.provider.tavilyDescription',
       'self_hosted_local:local_query_adapter': 'network.provider.selfHostedDescription',
+      'deepseek_native_responses:native_responses_hosted_search': 'network.provider.deepseekDescription',
     };
     const key = descriptionKey[contractKey];
     return key ? t(key) : '';
@@ -172,6 +181,9 @@
         responses_provider: responsesProviders[0] ?? '',
         responses_model: responsesModels[0] ?? '',
       };
+    }
+    if (provider === 'deepseek_native_responses') {
+      return { id, provider, deepseek_provider: deepseekProviders[0] ?? '' };
     }
     return { id, provider };
   }
@@ -261,6 +273,13 @@
           responses_model: row.responses_model ?? responsesModels[0] ?? '',
         };
       }
+      if (row.provider === 'deepseek_native_responses') {
+        return {
+          id: row.id,
+          provider: row.provider,
+          deepseek_provider: row.deepseek_provider ?? '',
+        };
+      }
       return { id: row.id, provider: row.provider };
     });
   }
@@ -284,6 +303,7 @@
     providers = config.providers ?? {};
     providerTypes = config.web_search_contract?.provider_types ?? [];
     responsesModels = config.web_search_contract?.responses_models ?? [];
+    deepseekProviders = config.web_search_contract?.deepseek_providers ?? [];
     maxProviders = config.web_search_contract?.max_providers ?? 0;
     rows = nextRows;
     providerContracts = nextProviderContracts;
@@ -409,6 +429,9 @@
                 {#if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
                   <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={saving || !responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
+                {:else if row.provider === 'deepseek_native_responses'}
+                  <label class="sr-only" for={`deepseek-provider-${row.id}`}>{t('label.deepseekSearchProvider')}</label>
+                  <Dropdown id={`deepseek-provider-${row.id}`} ariaLabel={t('label.deepseekSearchProvider')} value={row.deepseek_provider ?? ''} disabled={saving || !deepseekProviders.length} options={deepseekProviders.length ? deepseekProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noDeepSeek') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,deepseek_provider:String(value)}))} />
                 {/if}
                 <button class="btn btn-sm btn-danger remove-row" disabled={saving} onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
               </td>
@@ -419,6 +442,8 @@
                 {:else if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
                   <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} disabled={saving} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
+                {:else if row.provider === 'deepseek_native_responses'}
+                  <span class="fixed-search-model" aria-label={t('label.deepseekSearchModel')}>{t('network.provider.deepseekModel')}</span>
                 {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
                 {#if contract}
                   <div class="provider-contract" data-provider-family={contract.family}>
@@ -459,7 +484,7 @@
 <div class="section"><div class="section-header"><h2>{t('section.advancedSearch')}</h2></div><div class="provider-card" style="max-width:560px"><div class="form-group"><div class="form-label">{t('label.sidecarService')}</div><span class="badge" class:badge-success={status?.service_online} class:badge-error={status && !status.service_online}>{status === null ? t('status.checking') : status.service_online ? t('status.online') : status.configured === false ? t('status.notConfigured') : t('status.offline')}</span></div><div class="form-group"><div class="form-label">{t('label.sidecarBrowser')}</div><span class="badge" class:badge-success={status?.browser_ready} class:badge-error={status?.service_online && !status.browser_ready}>{status === null ? t('status.unknown') : status.browser_ready ? t('status.ready') : status?.service_online ? t('status.notReady') : t('status.unknown')}</span></div>{#if status?.error}<div style="font-size:11px;color:var(--text-dim)">{status.error}</div>{/if}</div></div>
 
 <style>
-  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
+  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
   .search-name-cell{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}.search-name-cell .row-order-controls{flex:0 0 auto}.search-name-cell>:global(.provider-type){flex:1 1 260px;width:auto;min-width:220px}.search-name-cell>:global(.suu-dropdown:not(.provider-type)){flex:1 1 240px;width:auto;min-width:220px;margin:0}.search-name-cell .remove-row{margin-left:auto}.search-name-cell :global(.suu-dropdown__button){width:100%;max-width:100%}.search-name-cell :global(.suu-dropdown__button > span:first-child){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   @media(max-width:760px){.section-header{align-items:flex-start}.search-actions{flex-wrap:wrap;justify-content:flex-end}.search-provider-table{overflow:visible}}
 </style>

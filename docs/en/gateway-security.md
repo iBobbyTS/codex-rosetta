@@ -257,21 +257,28 @@ enabled configured Responses Provider and one of the existing reviewed Search
 Models; in that mode the Gateway sends the
 unchanged Codex Search body to the Provider's `alpha/search` endpoint with that
 Provider's existing credential, proxy, and redirect policy. Disabled and
-non-Responses Providers are rejected during configuration. The
+non-Responses Providers are rejected during configuration. The page can also
+select an already configured DeepSeek Provider only when it is enabled, uses
+the `deepseek` identity and Responses protocol, has exactly one credential, and
+resolves to the official `https://api.deepseek.com` origin. This row stores only
+the configured Provider name and calls the official Responses `web_search` tool
+with fixed `deepseek-v4-flash`; it accepts only `search_query.q`, one query per
+request. Domains, recency, location, multiple queries, server history,
+`deepseek-v4-pro`, usage, and credit/quota display are not supported. The
 self-contained Admin view derives, rather than saves, each row's provider
 family, execution mode, and capability summary from Rosetta's Web Search
 Provider contract. GPT rows display only their Responses Provider and Search
 Model and preserve the complete configured Responses `/alpha/search`
 passthrough only when the entire ordered chain is GPT. Tavily rows display only
-their Tavily key and existing quota view; self-hosted rows display no GPT- or
-Tavily-specific fields. Local-only chains expose the local query-adapter
+their Tavily key and existing quota view; DeepSeek rows display the configured
+Provider selector and read-only `deepseek-v4-flash` model with an empty quota
+cell; self-hosted rows display no GPT- or Tavily-specific fields. Local-only chains expose the local query-adapter
 capabilities, while mixed GPT/local chains display and enforce the safe
 single-`search_query` intersection. These derived summaries never include
 credentials, fingerprints, sidecar connection values, or upstream-private
-data, and do not alter the persisted Provider-row wire format. DeepSeek is not
-a search Provider in this release: a future integration requires its own native
-Responses family, adapter, capability contract, and separate validation against
-the official Responses web-search wire.
+data, and do not alter the persisted Provider-row wire format. DeepSeek uses
+its own native Responses family and adapter rather than GPT's `alpha/search`
+passthrough or the Tool Catalog.
 
 self-contained **Search Test** card sends the fixed query
 `latest python release version` through the same Gateway auxiliary handler as a
@@ -298,7 +305,8 @@ the first non-empty value becomes active, discarded values remain redaction
 inputs, and the next Admin save converges the field to that one key. Configure
 multiple accounts as separate Providers; do not put multiple keys in one field.
 Configured Responses search rows never rotate or fall back to another
-credential. Self-hosted rows have neither quota configuration nor automatic
+credential. DeepSeek search rows use the selected Provider's single credential
+without copying it into the row. Self-hosted rows have neither quota configuration nor automatic
 credential fallback.
 
 For each Tavily row, Admin usage shows only Tavily's

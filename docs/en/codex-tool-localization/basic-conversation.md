@@ -100,7 +100,16 @@ the reviewed allowlist:
 endpoint using its credential and transport settings, and its final upstream
 `model` field is replaced with the selected Search Model. The current
 conversation model route and upstream model alias therefore cannot leak into
-this explicit search route. All local providers are
+this explicit search route. The list can also contain a **DeepSeek official
+Responses** row. Its dropdown consumes only eligible names from
+`web_search_contract.deepseek_providers`: enabled `deepseek` Responses Providers
+with exactly one credential and the official `https://api.deepseek.com` origin.
+The row stores only that Provider name, uses fixed `deepseek-v4-flash`, and
+invokes the official Responses `web_search` tool with one `search_query.q` per
+request. Domains, recency, location, multi-query, server history,
+`deepseek-v4-pro`, and usage/pro/quota display are intentionally unsupported.
+A failed eligible row may advance to the next configured row under the existing
+ordered chain rules. All local providers are
 normalized to the same Codex-visible source format.
 Web Search Providers are an independent Rosetta feature module: the Tool
 Catalog owns ordinary tool declarations, but does not own search-provider
@@ -108,17 +117,16 @@ sub-capabilities, request fields, validation, or invocation. An all-configured
 GPT chain forwards the complete `commands` object and request body unchanged
 to GPT's `alpha/search`; GPT validates that upstream wire contract and returns
 its complete response. Tavily and self-hosted providers instead use their
-code-owned query adapters and normalized local result/reference path. Future
-providers, including DeepSeek, must use an independent code adapter rather
-than extending the Tool Catalog.
+code-owned query adapters and normalized local result/reference path. DeepSeek
+uses an independent native Responses adapter rather than extending the Tool
+Catalog.
 
 The Admin page's family, execution-mode, and capability labels are derived from
 this independent Provider contract, not from Tool Catalog data or saved
 Provider-row fields. An all-GPT configured Responses chain keeps the full live
 `/alpha/search` passthrough; local-only chains expose the local adapter subset;
-a mixed GPT/local chain is limited to one `search_query`. DeepSeek has no
-executable search path until a separately validated native Responses Provider
-family and adapter are introduced.
+a mixed GPT/local chain is limited to one `search_query`. DeepSeek exposes only
+the q-only, single-query native Responses subset described above.
 
 Direct-URL
 `open` fetches public static HTML or plain text, and `time` uses

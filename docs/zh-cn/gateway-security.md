@@ -209,15 +209,20 @@ Tavily 凭据，或现有 sidecar 内的
 已配置 Responses 行还必须选择既有审核 Search Model。在后一模式中，Gateway 会使用
 该 Provider 既有的凭据、代理与重定向策略，把 Codex
 Search body 原样发送到它的 `alpha/search` 端点；已禁用或非 Responses Provider
-会在配置阶段被拒绝。Admin 页面会从 Rosetta 的 Web Search Provider contract 实时推导每一行的
+会在配置阶段被拒绝。页面还可以“选择已配置的DeepSeek官方API”：只有已启用、identity
+为 `deepseek`、协议为 Responses、恰好一个凭据且 origin 规范化为官方
+`https://api.deepseek.com` 的 Provider 才会出现在下拉列表。该行只保存 Provider 名称，
+使用固定的 `deepseek-v4-flash` 模型调用官方 Responses `web_search`；每个请求只接受一个
+`search_query.q`。不支持 domain、recency、location、多查询、server history、
+`deepseek-v4-pro`、usage 或 credit/quota 展示。Admin 页面会从 Rosetta 的 Web Search Provider contract 实时推导每一行的
 Provider family、执行模式和能力摘要，而不会保存这些派生值。GPT 行只显示 Responses Provider
 与搜索模型；只有整条有序链都是 GPT 时，才保留完整的已配置 Responses `/alpha/search` 透传。
-Tavily 行只显示 Tavily key 与现有额度视图；自托管行不显示 GPT 或 Tavily 专属字段。纯本地链
+Tavily 行只显示 Tavily key 与现有额度视图；DeepSeek 行显示配置 Provider 下拉框和只读的
+`deepseek-v4-flash`，额度列为空；自托管行不显示 GPT 或 Tavily 专属字段。纯本地链
 显示本地 query adapter 能力，GPT/local 混合链则显示并强制安全交集：只能包含一个
 `search_query`。这些派生摘要不会包含凭据、凭据指纹、sidecar 连接值或上游私有数据，也不会
-改变持久化的 Provider-row wire 格式。本版本不把 DeepSeek 作为搜索 Provider：未来接入必须
-提供独立的 native Responses family、adapter、capability contract，并针对官方 Responses
-web-search wire 单独验证。页面内的**搜索测试**卡片使用固定查询
+改变持久化的 Provider-row wire 格式。DeepSeek 使用独立的 native Responses family 和
+adapter，不复用 GPT `alpha/search` 透传，也不通过 Tool Catalog 扩展实现。页面内的**搜索测试**卡片使用固定查询
 `latest python release version`，并通过与真实 `POST /v1/alpha/search` 请求相同的
 Gateway auxiliary handler 执行后只展示规范化结果卡片；它不会直接调用 Tavily、sidecar 或
 Provider-specific 搜索 client。Admin 边界不会显示 Provider 原始失败正文；认证、超时、
@@ -233,7 +238,8 @@ Provider-specific 搜索 client。Admin 边界不会显示 Provider 原始失败
 Provider runtime 与 Admin 编辑都严格使用每个 Provider 一个 API Key。旧版逗号分隔的
 多 Key 只在读取边界兼容：首个非空值成为有效凭据，被丢弃值仍进入脱敏清单，并在下次
 Admin 保存时收敛成这一个 Key。多个账号必须配置成多个独立 Provider，不能把多个 Key
-放在同一字段。已配置 Responses 搜索行不会轮换或自动回退到其他 credential；自托管行
+放在同一字段。已配置 Responses 搜索行不会轮换或自动回退到其他 credential；DeepSeek
+搜索行使用所选 Provider 的单个凭据，不会把凭据复制进该行；自托管行
 既不配置额度，也不执行自动 credential fallback。
 
 对每个 Tavily 行，Admin usage 只展示 Tavily 的 `account.plan_usage` 和

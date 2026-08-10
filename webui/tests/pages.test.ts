@@ -98,8 +98,9 @@ describe('GatewayLogsPage', () => {
 
 describe('NetworkSearchPage', () => {
   const contract = {
-    provider_types: ['tavily', 'configured_responses_provider', 'self_hosted_google', 'self_hosted_bing', 'self_hosted_bing_browser'],
+    provider_types: ['tavily', 'configured_responses_provider', 'deepseek_native_responses', 'self_hosted_google', 'self_hosted_bing', 'self_hosted_bing_browser'],
     responses_models: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+    deepseek_providers: [],
     max_providers: 32,
   };
 
@@ -219,6 +220,31 @@ describe('NetworkSearchPage', () => {
     expect(await screen.findByText('Quota unavailable')).toBeInTheDocument();
     expect(document.querySelector('tr[data-row-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
     expect(document.querySelector('tr[data-row-id="sh"] .search-quota-cell')).toBeEmptyDOMElement();
+  });
+
+  it('renders DeepSeek official rows from the contract and saves only the provider name', async () => {
+    const rows = [{ id: 'deepseek-row', provider: 'deepseek_native_responses', deepseek_provider: 'official-deepseek' }];
+    mockConfig(configResponse(rows, {}, {
+      deepseek_providers: ['official-deepseek', 'backup-deepseek'],
+      configured_providers: [{ id: 'deepseek-row', provider: 'deepseek_native_responses', family: 'deepseek_native_responses', execution_mode: 'native_responses_hosted_search', capabilities: ['search_query', 'normalized_results', 'reference_storage'] }],
+      chain: { mode: 'local_query_adapter', capabilities: ['search_query', 'normalized_results', 'reference_storage'], limitations: [] },
+    }));
+    apiMock.put.mockResolvedValue({ server: { web_search: { providers: rows } } });
+    render(NetworkSearchPage);
+
+    const row = await screen.findByText('deepseek-v4-flash');
+    expect(row).toBeInTheDocument();
+    const provider = screen.getByLabelText('DeepSeek Provider');
+    expect(provider).toHaveAttribute('data-value', 'official-deepseek');
+    await fireEvent.click(provider);
+    expect(within(provider.parentElement!).getAllByRole('option').map((option) => option.getAttribute('data-value')))
+      .toEqual(['official-deepseek', 'backup-deepseek']);
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
+      web_search: { providers: rows },
+    });
+    expect(screen.queryByLabelText('Search Model')).not.toBeInTheDocument();
+    expect(document.body).not.toHaveTextContent('deepseek-secret');
   });
 
   it('explains code-owned provider families and the mixed single-query projection', async () => {
