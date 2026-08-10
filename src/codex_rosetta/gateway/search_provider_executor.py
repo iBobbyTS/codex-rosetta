@@ -126,13 +126,15 @@ class _DeepSeekSearchClient(Protocol):
 
 
 class _DeepSeekSearchClientFactory(Protocol):
-    def __call__(self, credential: str, origin: str) -> _DeepSeekSearchClient: ...
+    def __call__(
+        self, credential: str, origin: str, proxy_url: str | None
+    ) -> _DeepSeekSearchClient: ...
 
 
 def _default_deepseek_client_factory(
-    credential: str, origin: str
+    credential: str, origin: str, proxy_url: str | None
 ) -> _DeepSeekSearchClient:
-    return DeepSeekResponsesSearchClient(credential, origin=origin)
+    return DeepSeekResponsesSearchClient(credential, origin=origin, proxy_url=proxy_url)
 
 
 def _validate_response(value: Any) -> dict[str, Any]:
@@ -293,7 +295,9 @@ class SearchProviderExecutor:
         """Execute one already-validated DeepSeek hosted-search candidate."""
         credential = candidate.provider_info.credential_values[0]
         client = self._deepseek_client_factory(
-            credential, DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
+            credential,
+            DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
+            candidate.provider_info.proxy_url,
         )
         query = request.queries[0][0]
 

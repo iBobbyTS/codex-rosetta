@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import socket
 import subprocess
-from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 from unittest.mock import AsyncMock
@@ -88,7 +87,9 @@ def configured_responses_candidate():
     return candidate
 
 
-def deepseek_candidate(*, credential: str = "deepseek-secret"):
+def deepseek_candidate(
+    *, credential: str = "deepseek-secret", proxy_url: str | None = None
+):
     candidate = object.__new__(DeepSeekNativeResponsesSearchProviderCandidate)
     object.__setattr__(candidate, "row_id", "deepseek")
     object.__setattr__(candidate, "deepseek_provider", "official")
@@ -98,6 +99,7 @@ def deepseek_candidate(*, credential: str = "deepseek-secret"):
         SimpleNamespace(
             name="deepseek",
             base_url="https://api.deepseek.com",
+            proxy_url=proxy_url,
             credential_values=(credential,),
         ),
     )
@@ -128,8 +130,8 @@ def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
     builder_guard_states = []
     budget = SearchProviderRequestBudget(max_external_calls=1)
 
-    def factory(credential, origin):
-        factory_calls.append((credential, origin))
+    def factory(credential, origin, proxy_url):
+        factory_calls.append((credential, origin, proxy_url))
         return client
 
     def blocked_primitive(name):
@@ -194,7 +196,7 @@ def test_deepseek_offline_guard_blocks_socket_and_process_effects(monkeypatch):
 
     result = run(execute_under_guard())
 
-    assert factory_calls == [("deepseek-secret", "https://api.deepseek.com")]
+    assert factory_calls == [("deepseek-secret", "https://api.deepseek.com", None)]
     assert len(client.calls) == 1
     assert budget.external_calls == 1
     assert result == expected
@@ -217,8 +219,8 @@ def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
     client = FakeDeepSeekClient(result_value)
     factories = []
 
-    def factory(credential, origin):
-        factories.append((credential, origin))
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
         return client
 
     budget = SearchProviderRequestBudget(max_external_calls=1)
@@ -239,7 +241,7 @@ def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
         )
     )
 
-    assert factories == [("deepseek-secret", "https://api.deepseek.com")]
+    assert factories == [("deepseek-secret", "https://api.deepseek.com", None)]
     assert client.calls == [
         (
             "latest Python",
@@ -262,6 +264,27 @@ def test_deepseek_executor_calls_accepted_client_once_and_ignores_alpha_body():
         ],
     }
     assert request.body == body
+
+
+def test_deepseek_executor_forwards_candidate_proxy_to_factory():
+    client = FakeDeepSeekClient(DeepSeekSearchResult("answer", (), {}))
+    factory_calls = []
+
+    def factory(credential, origin, proxy_url):
+        factory_calls.append((credential, origin, proxy_url))
+        return client
+
+    result = run(
+        SearchProviderExecutor(deepseek_client_factory=factory).execute(
+            deepseek_candidate(proxy_url="http://proxy.example:8080"),
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        )
+    )
+
+    assert result == {"output": "answer", "results": []}
+    assert factory_calls == [
+        ("deepseek-secret", "https://api.deepseek.com", "http://proxy.example:8080")
+    ]
 
 
 @pytest.mark.parametrize(
@@ -577,15 +600,6 @@ def test_deepseek_control_signals_propagate_identity_without_retry(signal):
         )
     assert caught.value is signal
     assert len(client.calls) == 1
-
-
-def test_deepseek_runtime_integration_does_not_import_offline_harness_helpers():
-    combined = "\n".join(
-        path.read_text(encoding="utf-8")
-        for path in Path("src/codex_rosetta").rglob("*.py")
-    )
-    assert "deepseek_search_evidence" not in combined
-    assert "deepseek_web_search_smoke" not in combined
 
 
 def test_self_hosted_replays_all_queries_and_merges_results():

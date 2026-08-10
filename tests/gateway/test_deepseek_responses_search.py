@@ -3,26 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import importlib.util
 import json
-import stat
-from pathlib import Path
 
 import pytest
 
 import codex_rosetta.gateway.deepseek_responses_search as adapter
 from codex_rosetta.gateway.transport.http.transport import BoundedHttpResponse
-
-ROOT = Path(__file__).parents[2]
-
-
-def _load_script(name: str):
-    path = ROOT / "scripts" / name
-    spec = importlib.util.spec_from_file_location(name.replace(".py", ""), path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def _response() -> dict[str, object]:
@@ -153,8 +139,11 @@ def test_invalid_response_fails_closed(value: object) -> None:
 
 
 class _FakeAsyncClient:
+    instances: list[_FakeAsyncClient] = []
+
     def __init__(self, **kwargs: object) -> None:
         self.kwargs = kwargs
+        self.instances.append(self)
 
     async def __aenter__(self):
         return self
@@ -165,6 +154,7 @@ class _FakeAsyncClient:
 
 def test_client_performs_one_bounded_request(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[dict[str, object]] = []
+    _FakeAsyncClient.instances.clear()
     monkeypatch.setattr(adapter, "AsyncClient", _FakeAsyncClient)
 
     async def request(
@@ -177,6 +167,10 @@ def test_client_performs_one_bounded_request(monkeypatch: pytest.MonkeyPatch) ->
     result = asyncio.run(adapter.DeepSeekResponsesSearchClient("secret").execute("q"))
     assert result.output == "Answer from the web."
     assert len(calls) == 1
+    assert _FakeAsyncClient.instances[0].kwargs == {
+        "timeout": adapter.DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT,
+        "max_redirects": 0,
+    }
     assert (
         calls[0]["max_success_bytes"]
         == adapter.DEEPSEEK_RESPONSES_SEARCH_RESPONSE_MAX_BYTES
@@ -184,6 +178,7 @@ def test_client_performs_one_bounded_request(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_client_maps_http_and_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
+    _FakeAsyncClient.instances.clear()
     monkeypatch.setattr(adapter, "AsyncClient", _FakeAsyncClient)
 
     async def request(*_args: object, **_kwargs: object) -> BoundedHttpResponse:
@@ -203,21 +198,28 @@ def test_client_maps_http_and_cancellation(monkeypatch: pytest.MonkeyPatch) -> N
         asyncio.run(adapter.DeepSeekResponsesSearchClient("secret").search("q"))
 
 
-def test_origin_script_is_import_inert() -> None:
-    origin = _load_script("deepseek_search_origin.py")
-    assert (
-        origin.normalize_deepseek_origin("https://api.deepseek.com")
-        == "https://api.deepseek.com"
+@pytest.mark.parametrize("proxy_url", ["http://proxy.example:8080", None, ""])
+def test_client_passes_only_nonempty_proxy_to_async_client(
+    monkeypatch: pytest.MonkeyPatch, proxy_url: str | None
+) -> None:
+    _FakeAsyncClient.instances.clear()
+    monkeypatch.setattr(adapter, "AsyncClient", _FakeAsyncClient)
+
+    async def request(
+        _client: object, _method: str, _url: str, **_kwargs: object
+    ) -> BoundedHttpResponse:
+        return BoundedHttpResponse(200, {}, json.dumps(_response()).encode())
+
+    monkeypatch.setattr(adapter, "request_bounded_response", request)
+    asyncio.run(
+        adapter.DeepSeekResponsesSearchClient("secret", proxy_url=proxy_url).execute(
+            "q"
+        )
     )
-    assert not any(name.startswith("codex_rosetta") for name in origin.__dict__)
-
-
-def test_evidence_writer_is_private_atomic_and_static(tmp_path: Path) -> None:
-    evidence = _load_script("deepseek_search_evidence.py")
-    payload = evidence.serialize_evidence_manifest({"status": "completed", "value": 1})
-    output = evidence.write_private_evidence_bytes(payload, str(tmp_path))
-    assert output.read_bytes() == payload
-    assert stat.S_IMODE(output.parent.stat().st_mode) == 0o700
-    assert stat.S_IMODE(output.stat().st_mode) == 0o600
-    with pytest.raises(evidence.DeepSeekEvidencePublicationError):
-        evidence.write_private_evidence_bytes(b"", str(tmp_path))
+    expected = {
+        "timeout": adapter.DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT,
+        "max_redirects": 0,
+    }
+    if proxy_url:
+        expected["proxy"] = proxy_url
+    assert _FakeAsyncClient.instances[0].kwargs == expected

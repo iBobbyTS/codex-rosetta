@@ -397,7 +397,13 @@ async def _execute(
             "Authorization": f"Bearer {client._credential}",
             "Content-Type": "application/json",
         }
-        async with AsyncClient(timeout=request.timeout, max_redirects=0) as http_client:
+        client_kwargs: dict[str, Any] = {
+            "timeout": request.timeout,
+            "max_redirects": 0,
+        }
+        if client._proxy_url:
+            client_kwargs["proxy"] = client._proxy_url
+        async with AsyncClient(**client_kwargs) as http_client:
             response = await request_bounded_response(
                 http_client,
                 "POST",
@@ -455,6 +461,7 @@ class DeepSeekResponsesSearchClient:
         origin: object = DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
         base_url: object | None = None,
         timeout: object = DEFAULT_DEEPSEEK_RESPONSES_SEARCH_TIMEOUT,
+        proxy_url: str | None = None,
     ) -> None:
         if api_key is not None:
             if credential is not None:
@@ -467,6 +474,7 @@ class DeepSeekResponsesSearchClient:
             base_url if base_url is not None else origin
         )
         self._timeout = _normalize_timeout(timeout)
+        self._proxy_url = proxy_url
 
     async def execute(
         self,
