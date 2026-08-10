@@ -92,6 +92,7 @@ DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL = CONFIGURED_RESPONSES_WEB_SEARCH_
 WEB_SEARCH_PROVIDERS = frozenset(
     {
         CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+        "deepseek_native_responses",
         "tavily",
         *SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     }
@@ -118,6 +119,14 @@ class ConfiguredResponsesWebSearchProvider(TypedDict):
     responses_model: str
 
 
+class DeepSeekNativeResponsesWebSearchProvider(TypedDict):
+    """Canonical DeepSeek native Responses search-provider configuration."""
+
+    id: str
+    provider: Literal["deepseek_native_responses"]
+    deepseek_provider: str
+
+
 class SelfHostedWebSearchProvider(TypedDict):
     """Canonical self-hosted search-provider configuration."""
 
@@ -130,6 +139,7 @@ class SelfHostedWebSearchProvider(TypedDict):
 WebSearchProvider = (
     TavilyWebSearchProvider
     | ConfiguredResponsesWebSearchProvider
+    | DeepSeekNativeResponsesWebSearchProvider
     | SelfHostedWebSearchProvider
 )
 
@@ -249,7 +259,7 @@ def normalize_request_body_limit_mb(value: Any) -> int | None:
     return value
 
 
-def _normalize_web_search_provider(
+def _normalize_web_search_provider(  # noqa: C901
     value: Any,
     *,
     field: str,
@@ -273,6 +283,8 @@ def _normalize_web_search_provider(
         required_fields.add("tavily_api_key")
     elif provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
         required_fields.update({"responses_provider", "responses_model"})
+    elif provider == "deepseek_native_responses":
+        required_fields.add("deepseek_provider")
     unsupported = set(value) - required_fields
     missing = required_fields - set(value)
     if unsupported:
@@ -315,6 +327,17 @@ def _normalize_web_search_provider(
             "provider": CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
             "responses_provider": responses_provider.strip(),
             "responses_model": responses_model,
+        }
+    if provider == "deepseek_native_responses":
+        deepseek_provider = value["deepseek_provider"]
+        if not isinstance(deepseek_provider, str) or not deepseek_provider.strip():
+            raise ValueError(
+                f"config: {field}.deepseek_provider must be a non-empty string"
+            )
+        return {
+            "id": provider_id,
+            "provider": "deepseek_native_responses",
+            "deepseek_provider": deepseek_provider.strip(),
         }
     return cast(
         SelfHostedWebSearchProvider,
@@ -1040,6 +1063,15 @@ class GatewayConfig:
             )
             for name, cfg in self._raw_providers.items()
         }
+        # Native DeepSeek Responses search binds to the provider's main
+        # identity, while the generic Responses transport uses the standard
+        # protocol target internally.
+        for name, provider in self.providers.items():
+            if (
+                self._raw_providers[name].get("provider") == "deepseek"
+                and self._raw_providers[name].get("api_type") == "responses"
+            ):
+                provider.name = "deepseek"
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
         if legacy_web_search:

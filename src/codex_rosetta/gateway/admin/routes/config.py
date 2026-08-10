@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from typing import Any
 
 from codex_rosetta._vendor.httpclient import AsyncClient
@@ -26,6 +27,7 @@ from ...config import (
     provider_supports_tool_profiles,
     resolve_provider_api_type,
 )
+from ...deepseek_responses_search import normalize_deepseek_responses_origin
 from ...local_mode import config_toml_has_model_catalog
 from ...model_presets import (
     detect_model_preset,
@@ -54,6 +56,7 @@ from ...tool_profiles import (
 )
 from ...web_run_health import WebRunHealthState
 from ...transport.http.transport import request_bounded_response
+from ...transport.provider_info import ProviderInfo
 from ._shared import (
     _build_provider_entry,
     _commit_gateway_config,
@@ -96,7 +99,12 @@ def _search_capability_values(
     )
 
 
-def _web_search_contract_for_admin(value: Any) -> dict[str, Any]:
+def _web_search_contract_for_admin(
+    value: Any,
+    *,
+    providers: Mapping[str, ProviderInfo] | None = None,
+    provider_api_types: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
     """Return non-sensitive, derived Admin metadata for the saved search chain.
 
     The provider-row wire schema remains the sole persisted configuration.  This
@@ -116,13 +124,33 @@ def _web_search_contract_for_admin(value: Any) -> dict[str, Any]:
         "capabilities": _search_capability_values(chain_contract.capabilities),
         "limitations": list(chain_contract.limitations),
     }
+    deepseek_providers: list[str] = []
+    if providers is not None and provider_api_types is not None:
+        for name, provider_info in providers.items():
+            if provider_api_types.get(name) != "responses":
+                continue
+            if provider_info.name != "deepseek":
+                continue
+            try:
+                normalize_deepseek_responses_origin(provider_info.base_url)
+            except ValueError:
+                continue
+            credentials = provider_info.credential_values
+            if (
+                len(credentials) == 1
+                and type(credentials[0]) is str
+                and bool(credentials[0].strip())
+            ):
+                deepseek_providers.append(str(name))
     return {
         "provider_types": [
             "tavily",
             CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
+            "deepseek_native_responses",
             *sorted(SELF_HOSTED_WEB_SEARCH_PROVIDERS),
         ],
         "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
+        "deepseek_providers": sorted(deepseek_providers),
         "max_providers": MAX_WEB_SEARCH_PROVIDERS,
         "configured_providers": [
             {
@@ -773,7 +801,17 @@ async def get_config(request: Any) -> Response:
             "web_search_contract": _web_search_contract_for_admin(
                 raw.get("server", {}).get("web_search")
                 if isinstance(raw.get("server"), dict)
-                else None
+                else None,
+                providers=config.providers,
+                provider_api_types={
+                    str(name): str(entry.get("api_type", ""))
+                    for name, entry in (
+                        raw.get("providers", {}).items()
+                        if isinstance(raw.get("providers"), dict)
+                        else ()
+                    )
+                    if isinstance(entry, dict)
+                },
             ),
             "codex": config.codex,
             "server": server,
@@ -924,7 +962,11 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
             search_references = [
                 str(row.get("id"))
                 for row in rows
-                if isinstance(row, dict) and row.get("responses_provider") == name
+                if isinstance(row, dict)
+                and (
+                    row.get("responses_provider") == name
+                    or row.get("deepseek_provider") == name
+                )
             ]
         elif (
             web_search.get("provider") == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER

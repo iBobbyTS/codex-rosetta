@@ -799,11 +799,13 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
         "provider_types": [
             "tavily",
             "configured_responses_provider",
+            "deepseek_native_responses",
             "self_hosted_bing",
             "self_hosted_bing_browser",
             "self_hosted_google",
         ],
         "responses_models": list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS),
+        "deepseek_providers": [],
         "max_providers": MAX_WEB_SEARCH_PROVIDERS,
         "configured_providers": [
             {
@@ -864,6 +866,49 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
             "limitations": ["single_search_query"],
         },
     }
+
+
+def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
+    config = _config_data()
+    config["providers"].update(
+        {
+            "eligible": {
+                "provider": "deepseek",
+                "api_type": "responses",
+                "base_url": "https://api.deepseek.com",
+                "api_key": "eligible-secret",
+            },
+            "wrong-api": {
+                "provider": "deepseek",
+                "api_type": "chat",
+                "base_url": "https://api.deepseek.com",
+                "api_key": "wrong-api-secret",
+            },
+            "wrong-origin": {
+                "provider": "deepseek",
+                "api_type": "responses",
+                "base_url": "https://relay.example/v1",
+                "api_key": "wrong-origin-secret",
+            },
+        }
+    )
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path), gateway_config=GatewayConfig(config)
+    )
+
+    response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    serialized = response.body.decode("utf-8")
+    assert all(
+        secret not in serialized
+        for secret in ("eligible-secret", "wrong-api-secret", "wrong-origin-secret")
+    )
+    assert json.loads(serialized)["web_search_contract"]["deepseek_providers"] == [
+        "eligible"
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1169,6 +1214,44 @@ def test_put_server_settings_preserves_masked_web_search_key_and_hot_reloads(
         ]
         == "tvly***alue"
     )
+
+
+def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
+    config = _config_data()
+    config["providers"]["official-deepseek"] = {
+        "provider": "deepseek",
+        "api_type": "responses",
+        "base_url": "https://api.deepseek.com",
+        "api_key": "deepseek-secret",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+        auth_state=None,
+        stream_trace_state=None,
+    )
+    row = {
+        "id": "deepseek-row",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official-deepseek",
+    }
+
+    response = _run(
+        put_server_settings(
+            SimpleNamespace(
+                app=app,
+                json=lambda: {"web_search": {"providers": [row]}},
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"]["web_search"] == {"providers": [row]}
+    assert app.gateway_config.web_search.providers == [row]
+    assert "deepseek-secret" not in response.body.decode("utf-8")
 
 
 def test_put_server_settings_clears_web_search_key(tmp_path):
@@ -2060,6 +2143,37 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
     response = _run(delete_provider(request))
     assert response.status_code == 409
     assert b"web search rows" in response.body
+
+
+def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
+    config = _config_data()
+    config["providers"]["official-deepseek"] = {
+        "api_key": "deepseek-key",
+        "base_url": "https://api.deepseek.com",
+        "provider": "deepseek",
+        "api_type": "responses",
+    }
+    config["server"]["web_search"] = {
+        "providers": [
+            {
+                "id": "deepseek-row",
+                "provider": "deepseek_native_responses",
+                "deepseek_provider": "official-deepseek",
+            }
+        ]
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(config_path=str(config_path)),
+        path_params={"name": "official-deepseek"},
+        query_params={},
+    )
+
+    response = _run(delete_provider(request))
+
+    assert response.status_code == 409
+    assert b"deepseek-row" in response.body
 
 
 def _legacy_responses_search_config() -> dict[str, Any]:

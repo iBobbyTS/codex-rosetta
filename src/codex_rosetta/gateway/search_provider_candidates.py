@@ -266,6 +266,7 @@ def _deepseek_native_responses_candidate(
     row: Mapping[str, Any],
     row_id: str,
     providers: Mapping[str, ProviderInfo],
+    provider_api_types: Mapping[str, str],
     seen_providers: set[str],
 ) -> tuple[DeepSeekNativeResponsesSearchProviderCandidate, tuple[str, ...]]:
     """Build one official DeepSeek candidate without activating a client."""
@@ -281,6 +282,11 @@ def _deepseek_native_responses_candidate(
         raise ValueError(
             "config: web search provider row "
             f"{row_id!r} must name an enabled DeepSeek provider"
+        )
+    if provider_api_types.get(provider_name) != "responses":
+        raise ValueError(
+            "config: web search provider row "
+            f"{row_id!r} must name a provider with api_type 'responses'"
         )
     if provider_info.name != "deepseek":
         raise ValueError(
@@ -372,6 +378,7 @@ def build_search_provider_candidates(
                 row,
                 row_id,
                 providers,
+                provider_api_types,
                 seen_deepseek_providers,
             )
         else:

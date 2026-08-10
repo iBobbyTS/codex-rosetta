@@ -48,10 +48,12 @@ def _provider(
 
 
 def _build(rows, providers=None, api_types=None):
+    providers = providers or {}
+    api_types = api_types or {name: "responses" for name in providers}
     return build_search_provider_candidates(
         rows,
-        providers or {},
-        api_types or {},
+        providers,
+        api_types,
         allowed_responses_models=ALLOWED_MODELS,
     )
 
@@ -240,6 +242,22 @@ def test_rejects_deepseek_zero_or_multiple_credentials_locally():
             _build([row], {"official": provider})
 
 
+def test_rejects_deepseek_provider_without_responses_api_type():
+    row = {
+        "id": "deepseek-row",
+        "provider": "deepseek_native_responses",
+        "deepseek_provider": "official",
+    }
+    provider = _provider(
+        "deepseek", "deepseek-secret", base_url="https://api.deepseek.com"
+    )
+
+    with pytest.raises(ValueError, match="api_type 'responses'") as caught:
+        _build([row], {"official": provider}, {"official": "chat"})
+
+    assert "deepseek-secret" not in str(caught.value)
+
+
 def test_rejects_duplicate_deepseek_provider_and_cross_family_overlap():
     provider = _provider("deepseek", "shared", base_url="https://api.deepseek.com")
     first = {
@@ -267,7 +285,7 @@ def test_rejects_duplicate_deepseek_provider_and_cross_family_overlap():
         _build(
             [responses, first],
             {"gpt": _provider("openai", "shared"), "official": provider},
-            {"gpt": "responses"},
+            {"gpt": "responses", "official": "responses"},
         )
     assert "shared" not in str(caught.value)
 

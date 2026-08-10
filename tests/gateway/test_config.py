@@ -734,6 +734,38 @@ class TestWebSearchConfig:
         assert list(config.web_search) == ["providers"]
         assert json.loads(json.dumps(config.web_search)) == config.web_search
 
+    def test_accepts_canonical_deepseek_native_responses_row(self):
+        raw = _minimal_raw(
+            web_search={
+                "providers": [
+                    {
+                        "id": "deepseek-row",
+                        "provider": "deepseek_native_responses",
+                        "deepseek_provider": "official-deepseek",
+                    }
+                ]
+            }
+        )
+        raw["providers"]["official-deepseek"] = {
+            "api_key": "deepseek-secret",
+            "base_url": "https://api.deepseek.com",
+            "provider": "deepseek",
+            "api_type": "responses",
+        }
+
+        config = GatewayConfig(raw)
+
+        assert config.web_search == {
+            "providers": [
+                {
+                    "id": "deepseek-row",
+                    "provider": "deepseek_native_responses",
+                    "deepseek_provider": "official-deepseek",
+                }
+            ]
+        }
+        assert config.web_search_candidates[0].model == "deepseek-v4-flash"
+
     @pytest.mark.parametrize(
         "provider",
         ["self_hosted_google", "self_hosted_bing", "self_hosted_bing_browser"],
@@ -805,6 +837,23 @@ class TestWebSearchConfig:
                 "responses_model must be one of",
             ),
             (
+                {"providers": [{"id": "one", "provider": "deepseek_native_responses"}]},
+                "missing fields",
+            ),
+            (
+                {
+                    "providers": [
+                        {
+                            "id": "one",
+                            "provider": "deepseek_native_responses",
+                            "deepseek_provider": "official",
+                            "model": "deepseek-v4-flash",
+                        }
+                    ]
+                },
+                "unsupported fields",
+            ),
+            (
                 {
                     "providers": [
                         {"id": "one", "provider": "self_hosted_google", "token": "x"}
@@ -825,7 +874,7 @@ class TestWebSearchConfig:
             (
                 {"provider": "other"},
                 "config: server.web_search.provider must be one of "
-                "['configured_responses_provider', 'self_hosted_bing', "
+                "['configured_responses_provider', 'deepseek_native_responses', 'self_hosted_bing', "
                 "'self_hosted_bing_browser', 'self_hosted_google', 'tavily']",
             ),
             (
@@ -906,6 +955,11 @@ class TestWebSearchConfig:
                 "provider": "configured_responses_provider",
                 "responses_provider": "upstream",
                 "responses_model": " ",
+            },
+            {
+                "id": "one",
+                "provider": "deepseek_native_responses",
+                "deepseek_provider": " ",
             },
         ],
     )
