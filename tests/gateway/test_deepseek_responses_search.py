@@ -109,6 +109,7 @@ def test_origin_accepts_case_and_default_port() -> None:
         ("max_output_tokens", 256),
         ("citation_limit", 0),
         ("timeout", 0),
+        ("timeout", 10**400),
     ],
 )
 def test_local_controls_fail_before_http(field: str, value: object) -> None:

@@ -145,7 +145,12 @@ def _validate_citation_limit(value: object) -> int:
 def _normalize_timeout(value: object) -> float:
     if type(value) not in (int, float) or isinstance(value, bool):
         raise ValueError("DeepSeek Responses timeout must be a finite positive number")
-    normalized = float(cast(int | float, value))
+    try:
+        normalized = float(cast(int | float, value))
+    except OverflowError:
+        raise ValueError(
+            "DeepSeek Responses timeout must be a finite positive number"
+        ) from None
     if not math.isfinite(normalized) or normalized <= 0:
         raise ValueError("DeepSeek Responses timeout must be a finite positive number")
     return normalized
