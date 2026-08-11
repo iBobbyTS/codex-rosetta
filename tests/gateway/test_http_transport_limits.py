@@ -16,7 +16,11 @@ from typing import Any, cast
 
 import pytest
 
-from codex_rosetta._vendor.httpclient import AsyncClient, DEFAULT_MAX_REDIRECTS
+from codex_rosetta._vendor.httpclient import (
+    DEFAULT_HEADER_TIMEOUT,
+    DEFAULT_MAX_REDIRECTS,
+    AsyncClient,
+)
 from codex_rosetta.gateway.transport import (
     ProviderInfo,
     UpstreamContentEncodingError,
@@ -109,6 +113,10 @@ def test_client_pool_isolates_redirect_policy() -> None:
     assert allowed._max_redirects > 0
 
     asyncio.run(pool.close_all())
+
+
+def test_upstream_response_header_timeout_is_one_minute() -> None:
+    assert DEFAULT_HEADER_TIMEOUT == 60.0
 
 
 def _transport(

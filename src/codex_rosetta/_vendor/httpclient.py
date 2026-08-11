@@ -1,5 +1,5 @@
 # /// zerodep
-# version = "0.5.0"
+# version = "0.5.1"
 # deps = []
 # tier = "subsystem"
 # category = "network"
@@ -122,7 +122,7 @@ DEFAULT_MAX_LINE_BYTES = 1024 * 1024
 DEFAULT_MAX_HEADER_COUNT = 100
 DEFAULT_MAX_HEADER_BYTES = 64 * 1024
 DEFAULT_MAX_INFORMATIONAL_RESPONSES = 8
-DEFAULT_HEADER_TIMEOUT = 10.0
+DEFAULT_HEADER_TIMEOUT = 60.0
 _ASYNC_WRITER_CLOSE_TIMEOUT = 0.25
 
 # Stable minimum credential set that must never cross an origin boundary
