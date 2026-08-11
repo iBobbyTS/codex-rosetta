@@ -8,14 +8,12 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from enum import StrEnum
-from types import TracebackType
-from typing import Any, Generic, NoReturn, TypeVar, cast
+from typing import Any, Generic, TypeVar, cast
 
 from .search_provider_candidates import SearchProviderCandidate
 from .search_provider_chain_state import (
     DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
     SearchProviderStateCapacityUnavailable as SearchProviderStateCapacityUnavailable,
-    _Reservation,
     _SearchProviderChainState,
 )
 
@@ -30,23 +28,9 @@ _AsyncOperation = Callable[[], Awaitable[_ResultT]]
 _ObserverEvent = dict[str, str | int]
 _Observer = Callable[[_ObserverEvent], None]
 _DETACHED_OPERATION_FUTURES: set[asyncio.Future[Any]] = set()
-
-
-class _CapturedRunnerException:
-    """Retain one runner failure without exposing it through traceback locals."""
-
-    __slots__ = ("_error", "_traceback")
-
-    def __init__(self, error: BaseException) -> None:
-        self._error = error
-        self._traceback: TracebackType | None = error.__traceback__
-
-    def __repr__(self) -> str:
-        return "<captured runner exception>"
-
-    def reraise(self) -> NoReturn:
-        """Re-raise the original failure with its useful runner traceback."""
-        raise self._error.with_traceback(self._traceback)
+_CurrentProviderValue = SearchProviderCandidate | str | tuple[str, str] | None
+_CurrentProviderSource = Callable[[], _CurrentProviderValue] | _CurrentProviderValue
+_CurrentProviderRecorder = Callable[[SearchProviderCandidate], object]
 
 
 async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
@@ -158,11 +142,17 @@ class SearchProviderChainUnavailable(
     """Raised when no candidate in the ordered search chain can succeed."""
 
     def __init__(self, reason: SearchProviderChainUnavailableReason) -> None:
-        super().__init__(reason, "Search provider chain unavailable")
+        super().__init__(reason, "Search unavailable; Please consider Browser Use")
 
 
 class SearchProviderChainCoordinator:
-    """Run candidates in order and retain process-local candidate cooldowns."""
+    """Run one ordered search request with small process-local row state.
+
+    ``current_provider`` may be a row id, candidate, or zero-argument getter.
+    ``record_current`` is an optional state seam called only after a candidate
+    succeeds.  The coordinator intentionally keeps no reservation, waiter,
+    cohort, or generation state: one request owns one immutable circular pass.
+    """
 
     def __init__(
         self,
@@ -171,13 +161,20 @@ class SearchProviderChainCoordinator:
         state_capacity: int = DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
         clock: Callable[[], float] = time.monotonic,
         observer: _Observer | None = None,
+        current_provider: _CurrentProviderSource = None,
+        record_current: _CurrentProviderRecorder | None = None,
+        on_success: _CurrentProviderRecorder | None = None,
     ) -> None:
+        if record_current is not None and on_success is not None:
+            raise ValueError("record_current and on_success are mutually exclusive")
         self._observer = observer
         self._state = _SearchProviderChainState[SearchProviderAttemptCategory](
             cooldown_seconds=cooldown_seconds,
             capacity=state_capacity,
             clock=clock,
         )
+        self._current_provider = current_provider
+        self._record_current = record_current or on_success
 
     def is_cooling(self, candidate: SearchProviderCandidate) -> bool:
         """Return whether the candidate's current identity is cooling."""
@@ -248,91 +245,69 @@ class SearchProviderChainCoordinator:
             event["cooldown_reason"] = cooldown_reason.value
         self._observe(event)
 
-    def _observe_delayed_cooldown(
-        self, reason: SearchProviderAttemptCategory | None
-    ) -> None:
-        if reason is None:
-            return
-        self._observe(
-            {
-                "outcome_category": "cooldown_published",
-                "cooldown_reason": reason.value,
-            }
-        )
-
-    def _release_neutrally(
+    def _observe_candidate_safely(
         self,
-        reservation: _Reservation,
-        *,
-        primary_error: object | None = None,
-    ) -> None:
-        published_reason = self._state.release(
-            reservation,
-            primary_error=primary_error,
-        )
-        self._observe_delayed_cooldown(published_reason)
-
-    async def _run_admitted(
-        self,
-        candidate: _CandidateT,
+        candidate: SearchProviderCandidate,
         attempt_index: int,
-        runner: Callable[[_CandidateT], Awaitable[_ResultT]],
-        reservation: _Reservation,
-    ) -> tuple[bool, _ResultT | None]:
-        settled = False
+        outcome: StrEnum | str,
+        *,
+        cooldown_reason: SearchProviderAttemptCategory | None = None,
+    ) -> None:
+        """Keep fatal observer errors independent of provider failure context."""
         try:
-            attempt_category: SearchProviderAttemptCategory | None = None
-            quota_exhausted = False
-            failover_reason: SearchProviderRequestFailoverReason | None = None
-            captured_runner_error: _CapturedRunnerException | None = None
-            try:
-                result = await runner(candidate)
-            except SearchProviderAttemptError as error:
-                attempt_category = error.category
-                quota_exhausted = error.quota_exhausted
-            except SearchProviderRequestFailover as error:
-                failover_reason = error.reason
-            except BaseException as error:
-                captured_runner_error = _CapturedRunnerException(error)
-            else:
-                self._state.record_success(reservation)
-                settled = True
-                self._observe_candidate(candidate, attempt_index, "success")
-                return True, result
-
-            if captured_runner_error is not None:
-                try:
-                    self._release_neutrally(
-                        reservation,
-                        primary_error=captured_runner_error,
-                    )
-                except BaseException as settlement_error:
-                    raise settlement_error from None
-                settled = True
-                captured_runner_error.reraise()
-            if attempt_category is None:
-                assert failover_reason is not None
-                self._release_neutrally(reservation)
-                settled = True
-                self._observe_candidate(candidate, attempt_index, failover_reason)
-                return False, None
-            reason = (
-                SearchProviderAttemptCategory.QUOTA_EXHAUSTED
-                if quota_exhausted
-                else attempt_category
-            )
-            published = self._state.record_failure(reservation, reason)
-            settled = True
             self._observe_candidate(
                 candidate,
                 attempt_index,
-                attempt_category,
-                cooldown_reason=published,
+                outcome,
+                cooldown_reason=cooldown_reason,
             )
-            return False, None
-        finally:
-            if not settled:
-                self._release_neutrally(reservation)
+        except BaseException as error:
+            raise error from None
+
+    def _resolve_current_index(self, candidates: tuple[_CandidateT, ...]) -> int:
+        source = self._current_provider
+        current = (
+            cast(Callable[[], _CurrentProviderValue], source)()
+            if callable(source)
+            else source
+        )
+        if current is None:
+            return 0
+        if isinstance(current, str):
+            return next(
+                (
+                    index
+                    for index, item in enumerate(candidates)
+                    if item.row_id == current
+                ),
+                0,
+            )
+        if isinstance(current, tuple) and len(current) == 2:
+            row_id, identity = current
+            return next(
+                (
+                    index
+                    for index, item in enumerate(candidates)
+                    if item.row_id == row_id and item.identity == identity
+                ),
+                0,
+            )
+        return next(
+            (
+                index
+                for index, item in enumerate(candidates)
+                if item is current
+                or (
+                    getattr(current, "row_id", None) == item.row_id
+                    and getattr(current, "identity", None) == item.identity
+                )
+            ),
+            0,
+        )
+
+    def _record_success(self, candidate: _CandidateT) -> None:
+        if self._record_current is not None:
+            self._record_current(candidate)
 
     async def run(
         self,
@@ -345,50 +320,57 @@ class SearchProviderChainCoordinator:
             reason = SearchProviderChainUnavailableReason.EMPTY_CHAIN
             self._observe({"final_reason": reason.value})
             raise SearchProviderChainUnavailable(reason)
-
-        protection = self._state.protect(candidate_snapshot)
-        primary_error: BaseException | None = None
-        try:
-            try:
-                attempted = False
-                seen: set[object] = set()
-                for attempt_index, candidate in enumerate(candidate_snapshot):
-                    key = self._state.key(candidate)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    reservation, cooling_reason = await self._state.reserve(candidate)
-                    if cooling_reason is not None:
-                        self._observe_candidate(
-                            candidate,
-                            attempt_index,
-                            "cooling",
-                            cooldown_reason=cooling_reason,
-                        )
-                        continue
-                    assert reservation is not None
-                    attempted = True
-                    succeeded, result = await self._run_admitted(
-                        candidate, attempt_index, runner, reservation
-                    )
-                    if succeeded:
-                        return cast(_ResultT, result)
-
-                reason = (
-                    SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
-                    if attempted
-                    else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+        start = self._resolve_current_index(candidate_snapshot)
+        ordered = candidate_snapshot[start:] + candidate_snapshot[:start]
+        attempted = False
+        seen_rows: set[str] = set()
+        for attempt_index, candidate in enumerate(ordered):
+            if candidate.row_id in seen_rows:
+                continue
+            seen_rows.add(candidate.row_id)
+            cooling_reason = self._state.cooldown_reason(candidate)
+            if cooling_reason is not None:
+                self._observe_candidate_safely(
+                    candidate,
+                    attempt_index,
+                    "cooling",
+                    cooldown_reason=cooling_reason,
                 )
-                self._observe({"final_reason": reason.value})
-                raise SearchProviderChainUnavailable(reason)
-            except BaseException as error:
-                primary_error = error
+                continue
+            attempted = True
+            try:
+                result = await runner(candidate)
+            except SearchProviderAttemptError as error:
+                try:
+                    reason = self.mark_failed(candidate, error)
+                except BaseException as settlement_error:
+                    raise settlement_error from None
+                self._observe_candidate_safely(
+                    candidate,
+                    attempt_index,
+                    error.category,
+                    cooldown_reason=reason,
+                )
+                continue
+            except SearchProviderRequestFailover:
+                self._observe_candidate_safely(
+                    candidate,
+                    attempt_index,
+                    "request_rejected",
+                )
                 raise
-        finally:
-            self._state.release_protection(
-                protection,
-                primary_error=primary_error,
-            )
+            else:
+                self._record_success(candidate)
+                self._observe_candidate_safely(candidate, attempt_index, "success")
+                return result
+
+        reason = (
+            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+            if attempted
+            else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+        )
+        self._observe({"final_reason": reason.value})
+        raise SearchProviderChainUnavailable(reason)
 
 
 class SearchProviderRequestBudget:

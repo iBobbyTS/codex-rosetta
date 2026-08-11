@@ -177,6 +177,7 @@ def _deepseek_candidate() -> DeepSeekNativeResponsesSearchProviderCandidate:
             "name": "deepseek",
             "base_url": "https://api.deepseek.com",
             "credential_values": ("deepseek-secret",),
+            "proxy_url": None,
         },
     )()
     return DeepSeekNativeResponsesSearchProviderCandidate(

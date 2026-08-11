@@ -4,7 +4,7 @@ import math
 import time
 import traceback
 import weakref
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from typing import Any
 
 import pytest
@@ -771,7 +771,7 @@ def test_budget_summary_is_bounded_and_secret_safe() -> None:
                 SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
             ),
             SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED,
-            "Search provider chain unavailable",
+            "Search unavailable; Please consider Browser Use",
         ),
     ],
 )
@@ -814,6 +814,77 @@ def test_chain_defaults_to_one_hour_cooldown() -> None:
     assert DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS == 3600.0
 
 
+def test_chain_starts_at_current_row_wraps_once_and_records_success() -> None:
+    candidates = (
+        candidate("first", "identity-first"),
+        candidate("current", "identity-current"),
+        candidate("last", "identity-last"),
+    )
+    calls: list[str] = []
+    recorded: list[str] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> str:
+        calls.append(item.row_id)
+        if item.row_id != "last":
+            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
+        return "ok"
+
+    coordinator = SearchProviderChainCoordinator(
+        current_provider=lambda: "current",
+        record_current=lambda item: recorded.append(item.row_id),
+    )
+
+    assert run(coordinator.run(candidates, runner)) == "ok"
+    assert calls == ["current", "last"]
+    assert recorded == ["last"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ValueError("invalid local request"),
+        SearchProviderRequestFailover(
+            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+        ),
+        asyncio.CancelledError("cancelled"),
+    ],
+)
+def test_non_execution_failures_do_not_fail_over(
+    failure: BaseException,
+) -> None:
+    first = candidate("first", "identity-first")
+    second = candidate("second", "identity-second")
+    calls: list[str] = []
+
+    async def runner(item: TavilySearchProviderCandidate) -> None:
+        calls.append(item.row_id)
+        raise failure
+
+    coordinator = SearchProviderChainCoordinator()
+    with pytest.raises(type(failure)) as caught:
+        run(coordinator.run((first, second), runner))
+
+    assert caught.value is failure
+    assert calls == ["first"]
+    assert not coordinator.is_cooling(first)
+    assert not coordinator.is_cooling(second)
+
+
+def test_all_failed_chain_has_stable_browser_use_error() -> None:
+    first = candidate("first", "identity-first")
+    second = candidate("second", "identity-second")
+
+    async def runner(_item: TavilySearchProviderCandidate) -> None:
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE)
+
+    with pytest.raises(SearchProviderChainUnavailable) as caught:
+        run(SearchProviderChainCoordinator().run((first, second), runner))
+
+    assert "Please consider Browser Use" in str(caught.value)
+    assert "first" not in str(caught.value)
+    assert "second" not in str(caught.value)
+
+
 def test_candidate_key_has_exact_equality_hash_and_secret_safe_repr() -> None:
     first = search_provider_chain_state_module._CandidateKey("row", "private-identity")
     same = search_provider_chain_state_module._CandidateKey("row", "private-identity")
@@ -840,15 +911,15 @@ def test_chain_runs_in_order_once_and_short_circuits_on_success() -> None:
     async def runner(item: TavilySearchProviderCandidate) -> str:
         calls.append(item.row_id)
         if item.row_id == "first":
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.CONNECTION_ERROR
             )
         return "ok"
 
     coordinator = SearchProviderChainCoordinator()
     assert run(coordinator.run(candidates, runner)) == "ok"
     assert calls == ["first", "second"]
-    assert coordinator.is_cooling(candidates[0]) is False
+    assert coordinator.is_cooling(candidates[0]) is True
 
 
 def test_chain_does_not_retry_duplicate_candidate_identity_in_one_request() -> None:
@@ -858,9 +929,7 @@ def test_chain_does_not_retry_duplicate_candidate_identity_in_one_request() -> N
     async def runner(_item: TavilySearchProviderCandidate) -> None:
         nonlocal calls
         calls += 1
-        raise SearchProviderRequestFailover(
-            SearchProviderRequestFailoverReason.REQUEST_REJECTED
-        )
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
 
     with pytest.raises(SearchProviderChainUnavailable) as caught:
         run(SearchProviderChainCoordinator().run((item, item), runner))
@@ -886,9 +955,7 @@ def test_chain_has_bounded_terminal_reasons_for_empty_and_failed_chain(
     reason: SearchProviderChainUnavailableReason,
 ) -> None:
     async def runner(_item: TavilySearchProviderCandidate) -> None:
-        raise SearchProviderRequestFailover(
-            SearchProviderRequestFailoverReason.REQUEST_REJECTED
-        )
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
 
     with pytest.raises(SearchProviderChainUnavailable) as caught:
         run(SearchProviderChainCoordinator().run(candidates, runner))
@@ -912,8 +979,8 @@ def test_all_attempts_failed_locals_aware_traceback_excludes_candidate_secrets()
             raise SearchProviderAttemptError(
                 SearchProviderAttemptCategory.HTTP_ERROR
             ) from RuntimeError(raw_error)
-        raise SearchProviderRequestFailover(
-            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.CONNECTION_ERROR
         ) from RuntimeError(raw_error)
 
     with pytest.raises(SearchProviderChainUnavailable) as caught:
@@ -1049,85 +1116,6 @@ def test_untyped_budget_cancel_and_fatal_errors_propagate_without_cooldown(
     assert api_key not in formatted
 
 
-@pytest.mark.parametrize(
-    "primary_type",
-    [RuntimeError, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
-)
-def test_runner_primary_owns_neutral_release_notification_failure(
-    primary_type: type[BaseException],
-) -> None:
-    async def scenario() -> None:
-        item = candidate("row", f"neutral-primary-{primary_type.__name__}")
-        coordinator = SearchProviderChainCoordinator()
-        state = coordinator._state
-        primary = primary_type("runner-private-primary")
-        notification_failure = MemoryError("neutral-release-secondary")
-        real_loop = asyncio.get_running_loop()
-        future = real_loop.create_future()
-        runner_traceback: Any = None
-
-        class OneShotNotificationFailure:
-            calls = 0
-
-            def is_closed(self) -> bool:
-                return False
-
-            def call_soon_threadsafe(
-                self, callback: Callable[..., None], *args: Any
-            ) -> None:
-                self.calls += 1
-                if self.calls == 1:
-                    raise notification_failure
-                real_loop.call_soon_threadsafe(callback, *args)
-
-        failing_loop: Any = OneShotNotificationFailure()
-
-        async def runner(_item: TavilySearchProviderCandidate) -> None:
-            nonlocal runner_traceback
-            with state._lock:
-                state._next_waiter += 1
-                waiter = search_provider_chain_state_module._CapacityWaiter(
-                    state._next_waiter,
-                    failing_loop,
-                    future,
-                )
-                state._waiters[waiter.token] = waiter
-            try:
-                raise primary
-            except BaseException as error:
-                runner_traceback = error.__traceback__
-                raise
-
-        observed: BaseException | None = None
-        try:
-            await coordinator.run((item,), runner)
-        except BaseException as error:
-            observed = error
-
-        assert observed is primary
-        assert observed.__cause__ is None
-        assert observed.__context__ is None
-        traceback_cursor = observed.__traceback__
-        while traceback_cursor is not None and traceback_cursor is not runner_traceback:
-            traceback_cursor = traceback_cursor.tb_next
-        assert traceback_cursor is runner_traceback
-        async with asyncio.timeout(1):
-            await future
-        assert failing_loop.calls == 2
-        assert state._entries == {}
-        assert state._reservations == {}
-        assert state._protections == {}
-        assert state._protection_counts == {}
-        assert state._waiters == {}
-        for formatted in (
-            "".join(traceback.format_exception(observed)),
-            format_traceback_with_locals(observed),
-        ):
-            assert "neutral-release-secondary" not in formatted
-
-    run(scenario())
-
-
 def test_quota_attempt_uses_bounded_quota_cooldown_reason() -> None:
     item = candidate("row", "identity")
     coordinator = SearchProviderChainCoordinator()
@@ -1160,9 +1148,7 @@ def test_observer_receives_only_bounded_safe_events() -> None:
             error = SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
             error.__cause__ = RuntimeError(raw_error)
             raise error
-        raise SearchProviderRequestFailover(
-            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
-        )
+        raise SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE)
 
     coordinator = SearchProviderChainCoordinator(observer=events.append)
     with pytest.raises(SearchProviderChainUnavailable) as caught:
@@ -1183,7 +1169,8 @@ def test_observer_receives_only_bounded_safe_events() -> None:
             "row_id": "second",
             "provider": "tavily",
             "attempt_index": 1,
-            "outcome_category": "local_unavailable",
+            "outcome_category": "upstream_failure",
+            "cooldown_reason": "upstream_failure",
         },
         {"final_reason": "all_attempts_failed"},
     ]
@@ -1208,12 +1195,6 @@ def test_observer_receives_only_bounded_safe_events() -> None:
             None,
         ),
         (
-            "request_local_failover",
-            ["first", "second"],
-            ["local_unavailable", "success"],
-            None,
-        ),
-        (
             "empty",
             [],
             ["empty_chain"],
@@ -1228,7 +1209,7 @@ def test_observer_receives_only_bounded_safe_events() -> None:
         (
             "all_failed",
             ["first", "second"],
-            ["http_error", "local_unavailable", "all_attempts_failed"],
+            ["http_error", "connection_error", "all_attempts_failed"],
             SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED,
         ),
     ],
@@ -1259,7 +1240,7 @@ def test_observer_failures_are_advisory_for_every_chain_outcome(
         )
 
     candidates = () if scenario == "empty" else (first,)
-    if scenario in {"cooldown_failover", "request_local_failover", "all_failed"}:
+    if scenario in {"cooldown_failover", "all_failed"}:
         candidates = (first, second)
 
     async def runner(item: TavilySearchProviderCandidate) -> str:
@@ -1268,13 +1249,9 @@ def test_observer_failures_are_advisory_for_every_chain_outcome(
             raise SearchProviderAttemptError(
                 SearchProviderAttemptCategory.HTTP_ERROR
             ) from RuntimeError(upstream_secret)
-        if item is first and scenario == "request_local_failover":
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
-            ) from RuntimeError(upstream_secret)
         if scenario == "all_failed":
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.CONNECTION_ERROR
             ) from RuntimeError(upstream_secret)
         return "ok"
 
@@ -1296,468 +1273,3 @@ def test_observer_failures_are_advisory_for_every_chain_outcome(
     assert events == expected_events
     if scenario in {"cooldown_failover", "all_failed"}:
         assert coordinator.is_cooling(first) is True
-    elif scenario == "request_local_failover":
-        assert coordinator.is_cooling(first) is False
-
-
-@pytest.mark.parametrize("failure_type", [SystemExit, KeyboardInterrupt, MemoryError])
-def test_observer_process_and_resource_failures_propagate_without_provider_error_chain(
-    failure_type: type[BaseException],
-) -> None:
-    upstream_secret = "synthetic-fatal-observer-upstream-secret"
-    failure = failure_type("fatal-observer")
-    identity = "synthetic-fatal-observer-identity"
-    api_key = "synthetic-fatal-observer-api-key"
-    first = candidate("first", identity, api_key=api_key)
-    second = candidate("second", "b")
-    calls: list[str] = []
-
-    def observer(_event: dict[str, str | int]) -> None:
-        raise failure
-
-    async def runner(item: TavilySearchProviderCandidate) -> str:
-        calls.append(item.row_id)
-        if item is first:
-            raise SearchProviderAttemptError(
-                SearchProviderAttemptCategory.HTTP_ERROR
-            ) from RuntimeError(upstream_secret)
-        return "unreachable"
-
-    coordinator = SearchProviderChainCoordinator(observer=observer)
-    with pytest.raises(failure_type) as caught:
-        run(coordinator.run((first, second), runner))
-
-    assert caught.value is failure
-    assert calls == ["first"]
-    formatted = format_traceback_with_locals(caught.value)
-    assert upstream_secret not in formatted
-    assert identity not in formatted
-    assert api_key not in formatted
-    assert coordinator._state._reservations == {}
-    assert coordinator._state._protections == {}
-    entry = coordinator._state._entries[coordinator._state.key(first)]
-    assert entry.cohorts == {}
-    assert entry.open_generation is None
-    assert entry.latest_success_generation is None
-
-
-@pytest.mark.parametrize(
-    ("clock_failure", "initial_clock", "cooldown_seconds", "expected_message"),
-    [
-        (99.0, 100.0, 3600.0, "clock must be monotonic"),
-        (math.nan, 100.0, 3600.0, "clock must return a finite value"),
-        (math.inf, 100.0, 3600.0, "clock must return a finite value"),
-        (-math.inf, 100.0, 3600.0, "clock must return a finite value"),
-        (1e308, 1e308, 1e308, "cooldown deadline must be finite"),
-    ],
-)
-def test_typed_attempt_clock_failures_do_not_retain_provider_error_chain(
-    clock_failure: float,
-    initial_clock: float,
-    cooldown_seconds: float,
-    expected_message: str,
-) -> None:
-    upstream_secret = "synthetic-clock-path-secret"
-    clock = Clock(initial_clock)
-    coordinator = SearchProviderChainCoordinator(
-        clock=clock,
-        cooldown_seconds=cooldown_seconds,
-    )
-
-    async def runner(_item: TavilySearchProviderCandidate) -> None:
-        clock.value = clock_failure
-        raise SearchProviderAttemptError(
-            SearchProviderAttemptCategory.HTTP_ERROR
-        ) from RuntimeError(upstream_secret)
-
-    identity = "synthetic-clock-path-identity"
-    api_key = "synthetic-clock-path-api-key"
-    with pytest.raises(ValueError, match=expected_message) as caught:
-        run(coordinator.run((candidate("row", identity, api_key=api_key),), runner))
-
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    default_formatted = "".join(
-        traceback.format_exception(
-            type(caught.value), caught.value, caught.value.__traceback__
-        )
-    )
-    assert upstream_secret not in default_formatted
-    assert "SearchProviderAttemptError" not in default_formatted
-    locals_formatted = format_traceback_with_locals(caught.value)
-    assert upstream_secret not in locals_formatted
-    assert identity not in locals_formatted
-    assert api_key not in locals_formatted
-
-
-def test_unknown_runner_clock_failure_suppresses_sensitive_exception_context() -> None:
-    raw_error = "synthetic-unknown-runner-private-body"
-    identity = "synthetic-unknown-clock-identity"
-    api_key = "synthetic-unknown-clock-api-key"
-    clock = Clock()
-    coordinator = SearchProviderChainCoordinator(clock=clock)
-    item = candidate("row", identity, api_key=api_key)
-
-    async def runner(_item: TavilySearchProviderCandidate) -> None:
-        clock.value = 99.0
-        raise RuntimeError(raw_error)
-
-    with pytest.raises(ValueError, match="clock must be monotonic") as caught:
-        run(coordinator.run((item,), runner))
-
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    assert caught.value.__suppress_context__ is True
-    default_formatted = "".join(
-        traceback.format_exception(
-            type(caught.value), caught.value, caught.value.__traceback__
-        )
-    )
-    locals_formatted = format_traceback_with_locals(caught.value)
-    for secret in (raw_error, identity, api_key):
-        assert secret not in default_formatted
-        assert secret not in locals_formatted
-    assert coordinator._state._entries == {}
-    assert coordinator._state._reservations == {}
-    assert coordinator._state._protections == {}
-    assert coordinator._state._protection_counts == {}
-
-
-@pytest.mark.parametrize(
-    "runner_type",
-    [asyncio.CancelledError, MemoryError, KeyboardInterrupt],
-)
-def test_runner_error_is_replaced_by_original_clock_preflight_failure(
-    runner_type: type[BaseException],
-) -> None:
-    async def scenario() -> None:
-        clock_failure = MemoryError("clock-preflight-primary")
-
-        class FailingClock:
-            def __init__(self) -> None:
-                self.failure: BaseException | None = None
-                self.failure_traceback: Any = None
-
-            def __call__(self) -> float:
-                if self.failure is not None:
-                    try:
-                        raise self.failure
-                    except BaseException as error:
-                        self.failure_traceback = error.__traceback__
-                        raise
-                return 100.0
-
-        clock = FailingClock()
-        coordinator = SearchProviderChainCoordinator(clock=clock)
-        item = candidate("row", f"clock-primary-{runner_type.__name__}")
-        runner_error = runner_type("runner-private-error")
-
-        async def runner(_item: TavilySearchProviderCandidate) -> None:
-            clock.failure = clock_failure
-            raise runner_error
-
-        observed: BaseException | None = None
-        try:
-            await coordinator.run((item,), runner)
-        except BaseException as error:
-            observed = error
-
-        assert observed is clock_failure
-        assert observed.__cause__ is None
-        assert observed.__context__ is None
-        assert observed.__suppress_context__ is True
-        traceback_cursor = observed.__traceback__
-        while (
-            traceback_cursor is not None
-            and traceback_cursor is not clock.failure_traceback
-        ):
-            traceback_cursor = traceback_cursor.tb_next
-        assert traceback_cursor is clock.failure_traceback
-        assert coordinator._state._entries == {}
-        assert coordinator._state._reservations == {}
-        assert coordinator._state._protections == {}
-        assert coordinator._state._protection_counts == {}
-        for formatted in (
-            "".join(traceback.format_exception(observed)),
-            format_traceback_with_locals(observed),
-        ):
-            assert "runner-private-error" not in formatted
-
-    run(scenario())
-
-
-@pytest.mark.parametrize(
-    "terminal_kind",
-    ["unknown", "budget", "cancel", "memory", "exit", "interrupt"],
-)
-def test_neutral_deadline_failure_suppresses_all_runner_exception_contexts(
-    terminal_kind: str,
-) -> None:
-    async def scenario() -> None:
-        raw_error = f"synthetic-{terminal_kind}-runner-private-body"
-        identity = "synthetic-neutral-deadline-identity"
-        api_key = "synthetic-neutral-deadline-api-key"
-        item = candidate("row", identity, api_key=api_key)
-        clock = Clock(0.0)
-        coordinator = SearchProviderChainCoordinator(
-            clock=clock,
-            cooldown_seconds=math.ulp(100.0) / 4,
-        )
-        failure_started = asyncio.Event()
-        terminal_started = asyncio.Event()
-        release_failure = asyncio.Event()
-        release_terminal = asyncio.Event()
-
-        async def pending_failure(_item: TavilySearchProviderCandidate) -> None:
-            failure_started.set()
-            await release_failure.wait()
-            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
-
-        async def terminal(_item: TavilySearchProviderCandidate) -> None:
-            terminal_started.set()
-            await release_terminal.wait()
-            if terminal_kind == "unknown":
-                raise RuntimeError(raw_error)
-            if terminal_kind == "budget":
-                error: BaseException = SearchProviderBudgetExceeded(
-                    SearchProviderBudgetReason.DEADLINE_EXCEEDED
-                )
-                error.__cause__ = RuntimeError(raw_error)
-                raise error
-            if terminal_kind == "cancel":
-                raise asyncio.CancelledError(raw_error)
-            if terminal_kind == "memory":
-                raise MemoryError(raw_error)
-            if terminal_kind == "exit":
-                raise SystemExit(raw_error)
-            raise KeyboardInterrupt(raw_error)
-
-        failure_task = asyncio.create_task(coordinator.run((item,), pending_failure))
-        terminal_task = asyncio.create_task(coordinator.run((item,), terminal))
-        await asyncio.gather(failure_started.wait(), terminal_started.wait())
-        clock.value = 100.0
-        release_failure.set()
-        with pytest.raises(SearchProviderChainUnavailable):
-            await failure_task
-        release_terminal.set()
-        with pytest.raises(
-            ValueError,
-            match="cooldown deadline must be later than current time",
-        ) as caught:
-            await terminal_task
-
-        assert caught.value.__cause__ is None
-        assert caught.value.__context__ is None
-        assert caught.value.__suppress_context__ is True
-        default_formatted = "".join(
-            traceback.format_exception(
-                type(caught.value), caught.value, caught.value.__traceback__
-            )
-        )
-        locals_formatted = format_traceback_with_locals(caught.value)
-        for secret in (raw_error, identity, api_key):
-            assert secret not in default_formatted
-            assert secret not in locals_formatted
-        assert coordinator._state._entries == {}
-        assert coordinator._state._reservations == {}
-        assert coordinator._state._protections == {}
-        assert coordinator._state._protection_counts == {}
-
-    run(scenario())
-
-
-@pytest.mark.parametrize(
-    ("failure_clock", "cooldown_seconds"),
-    [
-        (1e20, DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS),
-        (100.0, math.ulp(100.0) / 4),
-    ],
-)
-def test_cooldown_deadline_must_strictly_advance_before_chain_side_effects(
-    failure_clock: float,
-    cooldown_seconds: float,
-) -> None:
-    clock = Clock(0.0)
-    events: list[dict[str, str | int]] = []
-    coordinator = SearchProviderChainCoordinator(
-        clock=clock,
-        cooldown_seconds=cooldown_seconds,
-        observer=events.append,
-    )
-    retained = candidate("retained", "retained-identity")
-    coordinator.mark_failed(
-        retained,
-        SearchProviderAttemptError(SearchProviderAttemptCategory.CONNECTION_ERROR),
-    )
-    assert coordinator.is_cooling(retained) is True
-
-    identity = "synthetic-non-advancing-deadline-identity"
-    api_key = "synthetic-non-advancing-deadline-api-key"
-    raw_error = "synthetic-non-advancing-deadline-provider-error"
-    failed = candidate("failed", identity, api_key=api_key)
-    following = candidate("following", "following-identity")
-    calls: list[str] = []
-
-    async def runner(item: TavilySearchProviderCandidate) -> str:
-        calls.append(item.row_id)
-        if item is failed:
-            clock.value = failure_clock
-            raise SearchProviderAttemptError(
-                SearchProviderAttemptCategory.HTTP_ERROR
-            ) from RuntimeError(raw_error)
-        return "unexpected"
-
-    with pytest.raises(ValueError) as caught:
-        run(coordinator.run((failed, following), runner))
-
-    assert str(caught.value) == "cooldown deadline must be later than current time"
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
-    retained_key = coordinator._state.key(retained)
-    assert retained_key in coordinator._state._entries
-    assert coordinator.is_cooling(failed) is False
-    assert events == []
-    assert calls == ["failed"]
-    formatted = format_traceback_with_locals(caught.value)
-    assert identity not in formatted
-    assert api_key not in formatted
-    assert raw_error not in formatted
-
-
-def test_delayed_cooldown_publication_is_bounded_and_advisory() -> None:
-    async def scenario() -> None:
-        item = candidate("private-row", "private-identity", api_key="private-key")
-        failure_started = asyncio.Event()
-        neutral_started = asyncio.Event()
-        release_failure = asyncio.Event()
-        release_neutral = asyncio.Event()
-        events: list[dict[str, str | int]] = []
-
-        def observer(event: dict[str, str | int]) -> None:
-            events.append(event)
-            if event.get("outcome_category") == "cooldown_published":
-                raise RuntimeError("advisory-observer-failure")
-
-        coordinator = SearchProviderChainCoordinator(observer=observer)
-
-        async def fail(_item: TavilySearchProviderCandidate) -> None:
-            failure_started.set()
-            await release_failure.wait()
-            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
-
-        async def failover(_item: TavilySearchProviderCandidate) -> None:
-            neutral_started.set()
-            await release_neutral.wait()
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
-            )
-
-        failure_task = asyncio.create_task(coordinator.run((item,), fail))
-        neutral_task = asyncio.create_task(coordinator.run((item,), failover))
-        await asyncio.gather(failure_started.wait(), neutral_started.wait())
-        release_failure.set()
-        with pytest.raises(SearchProviderChainUnavailable):
-            await failure_task
-        assert coordinator.is_cooling(item) is False
-        assert "cooldown_reason" not in events[0]
-
-        release_neutral.set()
-        with pytest.raises(SearchProviderChainUnavailable):
-            await neutral_task
-        assert coordinator.cooldown_reason(item) is (
-            SearchProviderAttemptCategory.HTTP_ERROR
-        )
-        cooldown_events = [
-            event
-            for event in events
-            if event.get("outcome_category") == "cooldown_published"
-        ]
-        assert cooldown_events == [
-            {
-                "outcome_category": "cooldown_published",
-                "cooldown_reason": "http_error",
-            }
-        ]
-        serialized = repr(cooldown_events[0])
-        assert item.row_id not in serialized
-        assert item.identity not in serialized
-        assert item.api_key not in serialized
-        assert coordinator._state._reservations == {}
-        entry = coordinator._state._entries[coordinator._state.key(item)]
-        assert entry.cohorts == {}
-        assert entry.open_generation is None
-        assert entry.latest_success_generation is None
-
-    run(scenario())
-
-
-@pytest.mark.parametrize(
-    "runner_type",
-    [RuntimeError, asyncio.CancelledError, MemoryError, KeyboardInterrupt],
-)
-def test_runner_delayed_fatal_observer_suppresses_sensitive_context(
-    runner_type: type[BaseException],
-) -> None:
-    async def scenario() -> None:
-        raw_error = "synthetic-delayed-unknown-private-body"
-        identity = "synthetic-delayed-fatal-identity"
-        api_key = "synthetic-delayed-fatal-api-key"
-        item = candidate("row", identity, api_key=api_key)
-        failure_started = asyncio.Event()
-        unknown_started = asyncio.Event()
-        release_failure = asyncio.Event()
-        release_unknown = asyncio.Event()
-        fatal_observer = MemoryError("fatal-delayed-observer")
-
-        def observer(event: dict[str, str | int]) -> None:
-            if event.get("outcome_category") == "cooldown_published":
-                raise fatal_observer
-
-        coordinator = SearchProviderChainCoordinator(observer=observer)
-
-        async def pending_failure(_item: TavilySearchProviderCandidate) -> None:
-            failure_started.set()
-            await release_failure.wait()
-            raise SearchProviderAttemptError(SearchProviderAttemptCategory.HTTP_ERROR)
-
-        async def unknown(_item: TavilySearchProviderCandidate) -> None:
-            unknown_started.set()
-            await release_unknown.wait()
-            raise runner_type(raw_error)
-
-        failure_task = asyncio.create_task(coordinator.run((item,), pending_failure))
-        unknown_task = asyncio.create_task(coordinator.run((item,), unknown))
-        await asyncio.gather(failure_started.wait(), unknown_started.wait())
-        release_failure.set()
-        with pytest.raises(SearchProviderChainUnavailable):
-            await failure_task
-        release_unknown.set()
-        with pytest.raises(MemoryError) as caught:
-            await unknown_task
-
-        assert caught.value is fatal_observer
-        assert caught.value.__cause__ is None
-        assert caught.value.__context__ is None
-        assert caught.value.__suppress_context__ is True
-        default_formatted = "".join(
-            traceback.format_exception(
-                type(caught.value), caught.value, caught.value.__traceback__
-            )
-        )
-        locals_formatted = format_traceback_with_locals(caught.value)
-        for secret in (raw_error, identity, api_key):
-            assert secret not in default_formatted
-            assert secret not in locals_formatted
-        assert coordinator.cooldown_reason(item) is (
-            SearchProviderAttemptCategory.HTTP_ERROR
-        )
-        assert coordinator._state._reservations == {}
-        assert coordinator._state._protections == {}
-        assert coordinator._state._protection_counts == {}
-        entry = coordinator._state._entries[coordinator._state.key(item)]
-        assert entry.cohorts == {}
-        assert entry.suppressed_pending_generations == set()
-        assert entry.open_generation is None
-        assert entry.latest_success_generation is None
-
-    run(scenario())

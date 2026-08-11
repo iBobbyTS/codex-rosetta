@@ -1125,10 +1125,15 @@ def test_mixed_chain_projection_execution_trace_and_cooldown_matrix(
         candidate.row_id: candidate for candidate in config.web_search_candidates
     }
     first_id = "responses" if gpt_first else "local"
-    if first_fails:
+    unavailable_first = (
+        local_provider == "self_hosted_google"
+        and sidecar_ready is False
+        and not gpt_first
+    )
+    if first_fails or unavailable_first:
         expected_cooldown = (
             SearchProviderAttemptCategory.UPSTREAM_FAILURE
-            if first_id == "responses"
+            if first_id == "responses" or unavailable_first
             else SearchProviderAttemptCategory.HTTP_ERROR
         )
         assert (

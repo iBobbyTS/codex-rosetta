@@ -37,7 +37,6 @@ from .search_provider_chain import (
     SearchProviderAttemptError,
     SearchProviderBudgetExceeded,
     SearchProviderRequestFailover,
-    SearchProviderRequestFailoverReason,
     SearchProviderRequestBudget,
 )
 from .search_provider_contract import (
@@ -251,8 +250,8 @@ class SearchProviderExecutor:
                 )
             )
         if client is None and candidate_client is None:
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.UPSTREAM_FAILURE
             )
         outputs: list[dict[str, Any]] = []
         for query, settings in snapshot.queries:
@@ -329,8 +328,8 @@ class SearchProviderExecutor:
     ) -> Any:
         transport = self._responses_transport
         if transport is None:
-            raise SearchProviderRequestFailover(
-                SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.UPSTREAM_FAILURE
             )
         try:
 
@@ -562,8 +561,8 @@ def _map_local_error(exc: Exception) -> None:
     if status in {400, 422}:
         raise SearchProviderTerminalError("Search request rejected") from None
     if category is WebRunSidecarSearchErrorCategory.UNAVAILABLE:
-        raise SearchProviderRequestFailover(
-            SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+        raise SearchProviderAttemptError(
+            SearchProviderAttemptCategory.UPSTREAM_FAILURE
         ) from None
     if category in {
         TavilyRequestErrorCategory.INVALID_JSON,

@@ -23,8 +23,6 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderBudgetReason,
     SearchProviderChainCoordinator,
-    SearchProviderRequestFailover,
-    SearchProviderRequestFailoverReason,
     SearchProviderRequestBudget,
 )
 from codex_rosetta.gateway.search_provider_contract import (
@@ -685,15 +683,15 @@ def test_responses_single_query_accepts_formal_search_response_without_query_out
     assert not coordinator.is_cooling(candidate)
 
 
-def test_local_unavailable_is_request_failover():
+def test_local_unavailable_is_provider_failure():
     request = SearchRequest.from_body({}, [("q", WebSearchSettings())])
-    with pytest.raises(SearchProviderRequestFailover) as caught:
+    with pytest.raises(SearchProviderAttemptError) as caught:
         run(
             SearchProviderExecutor().execute(
                 SelfHostedSearchProviderCandidate("row", "self_hosted_google"), request
             )
         )
-    assert caught.value.reason is SearchProviderRequestFailoverReason.LOCAL_UNAVAILABLE
+    assert caught.value.category is SearchProviderAttemptCategory.UPSTREAM_FAILURE
 
 
 def test_failed_query_does_not_publish_partial_result():
@@ -956,10 +954,11 @@ def test_local_error_mapping_is_whitelisted_and_unknown_is_propagated():
             TavilyRequestError(TavilyRequestErrorCategory.HTTP_ERROR, status_code=401)
         )
     assert caught.value.category is SearchProviderAttemptCategory.HTTP_ERROR
-    with pytest.raises(SearchProviderRequestFailover):
+    with pytest.raises(SearchProviderAttemptError) as unavailable:
         _map_local_error(
             WebRunSidecarSearchError(WebRunSidecarSearchErrorCategory.UNAVAILABLE)
         )
+    assert unavailable.value.category is SearchProviderAttemptCategory.UPSTREAM_FAILURE
     unknown = RuntimeError("unknown")
     with pytest.raises(RuntimeError) as caught_unknown:
         _map_local_error(unknown)
