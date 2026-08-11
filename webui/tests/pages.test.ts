@@ -209,6 +209,47 @@ describe('NetworkSearchPage', () => {
     ));
   });
 
+  it('loads routing status after initial usage can mark a Tavily row exhausted', async () => {
+    const rows = [
+      { id: 'local', provider: 'self_hosted_google' },
+      { id: 'tavily', provider: 'tavily', tavily_api_key: 'masked***key' },
+    ];
+    const usage = deferred<{ entries: Array<Record<string, unknown>> }>();
+    let statusReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return Promise.resolve(configResponse(rows));
+      if (path.endsWith('/usage')) return usage.promise;
+      if (path.endsWith('/status')) {
+        statusReads += 1;
+        return Promise.resolve({
+          configured: false,
+          current_provider_id: 'local',
+          providers: [
+            { id: 'local', status: 'available', current: true },
+            { id: 'tavily', status: 'exhausted', current: false },
+          ],
+        });
+      }
+      return Promise.resolve({});
+    });
+    render(NetworkSearchPage);
+
+    await waitFor(() => expect(document.querySelector('tr[data-row-id="tavily"]')).not.toBeNull());
+    expect(statusReads).toBe(0);
+
+    usage.resolve({
+      entries: [
+        { id: 'tavily', status: 'ok', used: 100, limit: 100, reset_date: '2026-09-01' },
+      ],
+    });
+
+    await waitFor(() => expect(statusReads).toBe(1));
+    const row = document.querySelector<HTMLElement>('tr[data-row-id="tavily"]')!;
+    await waitFor(() => expect(row).toHaveClass('routing-exhausted'));
+    expect(within(row).getByText('Quota exhausted')).toBeInTheDocument();
+    expect(within(row).getByRole('button', { name: 'Set Tavily as current provider' })).toBeDisabled();
+  });
+
   it.each([
     {
       name: 'Tavily',

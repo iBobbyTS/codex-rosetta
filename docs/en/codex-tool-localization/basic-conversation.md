@@ -187,19 +187,17 @@ global Provider list and Search Model and uses the current session's native
 Responses route. Configured Responses rows participate only in the complete
 Modified Provider chain, including when one is the first row. Disabled remains
 blocked. In Modified mode, supported commands use Rosetta's provider-chain
-coordinator. The
-model-visible definition always retains
-direct-URL `open`, fixed-offset `time`, and `response_length`; it adds
-`search_query` when any canonical Provider-list candidate can supply basic
-search. A configured Responses row or a Tavily row with a valid Key qualifies
-regardless of its list position; a self-hosted row qualifies only while the
-sidecar reports ready. Candidate order therefore controls execution, not
-whether a later eligible candidate is visible to the model. A mixed chain is
-currently single-query: its schema limits `search_query` to one item and the
-local bridge rejects larger requests before any Provider call or cooldown. The
-definition adds `click`, `find`, and `screenshot` only while the optional
-sidecar reports `browser_ready=true`, except that an all-configured-GPT chain
-preserves its complete upstream surface. The Hosted `web_search` tool remains independent:
+coordinator. The model-visible definition always retains direct-URL `open`,
+fixed-offset `time`, and `response_length`. A new window derives
+Provider-dependent commands only from the current row: configured GPT keeps its
+complete upstream surface; Tavily exposes its local search adapter; DeepSeek
+exposes its q-only, single-query subset; and self-hosted search is available
+only while the sidecar reports ready. Candidate order and later fallback rows
+do not widen that new window's tool surface. The definition adds `click`,
+`find`, and `screenshot` only when the current Provider contract and optional
+sidecar readiness support them. Existing windows retain the locked surface
+described above, and stale commands fail as currently unavailable. The Hosted
+`web_search` tool remains independent:
 its Provider, Token, and guidance continue to belong to the selected Profile.
 
 `/v1/alpha/search` above is the Codex-facing Gateway route. Passthrough does not

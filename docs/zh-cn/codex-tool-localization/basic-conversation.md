@@ -141,14 +141,12 @@ HTTP `501` 和 `code: "not_implemented"`。这些辅助端点的所有 `501` 文
 列表和搜索模型，沿当前会话的原生 Responses route 转发。已配置 Responses 行只参与
 完整的 Modified Provider 链，包括它位于第一行时。Disabled 仍会阻止该端点。
 Modified 模式的受支持命令统一由 Rosetta Provider 链 coordinator 执行。
-模型可见定义始终保留直接 URL 的 `open`、固定时区 `time`
-和 `response_length`；只要标准 Provider 列表中任一候选能够提供基础搜索，就会增加
-`search_query`。已配置 Responses 行或具有有效 Key 的 Tavily 行无论位于列表何处都
-符合条件；self-hosted 行则仅在 sidecar 报告就绪时符合条件。因此候选顺序只控制
-执行次序，不会让模型看不到后续可用候选。mixed 链目前只支持单个 query：schema 将
-`search_query` 限制为一个 item，local bridge 会在任何 Provider 调用或 cooldown 前拒绝更多
-query。只有可选 sidecar 报告 `browser_ready=true` 时才增加 `click`、`find` 和
-`screenshot`；全 configured GPT 链保留其完整 upstream surface。Hosted
+模型可见定义始终保留直接 URL 的 `open`、固定时区 `time` 和 `response_length`。新窗口
+只根据当前行派生 Provider 相关命令：configured GPT 保留完整 upstream surface；Tavily
+暴露本地搜索 adapter；DeepSeek 暴露 q-only、single-query 子集；self-hosted 搜索仅在
+sidecar 报告就绪时可用。候选顺序和后续 fallback 行不会扩大新窗口的工具面。只有当前
+Provider contract 与可选 sidecar 的就绪状态都支持时，才会增加 `click`、`find` 和
+`screenshot`。既有窗口保留上文所述的锁定工具面，旧命令会返回当前不可用。Hosted
 `web_search` 保持独立，其 Provider、Token 和 guidance 仍属于所选 Profile。
 
 这里的 `/v1/alpha/search` 是 Codex 调用 Gateway 的入口。Passthrough 不会假设

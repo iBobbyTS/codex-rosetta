@@ -424,8 +424,9 @@
   onMount(() => {
     const controller = new AbortController();
     void loadConfig(controller.signal);
-    void loadUsage(controller.signal);
-    poll.start();
+    void loadUsage(controller.signal).then(() => {
+      if (!controller.signal.aborted) poll.start();
+    });
     return () => { controller.abort(); testController?.abort(); poll.stop(); };
   });
 </script>
