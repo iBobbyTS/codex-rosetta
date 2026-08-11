@@ -245,25 +245,6 @@ class SearchProviderChainCoordinator:
             event["cooldown_reason"] = cooldown_reason.value
         self._observe(event)
 
-    def _observe_candidate_safely(
-        self,
-        candidate: SearchProviderCandidate,
-        attempt_index: int,
-        outcome: StrEnum | str,
-        *,
-        cooldown_reason: SearchProviderAttemptCategory | None = None,
-    ) -> None:
-        """Keep fatal observer errors independent of provider failure context."""
-        try:
-            self._observe_candidate(
-                candidate,
-                attempt_index,
-                outcome,
-                cooldown_reason=cooldown_reason,
-            )
-        except BaseException as error:
-            raise error from None
-
     def _resolve_current_index(self, candidates: tuple[_CandidateT, ...]) -> int:
         source = self._current_provider
         current = (
@@ -330,7 +311,7 @@ class SearchProviderChainCoordinator:
             seen_rows.add(candidate.row_id)
             cooling_reason = self._state.cooldown_reason(candidate)
             if cooling_reason is not None:
-                self._observe_candidate_safely(
+                self._observe_candidate(
                     candidate,
                     attempt_index,
                     "cooling",
@@ -345,7 +326,7 @@ class SearchProviderChainCoordinator:
                     reason = self.mark_failed(candidate, error)
                 except BaseException as settlement_error:
                     raise settlement_error from None
-                self._observe_candidate_safely(
+                self._observe_candidate(
                     candidate,
                     attempt_index,
                     error.category,
@@ -353,7 +334,7 @@ class SearchProviderChainCoordinator:
                 )
                 continue
             except SearchProviderRequestFailover:
-                self._observe_candidate_safely(
+                self._observe_candidate(
                     candidate,
                     attempt_index,
                     "request_rejected",
@@ -361,7 +342,7 @@ class SearchProviderChainCoordinator:
                 raise
             else:
                 self._record_success(candidate)
-                self._observe_candidate_safely(candidate, attempt_index, "success")
+                self._observe_candidate(candidate, attempt_index, "success")
                 return result
 
         reason = (
