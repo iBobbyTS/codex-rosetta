@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +17,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderAttemptError,
     SearchProviderChainCoordinator,
 )
-from codex_rosetta.gateway.search_usage import TavilyUsage
+from codex_rosetta.gateway.search_usage import TavilyUsage, TavilyUsageState
 from codex_rosetta.observability.persistence import PersistenceManager
 
 
@@ -28,14 +29,19 @@ def candidate(row_id: str, identity: str) -> TavilySearchProviderCandidate:
     )
 
 
-class UsageState:
+class UsageState(TavilyUsageState):
     def __init__(self, *samples: TavilyUsage | Exception) -> None:
         self.samples = list(samples)
         self.calls: list[tuple[str, bool]] = []
 
     async def get(
-        self, api_key: str, *, refresh: bool = False, **_kwargs: Any
+        self,
+        api_key: str,
+        *,
+        fetcher: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+        refresh: bool = False,
     ) -> TavilyUsage:
+        del fetcher
         self.calls.append((api_key, refresh))
         sample = self.samples.pop(0)
         if isinstance(sample, Exception):
