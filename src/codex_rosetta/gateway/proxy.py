@@ -1674,7 +1674,7 @@ def _resolve_state_stores(
     )
 
 
-async def handle_non_streaming(
+async def handle_non_streaming(  # noqa: C901
     route: ResolvedRoute,
     provider_info: ProviderInfo,
     body: dict[str, Any],
@@ -1746,6 +1746,21 @@ async def handle_non_streaming(
         original_body, body, route
     )
     if is_responses_passthrough(route):
+        try:
+            surface_decision = apply_chat_tool_surface(
+                chat_tool_surface_coordinator,
+                body,
+                route=route,
+                state_scope=scope,
+                codex_window_id=codex_window_id,
+                persistence=persistence,
+            )
+        except ChatToolSurfaceUnavailable as exc:
+            return error_response_for_source(
+                route.source_provider, 503, str(exc)
+            ), profile
+        body = surface_decision.body
+        profile.update(surface_decision.profile)
         log_original_request(body, state=body_log_state)
         t_upstream = time.perf_counter()
         try:
@@ -2901,6 +2916,21 @@ async def handle_streaming(  # noqa: C901
         original_body, body, route
     )
     if is_responses_passthrough(route):
+        try:
+            surface_decision = apply_chat_tool_surface(
+                chat_tool_surface_coordinator,
+                body,
+                route=route,
+                state_scope=scope,
+                codex_window_id=codex_window_id,
+                persistence=persistence,
+            )
+        except ChatToolSurfaceUnavailable as exc:
+            return error_response_for_source(
+                route.source_provider, 503, str(exc)
+            ), profile
+        body = surface_decision.body
+        profile.update(surface_decision.profile)
         response, direct_profile = await _handle_direct_responses_streaming(
             route,
             provider_info,

@@ -29,6 +29,11 @@ from .codex_search import (
     should_use_local_codex_search,
 )
 from .codex_search_references import CodexSearchReferenceStore
+from .chat_tool_surface import (
+    ChatToolSurfaceCoordinator,
+    ChatToolSurfaceUnavailable,
+)
+from .search_provider_candidates import search_candidates_capabilities
 from .search_provider_chain import (
     SearchProviderBudgetExceeded,
     SearchProviderChainUnavailable,
@@ -39,6 +44,7 @@ from .search_provider_executor import (
     SearchProviderExecutor,
     SearchProviderTerminalError,
 )
+from .search_provider_contract import SearchProviderCapability
 from .config import GatewayConfig
 from .downstream_errors import (
     DownstreamErrorOrigin,
@@ -48,7 +54,8 @@ from .downstream_errors import (
 )
 from .headers import build_upstream_extra_headers, resolve_request_id
 from .logging import record_request_stat
-from .proxy import error_response_for_source, extract_model
+from .proxy import error_response_for_source, extract_model, normalize_codex_window_id
+from .state_scope import GatewayStateScope
 from .stream_trace import StreamTraceLogger, StreamTraceState
 from .tool_profiles import route_tool_state
 from .transport import ProviderInfo, UpstreamConnectionError, UpstreamTransport
@@ -336,6 +343,42 @@ async def handle_codex_auxiliary(  # noqa: C901
     try:
         if use_local_search or use_chain_search:
             reference_store, principal_id = _search_reference_context(request)
+            current_candidate = search_coordinator.current_candidate(search_candidates)
+            live_search_capabilities = search_candidates_capabilities(
+                (current_candidate,) if current_candidate is not None else (),
+                self_hosted_ready=True,
+            )
+            locked_search_capabilities = None
+            try:
+                codex_window_id = normalize_codex_window_id(
+                    request.headers.get("x-codex-window-id")
+                )
+            except ValueError as exc:
+                return error_response_for_source("openai_responses", 400, str(exc))
+            surface_coordinator = getattr(
+                request.app, "chat_tool_surface_coordinator", None
+            )
+            if (
+                codex_window_id
+                and principal_id is not None
+                and isinstance(surface_coordinator, ChatToolSurfaceCoordinator)
+            ):
+                try:
+                    locked_search_capabilities = (
+                        surface_coordinator.locked_web_run_capabilities(
+                            route=route,
+                            state_scope=GatewayStateScope.for_request(
+                                principal_id=principal_id,
+                                provider_name=route.provider_name,
+                                model=model,
+                                window_id=codex_window_id,
+                            ),
+                            codex_window_id=codex_window_id,
+                            persistence=getattr(request.app, "persistence", None),
+                        )
+                    )
+                except ChatToolSurfaceUnavailable as exc:
+                    return error_response_for_source("openai_responses", 503, str(exc))
             (
                 response,
                 status_code,
@@ -361,6 +404,8 @@ async def handle_codex_auxiliary(  # noqa: C901
                     transport=transport,
                     extra_headers=extra_headers,
                 ),
+                locked_search_capabilities=locked_search_capabilities,
+                live_search_capabilities=live_search_capabilities,
             )
             if search_result is not None:
                 attribution = search_result.attribution
@@ -507,6 +552,8 @@ async def _handle_local_search(
     search_candidates: tuple[Any, ...] | None = None,
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
+    locked_search_capabilities: frozenset[SearchProviderCapability] | None = None,
+    live_search_capabilities: frozenset[SearchProviderCapability] | None = None,
 ) -> tuple[Response, int, str | None, CodexSearchBridgeResult | None]:
     request_summary = codex_search_request_summary(body)
 
@@ -532,6 +579,8 @@ async def _handle_local_search(
             search_candidates=search_candidates,
             search_coordinator=search_coordinator,
             search_executor=search_executor,
+            locked_search_capabilities=locked_search_capabilities,
+            live_search_capabilities=live_search_capabilities,
         )
     except CodexSearchNotImplemented as exc:
         error = str(exc)

@@ -103,6 +103,10 @@ class CodexSearchNotImplemented(CodexSearchError):
     """The request requires semantics the local bridge cannot provide."""
 
 
+class CodexSearchCurrentProviderUnavailable(CodexSearchNotImplemented):
+    """A locked window capability is unavailable on its current provider."""
+
+
 class CodexSearchExecutionError(RuntimeError):
     """A supported operation failed in its external executor."""
 
@@ -264,6 +268,8 @@ async def execute_local_codex_search(  # noqa: C901
     search_candidates: tuple[SearchProviderCandidate, ...] | None = None,
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
+    locked_search_capabilities: frozenset[SearchProviderCapability] | None = None,
+    live_search_capabilities: frozenset[SearchProviderCapability] | None = None,
 ) -> CodexSearchBridgeResult:
     """Execute the deterministic local subset of Codex ``SearchRequest``."""
     _validate_request_identity(body)
@@ -271,6 +277,10 @@ async def execute_local_codex_search(  # noqa: C901
     if not isinstance(commands, dict):
         raise CodexSearchInvalidRequest("'commands' must be an object")
 
+    if search_candidates == () and commands.get("search_query"):
+        raise SearchProviderChainUnavailable(
+            SearchProviderChainUnavailableReason.EMPTY_CHAIN
+        )
     passthrough_only = _all_alpha_search_passthrough(search_candidates)
     if passthrough_only and not commands:
         raise CodexSearchInvalidRequest("'commands' must be an object")
@@ -313,11 +323,7 @@ async def execute_local_codex_search(  # noqa: C901
             passthrough_body=passthrough,
         )
 
-    if search_candidates == () and commands.get("search_query"):
-        raise SearchProviderChainUnavailable(
-            SearchProviderChainUnavailableReason.EMPTY_CHAIN
-        )
-    search_capabilities = (
+    candidate_capabilities = (
         search_candidates_capabilities(
             search_candidates,
             self_hosted_ready=browser_client is not None,
@@ -325,40 +331,43 @@ async def execute_local_codex_search(  # noqa: C901
         if search_candidates is not None
         else LOCAL_QUERY_CAPABILITIES
     )
-    supported_fields = web_run_supported_command_fields(
-        search_available=True,
-        browser_available=browser_client is not None,
-        search_capabilities=search_capabilities,
+    search_capabilities = (
+        locked_search_capabilities
+        if locked_search_capabilities is not None
+        else live_search_capabilities
+        if live_search_capabilities is not None
+        else candidate_capabilities
     )
-    unsupported = _unsupported_features(
-        commands,
-        body.get("settings"),
-        supported_fields=supported_fields,
-        search_capabilities=search_capabilities,
+    unsupported = (
+        set()
+        if SearchProviderCapability.FULL_WEB_RUN_PASSTHROUGH in search_capabilities
+        else _capability_rejections(
+            body,
+            commands,
+            browser_available=browser_client is not None,
+            search_capabilities=search_capabilities,
+        )
     )
     if unsupported:
         joined = ", ".join(sorted(unsupported))
         raise CodexSearchNotImplemented(
             f"Codex search feature not implemented by the local bridge: {joined}"
         )
-
-    if _search_query_has_other_executable_commands(
-        commands, supported_fields, search_capabilities
-    ):
-        raise CodexSearchNotImplemented(
-            "Codex search feature not implemented by the local bridge: "
-            "search_query cannot be combined with other executable commands"
+    if locked_search_capabilities is not None and live_search_capabilities is not None:
+        live_unsupported = _capability_rejections(
+            body,
+            commands,
+            browser_available=browser_client is not None,
+            search_capabilities=live_search_capabilities,
         )
+        if live_unsupported:
+            joined = ", ".join(sorted(live_unsupported))
+            raise CodexSearchCurrentProviderUnavailable(
+                f"{joined} is currently unavailable for the current provider"
+            )
 
     base_settings = _resolve_settings(commands, body.get("settings"))
     queries = _parse_search_queries(commands.get("search_query"), base_settings)
-    if (
-        len(queries) > 1
-        and SearchProviderCapability.MULTI_QUERY not in search_capabilities
-    ):
-        raise CodexSearchNotImplemented(
-            "Codex search feature not implemented by the local bridge: search_query supports one query"
-        )
     open_operations = _parse_open_operations(commands.get("open"))
     click_operations = _parse_click_operations(commands.get("click"))
     find_operations = _parse_find_operations(commands.get("find"))
@@ -442,6 +451,27 @@ async def execute_local_codex_search(  # noqa: C901
         search_coordinator=search_coordinator,
         search_executor=search_executor,
     )
+    if search_execution.passthrough_body is not None:
+        passthrough = search_execution.passthrough_body
+        return CodexSearchBridgeResult(
+            output=str(passthrough.get("output") or ""),
+            search_count=len(queries),
+            open_count=0,
+            time_count=0,
+            search_result_count=(
+                len(passthrough["results"])
+                if isinstance(passthrough.get("results"), list)
+                else 0
+            ),
+            search_provider=(
+                search_execution.attribution.search_provider
+                if search_execution.attribution is not None
+                else "configured_responses_provider"
+            ),
+            attribution=search_execution.attribution,
+            results=None,
+            passthrough_body=passthrough,
+        )
     sections = list(search_execution.sections)
     open_sections, stored_reference_open_count = await _execute_open_operations(
         open_operations,
@@ -516,6 +546,7 @@ async def execute_local_codex_search(  # noqa: C901
         find_count=len(find_operations),
         screenshot_count=len(screenshot_operations),
         browser_open_count=len(open_operations) if browser_client is not None else 0,
+        passthrough_body=search_execution.passthrough_body,
     )
 
 
@@ -533,6 +564,19 @@ def _all_alpha_search_passthrough(
     )
 
 
+def _current_alpha_search_passthrough(
+    candidates: tuple[SearchProviderCandidate, ...] | None,
+    coordinator: Any | None,
+) -> bool:
+    """Return whether the coordinator's current row owns the full alpha wire."""
+    if candidates and coordinator is not None:
+        resolver = getattr(coordinator, "current_candidate", None)
+        if callable(resolver):
+            current = resolver(candidates)
+            return current is not None and _all_alpha_search_passthrough((current,))
+    return _all_alpha_search_passthrough(candidates)
+
+
 async def _execute_search_queries(  # noqa: C901
     queries: list[tuple[str, WebSearchSettings]],
     *,
@@ -546,7 +590,9 @@ async def _execute_search_queries(  # noqa: C901
     search_coordinator: Any | None = None,
     search_executor: SearchProviderExecutor | None = None,
 ) -> _SearchExecution:
-    if not queries and not _all_alpha_search_passthrough(search_candidates):
+    if not queries and not _current_alpha_search_passthrough(
+        search_candidates, search_coordinator
+    ):
         return _SearchExecution((), 0, 0, False, None)
 
     fingerprint = _search_request_fingerprint(body)
@@ -591,7 +637,7 @@ async def _execute_search_queries(  # noqa: C901
             )
         successful_candidate = selected[-1]
         attribution = _candidate_attribution(successful_candidate)
-        if _all_alpha_search_passthrough(search_candidates) and (
+        if (
             successful_candidate.contract.execution_mode
             is SearchProviderExecutionMode.ALPHA_SEARCH_PASSTHROUGH
         ):
@@ -964,6 +1010,39 @@ def _unsupported_features(
     return _unsupported_command_features(
         commands, supported_fields=supported_fields
     ) | _unsupported_setting_features(settings, search_capabilities=search_capabilities)
+
+
+def _capability_rejections(
+    body: dict[str, Any],
+    commands: dict[str, Any],
+    *,
+    browser_available: bool,
+    search_capabilities: frozenset[SearchProviderCapability],
+) -> set[str]:
+    """Return pure capability rejections before any provider or state work."""
+    supported_fields = web_run_supported_command_fields(
+        search_available=True,
+        browser_available=browser_available,
+        search_capabilities=search_capabilities,
+    )
+    rejected = _unsupported_features(
+        commands,
+        body.get("settings"),
+        supported_fields=supported_fields,
+        search_capabilities=search_capabilities,
+    )
+    if _search_query_has_other_executable_commands(
+        commands, supported_fields, search_capabilities
+    ):
+        rejected.add("search_query cannot be combined with other executable commands")
+    search_queries = commands.get("search_query")
+    if (
+        isinstance(search_queries, list)
+        and len(search_queries) > 1
+        and SearchProviderCapability.MULTI_QUERY not in search_capabilities
+    ):
+        rejected.add("search_query supports one query")
+    return rejected
 
 
 def _search_query_has_other_executable_commands(

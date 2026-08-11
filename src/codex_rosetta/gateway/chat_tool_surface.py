@@ -25,8 +25,15 @@ from .code_mode_projection import (
     prune_exec_tool_description,
 )
 from .tool_adaptation import DEFERRED_CANDIDATES_KEY, EXEC_PROJECTIONS_KEY
+from .tool_profiles import (
+    catalog_runtime_adapters,
+    route_tool_state,
+    tool_catalog_lookups,
+)
+from .web_run_capabilities import WEB_RUN_PROFILE_ITEM_ID
+from .search_provider_contract import SearchProviderCapability
 
-ADAPTER_CONTRACT_VERSION = "chat-tool-surface-v1"
+ADAPTER_CONTRACT_VERSION = "chat-tool-surface-v2"
 
 
 class ChatToolSurfaceUnavailable(RuntimeError):
@@ -131,16 +138,21 @@ class ChatToolSurfaceCoordinator:
         )
         candidate_tools = copy.deepcopy(body["tools"])
         candidate_hash = _canonical_hash(candidate_tools)
-        initial = _snapshot(candidate_tools, epoch=0, reason="initial")
+        initial = _snapshot(
+            candidate_tools,
+            epoch=0,
+            reason="initial",
+            web_run_capabilities=route.web_run_search_capabilities,
+        )
         try:
             snapshot, created = (
-                store.load_or_create_chat_tool_surface(
+                persistence.load_or_create_chat_tool_surface(
                     principal_id=state_scope.principal_id,
                     scope=scope,
                     initial_payload=initial,
                 )
                 if persistence is not None
-                else store.load_or_create(
+                else self._in_memory_store.load_or_create(
                     principal_id=state_scope.principal_id,
                     scope=scope,
                     initial_payload=initial,
@@ -148,6 +160,7 @@ class ChatToolSurfaceCoordinator:
             )
             return self._resolve(
                 body=body,
+                route=route,
                 candidate_tools=candidate_tools,
                 candidate_hash=candidate_hash,
                 snapshot=snapshot,
@@ -168,10 +181,92 @@ class ChatToolSurfaceCoordinator:
                 "window tool surface persistence is unavailable"
             ) from exc
 
+    def locked_web_run_capabilities(
+        self,
+        *,
+        route: ResolvedRoute,
+        state_scope: GatewayStateScope,
+        codex_window_id: str | None,
+        persistence: Any | None,
+    ) -> frozenset[SearchProviderCapability] | None:
+        """Read the first window surface's typed web.run capability contract."""
+        if not (
+            codex_window_id
+            and state_scope.persistent
+            and route.source_provider in {"openai_responses", "open_responses"}
+            and route.tool_profile_name is not None
+            and route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) == "modified"
+        ):
+            return None
+        scope = _surface_scope(
+            route=route,
+            state_scope=state_scope,
+            window_id=codex_window_id,
+        )
+        initial = _snapshot(
+            [],
+            epoch=0,
+            reason="capability_read",
+            web_run_capabilities=route.web_run_search_capabilities,
+        )
+        try:
+            snapshot, _created = (
+                persistence.load_or_create_chat_tool_surface(
+                    principal_id=state_scope.principal_id,
+                    scope=scope,
+                    initial_payload=initial,
+                )
+                if persistence is not None
+                else self._in_memory_store.load_or_create(
+                    principal_id=state_scope.principal_id,
+                    scope=scope,
+                    initial_payload=initial,
+                )
+            )
+            values = snapshot.get("web_run_capabilities")
+            if not isinstance(values, list) or not all(
+                isinstance(value, str) for value in values
+            ):
+                raise ChatToolSurfaceUnavailable(
+                    "stored window web.run capabilities are invalid"
+                )
+            return frozenset(SearchProviderCapability(value) for value in values)
+        except ChatToolSurfaceUnavailable:
+            raise
+        except Exception as exc:
+            raise ChatToolSurfaceUnavailable(
+                "window tool surface persistence is unavailable"
+            ) from exc
+
+    @staticmethod
+    def _replace_snapshot(
+        *,
+        store: Any,
+        persistence: Any | None,
+        principal_id: str,
+        scope: dict[str, Any],
+        expected_epoch: int,
+        replacement: dict[str, Any],
+    ) -> dict[str, Any]:
+        if persistence is not None:
+            return store.replace_chat_tool_surface(
+                principal_id=principal_id,
+                scope=scope,
+                expected_epoch=expected_epoch,
+                payload=replacement,
+            )
+        return store.replace(
+            principal_id=principal_id,
+            scope=scope,
+            expected_epoch=expected_epoch,
+            payload=replacement,
+        )
+
     def _resolve(
         self,
         *,
         body: dict[str, Any],
+        route: ResolvedRoute,
         candidate_tools: list[Any],
         candidate_hash: str,
         snapshot: dict[str, Any],
@@ -212,13 +307,18 @@ class ChatToolSurfaceCoordinator:
         reliable = (
             not opaque
             and selected_name not in deferred_names
-            and all(_reliable_deferred_name(body, name) for name in capability_names)
+            and all(
+                _reliable_deferred_name(body, name, route=route)
+                for name in capability_names
+            )
             and (
                 "exec" not in changed
                 or _reliable_exec_container_change(
                     body,
                     baseline_tools=baseline_tools,
-                    changed_capability_names=capability_names,
+                    changed_capability_names=(
+                        capability_names or _modified_direct_capability_names(route)
+                    ),
                 )
             )
         )
@@ -238,21 +338,16 @@ class ChatToolSurfaceCoordinator:
             candidate_tools,
             epoch=int(snapshot["epoch"]) + 1,
             reason="opaque_rollover",
+            web_run_capabilities=route.web_run_search_capabilities,
         )
-        if persistence is not None:
-            store.replace_chat_tool_surface(
-                principal_id=principal_id,
-                scope=scope,
-                expected_epoch=int(snapshot["epoch"]),
-                payload=replacement,
-            )
-        else:
-            store.replace(
-                principal_id=principal_id,
-                scope=scope,
-                expected_epoch=int(snapshot["epoch"]),
-                payload=replacement,
-            )
+        self._replace_snapshot(
+            store=store,
+            persistence=persistence,
+            principal_id=principal_id,
+            scope=scope,
+            expected_epoch=int(snapshot["epoch"]),
+            replacement=replacement,
+        )
         metadata.update(
             chat_tool_surface_epoch=replacement["epoch"],
             chat_tool_surface_final_hash=candidate_hash,
@@ -300,7 +395,13 @@ def _eligible(
         bool(codex_window_id)
         and state_scope.persistent
         and route.source_provider in {"openai_responses", "open_responses"}
-        and route.target_provider == "openai_chat"
+        and (
+            route.target_provider == "openai_chat"
+            or (
+                route.target_provider in {"openai_responses", "open_responses"}
+                and route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) == "modified"
+            )
+        )
         and route.tool_profile_name is not None
         and isinstance(tools, list)
     )
@@ -329,13 +430,24 @@ def _surface_scope(
     }
 
 
-def _snapshot(tools: list[Any], *, epoch: int, reason: str) -> dict[str, Any]:
+def _snapshot(
+    tools: list[Any],
+    *,
+    epoch: int,
+    reason: str,
+    web_run_capabilities: frozenset[object] | None,
+) -> dict[str, Any]:
     return {
         "epoch": epoch,
         "tools": copy.deepcopy(tools),
         "tool_hash": _canonical_hash(tools),
         "adapter_manifest": _tool_manifest(tools),
         "reason": reason,
+        "web_run_capabilities": sorted(
+            capability.value
+            for capability in (web_run_capabilities or ())
+            if isinstance(capability, SearchProviderCapability)
+        ),
     }
 
 
@@ -382,14 +494,18 @@ def _tool_map(tools: list[Any]) -> tuple[dict[str, Any], bool]:
 
 
 def _tool_name(tool: Any) -> str | None:
-    if not isinstance(tool, dict) or tool.get("type") != "function":
+    if not isinstance(tool, dict) or tool.get("type") not in {"function", "custom"}:
         return None
     function = tool.get("function")
     name = function.get("name") if isinstance(function, dict) else None
+    if not isinstance(name, str):
+        name = tool.get("name")
     return name if isinstance(name, str) and name else None
 
 
-def _reliable_deferred_name(body: dict[str, Any], name: str) -> bool:
+def _reliable_deferred_name(
+    body: dict[str, Any], name: str, *, route: ResolvedRoute
+) -> bool:
     candidates = body.get(DEFERRED_CANDIDATES_KEY)
     candidate = candidates.get(name) if isinstance(candidates, dict) else None
     current_tool = _tool_map(body.get("tools", []))[0].get(name)
@@ -408,7 +524,21 @@ def _reliable_deferred_name(body: dict[str, Any], name: str) -> bool:
     if projection is not None and getattr(projection, "nested_name", ""):
         return getattr(projection, "input_mode", "") in {"args", "freeform"}
 
-    return False
+    return name in _modified_direct_capability_names(route)
+
+
+def _modified_direct_capability_names(route: ResolvedRoute) -> set[str]:
+    """Resolve reliable direct tool identities from the catalog-owned profile item."""
+    if (
+        route.target_provider not in {"openai_responses", "open_responses"}
+        or route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) != "modified"
+    ):
+        return set()
+    if "web_run" not in catalog_runtime_adapters(WEB_RUN_PROFILE_ITEM_ID):
+        return set()
+    item = tool_catalog_lookups()["items"][WEB_RUN_PROFILE_ITEM_ID]
+    name = item.get("name")
+    return {name} if isinstance(name, str) and name else set()
 
 
 def _reliable_exec_container_change(
@@ -491,10 +621,10 @@ def _normalize_exec_description(description: str) -> str:
 
 
 def _function_definition(tool: Any) -> dict[str, Any] | None:
-    if not isinstance(tool, dict) or tool.get("type") != "function":
+    if not isinstance(tool, dict) or tool.get("type") not in {"function", "custom"}:
         return None
     function = tool.get("function")
-    return function if isinstance(function, dict) else None
+    return function if isinstance(function, dict) else tool
 
 
 def _exec_projection_candidates(body: dict[str, Any]) -> dict[str, ExecToolProjection]:
@@ -575,6 +705,8 @@ def _selected_tool_name(tool_choice: Any) -> str | None:
         return None
     function = tool_choice.get("function")
     name = function.get("name") if isinstance(function, dict) else None
+    if not isinstance(name, str):
+        name = tool_choice.get("name")
     return name if isinstance(name, str) else None
 
 

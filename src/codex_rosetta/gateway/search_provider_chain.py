@@ -408,6 +408,15 @@ class SearchProviderChainCoordinator:
             0,
         )
 
+    def current_candidate(
+        self, candidates: Sequence[_CandidateT]
+    ) -> _CandidateT | None:
+        """Return the configured current candidate without changing chain state."""
+        candidate_snapshot = tuple(candidates)
+        if not candidate_snapshot:
+            return None
+        return candidate_snapshot[self._resolve_current_index(candidate_snapshot)]
+
     def _record_success(self, candidate: _CandidateT) -> None:
         self.select_current(candidate)
 

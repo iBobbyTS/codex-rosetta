@@ -23,6 +23,10 @@ from codex_rosetta.gateway.tool_adaptation import (
     DEFERRED_CANDIDATES_KEY,
     EXEC_PROJECTIONS_KEY,
 )
+from codex_rosetta.gateway.search_provider_contract import (
+    DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
+    LOCAL_QUERY_CAPABILITIES,
+)
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.observability.chat_tool_surface_store import (
     ChatToolSurfaceCapacityError,
@@ -70,6 +74,19 @@ def _tool(name: str, *, field: str = "value") -> dict:
                 "properties": {field: {"type": "string"}},
                 "additionalProperties": False,
             },
+        },
+    }
+
+
+def _responses_tool(name: str, *, fields: tuple[str, ...]) -> dict:
+    return {
+        "type": "function",
+        "name": name,
+        "description": f"Use {name}.",
+        "parameters": {
+            "type": "object",
+            "properties": {field: {"type": "string"} for field in fields},
+            "additionalProperties": False,
         },
     }
 
@@ -344,6 +361,49 @@ def test_non_eligible_routes_remain_stateless():
     )
     assert decision.body is body
     assert decision.profile == {}
+
+
+def test_direct_responses_modified_web_run_keeps_first_window_schema() -> None:
+    coordinator = ChatToolSurfaceCoordinator(InMemoryChatToolSurfaceStore())
+    scope = _scope()
+    deepseek_route = _route(
+        target_provider="openai_responses",
+        tool_profile={"namespace.web.run": "modified"},
+        web_run_search_capabilities=DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities,
+    )
+    tavily_route = _route(
+        target_provider="openai_responses",
+        tool_profile={"namespace.web.run": "modified"},
+        web_run_search_capabilities=LOCAL_QUERY_CAPABILITIES,
+    )
+    initial = _responses_tool("web__run", fields=("q",))
+    expanded = _responses_tool("web__run", fields=("q", "domains"))
+
+    first = _apply(
+        coordinator,
+        {"tools": [initial]},
+        scope=scope,
+        route=deepseek_route,
+    )
+    second = _apply(
+        coordinator,
+        {"tools": [expanded]},
+        scope=scope,
+        route=tavily_route,
+    )
+
+    assert first.profile["chat_tool_surface_decision"] == "created"
+    assert second.profile["chat_tool_surface_decision"] == "locked"
+    assert second.body["tools"] == [initial]
+    assert (
+        coordinator.locked_web_run_capabilities(
+            route=tavily_route,
+            state_scope=scope,
+            codex_window_id=scope.conversation_id,
+            persistence=None,
+        )
+        == DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities
+    )
 
 
 def test_persistent_snapshot_survives_restart_without_plaintext_scope(tmp_path):

@@ -754,7 +754,7 @@ def test_gpt_only_rejects_malformed_commands_before_provider_call(
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
-def test_mixed_chain_rejects_recency_before_any_provider_call():
+def test_mixed_chain_current_gpt_preserves_recency_passthrough():
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -773,102 +773,59 @@ def test_mixed_chain_rejects_recency_before_any_provider_call():
     request = _make_request(
         _search_body({"search_query": [{"q": "Python", "recency": 7}]})
     )
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"output": "GPT answer"},
+        raw_content=b'{"output":"GPT answer"}',
+    )
 
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
-    assert response.status_code == 501
-    request.app.transport.send_passthrough.assert_not_awaited()
+    assert response.status_code == 200
+    request.app.transport.send_passthrough.assert_awaited_once()
 
 
-@pytest.mark.parametrize(
-    "local_provider,sidecar_ready",
-    [
-        ("tavily", None),
-        ("self_hosted_google", False),
-        ("self_hosted_google", True),
-    ],
-)
-@pytest.mark.parametrize("gpt_first", [False, True])
-def test_mixed_chain_multi_query_fails_before_candidate_attempt_or_cooldown(
-    local_provider: str,
-    sidecar_ready: bool | None,
-    gpt_first: bool,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
+def test_mixed_chain_multi_query_uses_the_current_provider_capability() -> None:
     gpt_row = {
         "id": "responses",
         "provider": "configured_responses_provider",
         "responses_provider": "search-upstream",
         "responses_model": "gpt-5.6-luna",
     }
-    local_row: dict[str, Any] = {"id": "local", "provider": local_provider}
-    if local_provider == "tavily":
-        local_row["tavily_api_key"] = "tvly-test"
-    rows = [gpt_row, local_row] if gpt_first else [local_row, gpt_row]
+    local_row = {
+        "id": "local",
+        "provider": "tavily",
+        "tavily_api_key": "tvly-test",
+    }
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
         responses_search_provider="search-upstream",
         tool_profile="test-web-run-mapping",
-        search_providers=rows,
-        tavily_api_key="tvly-test" if local_provider == "tavily" else None,
-        web_run_sidecar=local_provider == "self_hosted_google",
+        search_providers=[local_row, gpt_row],
+        tavily_api_key="tvly-test",
     )
     request = _make_request(
         _search_body({"search_query": [{"q": "first"}, {"q": "second"}]})
     )
-    if sidecar_ready is not None:
-        request.app.web_run_health_state = SimpleNamespace(
-            status=AsyncMock(return_value=SimpleNamespace(browser_ready=sidecar_ready))
-        )
-        monkeypatch.setattr(sidecar_module, "request_bounded_response", AsyncMock())
-    trace_path = tmp_path / f"mixed-{local_provider}-{gpt_first}-{sidecar_ready}.jsonl"
-    request.app.stream_trace_state = StreamTraceState(
-        StreamTraceConfig(enabled=True, path=str(trace_path))
+    client = _FakeTavilyClient()
+
+    response = asyncio.run(
+        handle_codex_auxiliary(request, config, "alpha/search", search_client=client)
     )
 
-    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
-
-    assert response.status_code == 501
-    assert (
-        "search_query supports one query"
-        in json.loads(response.body)["error"]["message"]
-    )
+    assert response.status_code == 200
+    assert [query for query, _settings in client.calls] == ["first", "second"]
     request.app.transport.send_passthrough.assert_not_awaited()
-    coordinator = request.app.search_provider_coordinator
-    assert all(
-        not coordinator.is_cooling(candidate)
-        for candidate in config.web_search_candidates
-    )
-    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [record["stage"] for record in records] == [
-        "codex_search_request",
-        "codex_search_not_implemented",
-    ]
-    assert all("candidate_id" not in record["data"] for record in records)
 
 
-@pytest.mark.parametrize(
-    "commands",
-    [
-        {"search_query": [{"q": "Python"}], "open": [{"ref_id": "turn0search0"}]},
-        {"search_query": [{"q": "Python"}], "time": [{"utc_offset": "+00:00"}]},
-        {
-            "search_query": [{"q": "Python"}],
-            "click": [{"ref_id": "turn0fetch0", "id": 1}],
-        },
-    ],
-)
-@pytest.mark.parametrize("gpt_first", [False, True])
-@pytest.mark.parametrize("gpt_status", [200, 500])
-def test_mixed_chain_rejects_combined_commands_before_any_execution(
-    commands: dict[str, Any],
-    gpt_first: bool,
-    gpt_status: int,
+def test_mixed_chain_combined_commands_use_the_current_provider_contract(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
 ) -> None:
+    commands = {
+        "search_query": [{"q": "Python"}],
+        "open": [{"ref_id": "turn0search0"}],
+    }
     gpt_row = {
         "id": "responses",
         "provider": "configured_responses_provider",
@@ -881,43 +838,27 @@ def test_mixed_chain_rejects_combined_commands_before_any_execution(
         upstream_model="deepseek-v4-flash",
         responses_search_provider="search-upstream",
         tool_profile="test-web-run-mapping",
-        search_providers=[gpt_row, local_row] if gpt_first else [local_row, gpt_row],
+        search_providers=[gpt_row, local_row],
         web_run_sidecar=True,
     )
     request = _make_request(_search_body(commands))
     request.app.transport.send_passthrough.return_value = UpstreamResponse(
-        status_code=gpt_status,
-        body={"output": "must not be used"} if gpt_status == 200 else None,
-        raw_content=b"{}",
+        status_code=200,
+        body={"output": "direct GPT response"},
+        raw_content=b'{"output":"direct GPT response"}',
     )
     sidecar_request = AsyncMock()
     monkeypatch.setattr(sidecar_module, "request_bounded_response", sidecar_request)
-    trace_path = (
-        tmp_path / f"combined-{gpt_first}-{gpt_status}-{sorted(commands)}.jsonl"
-    )
-    request.app.stream_trace_state = StreamTraceState(
-        StreamTraceConfig(enabled=True, path=str(trace_path))
-    )
-
     response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
 
-    assert response.status_code == 501
-    assert (
-        "search_query cannot be combined"
-        in json.loads(response.body)["error"]["message"]
-    )
-    request.app.transport.send_passthrough.assert_not_awaited()
+    assert response.status_code == 200
+    request.app.transport.send_passthrough.assert_awaited_once()
     sidecar_request.assert_not_awaited()
     coordinator = request.app.search_provider_coordinator
     assert all(
         coordinator.cooldown_reason(candidate) is None
         for candidate in config.web_search_candidates
     )
-    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [record["stage"] for record in records] == [
-        "codex_search_request",
-        "codex_search_not_implemented",
-    ]
 
 
 def test_all_gpt_preserves_combined_commands_for_direct_passthrough() -> None:
@@ -1168,13 +1109,13 @@ def test_offline_self_hosted_mixed_chain_rejects_unprojected_gpt_commands(
         responses_search_provider="search-upstream",
         tool_profile="test-web-run-mapping",
         search_providers=[
+            {"id": "self-hosted-offline", "provider": "self_hosted_google"},
             {
                 "id": "responses-first",
                 "provider": "configured_responses_provider",
                 "responses_provider": "search-upstream",
                 "responses_model": "gpt-5.6-luna",
             },
-            {"id": "self-hosted-offline", "provider": "self_hosted_google"},
         ],
     )
     request = _make_request(_search_body(commands))
@@ -1200,13 +1141,13 @@ def test_mixed_chain_projection_and_execution_reject_unprojected_commands_across
         responses_search_provider="search-upstream",
         tool_profile="test-web-run-mapping",
         search_providers=[
+            {"id": "self-hosted-second", "provider": "self_hosted_google"},
             {
                 "id": "responses-first",
                 "provider": "configured_responses_provider",
                 "responses_provider": "search-upstream",
                 "responses_model": "gpt-5.6-luna",
             },
-            {"id": "self-hosted-second", "provider": "self_hosted_google"},
         ],
         web_run_sidecar=True,
     )
@@ -1427,7 +1368,7 @@ def test_modified_responses_first_row_fails_over_to_candidate_sidecar(
     assert records[-1]["data"]["candidate_provider"] == "self_hosted_google"
 
 
-def test_mixed_gpt_success_uses_normalized_local_result_contract() -> None:
+def test_mixed_current_gpt_success_preserves_passthrough_result_contract() -> None:
     config = _make_config(
         "chat",
         upstream_model="deepseek-v4-flash",
@@ -1457,9 +1398,7 @@ def test_mixed_gpt_success_uses_normalized_local_result_contract() -> None:
     result = json.loads(response.body)
     assert response.status_code == 200
     assert "GPT answer" in result["output"]
-    assert result["results"] == [
-        {"type": "text_result", "title": "Result", "url": "", "content": ""}
-    ]
+    assert result["results"] == [{"title": "Result"}]
 
 
 def test_each_self_hosted_candidate_selects_its_own_sidecar_engine(

@@ -61,6 +61,7 @@ from .logging import (
     record_request_stat,
 )
 from .search_provider_candidates import search_candidates_capabilities
+from .search_provider_chain import SearchProviderChainCoordinator
 
 from .proxy import (
     ProviderMetadataCapacityError,
@@ -617,24 +618,33 @@ async def _resolve_request_tool_runtime_capabilities(
         return route
     if route_tool_state(route, WEB_RUN_PROFILE_ITEM_ID) != "modified":
         return route
-    if not config.web_run_sidecar_url or not config.web_run_sidecar_token:
-        return route
     if not _request_exposes_web_run(body):
         return route
 
-    health_state: WebRunHealthState = app.web_run_health_state
-    status = await health_state.status(config.web_run_sidecar_url)
-    if status.browser_ready is not True:
-        return route
+    browser_ready = False
+    if config.web_run_sidecar_url and config.web_run_sidecar_token:
+        health_state: WebRunHealthState = app.web_run_health_state
+        status = await health_state.status(config.web_run_sidecar_url)
+        browser_ready = status.browser_ready is True
 
     capabilities = set(route.tool_runtime_capabilities)
-    capabilities.add(WEB_RUN_SIDECAR_CAPABILITY)
+    if browser_ready:
+        capabilities.add(WEB_RUN_SIDECAR_CAPABILITY)
+    else:
+        capabilities.discard(WEB_RUN_SIDECAR_CAPABILITY)
+    candidates = config.web_search_candidates
+    coordinator = getattr(app, "search_provider_coordinator", None)
+    if isinstance(coordinator, SearchProviderChainCoordinator):
+        current = coordinator.current_candidate(candidates)
+        candidates = (current,) if current is not None else ()
     search_capabilities = search_candidates_capabilities(
-        config.web_search_candidates,
+        candidates,
         self_hosted_ready=True,
     )
     if search_capabilities:
         capabilities.add(WEB_RUN_BASIC_SEARCH_CAPABILITY)
+    else:
+        capabilities.discard(WEB_RUN_BASIC_SEARCH_CAPABILITY)
     return replace(
         route,
         tool_runtime_capabilities=frozenset(capabilities),
@@ -1159,7 +1169,6 @@ def create_app(
     )
     codex_search_reference_store = CodexSearchReferenceStore()
     from .search_usage import TavilyUsageState
-    from .search_provider_chain import SearchProviderChainCoordinator
 
     tavily_usage_state = TavilyUsageState()
     image_fetch_workers = ImageFetchWorkerPool()

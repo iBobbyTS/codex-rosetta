@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import AsyncMock, MagicMock
 
 import asyncio
 import pytest
@@ -15,6 +16,7 @@ from codex_rosetta.gateway.code_mode_projection import (
     project_modified_exec_web_run_description,
 )
 from codex_rosetta.gateway.codex_search import (
+    CodexSearchCurrentProviderUnavailable,
     CodexSearchNotImplemented,
     execute_local_codex_search,
 )
@@ -26,6 +28,7 @@ from codex_rosetta.gateway.proxy import (
 from codex_rosetta.gateway.search_provider_candidates import (
     search_candidates_capabilities,
 )
+from codex_rosetta.gateway.search_provider_chain import SearchProviderChainCoordinator
 from codex_rosetta.gateway.search_provider_contract import (
     DEEPSEEK_NATIVE_RESPONSES_CONTRACT,
     GPT_MIXED_MODE_CAPABILITIES,
@@ -49,7 +52,12 @@ from codex_rosetta.routing import ResolvedRoute
 
 
 def _candidate(contract, provider="configured_responses_provider"):
-    return SimpleNamespace(contract=contract, provider=provider)
+    return SimpleNamespace(
+        row_id=provider,
+        identity=f"identity-{provider}",
+        contract=contract,
+        provider=provider,
+    )
 
 
 def _schema() -> dict:
@@ -460,6 +468,67 @@ def test_request_time_replace_promotes_ready_self_hosted_typed_enum() -> None:
     )
     assert resolved.web_run_search_capabilities == LOCAL_QUERY_CAPABILITIES
     assert WEB_RUN_SIDECAR_CAPABILITY in resolved.tool_runtime_capabilities
+
+
+def test_request_time_projection_uses_only_the_current_provider_contract() -> None:
+    tavily = _candidate(TAVILY_LOCAL_CONTRACT, "tavily")
+    deepseek = _candidate(
+        DEEPSEEK_NATIVE_RESPONSES_CONTRACT, "deepseek_native_responses"
+    )
+    coordinator = SearchProviderChainCoordinator(current_provider=deepseek)
+    config = SimpleNamespace(
+        web_run_sidecar_url=None,
+        web_run_sidecar_token=None,
+        web_search_candidates=(tavily, deepseek),
+    )
+
+    resolved = asyncio.run(
+        _resolve_request_tool_runtime_capabilities(
+            SimpleNamespace(search_provider_coordinator=coordinator),
+            cast(GatewayConfig, config),
+            _route(LOCAL_QUERY_CAPABILITIES),
+            {"tools": [_function()]},
+        )
+    )
+
+    assert (
+        resolved.web_run_search_capabilities
+        == DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities
+    )
+    assert (
+        SearchProviderCapability.DOMAIN_FILTER
+        not in resolved.web_run_search_capabilities
+    )
+
+
+def test_locked_capability_current_unavailable_rejects_before_search_state() -> None:
+    coordinator = SimpleNamespace(run=AsyncMock())
+    reference_store = SimpleNamespace(provider_affinity=MagicMock())
+    body = {
+        "id": "search-1",
+        "model": "gateway-model",
+        "commands": {"search_query": [{"q": "Python", "domains": ["python.org"]}]},
+    }
+
+    with pytest.raises(
+        CodexSearchCurrentProviderUnavailable,
+        match=r"commands.search_query\[\]\.domains is currently unavailable",
+    ):
+        asyncio.run(
+            execute_local_codex_search(
+                body,
+                None,
+                reference_store=reference_store,
+                principal_id="principal",
+                search_candidates=(_candidate(TAVILY_LOCAL_CONTRACT, "tavily"),),
+                search_coordinator=coordinator,
+                locked_search_capabilities=LOCAL_QUERY_CAPABILITIES,
+                live_search_capabilities=DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities,
+            )
+        )
+
+    coordinator.run.assert_not_awaited()
+    reference_store.provider_affinity.assert_not_called()
 
 
 def test_typed_empty_or_unknown_does_not_fall_back_to_legacy_search() -> None:
