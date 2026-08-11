@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -18,9 +19,17 @@ from codex_rosetta.gateway.codex_auxiliary import handle_codex_auxiliary
 from codex_rosetta.gateway.codex_page import OpenedPage, PageOpenBlocked
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.codex_search_references import CodexSearchReferenceStore
+from codex_rosetta.gateway.chat_tool_surface import (
+    ChatToolSurfaceCoordinator,
+    InMemoryChatToolSurfaceStore,
+)
 from codex_rosetta.gateway.proxy import _apply_profile_runtime_adapter
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
-from codex_rosetta.gateway.search_provider_chain import SearchProviderAttemptCategory
+from codex_rosetta.gateway.search_provider_chain import (
+    SearchProviderAttemptCategory,
+    SearchProviderChainCoordinator,
+)
+from codex_rosetta.gateway.state_scope import GatewayStateScope
 from codex_rosetta.gateway.stream_trace import StreamTraceConfig, StreamTraceState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport import UpstreamConnectionError
@@ -31,7 +40,10 @@ from codex_rosetta.gateway.web_search import (
     TavilyRequestErrorCategory,
     WebSearchSettings,
 )
-from codex_rosetta.gateway.search_provider_contract import GPT_MIXED_MODE_CAPABILITIES
+from codex_rosetta.gateway.search_provider_contract import (
+    GPT_MIXED_MODE_CAPABILITIES,
+    LOCAL_QUERY_CAPABILITIES,
+)
 from codex_rosetta.gateway.web_run_capabilities import (
     project_modified_web_run_function,
     web_run_model_availability,
@@ -1042,6 +1054,20 @@ def test_mixed_chain_projection_execution_trace_and_cooldown_matrix(
         )
     )
 
+    unavailable_current_self_hosted = (
+        local_provider == "self_hosted_google"
+        and sidecar_ready is False
+        and not gpt_first
+    )
+    if unavailable_current_self_hosted:
+        assert response.status_code == 501
+        assert all(
+            request.app.search_provider_coordinator.cooldown_reason(candidate) is None
+            for candidate in config.web_search_candidates
+        )
+        request.app.transport.send_passthrough.assert_not_awaited()
+        return
+
     assert response.status_code == 200
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
     result_record = records[-1]
@@ -1066,15 +1092,10 @@ def test_mixed_chain_projection_execution_trace_and_cooldown_matrix(
         candidate.row_id: candidate for candidate in config.web_search_candidates
     }
     first_id = "responses" if gpt_first else "local"
-    unavailable_first = (
-        local_provider == "self_hosted_google"
-        and sidecar_ready is False
-        and not gpt_first
-    )
-    if first_fails or unavailable_first:
+    if first_fails:
         expected_cooldown = (
             SearchProviderAttemptCategory.UPSTREAM_FAILURE
-            if first_id == "responses" or unavailable_first
+            if first_id == "responses"
             else SearchProviderAttemptCategory.HTTP_ERROR
         )
         assert (
@@ -1511,6 +1532,58 @@ def test_browser_only_injection_is_not_used_as_a_search_dependency() -> None:
     assert json.loads(response.body)["error"]["message"].endswith(
         "Search unavailable; Please consider Browser Use"
     )
+    request.app.transport.send_passthrough.assert_not_awaited()
+
+
+def test_locked_search_rejects_unready_current_self_hosted_before_chain() -> None:
+    config = _make_config(
+        "chat",
+        upstream_model="deepseek-v4-flash",
+        tool_profile="test-web-run-mapping",
+        search_providers=[{"id": "self-hosted-only", "provider": "self_hosted_google"}],
+    )
+    request = _make_request(
+        _search_body({"search_query": [{"q": "Python documentation"}]})
+    )
+    window_id = "window-self-hosted"
+    request.headers["x-codex-window-id"] = window_id
+    request.app.persistence = None
+
+    route, _ = config.resolve("openai_responses", "gateway-model")
+    surface_coordinator = ChatToolSurfaceCoordinator(InMemoryChatToolSurfaceStore())
+    scope = GatewayStateScope.for_request(
+        principal_id="test-client",
+        provider_name=route.provider_name,
+        model="gateway-model",
+        window_id=window_id,
+    )
+    assert (
+        surface_coordinator.locked_web_run_capabilities(
+            route=replace(
+                route,
+                web_run_search_capabilities=LOCAL_QUERY_CAPABILITIES,
+            ),
+            state_scope=scope,
+            codex_window_id=window_id,
+            persistence=None,
+        )
+        == LOCAL_QUERY_CAPABILITIES
+    )
+    request.app.chat_tool_surface_coordinator = surface_coordinator
+
+    chain_coordinator = SearchProviderChainCoordinator()
+    run = AsyncMock(side_effect=AssertionError("search chain must not be reached"))
+    chain_coordinator.run = run  # type: ignore[method-assign]
+    request.app.search_provider_coordinator = chain_coordinator
+
+    response = asyncio.run(handle_codex_auxiliary(request, config, "alpha/search"))
+
+    assert response.status_code == 501
+    assert "search_query is currently unavailable for the current provider" in str(
+        json.loads(response.body)["error"]["message"]
+    )
+    run.assert_not_awaited()
+    assert chain_coordinator.cooldown_reason(config.web_search_candidates[0]) is None
     request.app.transport.send_passthrough.assert_not_awaited()
 
 

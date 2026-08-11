@@ -346,7 +346,7 @@ async def handle_codex_auxiliary(  # noqa: C901
             current_candidate = search_coordinator.current_candidate(search_candidates)
             live_search_capabilities = search_candidates_capabilities(
                 (current_candidate,) if current_candidate is not None else (),
-                self_hosted_ready=True,
+                self_hosted_ready=resolved_browser_client is not None,
             )
             locked_search_capabilities = None
             try:
