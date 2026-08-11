@@ -406,6 +406,40 @@ def test_direct_responses_modified_web_run_keeps_first_window_schema() -> None:
     )
 
 
+def test_direct_responses_lite_additional_tools_keep_first_window_schema() -> None:
+    coordinator = ChatToolSurfaceCoordinator(InMemoryChatToolSurfaceStore())
+    scope = _scope()
+    deepseek_route = _route(
+        target_provider="openai_responses",
+        tool_profile={"namespace.web.run": "modified"},
+        web_run_search_capabilities=DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities,
+    )
+    tavily_route = _route(
+        target_provider="openai_responses",
+        tool_profile={"namespace.web.run": "modified"},
+        web_run_search_capabilities=LOCAL_QUERY_CAPABILITIES,
+    )
+    initial = _responses_tool("web__run", fields=("q",))
+    expanded = _responses_tool("web__run", fields=("q", "domains"))
+
+    first = _apply(
+        coordinator,
+        {"input": [{"type": "additional_tools", "tools": [initial]}]},
+        scope=scope,
+        route=deepseek_route,
+    )
+    second = _apply(
+        coordinator,
+        {"input": [{"type": "additional_tools", "tools": [expanded]}]},
+        scope=scope,
+        route=tavily_route,
+    )
+
+    assert first.profile["chat_tool_surface_decision"] == "created"
+    assert second.profile["chat_tool_surface_decision"] == "locked"
+    assert second.body["input"][0]["tools"] == [initial]
+
+
 def test_persistent_snapshot_survives_restart_without_plaintext_scope(tmp_path):
     coordinator = ChatToolSurfaceCoordinator(InMemoryChatToolSurfaceStore())
     baseline = _body(_tool("exec"))

@@ -501,6 +501,35 @@ def test_request_time_projection_uses_only_the_current_provider_contract() -> No
     )
 
 
+def test_unready_current_self_hosted_provider_does_not_project_search() -> None:
+    self_hosted = _candidate(SELF_HOSTED_LOCAL_CONTRACT, "self_hosted_google")
+    coordinator = SearchProviderChainCoordinator(current_provider=self_hosted)
+    config = SimpleNamespace(
+        web_run_sidecar_url="http://sidecar",
+        web_run_sidecar_token="secret",
+        web_search_candidates=(self_hosted,),
+    )
+
+    class Health:
+        async def status(self, _url):
+            return SimpleNamespace(browser_ready=False)
+
+    resolved = asyncio.run(
+        _resolve_request_tool_runtime_capabilities(
+            SimpleNamespace(
+                search_provider_coordinator=coordinator,
+                web_run_health_state=Health(),
+            ),
+            cast(GatewayConfig, config),
+            _route(LOCAL_QUERY_CAPABILITIES),
+            {"tools": [_function()]},
+        )
+    )
+
+    assert resolved.web_run_search_capabilities == frozenset()
+    assert WEB_RUN_BASIC_SEARCH_CAPABILITY not in resolved.tool_runtime_capabilities
+
+
 def test_locked_capability_current_unavailable_rejects_before_search_state() -> None:
     coordinator = SimpleNamespace(run=AsyncMock())
     reference_store = SimpleNamespace(provider_affinity=MagicMock())

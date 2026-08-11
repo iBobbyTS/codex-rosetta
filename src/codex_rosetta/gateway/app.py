@@ -639,7 +639,7 @@ async def _resolve_request_tool_runtime_capabilities(
         candidates = (current,) if current is not None else ()
     search_capabilities = search_candidates_capabilities(
         candidates,
-        self_hosted_ready=True,
+        self_hosted_ready=browser_ready,
     )
     if search_capabilities:
         capabilities.add(WEB_RUN_BASIC_SEARCH_CAPABILITY)

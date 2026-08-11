@@ -122,11 +122,12 @@ class ChatToolSurfaceCoordinator:
         persistence: Any | None,
     ) -> ChatToolSurfaceDecision:
         """Lock or roll over the eligible window's final ordered Chat tools."""
+        carrier_index, carrier_tools = _tool_carrier(body)
         if not _eligible(
             route=route,
             state_scope=state_scope,
             codex_window_id=codex_window_id,
-            tools=body.get("tools"),
+            tools=carrier_tools,
         ):
             return ChatToolSurfaceDecision(body=body, profile={})
 
@@ -136,7 +137,7 @@ class ChatToolSurfaceCoordinator:
             state_scope=state_scope,
             window_id=codex_window_id or "",
         )
-        candidate_tools = copy.deepcopy(body["tools"])
+        candidate_tools = copy.deepcopy(carrier_tools)
         candidate_hash = _canonical_hash(candidate_tools)
         initial = _snapshot(
             candidate_tools,
@@ -161,6 +162,7 @@ class ChatToolSurfaceCoordinator:
             return self._resolve(
                 body=body,
                 route=route,
+                carrier_index=carrier_index,
                 candidate_tools=candidate_tools,
                 candidate_hash=candidate_hash,
                 snapshot=snapshot,
@@ -267,6 +269,7 @@ class ChatToolSurfaceCoordinator:
         *,
         body: dict[str, Any],
         route: ResolvedRoute,
+        carrier_index: int | None,
         candidate_tools: list[Any],
         candidate_hash: str,
         snapshot: dict[str, Any],
@@ -301,6 +304,8 @@ class ChatToolSurfaceCoordinator:
             )
             return ChatToolSurfaceDecision(body=body, profile=metadata)
 
+        comparison_body = dict(body)
+        comparison_body["tools"] = candidate_tools
         deferred_names = added | changed
         capability_names = deferred_names - {"exec"}
         selected_name = _selected_tool_name(body.get("tool_choice"))
@@ -308,13 +313,13 @@ class ChatToolSurfaceCoordinator:
             not opaque
             and selected_name not in deferred_names
             and all(
-                _reliable_deferred_name(body, name, route=route)
+                _reliable_deferred_name(comparison_body, name, route=route)
                 for name in capability_names
             )
             and (
                 "exec" not in changed
                 or _reliable_exec_container_change(
-                    body,
+                    comparison_body,
                     baseline_tools=baseline_tools,
                     changed_capability_names=(
                         capability_names or _modified_direct_capability_names(route)
@@ -323,8 +328,7 @@ class ChatToolSurfaceCoordinator:
             )
         )
         if reliable:
-            adapted = dict(body)
-            adapted["tools"] = copy.deepcopy(baseline_tools)
+            adapted = _replace_tool_carrier(body, carrier_index, baseline_tools)
             _enable_locked_deferred_candidates(adapted, capability_names)
             metadata.update(
                 chat_tool_surface_final_hash=baseline_hash,
@@ -382,6 +386,30 @@ def apply_chat_tool_surface(
         codex_window_id=codex_window_id,
         persistence=persistence,
     )
+
+
+def _tool_carrier(body: dict[str, Any]) -> tuple[int | None, Any]:
+    """Return the top-level or Responses Lite final tool array."""
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        return None, tools
+    input_items = body.get("input")
+    if isinstance(input_items, list):
+        for index, item in enumerate(input_items):
+            if isinstance(item, dict) and item.get("type") == "additional_tools":
+                return index, item.get("tools")
+    return None, None
+
+
+def _replace_tool_carrier(
+    body: dict[str, Any], carrier_index: int | None, tools: list[Any]
+) -> dict[str, Any]:
+    adapted = copy.deepcopy(body) if carrier_index is not None else dict(body)
+    if carrier_index is None:
+        adapted["tools"] = copy.deepcopy(tools)
+    else:
+        adapted["input"][carrier_index]["tools"] = copy.deepcopy(tools)
+    return adapted
 
 
 def _eligible(
