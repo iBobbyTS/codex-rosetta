@@ -17,8 +17,6 @@ from .transport._base import UpstreamSafetyError
 
 TAVILY_USAGE_CACHE_SECONDS = 300.0
 TAVILY_USAGE_FETCH_TIMEOUT_SECONDS = 10.0
-# One SearchRequest may contain four advanced searches at two credits each.
-TAVILY_QUOTA_RECOVERY_MIN_CREDITS = 8
 # Four complete generations of the 32-row configured provider chain.
 TAVILY_USAGE_STATE_CAPACITY = 128
 
@@ -36,13 +34,13 @@ class TavilyUsage:
 
     @property
     def proves_search_quota_recovery(self) -> bool:
-        """Return whether this fresh sample can fund one maximum-size request."""
+        """Return whether this sample proves the account is no longer empty."""
 
         return (
             self.status == "ok"
             and self.sample_started_at is not None
             and self.available_credits is not None
-            and self.available_credits >= TAVILY_QUOTA_RECOVERY_MIN_CREDITS
+            and self.available_credits > 0
         )
 
 
@@ -73,6 +71,7 @@ class TavilyUsageState:
         api_key: str,
         *,
         fetcher: Callable[[], Awaitable[dict[str, Any]]] | None = None,
+        refresh: bool = False,
     ) -> TavilyUsage:
         """Return cached account-plan usage, coalescing concurrent cache misses."""
         digest = hashlib.sha256(api_key.encode()).hexdigest()
@@ -81,7 +80,7 @@ class TavilyUsageState:
             async with self._lock:
                 self._sweep_expired_cache_locked()
                 cached = self._cache.get(digest)
-                if cached is not None:
+                if cached is not None and not refresh:
                     self._cache.move_to_end(digest)
                     return cached[1]
                 task = self._inflight.get(digest)

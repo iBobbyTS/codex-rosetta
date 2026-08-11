@@ -30,35 +30,52 @@ async def test_usage_reads_only_account_plan_and_calculates_next_month() -> None
     assert usage.status == "ok"
     assert (usage.used, usage.limit, usage.reset_date) == (156, 1000, "2027-01-01")
     assert usage.available_credits == 3
-    assert not usage.proves_search_quota_recovery
-
-
-@pytest.mark.asyncio
-async def test_usage_recovery_requires_capacity_for_a_complete_request() -> None:
-    now = 100.0
-    state = TavilyUsageState(monotonic=lambda: now)
-
-    async def fetch() -> dict[str, object]:
-        return {"account": {"plan_usage": 992, "plan_limit": 1000}}
-
-    usage = await state.get("secret", fetcher=fetch)
-
-    assert usage.sample_started_at == 100.0
-    assert usage.available_credits == 8
     assert usage.proves_search_quota_recovery
 
 
 @pytest.mark.asyncio
-async def test_usage_near_limit_does_not_prove_recovery() -> None:
-    state = TavilyUsageState()
+async def test_any_positive_available_credit_proves_recovery() -> None:
+    now = 100.0
+    state = TavilyUsageState(monotonic=lambda: now)
 
     async def fetch() -> dict[str, object]:
         return {"account": {"plan_usage": 999, "plan_limit": 1000}}
 
     usage = await state.get("secret", fetcher=fetch)
 
+    assert usage.sample_started_at == 100.0
     assert usage.available_credits == 1
+    assert usage.proves_search_quota_recovery
+
+
+@pytest.mark.asyncio
+async def test_zero_available_credit_does_not_prove_recovery() -> None:
+    state = TavilyUsageState()
+
+    async def fetch() -> dict[str, object]:
+        return {"account": {"plan_usage": 1000, "plan_limit": 1000}}
+
+    usage = await state.get("secret", fetcher=fetch)
+
+    assert usage.available_credits == 0
     assert not usage.proves_search_quota_recovery
+
+
+@pytest.mark.asyncio
+async def test_forced_usage_refresh_bypasses_completed_cache() -> None:
+    state = TavilyUsageState()
+    calls = 0
+
+    async def fetch() -> dict[str, object]:
+        nonlocal calls
+        calls += 1
+        return {"account": {"plan_usage": calls, "plan_limit": 10}}
+
+    first = await state.get("secret", fetcher=fetch)
+    second = await state.get("secret", fetcher=fetch, refresh=True)
+
+    assert (first.used, second.used) == (1, 2)
+    assert calls == 2
 
 
 @pytest.mark.asyncio

@@ -383,3 +383,36 @@ def test_usage_with_no_tavily_rows_performs_no_io() -> None:
     )
 
     assert json.loads(response.body) == {"entries": []}
+
+
+def test_admin_usage_zero_marks_tavily_row_quota_exhausted() -> None:
+    config = _config()
+    config.web_search = WebSearchConfig(
+        [{"id": "tavily-row", "provider": "tavily", "tavily_api_key": "secret"}]
+    )
+    tavily_candidate = network_search.TavilySearchProviderCandidate(
+        row_id="tavily-row", api_key="secret", identity="identity"
+    )
+    config.web_search_candidates = (tavily_candidate,)
+    state = TavilyUsageState()
+    coordinator = SearchProviderChainCoordinator()
+
+    async def run() -> Any:
+        async def fetch() -> dict[str, object]:
+            return {"account": {"plan_usage": 10, "plan_limit": 10}}
+
+        await state.get("secret", fetcher=fetch)
+        return await network_search.get_network_search_usage(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    gateway_config=config,
+                    tavily_usage_state=state,
+                    search_provider_coordinator=coordinator,
+                )
+            )
+        )
+
+    response = asyncio.run(run())
+
+    assert response.status_code == 200
+    assert coordinator.is_quota_exhausted(tavily_candidate)

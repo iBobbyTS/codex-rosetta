@@ -147,9 +147,7 @@ async def get_network_search_usage(request: Any) -> Response:
                 )
             except TimeoutError:
                 usage = TavilyUsage(status="unavailable")
-        if usage.proves_search_quota_recovery and isinstance(
-            coordinator, SearchProviderChainCoordinator
-        ):
+        if isinstance(coordinator, SearchProviderChainCoordinator):
             candidate = next(
                 (
                     item
@@ -160,11 +158,13 @@ async def get_network_search_usage(request: Any) -> Response:
                 None,
             )
             if candidate is not None:
-                coordinator.clear_cooldown_from_health_evidence(
-                    candidate,
-                    evidence_started_at=usage.sample_started_at,
-                    reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
-                )
+                coordinator.apply_tavily_usage(candidate, usage)
+                if usage.proves_search_quota_recovery:
+                    coordinator.clear_cooldown_from_health_evidence(
+                        candidate,
+                        evidence_started_at=usage.sample_started_at,
+                        reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                    )
         safe_limit = _safe_usage_value(usage.limit)
         safe_used = _safe_usage_value(usage.used, upper_bound=safe_limit)
         if usage.status != "ok" or safe_limit is None or safe_used is None:

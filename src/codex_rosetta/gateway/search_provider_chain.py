@@ -8,9 +8,12 @@ import time
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import suppress
 from enum import StrEnum
-from typing import Any, Generic, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
-from .search_provider_candidates import SearchProviderCandidate
+from .search_provider_candidates import (
+    SearchProviderCandidate,
+    TavilySearchProviderCandidate,
+)
 from .search_provider_chain_state import (
     DEFAULT_SEARCH_PROVIDER_STATE_CAPACITY,
     SearchProviderStateCapacityUnavailable as SearchProviderStateCapacityUnavailable,
@@ -31,6 +34,11 @@ _DETACHED_OPERATION_FUTURES: set[asyncio.Future[Any]] = set()
 _CurrentProviderValue = SearchProviderCandidate | str | tuple[str, str] | None
 _CurrentProviderSource = Callable[[], _CurrentProviderValue] | _CurrentProviderValue
 _CurrentProviderRecorder = Callable[[SearchProviderCandidate], object]
+
+if TYPE_CHECKING:
+    from codex_rosetta.observability.persistence import PersistenceManager
+
+    from .search_usage import TavilyUsage, TavilyUsageState
 
 
 async def _invoke_operation(operation: _AsyncOperation[_ResultT]) -> _ResultT:
@@ -164,6 +172,9 @@ class SearchProviderChainCoordinator:
         current_provider: _CurrentProviderSource = None,
         record_current: _CurrentProviderRecorder | None = None,
         on_success: _CurrentProviderRecorder | None = None,
+        persistence: PersistenceManager | None = None,
+        tavily_usage_state: TavilyUsageState | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if record_current is not None and on_success is not None:
             raise ValueError("record_current and on_success are mutually exclusive")
@@ -175,6 +186,95 @@ class SearchProviderChainCoordinator:
         )
         self._current_provider = current_provider
         self._record_current = record_current or on_success
+        self._persistence = persistence
+        self._tavily_usage_state = tavily_usage_state
+        self._wall_clock = wall_clock
+        self._process_current: tuple[str, str] | None = None
+        self._process_quota: dict[tuple[str, str], float] = {}
+
+    def _load_current(self) -> _CurrentProviderValue:
+        if self._current_provider is not None:
+            source = self._current_provider
+            return (
+                cast(Callable[[], _CurrentProviderValue], source)()
+                if callable(source)
+                else source
+            )
+        if self._persistence is not None:
+            return self._persistence.load_current_search_provider()
+        return self._process_current
+
+    def select_current(self, candidate: SearchProviderCandidate) -> None:
+        """Record a manually or automatically selected current provider row."""
+        if self._record_current is not None:
+            self._record_current(candidate)
+            return
+        value = (candidate.row_id, candidate.identity)
+        if self._persistence is not None:
+            self._persistence.set_current_search_provider(*value)
+        else:
+            self._process_current = value
+
+    def _quota_check_at(self, candidate: SearchProviderCandidate) -> float | None:
+        if self._persistence is not None:
+            return self._persistence.load_search_provider_quota_check(
+                candidate.row_id, candidate.identity
+            )
+        return self._process_quota.get((candidate.row_id, candidate.identity))
+
+    def is_quota_exhausted(self, candidate: SearchProviderCandidate) -> bool:
+        """Return whether a zero-credit exclusion exists for this identity."""
+        return self._quota_check_at(candidate) is not None
+
+    def apply_tavily_usage(
+        self, candidate: TavilySearchProviderCandidate, usage: TavilyUsage
+    ) -> bool:
+        """Apply one safe Tavily usage sample to persistent routing state."""
+        available = usage.available_credits if usage.status == "ok" else None
+        key = (candidate.row_id, candidate.identity)
+        if available == 0:
+            next_check_at = (
+                self._wall_clock() + DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+            )
+            if self._persistence is not None:
+                self._persistence.set_search_provider_quota_exhausted(
+                    *key, next_check_at
+                )
+            else:
+                self._process_quota[key] = next_check_at
+            return True
+        if available is not None and available > 0:
+            if self._persistence is not None:
+                self._persistence.clear_search_provider_quota(*key)
+            else:
+                self._process_quota.pop(key, None)
+        return False
+
+    async def _refresh_tavily_quota(
+        self, candidate: TavilySearchProviderCandidate
+    ) -> bool | None:
+        if self._tavily_usage_state is None:
+            return None
+        try:
+            usage = await self._tavily_usage_state.get(candidate.api_key, refresh=True)
+        except asyncio.CancelledError:
+            raise
+        except MemoryError:
+            raise
+        except Exception:
+            return None
+        return self.apply_tavily_usage(candidate, usage)
+
+    async def _quota_allows_attempt(self, candidate: _CandidateT) -> bool:
+        next_check_at = self._quota_check_at(candidate)
+        if next_check_at is None:
+            return True
+        if self._wall_clock() < next_check_at:
+            return False
+        if not isinstance(candidate, TavilySearchProviderCandidate):
+            return False
+        exhausted = await self._refresh_tavily_quota(candidate)
+        return exhausted is False
 
     def is_cooling(self, candidate: SearchProviderCandidate) -> bool:
         """Return whether the candidate's current identity is cooling."""
@@ -246,12 +346,7 @@ class SearchProviderChainCoordinator:
         self._observe(event)
 
     def _resolve_current_index(self, candidates: tuple[_CandidateT, ...]) -> int:
-        source = self._current_provider
-        current = (
-            cast(Callable[[], _CurrentProviderValue], source)()
-            if callable(source)
-            else source
-        )
+        current = self._load_current()
         if current is None:
             return 0
         if isinstance(current, str):
@@ -287,8 +382,7 @@ class SearchProviderChainCoordinator:
         )
 
     def _record_success(self, candidate: _CandidateT) -> None:
-        if self._record_current is not None:
-            self._record_current(candidate)
+        self.select_current(candidate)
 
     async def run(
         self,
@@ -309,6 +403,14 @@ class SearchProviderChainCoordinator:
             if candidate.row_id in seen_rows:
                 continue
             seen_rows.add(candidate.row_id)
+            if not await self._quota_allows_attempt(candidate):
+                self._observe_candidate(
+                    candidate,
+                    attempt_index,
+                    "quota_exhausted",
+                    cooldown_reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+                )
+                continue
             cooling_reason = self._state.cooldown_reason(candidate)
             if cooling_reason is not None:
                 self._observe_candidate(
@@ -323,7 +425,16 @@ class SearchProviderChainCoordinator:
                 result = await runner(candidate)
             except SearchProviderAttemptError as error:
                 try:
-                    reason = self.mark_failed(candidate, error)
+                    quota_exhausted = (
+                        await self._refresh_tavily_quota(candidate)
+                        if isinstance(candidate, TavilySearchProviderCandidate)
+                        else None
+                    )
+                    reason = (
+                        SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+                        if quota_exhausted is True
+                        else self.mark_failed(candidate, error)
+                    )
                 except BaseException as settlement_error:
                     raise settlement_error from None
                 self._observe_candidate(

@@ -1159,6 +1159,7 @@ def create_app(
     )
     codex_search_reference_store = CodexSearchReferenceStore()
     from .search_usage import TavilyUsageState
+    from .search_provider_chain import SearchProviderChainCoordinator
 
     tavily_usage_state = TavilyUsageState()
     image_fetch_workers = ImageFetchWorkerPool()
@@ -1285,6 +1286,10 @@ def create_app(
     app.body_log_state = body_log_state  # type: ignore
 
     setup_admin(app, config, config_path)
+    app.search_provider_coordinator = SearchProviderChainCoordinator(  # type: ignore
+        persistence=app.persistence,  # type: ignore
+        tavily_usage_state=tavily_usage_state,
+    )
 
     return app
 

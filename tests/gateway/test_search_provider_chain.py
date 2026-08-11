@@ -1080,6 +1080,7 @@ def test_cooldown_survives_reorder_but_identity_change_is_fresh() -> None:
     assert run(coordinator.run((second, first), fail_first)) == "b"
     assert calls == ["b"]
     calls.clear()
+    coordinator.select_current(changed)
     assert run(coordinator.run((changed, second), fail_first)) == "new-a"
     assert calls == ["new-a"]
 

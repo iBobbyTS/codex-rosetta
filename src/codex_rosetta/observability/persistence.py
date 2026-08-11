@@ -104,6 +104,13 @@ _EXPECTED_SCHEMA_COLUMNS: dict[str, tuple[tuple[str, str, int, int], ...]] = {
         ("created_at", "TEXT", 1, 0),
         ("expires_at", "TEXT", 1, 0),
     ),
+    "search_provider_state": (
+        ("row_id", "TEXT", 0, 1),
+        ("identity", "TEXT", 1, 0),
+        ("is_current", "INTEGER", 1, 0),
+        ("quota_exhausted", "INTEGER", 1, 0),
+        ("quota_check_at", "REAL", 0, 0),
+    ),
 }
 
 _EXPECTED_SCHEMA_INDEXES: dict[
@@ -217,6 +224,7 @@ class PersistenceManager:
         self._chat_tool_surface_store: Any | None = None
         self._tool_mapping_lock = threading.RLock()
         self._compaction_mapping_lock = threading.RLock()
+        self._search_provider_state_lock = threading.RLock()
         self._tool_mapping_max_row_bytes = _positive_tool_mapping_limit(
             tool_mapping_max_row_bytes,
             field="tool_mapping_max_row_bytes",
@@ -482,6 +490,13 @@ class PersistenceManager:
                 ON codex_compaction_mappings(expires_at);
             CREATE INDEX IF NOT EXISTS idx_ccm_principal
                 ON codex_compaction_mappings(principal_id);
+            CREATE TABLE IF NOT EXISTS search_provider_state (
+                row_id           TEXT PRIMARY KEY,
+                identity         TEXT NOT NULL,
+                is_current       INTEGER NOT NULL,
+                quota_exhausted  INTEGER NOT NULL,
+                quota_check_at   REAL
+            );
         """)
         from .tool_history_store import ToolHistoryStore
 
@@ -1194,6 +1209,84 @@ class PersistenceManager:
         except (json.JSONDecodeError, TypeError) as exc:
             logger.warning("Failed to load metrics: %s", exc)
             return None
+
+    # ------------------------------------------------------------------
+    # Search provider routing state
+    # ------------------------------------------------------------------
+
+    def load_current_search_provider(self) -> tuple[str, str] | None:
+        """Return the persisted current row and its effective identity."""
+        with self._search_provider_state_lock:
+            row = self._conn.execute(
+                "SELECT row_id, identity FROM search_provider_state "
+                "WHERE is_current = 1 LIMIT 1"
+            ).fetchone()
+        return (str(row[0]), str(row[1])) if row is not None else None
+
+    def set_current_search_provider(self, row_id: str, identity: str) -> None:
+        """Persist one current row while invalidating stale row identities."""
+        with self._search_provider_state_lock:
+            try:
+                self._conn.execute("BEGIN IMMEDIATE")
+                self._conn.execute(
+                    "UPDATE search_provider_state SET is_current = 0 "
+                    "WHERE is_current = 1"
+                )
+                self._conn.execute(
+                    "INSERT INTO search_provider_state "
+                    "(row_id, identity, is_current, quota_exhausted, quota_check_at) "
+                    "VALUES (?, ?, 1, 0, NULL) "
+                    "ON CONFLICT(row_id) DO UPDATE SET "
+                    "identity = excluded.identity, is_current = 1, "
+                    "quota_exhausted = CASE WHEN identity = excluded.identity "
+                    "THEN quota_exhausted ELSE 0 END, "
+                    "quota_check_at = CASE WHEN identity = excluded.identity "
+                    "THEN quota_check_at ELSE NULL END",
+                    (row_id, identity),
+                )
+                self._conn.commit()
+            except BaseException:
+                self._conn.rollback()
+                raise
+
+    def load_search_provider_quota_check(
+        self, row_id: str, identity: str
+    ) -> float | None:
+        """Return the next check time for an exhausted matching row identity."""
+        with self._search_provider_state_lock:
+            row = self._conn.execute(
+                "SELECT quota_check_at FROM search_provider_state "
+                "WHERE row_id = ? AND identity = ? AND quota_exhausted = 1",
+                (row_id, identity),
+            ).fetchone()
+        return float(row[0]) if row is not None and row[0] is not None else None
+
+    def set_search_provider_quota_exhausted(
+        self, row_id: str, identity: str, next_check_at: float
+    ) -> None:
+        """Persist a zero-credit exclusion and its next on-demand check time."""
+        with self._search_provider_state_lock:
+            self._conn.execute(
+                "INSERT INTO search_provider_state "
+                "(row_id, identity, is_current, quota_exhausted, quota_check_at) "
+                "VALUES (?, ?, 0, 1, ?) "
+                "ON CONFLICT(row_id) DO UPDATE SET identity = excluded.identity, "
+                "quota_exhausted = 1, quota_check_at = excluded.quota_check_at, "
+                "is_current = CASE WHEN identity = excluded.identity "
+                "THEN is_current ELSE 0 END",
+                (row_id, identity, next_check_at),
+            )
+            self._conn.commit()
+
+    def clear_search_provider_quota(self, row_id: str, identity: str) -> None:
+        """Clear quota exclusion for one matching row identity."""
+        with self._search_provider_state_lock:
+            self._conn.execute(
+                "UPDATE search_provider_state SET quota_exhausted = 0, "
+                "quota_check_at = NULL WHERE row_id = ? AND identity = ?",
+                (row_id, identity),
+            )
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Error dumps
