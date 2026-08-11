@@ -16,6 +16,7 @@ from typing import Any, cast
 
 import pytest
 
+from codex_rosetta._vendor import httpclient as httpclient_module
 from codex_rosetta._vendor.httpclient import (
     DEFAULT_HEADER_TIMEOUT,
     DEFAULT_MAX_REDIRECTS,
@@ -1237,6 +1238,52 @@ def test_stream_open_timeout_returns_connection_error(
                 _provider(), "openai_chat", {"model": "test"}, "test"
             )
         )
+
+
+def test_stream_open_peer_reset_returns_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ResettingWriter:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def write(self, _data: bytes) -> None:
+            return None
+
+        async def drain(self) -> None:
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+        def close(self) -> None:
+            self.closed = True
+
+        async def wait_closed(self) -> None:
+            return None
+
+    writer = _ResettingWriter()
+
+    async def acquire(*args: Any, **kwargs: Any) -> tuple[Any, _ResettingWriter, str]:
+        del args, kwargs
+        return asyncio.StreamReader(), writer, "/"
+
+    monkeypatch.setattr(httpclient_module, "_async_acquire_connection", acquire)
+    client = AsyncClient()
+    transport = HttpTransport()
+    transport._pool = cast(
+        Any,
+        SimpleNamespace(get=lambda _proxy=None, allow_redirects=False: client),
+    )
+
+    with pytest.raises(
+        transport_module.UpstreamConnectionError,
+        match="Connection to upstream.example:443 failed",
+    ):
+        asyncio.run(
+            transport.send_streaming(
+                _provider(), "openai_chat", {"model": "test"}, "test"
+            )
+        )
+
+    assert writer.closed is True
 
 
 def test_stream_open_cancellation_cancels_upstream_operation() -> None:

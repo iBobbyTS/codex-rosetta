@@ -1,5 +1,5 @@
 # /// zerodep
-# version = "0.5.1"
+# version = "0.5.2"
 # deps = []
 # tier = "subsystem"
 # category = "network"
@@ -1003,6 +1003,13 @@ async def _async_teardown_writer(
     """
     try:
         writer.close()
+    except OSError:
+        logger.debug(
+            "peer reset while waiting for writer close for %s",
+            context,
+            exc_info=True,
+        )
+        return
     except BaseException as exc:
         if preserve_primary or isinstance(exc, Exception):
             logger.debug("failed to close writer for %s", context, exc_info=True)
@@ -3190,6 +3197,28 @@ def _build_async_streaming_response(
 # -- Async transport --
 
 
+def _wrap_async_errors(
+    exc: Exception,
+    host: str,
+    port: int,
+    url: str,
+    timeout: float,
+) -> HttpClientError:
+    """Translate low-level async exceptions into httpclient exceptions."""
+    if isinstance(exc, (HttpTimeoutError, HttpConnectionError, TooManyRedirects)):
+        return exc
+    if isinstance(exc, (OSError, http.client.HTTPException)):
+        return HttpConnectionError(
+            f"Connection to {host}:{port} failed: {exc}",
+            host=host,
+            port=port,
+        )
+    if "timed out" in str(exc).lower():
+        msg = f"Request to {url} timed out after {timeout}s"
+        return HttpTimeoutError(msg, url=url, timeout=timeout)
+    return exc  # type: ignore[return-value]
+
+
 async def _async_request(
     method: str,
     url: str,
@@ -3326,6 +3355,12 @@ async def _async_request(
                 url=url,
                 timeout=timeout,
             )
+        except Exception as exc:
+            preserve_primary = True
+            wrapped = _wrap_async_errors(exc, host, port, url, timeout)
+            if wrapped is exc:
+                raise
+            raise wrapped from exc
         except BaseException:
             preserve_primary = True
             raise
