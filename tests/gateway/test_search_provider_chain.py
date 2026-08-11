@@ -870,6 +870,21 @@ def test_non_execution_failures_do_not_fail_over(
     assert not coordinator.is_cooling(second)
 
 
+def test_manual_selection_clears_only_selected_candidate_cooldown() -> None:
+    first = candidate("first", "identity-first")
+    second = candidate("second", "identity-second")
+    coordinator = SearchProviderChainCoordinator()
+    failure = SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE)
+    coordinator.mark_failed(first, failure)
+    coordinator.mark_failed(second, failure)
+
+    coordinator.select_current(first, clear_cooldown=True)
+
+    assert coordinator.current_candidate((first, second)) is first
+    assert coordinator.is_cooling(first) is False
+    assert coordinator.is_cooling(second) is True
+
+
 def test_all_failed_chain_has_stable_browser_use_error() -> None:
     first = candidate("first", "identity-first")
     second = candidate("second", "identity-second")

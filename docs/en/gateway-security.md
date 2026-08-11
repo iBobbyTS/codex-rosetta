@@ -249,8 +249,9 @@ CLI option, configure matching `server.web_run.base_url` and
 variables) explicitly. Sidecar operations default to a 300-second timeout;
 `server.web_run.timeout_seconds` accepts values from 1 through 600 seconds.
 
-The Admin **Web Search** page stores an ordered list of at most 32 basic-search
-Providers. It can use Tavily credentials,
+The Admin **Web Search** page stores the canonical
+`server.web_search.providers` list of at most 32 basic-search Providers. The
+retired single-Provider object is rejected. It can use Tavily credentials,
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, or
 **Self-hosted (Bing Browser)** in the existing sidecar. It can also select an
 enabled configured Responses Provider and one of the existing reviewed Search
@@ -280,16 +281,20 @@ data, and do not alter the persisted Provider-row wire format. DeepSeek uses
 its own native Responses family and adapter rather than GPT's `alpha/search`
 passthrough or the Tool Catalog.
 
-self-contained **Search Test** card sends the fixed query
+One row is the sticky current Provider. A Provider search failure starts one
+circular pass over the other eligible rows, with each row attempted at most
+once; the first successful row is persisted as current for subsequent requests.
+An unsupported search sub-tool is returned as unavailable for the current
+Provider and does not trigger failover or cooldown. The self-contained
+**Search Test** card sends the fixed query
 `latest python release version` through the same Gateway auxiliary handler as a
 real `POST /v1/alpha/search` request and displays normalized result cards; it does not call
 Tavily, the sidecar, or a Provider-specific search client directly. The
 self-contained Admin boundary never displays a Provider's raw failure body:
 authorization, timeout, rate-limit, unavailable, and rejected outcomes are
 mapped to controlled error categories. Self-hosted providers send no search API
-credential and never substitute another engine within one row. A typed
-candidate-health failure may still advance to the next explicitly configured
-row in the ordered Provider list. The read-only advanced section reports sidecar service
+credential and never substitute another engine within one row. The read-only
+advanced section reports sidecar service
 availability and browser readiness independently. The status endpoint uses a
 five-second bounded request to the sidecar's public `/health` route and never
 returns the sidecar URL, bearer token, or upstream error text. The page checks
@@ -314,6 +319,22 @@ For each Tavily row, Admin usage shows only Tavily's
 for five minutes by credential and concurrent misses are coalesced. The reset
 date is shown only as the first day of the next month; Tavily does not provide
 an exact reset time or authoritative time zone for this value.
+
+An ordinary Provider search failure puts that row identity into a one-hour,
+process-local cooldown. A Provider with a supported periodic-credit check is
+instead persistently marked exhausted only when its available credit is exactly
+zero. Exhausted credit is rechecked on demand no more than once per hour until
+it recovers; refreshing Admin usage applies the same state transition. Admin
+shows available, cooling, and exhausted rows with green, yellow, and red
+backgrounds. A cooling row remains manually selectable and selection clears
+its cooldown; an exhausted row is disabled and rejected. Manual selection and
+successful automatic failover persist the current row, while Gateway restart
+clears only the process-local cooldowns.
+
+For authenticated Codex requests with `x-codex-window-id`, Provider changes do
+not add to or trim that window's first projected `web.run` surface. A stale
+invocation returns that the command is currently unavailable for the current
+Provider. New windows receive the current Provider capabilities.
 
 Tavily credentials are sent only in the Bearer authorization header. Before a
 Tavily success or error response can reach a model, Search client, or diagnostic

@@ -66,11 +66,12 @@ OpenAI `images/generations` 和 `images/edits` 线协议；Rosetta 不转换供�
 
 独立 Search 还提供本地 bridge。当所选 Profile 把 `web.run` 设为 Modified
 时，`/v1/alpha/search` 会在本地执行可靠子集：`search_query` 使用 Admin
-**联网搜索**页面中的有序 Provider 列表（`server.web_search.providers`）。列表最多
-包含 32 行，并严格从上到下尝试。单行列表只代表一个 Provider，不会自动切换；多行
-列表只有在已定义的连接、HTTP、无效响应、上游、额度或本地不可用结果下
-才尝试下一候选，并且每个候选在每个 SearchRequest 中最多尝试一次。400/422 请求拒绝
-属于终止结果，不会切换候选或启动冷却。Tavily 使用所配置的 API Key；
+**联网搜索**页面中的有序 Provider 列表（`server.web_search.providers`）。规范格式最多
+包含 32 行；已停用的单 Provider 对象会被拒绝。其中一行是粘性的当前 Provider。每个
+请求从该行开始；发生 Provider 搜索失败后，Rosetta 会在其余符合条件的行中循环一圈，
+直到某行成功，并把成功行作为后续请求的当前 Provider。每个候选在单个 SearchRequest
+中最多尝试一次。搜索子工具不受当前 Provider 支持时，会明确返回该子工具当前不可用，
+不会切换 Provider，也不会启动冷却。Tavily 使用所配置的 API Key；
 **Self-hosted (Google)**、**Self-hosted (Bing RSS)** 和
 **Self-hosted (Bing Browser)** 则在现有 `web-run` 容器中运行，因此要求
 sidecar 健康。Bing RSS 读取 XML 结果表示，Bing Browser 加载并解析交互式
@@ -84,7 +85,8 @@ Provider 的相对 `alpha/search` 端点，使用其凭据和传输设置，并�
 Responses 协议、恰好一个凭据且 origin 为官方 `https://api.deepseek.com`。该行只保存 Provider
 名称，模型固定为 `deepseek-v4-flash`，通过官方 Responses `web_search` 每个请求只发送一个
 `search_query.q`。domain、recency、location、多查询、server history、`deepseek-v4-pro` 以及
-usage/pro/quota 展示均不支持。符合条件的行失败时，仍按既有有序链规则切换到下一条配置行。
+usage/pro/quota 展示均不支持。符合条件的行发生 Provider 搜索失败时，仍可在本轮循环中
+切换到下一条符合条件的配置行。
 所有本地搜索 Provider 都会被规范化为相同的 Codex 可见来源格式。
 Web Search Provider 是 Rosetta 的独立功能模块：Tool Catalog 只拥有普通工具声明，
 不拥有搜索 Provider 的子能力、请求字段、校验或调用方式。全 configured GPT 候选链会将完整
@@ -103,9 +105,19 @@ UTC offset 计算。Open 会逐跳校验重定向目标，拒绝凭据和非公�
 允许五次重定向，并限制为 15 秒和 2 MiB；返回规范化、带行号的正文并支持
 `lineno`；已保存的 `turnXsearchY` 引用会在对应作用域内解析为搜索结果 URL。
 
-候选健康失败会启动一小时的进程内冷却，后续请求会跳过相同的行、配置和凭据 identity。
-Gateway 重启会清空全部冷却；修改某行的配置或凭据会形成新的候选 identity，而只调整
-未变化行的顺序不会。Tavily HTTP 432 和 433 还会额外归类为额度耗尽。
+普通 Provider 搜索失败会启动一小时的进程内冷却，后续请求会跳过相同的行、配置和凭据
+identity；Gateway 重启会清空这些冷却。对于支持周期额度查询的 Provider，只有可用额度
+严格等于零才会把该行标记为额度耗尽并持久排除。Rosetta 会按需查询已耗尽行，频率不超过
+每小时一次，直到额度恢复；刷新 Admin 额度也会应用同一份额度状态。修改某行的配置或
+凭据会形成新的候选 identity，而只调整未变化行的顺序不会。Admin 页面用绿色表示可用、
+黄色表示冷却、红色表示额度耗尽。用户可以手动选择冷却行，这会清除该行当前冷却并允许
+立即尝试；额度耗尽行不可选择。手动选择和成功的自动切换都会持久保存当前行，Gateway
+重启后仍然生效。
+
+对于带 `x-codex-window-id` 的已认证 Codex 请求，Provider 状态变化后，同一窗口继续使用
+首次投影的 `web.run` 工具面；Rosetta 不会在该窗口内直接增加或裁剪命令。如果窗口调用
+当前 Provider 无法执行的旧命令，Rosetta 会返回该命令当前不可用。新窗口只获得当前
+Provider 状态支持的能力。
 
 可选、独立构建的 `web-run` Docker sidecar 会提供自托管 Google 或 Bing 基础搜索，并增加
 支持 JavaScript 渲染的 `open`、session 级 `turnXfetchY` 页面引用、带编号链接的 `click`、不区分大小写

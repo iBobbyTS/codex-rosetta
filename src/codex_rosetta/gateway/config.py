@@ -86,9 +86,6 @@ CONFIGURED_RESPONSES_WEB_SEARCH_MODELS = (
     "gpt-5.6-terra",
     "gpt-5.6-luna",
 )
-DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL = CONFIGURED_RESPONSES_WEB_SEARCH_MODELS[
-    0
-]
 WEB_SEARCH_PROVIDERS = frozenset(
     {
         CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
@@ -96,11 +93,6 @@ WEB_SEARCH_PROVIDERS = frozenset(
         "tavily",
         *SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     }
-)
-LEGACY_WEB_SEARCH_PROVIDERS = frozenset(
-    provider
-    for provider in WEB_SEARCH_PROVIDERS
-    if provider != "deepseek_native_responses"
 )
 MAX_WEB_SEARCH_PROVIDERS = 32
 WEB_SEARCH_PROVIDER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -350,81 +342,16 @@ def _normalize_web_search_provider(  # noqa: C901
     )
 
 
-def _normalize_legacy_web_search(mapping: dict[str, Any]) -> list[WebSearchProvider]:
-    """Normalize the former single-provider shape into the canonical list."""
-    unsupported = set(mapping) - {
-        "provider",
-        "responses_model",
-        "responses_provider",
-        "tavily_api_key",
-    }
-    if unsupported:
-        raise ValueError(
-            f"config: server.web_search has unsupported fields: {sorted(unsupported)}"
-        )
-    provider = mapping.get("provider", "tavily")
-    responses_model = mapping.get(
-        "responses_model", DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL
-    )
-    responses_provider = mapping.get("responses_provider", "")
-    api_key = mapping.get("tavily_api_key", "")
-    if not isinstance(provider, str) or provider not in LEGACY_WEB_SEARCH_PROVIDERS:
-        raise ValueError(
-            "config: server.web_search.provider must be one of "
-            f"{sorted(LEGACY_WEB_SEARCH_PROVIDERS)}"
-        )
-    if not isinstance(api_key, str):
-        raise ValueError("config: server.web_search.tavily_api_key must be a string")
-    if not isinstance(responses_provider, str):
-        raise ValueError(
-            "config: server.web_search.responses_provider must be a string"
-        )
-    responses_provider = responses_provider.strip()
-    if not isinstance(responses_model, str):
-        raise ValueError("config: server.web_search.responses_model must be a string")
-    responses_model = responses_model.strip()
-    if responses_model not in CONFIGURED_RESPONSES_WEB_SEARCH_MODELS:
-        raise ValueError(
-            "config: server.web_search.responses_model must be one of "
-            f"{list(CONFIGURED_RESPONSES_WEB_SEARCH_MODELS)}"
-        )
-    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER and not responses_provider:
-        raise ValueError(
-            "config: server.web_search.responses_provider is required when "
-            "provider is 'configured_responses_provider'"
-        )
-    api_key = api_key.strip()
-    if provider == "tavily":
-        if not api_key:
-            return []
-        return [{"id": "legacy-0", "provider": "tavily", "tavily_api_key": api_key}]
-    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
-        return [
-            {
-                "id": "legacy-0",
-                "provider": CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
-                "responses_provider": responses_provider,
-                "responses_model": responses_model,
-            }
-        ]
-    return [
-        cast(
-            SelfHostedWebSearchProvider,
-            {"id": "legacy-0", "provider": provider},
-        )
-    ]
-
-
 def normalize_web_search(value: Any) -> WebSearchConfig:
     """Validate and canonicalize the global Rosetta search configuration."""
     if value is None:
-        mapping: dict[str, Any] = {}
+        return WebSearchConfig([])
     elif isinstance(value, dict):
         mapping = value
     else:
         raise ValueError("config: server.web_search must be an object")
     if "providers" not in mapping:
-        return WebSearchConfig(_normalize_legacy_web_search(mapping))
+        raise ValueError("config: server.web_search must contain 'providers'")
     unsupported = set(mapping) - {"providers"}
     if unsupported:
         raise ValueError(
@@ -973,11 +900,7 @@ class GatewayConfig:
         self.local_mode, self.local_mode_confirmed = normalize_local_mode_settings(
             _server
         )
-        raw_web_search = _server.get("web_search")
-        legacy_web_search = not (
-            isinstance(raw_web_search, dict) and "providers" in raw_web_search
-        )
-        self.web_search = normalize_web_search(raw_web_search)
+        self.web_search = normalize_web_search(_server.get("web_search"))
         for provider in self.web_search.providers:
             if provider["provider"] == "tavily":
                 tavily = cast(TavilyWebSearchProvider, provider)
@@ -1079,36 +1002,12 @@ class GatewayConfig:
                 provider.name = "deepseek"
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
-        if legacy_web_search:
-            self._validate_legacy_web_search_provider(
-                raw_web_search if isinstance(raw_web_search, dict) else {}
-            )
         self.web_search_candidates = build_search_provider_candidates(
             self.web_search.providers,
             self.providers,
             {name: cfg["api_type"] for name, cfg in self._raw_providers.items()},
             allowed_responses_models=CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
         )
-
-    def _validate_legacy_web_search_provider(self, mapping: dict[str, Any]) -> None:
-        """Require a legacy configured search upstream to support Responses."""
-        if (
-            mapping.get("provider", "tavily")
-            != CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
-        ):
-            return
-        provider_name = mapping.get("responses_provider", "")
-        provider = self._raw_providers.get(provider_name)
-        if provider is None:
-            raise ValueError(
-                "config: server.web_search.responses_provider must name an enabled "
-                f"provider; got {provider_name!r}"
-            )
-        if provider.get("api_type") != "responses":
-            raise ValueError(
-                "config: server.web_search.responses_provider must name a provider "
-                f"with api_type 'responses'; got {provider_name!r}"
-            )
 
     def _validate(self) -> None:
         if not isinstance(self.admin_password, str) or not self.admin_password.strip():

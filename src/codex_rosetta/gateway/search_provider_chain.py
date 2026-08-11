@@ -204,8 +204,15 @@ class SearchProviderChainCoordinator:
             return self._persistence.load_current_search_provider()
         return self._process_current
 
-    def select_current(self, candidate: SearchProviderCandidate) -> None:
+    def select_current(
+        self,
+        candidate: SearchProviderCandidate,
+        *,
+        clear_cooldown: bool = False,
+    ) -> None:
         """Record a manually or automatically selected current provider row."""
+        if clear_cooldown:
+            self._state.clear(candidate)
         if self._record_current is not None:
             self._record_current(candidate)
             return

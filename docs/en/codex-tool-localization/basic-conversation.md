@@ -81,12 +81,13 @@ not translate vendor-specific image APIs.
 Standalone Search has an additional local bridge. When the selected Profile
 marks `web.run` as Modified, `/v1/alpha/search` executes the reliable subset
 locally: `search_query` uses the ordered Provider list configured under Admin
-**Web Search** (`server.web_search.providers`). The list accepts up to 32 rows
-and is tried from top to bottom. A one-row list is one Provider, not automatic
-failover. With multiple rows, Rosetta tries the next candidate only after a
-defined connection, HTTP, invalid-response, upstream, quota, or
-local-unavailable outcome; every candidate is attempted at most once per
-SearchRequest. A 400/422 request rejection is terminal and does not fail over
+**Web Search** (`server.web_search.providers`). The canonical list accepts up
+to 32 rows; the retired single-Provider object is rejected. One row is the
+sticky current Provider. Each request starts there and, after a Provider search
+failure, makes one circular pass over the other eligible rows until one
+succeeds. That successful row becomes current for later requests. A row is
+attempted at most once per SearchRequest. An unsupported search sub-tool is
+reported as unavailable for the current Provider and does not switch Providers
 or start a cooldown. Tavily uses the configured API Key;
 **Self-hosted (Google)**, **Self-hosted (Bing RSS)**, and
 **Self-hosted (Bing Browser)** run in the existing `web-run` container and
@@ -108,9 +109,9 @@ The row stores only that Provider name, uses fixed `deepseek-v4-flash`, and
 invokes the official Responses `web_search` tool with one `search_query.q` per
 request. Domains, recency, location, multi-query, server history,
 `deepseek-v4-pro`, and usage/pro/quota display are intentionally unsupported.
-A failed eligible row may advance to the next configured row under the existing
-ordered chain rules. All local providers are
-normalized to the same Codex-visible source format.
+An eligible row whose Provider search fails may advance to the next eligible
+configured row in that circular pass. All local providers are normalized to the
+same Codex-visible source format.
 Web Search Providers are an independent Rosetta feature module: the Tool
 Catalog owns ordinary tool declarations, but does not own search-provider
 sub-capabilities, request fields, validation, or invocation. An all-configured
@@ -136,11 +137,26 @@ and applies a 15-second and 2 MiB response limit. It returns normalized,
 line-addressable text and supports `lineno`; stored `turnXsearchY` references
 resolve to their scoped search-result URL.
 
-A candidate-health failure starts a one-hour, process-local cooldown, so later
-requests skip that same row/configuration/credential identity. Restarting the
-Gateway clears all cooldowns. Changing a row's configuration or credential
-creates a new candidate identity; merely reordering an unchanged row does not.
-Tavily HTTP 432 and 433 are additionally classified as quota exhaustion.
+An ordinary Provider search failure starts a one-hour, process-local cooldown,
+so later requests skip that same row/configuration/credential identity.
+Restarting the Gateway clears these cooldowns. For Providers with a supported
+periodic-credit check, only an exact zero available-credit value marks the row
+exhausted and persistently excludes it. Rosetta rechecks an exhausted row on
+demand no more than once per hour until credit is available again; refreshing
+Admin usage applies the same quota state. Changing a row's configuration or
+credential creates a new candidate identity; merely reordering an unchanged row
+does not. The Admin page shows available rows in green, cooling rows in yellow,
+and exhausted rows in red. An operator may select a cooling row, which clears
+that row's current cooldown for an immediate attempt; an exhausted row cannot
+be selected. Manual selection and successful automatic failover persist the
+current row across Gateway restarts.
+
+For authenticated Codex requests with `x-codex-window-id`, a window keeps its
+first projected `web.run` surface when Provider state changes. Rosetta neither
+adds nor removes commands from that locked surface. If the window invokes a
+stale command that the current Provider cannot perform, Rosetta returns that
+the command is currently unavailable. A new window receives the capabilities
+of the current Provider state.
 
 An optional, separately built `web-run` Docker sidecar provides self-hosted
 Google or Bing basic search and adds JavaScript-rendered `open`, session-scoped

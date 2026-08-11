@@ -19,6 +19,8 @@ from ...search_provider_chain import (
 from ...search_provider_candidates import TavilySearchProviderCandidate
 from ...search_usage import TavilyUsage, TavilyUsageState
 from ...tool_profiles import route_tool_state
+from ...web_run_health import WebRunHealthState
+from ._shared import _parse_json_object
 
 SEARCH_TEST_QUERY = "latest python release version"
 TAVILY_USAGE_MAX_CONCURRENCY = 8
@@ -125,6 +127,93 @@ async def test_network_search(request: Any) -> Response:
         return _normalize_search_test_failure(response)
     finally:
         api_key_principal_var.reset(principal_token)
+
+
+def _routing_status(
+    coordinator: SearchProviderChainCoordinator,
+    candidate: Any,
+) -> str:
+    if coordinator.is_quota_exhausted(candidate):
+        return "exhausted"
+    if coordinator.is_cooling(candidate):
+        return "cooling"
+    return "available"
+
+
+async def get_network_search_status(request: Any) -> Response:
+    """Return sidecar health plus credential-free row routing status."""
+    config = getattr(request.app, "gateway_config", None)
+    health_state = getattr(request.app, "web_run_health_state", None)
+    if health_state is None:
+        health_state = WebRunHealthState()
+        request.app.web_run_health_state = health_state
+    health = await health_state.status(
+        config.web_run_sidecar_url if isinstance(config, GatewayConfig) else None
+    )
+    payload: dict[str, Any] = health.as_dict()
+    candidates = tuple(getattr(config, "web_search_candidates", ()))
+    coordinator = getattr(request.app, "search_provider_coordinator", None)
+    if not isinstance(coordinator, SearchProviderChainCoordinator):
+        payload.update({"current_provider_id": None, "providers": []})
+        return JSONResponse(payload)
+    current = coordinator.current_candidate(candidates)
+    payload.update(
+        {
+            "current_provider_id": current.row_id if current is not None else None,
+            "providers": [
+                {
+                    "id": candidate.row_id,
+                    "status": _routing_status(coordinator, candidate),
+                    "current": candidate is current,
+                }
+                for candidate in candidates
+            ],
+        }
+    )
+    return JSONResponse(payload)
+
+
+async def select_network_search_provider(request: Any) -> Response:
+    """Select the current row, rejecting only persisted quota exhaustion."""
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    if set(body) != {"current_provider_id"}:
+        return JSONResponse(
+            {"error": "Body must contain only 'current_provider_id'"},
+            status_code=400,
+        )
+    row_id = body.get("current_provider_id")
+    if not isinstance(row_id, str) or not row_id:
+        return JSONResponse(
+            {"error": "'current_provider_id' must be a non-empty string"},
+            status_code=400,
+        )
+    config = getattr(request.app, "gateway_config", None)
+    coordinator = getattr(request.app, "search_provider_coordinator", None)
+    if not isinstance(config, GatewayConfig) or not isinstance(
+        coordinator, SearchProviderChainCoordinator
+    ):
+        return JSONResponse(
+            {"error": "Gateway search provider state is unavailable"},
+            status_code=503,
+        )
+    candidate = next(
+        (
+            item
+            for item in getattr(config, "web_search_candidates", ())
+            if item.row_id == row_id
+        ),
+        None,
+    )
+    if candidate is None:
+        return JSONResponse({"error": "Search provider row not found"}, status_code=404)
+    if coordinator.is_quota_exhausted(candidate):
+        return JSONResponse(
+            {"error": "Search provider quota is exhausted"}, status_code=409
+        )
+    coordinator.select_current(candidate, clear_cooldown=True)
+    return JSONResponse({"ok": True, "current_provider_id": candidate.row_id})
 
 
 async def get_network_search_usage(request: Any) -> Response:

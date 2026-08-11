@@ -202,7 +202,8 @@ docker-compose -f docker/docker-compose.yaml \
 `server.web_run.base_url`、`server.web_run.token`（或对应的 URL/Token 环境变量）。
 Sidecar 操作默认超时为 300 秒；`server.web_run.timeout_seconds` 接受 1 到 600 秒。
 
-Admin **联网搜索**页面保存一个最多 32 行的有序基础搜索 Provider 列表，可选择
+Admin **联网搜索**页面保存规范的 `server.web_search.providers` 列表，最多包含 32 行；
+已停用的单 Provider 对象会被拒绝。页面可选择
 Tavily 凭据，或现有 sidecar 内的
 **Self-hosted (Google)**、**Self-hosted (Bing RSS)** 与
 **Self-hosted (Bing Browser)**，也可以选择一个已启用的已配置 Responses Provider。
@@ -222,13 +223,15 @@ Tavily 行只显示 Tavily key 与现有额度视图；DeepSeek 行显示配置 
 显示本地 query adapter 能力，GPT/local 混合链则显示并强制安全交集：只能包含一个
 `search_query`。这些派生摘要不会包含凭据、凭据指纹、sidecar 连接值或上游私有数据，也不会
 改变持久化的 Provider-row wire 格式。DeepSeek 使用独立的 native Responses family 和
-adapter，不复用 GPT `alpha/search` 透传，也不通过 Tool Catalog 扩展实现。页面内的**搜索测试**卡片使用固定查询
+adapter，不复用 GPT `alpha/search` 透传，也不通过 Tool Catalog 扩展实现。其中一行是
+粘性的当前 Provider。发生 Provider 搜索失败时，Rosetta 会从下一条符合条件的行开始
+循环一圈，每行最多尝试一次；第一条成功行会持久保存为后续请求的当前 Provider。搜索
+子工具不受支持时只返回该子工具当前不可用，不会触发切换或冷却。页面内的**搜索测试**卡片使用固定查询
 `latest python release version`，并通过与真实 `POST /v1/alpha/search` 请求相同的
 Gateway auxiliary handler 执行后只展示规范化结果卡片；它不会直接调用 Tavily、sidecar 或
 Provider-specific 搜索 client。Admin 边界不会显示 Provider 原始失败正文；认证、超时、
 限流、不可用和拒绝结果会映射为受控错误类别。self-hosted Provider 不会发送搜索 API
-凭据，也不会在单行内部隐式替换搜索引擎；候选健康失败仍可按有序 Provider 列表切换到
-下一条显式配置的候选。高级 Section
+凭据，也不会在单行内部隐式替换搜索引擎。高级 Section
 只读，并分别显示 sidecar 服务在线状态和浏览器就绪状态。状态端点以五秒超时、
 有界响应访问 sidecar 的公共 `/health` 路由，不返回 sidecar URL、Bearer Token
 或上游错误正文。页面进入后立即检查，仅在页面停留期间每五秒刷新，离开后停止。
@@ -245,6 +248,17 @@ Admin 保存时收敛成这一个 Key。多个账号必须配置成多个独立 
 对每个 Tavily 行，Admin usage 只展示 Tavily 的 `account.plan_usage` 和
 `account.plan_limit`。结果按 credential 在服务端缓存五分钟，并合并并发 cache miss。
 重置日期只显示为下个月首日；Tavily 未为这个值提供准确重置时间或权威时区。
+
+普通 Provider 搜索失败会让该行 identity 进入一小时的进程内冷却。对于支持周期额度
+查询的 Provider，只有可用额度严格等于零时才会持久标记为额度耗尽。Rosetta 会按需查询
+已耗尽额度，频率不超过每小时一次，直到恢复；刷新 Admin 额度会应用相同状态转换。Admin
+用绿色、黄色和红色背景分别显示可用、冷却和额度耗尽行。冷却行仍可手动选择，选择后会
+清除该行冷却；额度耗尽行会禁用并拒绝选择。手动选择和成功的自动切换都会持久保存当前
+行，Gateway 重启只会清除进程内冷却。
+
+对于带 `x-codex-window-id` 的已认证 Codex 请求，Provider 变化不会在同一窗口首次投影的
+`web.run` 工具面中增加或裁剪命令。调用当前 Provider 无法执行的旧命令时，会返回该命令
+当前不可用；新窗口获得当前 Provider 支持的能力。
 
 Tavily credential 只通过 Bearer Authorization header 发送。在 Tavily 成功或错误响应
 进入模型、Search 客户端或诊断边界之前，网关会移除其中回显的已配置 Token；这同样

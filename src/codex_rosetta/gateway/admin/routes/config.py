@@ -15,7 +15,6 @@ from ...config import (
     API_TYPE_ORDER,
     CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER,
     CONFIGURED_RESPONSES_WEB_SEARCH_MODELS,
-    DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL,
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
@@ -54,7 +53,6 @@ from ...tool_profiles import (
     tool_profile_contract,
     validate_tool_profile_reference,
 )
-from ...web_run_health import WebRunHealthState
 from ...transport.http.transport import request_bounded_response
 from ...transport.provider_info import ProviderInfo
 from ._shared import (
@@ -224,75 +222,65 @@ def _apply_canonical_web_search(
     server: dict[str, Any], incoming: dict[str, Any]
 ) -> Response | None:
     """Validate canonical rows and merge masked Tavily credentials by ID."""
-    if "providers" in incoming:
-        unsupported = set(incoming) - {"providers"}
-        if unsupported:
+    unsupported = set(incoming) - {"providers"}
+    if unsupported or "providers" not in incoming:
+        return JSONResponse(
+            {"error": "'web_search' must contain only 'providers'"},
+            status_code=400,
+        )
+    rows = incoming.get("providers")
+    if not isinstance(rows, list):
+        return JSONResponse(
+            {"error": "'web_search.providers' must be a list"}, status_code=400
+        )
+    current = server.get("web_search")
+    current_rows = (
+        [row for row in current["providers"] if isinstance(row, dict)]
+        if isinstance(current, dict) and isinstance(current.get("providers"), list)
+        else []
+    )
+    current_by_id = {str(row.get("id")): row for row in current_rows}
+    merged: list[dict[str, Any]] = []
+    for index, value in enumerate(rows):
+        if not isinstance(value, dict):
             return JSONResponse(
-                {
-                    "error": f"'web_search' has unsupported fields: {sorted(unsupported)}"
-                },
+                {"error": f"'web_search.providers[{index}]' must be an object"},
                 status_code=400,
             )
-        rows = incoming.get("providers")
-        if not isinstance(rows, list):
-            return JSONResponse(
-                {"error": "'web_search.providers' must be a list"}, status_code=400
-            )
-        current = server.get("web_search")
-        current_rows: list[dict[str, Any]] = []
-        if isinstance(current, dict) and isinstance(current.get("providers"), list):
-            current_rows = [
-                row for row in current["providers"] if isinstance(row, dict)
-            ]
-        elif isinstance(current, dict):
-            try:
-                current_rows = [
-                    dict(row) for row in normalize_web_search(current).providers
-                ]
-            except ValueError:
-                current_rows = []
-        current_by_id = {str(row.get("id")): row for row in current_rows}
-        merged: list[dict[str, Any]] = []
-        for index, value in enumerate(rows):
-            if not isinstance(value, dict):
+        row = dict(value)
+        if row.get("provider") == "tavily":
+            key = row.get("tavily_api_key")
+            if not isinstance(key, str):
                 return JSONResponse(
-                    {"error": f"'web_search.providers[{index}]' must be an object"},
+                    {
+                        "error": f"'web_search.providers[{index}].tavily_api_key' must be a string"
+                    },
                     status_code=400,
                 )
-            row = dict(value)
-            if row.get("provider") == "tavily":
-                key = row.get("tavily_api_key")
-                if not isinstance(key, str):
+            if "***" in key:
+                row_id = row.get("id")
+                existing = current_by_id.get(str(row_id))
+                existing_key = existing.get("tavily_api_key") if existing else None
+                if (
+                    not isinstance(existing_key, str)
+                    or _mask_api_key(existing_key) != key
+                ):
                     return JSONResponse(
                         {
-                            "error": f"'web_search.providers[{index}].tavily_api_key' must be a string"
+                            "error": f"'web_search.providers[{index}].tavily_api_key' mask does not match saved credential"
                         },
                         status_code=400,
                     )
-                if "***" in key:
-                    row_id = row.get("id")
-                    existing = current_by_id.get(str(row_id))
-                    existing_key = existing.get("tavily_api_key") if existing else None
-                    if (
-                        not isinstance(existing_key, str)
-                        or _mask_api_key(existing_key) != key
-                    ):
-                        return JSONResponse(
-                            {
-                                "error": f"'web_search.providers[{index}].tavily_api_key' mask does not match saved credential"
-                            },
-                            status_code=400,
-                        )
-                    row["tavily_api_key"] = existing_key
-            merged.append(row)
-        try:
-            server["web_search"] = dict(normalize_web_search({"providers": merged}))
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return None
+                row["tavily_api_key"] = existing_key
+        merged.append(row)
+    try:
+        server["web_search"] = dict(normalize_web_search({"providers": merged}))
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    return None
 
 
-def _apply_web_search_settings(  # noqa: C901
+def _apply_web_search_settings(
     server: dict[str, Any], body: dict[str, Any]
 ) -> Response | None:
     """Merge and validate an Admin edit into canonical ``server.web_search``."""
@@ -303,89 +291,7 @@ def _apply_web_search_settings(  # noqa: C901
         return JSONResponse(
             {"error": "'web_search' must be an object"}, status_code=400
         )
-    if "providers" in incoming:
-        return _apply_canonical_web_search(server, incoming)
-
-    current = server.get("web_search")
-    if isinstance(current, dict) and isinstance(current.get("providers"), list):
-        return JSONResponse(
-            {
-                "error": (
-                    "Legacy 'web_search' payload cannot replace canonical provider rows"
-                )
-            },
-            status_code=409,
-        )
-
-    unsupported = set(incoming) - {
-        "provider",
-        "responses_model",
-        "responses_provider",
-        "tavily_api_key",
-    }
-    if unsupported:
-        return JSONResponse(
-            {"error": f"'web_search' has unsupported fields: {sorted(unsupported)}"},
-            status_code=400,
-        )
-    current = dict(current) if isinstance(current, dict) else {}
-    provider = incoming.get("provider", current.get("provider", "tavily"))
-    next_value: dict[str, Any] = {"provider": provider}
-    if provider == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER:
-        responses_model = incoming.get(
-            "responses_model",
-            current.get(
-                "responses_model", DEFAULT_CONFIGURED_RESPONSES_WEB_SEARCH_MODEL
-            ),
-        )
-        if not isinstance(responses_model, str):
-            return JSONResponse(
-                {"error": "'web_search.responses_model' must be a string"},
-                status_code=400,
-            )
-        next_value["responses_model"] = responses_model.strip()
-    responses_provider = incoming.get(
-        "responses_provider", current.get("responses_provider", "")
-    )
-    if not isinstance(responses_provider, str):
-        return JSONResponse(
-            {"error": "'web_search.responses_provider' must be a string"},
-            status_code=400,
-        )
-    if responses_provider.strip():
-        next_value["responses_provider"] = responses_provider.strip()
-    if "tavily_api_key" in incoming:
-        api_key = incoming["tavily_api_key"]
-        if not isinstance(api_key, str):
-            return JSONResponse(
-                {"error": "'web_search.tavily_api_key' must be a string"},
-                status_code=400,
-            )
-        if "***" in api_key:
-            existing_key = current.get("tavily_api_key")
-            if (
-                not isinstance(existing_key, str)
-                or _mask_api_key(existing_key) != api_key
-            ):
-                return JSONResponse(
-                    {
-                        "error": "'web_search.tavily_api_key' mask does not match saved credential"
-                    },
-                    status_code=400,
-                )
-            next_value["tavily_api_key"] = existing_key
-        elif api_key.strip():
-            next_value["tavily_api_key"] = api_key.strip()
-    else:
-        existing_key = current.get("tavily_api_key")
-        if isinstance(existing_key, str) and existing_key:
-            next_value["tavily_api_key"] = existing_key
-    try:
-        normalized = normalize_web_search(next_value)
-    except ValueError as exc:
-        return JSONResponse({"error": str(exc)}, status_code=400)
-    server["web_search"] = {"providers": [dict(row) for row in normalized.providers]}
-    return None
+    return _apply_canonical_web_search(server, incoming)
 
 
 def _get_gateway_config(request: Any) -> GatewayConfig | None:
@@ -955,7 +861,6 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
     server = data.get("server")
     web_search = server.get("web_search") if isinstance(server, dict) else None
     search_references: list[str] = []
-    clear_legacy_web_search = False
     if isinstance(web_search, dict):
         rows = web_search.get("providers")
         if isinstance(rows, list):
@@ -968,11 +873,6 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
                     or row.get("deepseek_provider") == name
                 )
             ]
-        elif (
-            web_search.get("provider") == CONFIGURED_RESPONSES_WEB_SEARCH_PROVIDER
-            and web_search.get("responses_provider") == name
-        ):
-            clear_legacy_web_search = True
     if search_references:
         return JSONResponse(
             {
@@ -983,9 +883,6 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
             },
             status_code=409,
         )
-    if clear_legacy_web_search and isinstance(server, dict):
-        server.pop("web_search", None)
-
     cascade_deleted_groups: list[str] = []
     if referencing_groups and cascade:
         for group_name in referencing_groups:
@@ -1281,19 +1178,6 @@ async def put_codex_settings(request: Any) -> Response:
         return commit_error
     assert new_config is not None
     return JSONResponse({"ok": True, "codex": new_config.codex})
-
-
-async def get_network_search_status(request: Any) -> Response:
-    """Return bounded, credential-free Docker sidecar health state."""
-    config = _get_gateway_config(request)
-    health_state = getattr(request.app, "web_run_health_state", None)
-    if health_state is None:
-        health_state = WebRunHealthState()
-        request.app.web_run_health_state = health_state
-    status = await health_state.status(
-        config.web_run_sidecar_url if config is not None else None
-    )
-    return JSONResponse(status.as_dict())
 
 
 async def reload_config(request: Any) -> Response:

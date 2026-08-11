@@ -51,6 +51,13 @@
     service_online?: boolean;
     browser_ready?: boolean;
     error?: string;
+    current_provider_id?: string | null;
+    providers?: RoutingEntry[];
+  };
+  type RoutingEntry = {
+    id: string;
+    status: 'available' | 'cooling' | 'exhausted';
+    current: boolean;
   };
   type UsageEntry = {
     id?: string;
@@ -87,6 +94,7 @@
   let usageLoading = $state(true);
   let loading = $state(true);
   let saving = $state(false);
+  let selectingCurrentId = $state<string | null>(null);
   let testing = $state(false);
   let testResult = $state('');
   let testError = $state('');
@@ -143,6 +151,10 @@
     if (!contractsCurrent || !chainContract) return '';
     return t(`network.chain.${chainContract.mode}`);
   };
+  const routingEntry = (id: string): RoutingEntry | undefined =>
+    status?.providers?.find((entry) => entry.id === id);
+  const routingLabel = (entry: RoutingEntry): string =>
+    t(`network.routing.${entry.status}`);
 
   function displayUsage(id: string): DisplayUsage | null {
     const entry = usageById.get(id);
@@ -334,6 +346,29 @@
     }
   }
 
+  async function selectCurrent(row: SearchRow): Promise<void> {
+    const entry = routingEntry(row.id);
+    if (!entry || entry.current || entry.status === 'exhausted' || selectingCurrentId) return;
+    selectingCurrentId = row.id;
+    error = '';
+    try {
+      await api.put('/admin/api/network-search/status', { current_provider_id: row.id });
+      status = {
+        ...status,
+        current_provider_id: row.id,
+        providers: status?.providers?.map((item) => ({
+          ...item,
+          current: item.id === row.id,
+          status: item.id === row.id ? 'available' : item.status,
+        })),
+      };
+    } catch (cause) {
+      error = message(cause);
+    } finally {
+      selectingCurrentId = null;
+    }
+  }
+
   const poll = createSerialPoll(loadStatus, 5000);
 
   async function save(): Promise<void> {
@@ -417,7 +452,8 @@
         <tbody>
           {#each rows as row, index (row.id)}
             {@const contract = rowContract(row.id)}
-            <tr data-row-id={row.id} class:dragging={draggedId === row.id} ondragover={(event) => { if (!saving) event.preventDefault(); }} ondrop={(event) => dropRow(event, row.id)}>
+            {@const routing = routingEntry(row.id)}
+            <tr data-row-id={row.id} class:dragging={draggedId === row.id} class:routing-available={routing?.status === 'available'} class:routing-cooling={routing?.status === 'cooling'} class:routing-exhausted={routing?.status === 'exhausted'} ondragover={(event) => { if (!saving) event.preventDefault(); }} ondrop={(event) => dropRow(event, row.id)}>
               <td class="search-name-cell">
                 <div class="row-order-controls">
                   <button class="drag-handle" draggable={!saving} disabled={saving} aria-label={t('aria.dragSearchProvider')} title={t('aria.dragSearchProvider')} ondragstart={(event) => startDrag(event, row.id)} ondragend={() => draggedId = null}>⋮⋮</button>
@@ -432,6 +468,14 @@
                 {:else if row.provider === 'deepseek_native_responses'}
                   <label class="sr-only" for={`deepseek-provider-${row.id}`}>{t('label.deepseekSearchProvider')}</label>
                   <Dropdown id={`deepseek-provider-${row.id}`} ariaLabel={t('label.deepseekSearchProvider')} value={row.deepseek_provider ?? ''} disabled={saving || !deepseekProviders.length} options={deepseekProviders.length ? deepseekProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noDeepSeek') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,deepseek_provider:String(value)}))} />
+                {/if}
+                {#if routing}
+                  <span class={`routing-status routing-status-${routing.status}`}>{routingLabel(routing)}</span>
+                  {#if routing.current}
+                    <span class="current-provider">{t('network.routing.current')}</span>
+                  {:else}
+                    <button class="btn btn-sm current-provider-selector" aria-label={t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })} disabled={saving || selectingCurrentId !== null || routing.status === 'exhausted'} onclick={() => void selectCurrent(row)}>{t('network.routing.select')}</button>
+                  {/if}
                 {/if}
                 <button class="btn btn-sm btn-danger remove-row" disabled={saving} onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
               </td>
@@ -486,5 +530,6 @@
 <style>
   .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
   .search-name-cell{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}.search-name-cell .row-order-controls{flex:0 0 auto}.search-name-cell>:global(.provider-type){flex:1 1 260px;width:auto;min-width:220px}.search-name-cell>:global(.suu-dropdown:not(.provider-type)){flex:1 1 240px;width:auto;min-width:220px;margin:0}.search-name-cell .remove-row{margin-left:auto}.search-name-cell :global(.suu-dropdown__button){width:100%;max-width:100%}.search-name-cell :global(.suu-dropdown__button > span:first-child){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .search-provider-table tr.routing-available>td{background:color-mix(in srgb,var(--green) 10%,transparent)}.search-provider-table tr.routing-cooling>td{background:color-mix(in srgb,var(--orange) 12%,transparent)}.search-provider-table tr.routing-exhausted>td{background:color-mix(in srgb,var(--red) 12%,transparent)}.routing-status,.current-provider{font-size:11px;font-weight:600}.routing-status-available{color:var(--green)}.routing-status-cooling{color:var(--orange)}.routing-status-exhausted{color:var(--red)}.current-provider{color:var(--accent)}
   @media(max-width:760px){.section-header{align-items:flex-start}.search-actions{flex-wrap:wrap;justify-content:flex-end}.search-provider-table{overflow:visible}}
 </style>

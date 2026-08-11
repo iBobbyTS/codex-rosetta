@@ -37,7 +37,6 @@ from .config import (
     delete_provider,
     fetch_upstream_models,
     get_config,
-    get_network_search_status,
     put_codex_settings,
     put_model_group,
     put_provider,
@@ -54,7 +53,12 @@ from .keys import (
     rotate_api_key,
     update_api_key,
 )
-from .network_search import get_network_search_usage, test_network_search
+from .network_search import (
+    get_network_search_status,
+    get_network_search_usage,
+    select_network_search_provider,
+    test_network_search,
+)
 from .observability import (
     clear_error_dumps,
     clear_requests,
@@ -137,6 +141,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)
     app.route("/admin/api/network-search/status", methods=["GET"])(
         get_network_search_status
+    )
+    app.route("/admin/api/network-search/status", methods=["PUT"])(
+        select_network_search_provider
     )
     app.route("/admin/api/network-search/test", methods=["POST"])(test_network_search)
     app.route("/admin/api/network-search/usage", methods=["GET"])(

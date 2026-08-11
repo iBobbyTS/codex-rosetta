@@ -132,6 +132,14 @@ class _SearchProviderChainState(Generic[_ReasonT]):
             )
         return reason
 
+    def clear(self, candidate: SearchProviderCandidate) -> bool:
+        """Clear one exact row identity's active ordinary cooldown."""
+        key = self.key(candidate)
+        with self._lock:
+            now = self._read_clock_locked()
+            self._prune_expired_locked(now)
+            return self._entries.pop(key, None) is not None
+
     def clear_cooldown_from_health_evidence(
         self,
         candidate: SearchProviderCandidate,

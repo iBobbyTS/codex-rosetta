@@ -153,7 +153,7 @@ describe('NetworkSearchPage', () => {
     apiMock.put.mockResolvedValue(configResponse(rows).server);
     render(NetworkSearchPage);
     expect(await screen.findByDisplayValue('tav***key')).toBeInTheDocument();
-    expect(screen.getByText(/Providers are tried in this order/)).toBeInTheDocument();
+    expect(screen.getByText(/Requests start with the current provider/)).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: rows } });
     const body = apiMock.put.mock.calls[0][1] as { web_search: Record<string, unknown> };
@@ -162,28 +162,75 @@ describe('NetworkSearchPage', () => {
     expect(body.web_search).not.toHaveProperty('tavily_api_key');
   });
 
+  it('renders current routing state and permits cooling but not exhausted selection', async () => {
+    const rows = [
+      { id: 'available', provider: 'self_hosted_google' },
+      { id: 'cooling', provider: 'self_hosted_bing' },
+      { id: 'exhausted', provider: 'tavily', tavily_api_key: 'masked***key' },
+    ];
+    const config = configResponse(rows);
+    apiMock.get.mockImplementation((path: string) => {
+      if (path.endsWith('/config')) return Promise.resolve(config);
+      if (path.endsWith('/usage')) return Promise.resolve({ entries: [] });
+      return Promise.resolve({
+        configured: false,
+        current_provider_id: 'available',
+        providers: [
+          { id: 'available', status: 'available', current: true },
+          { id: 'cooling', status: 'cooling', current: false },
+          { id: 'exhausted', status: 'exhausted', current: false },
+        ],
+      });
+    });
+    apiMock.put.mockResolvedValue({ ok: true, current_provider_id: 'cooling' });
+    render(NetworkSearchPage);
+
+    await waitFor(() => expect(document.querySelector('tr[data-row-id="available"]')).not.toBeNull());
+    const available = document.querySelector<HTMLElement>('tr[data-row-id="available"]')!;
+    const cooling = document.querySelector<HTMLElement>('tr[data-row-id="cooling"]')!;
+    const exhausted = document.querySelector<HTMLElement>('tr[data-row-id="exhausted"]')!;
+    await waitFor(() => expect(available).toHaveClass('routing-available'));
+    expect(cooling).toHaveClass('routing-cooling');
+    expect(exhausted).toHaveClass('routing-exhausted');
+    expect(within(available).getByText('Current')).toBeInTheDocument();
+    expect(within(available).getByText('Available')).toBeInTheDocument();
+    expect(within(cooling).getByText('Cooling')).toBeInTheDocument();
+    expect(within(exhausted).getByText('Quota exhausted')).toBeInTheDocument();
+    const exhaustedSelector = within(exhausted).getByRole('button', { name: 'Set Tavily as current provider' });
+    expect(exhaustedSelector).toBeDisabled();
+    const coolingSelector = within(cooling).getByRole('button', { name: 'Set Self-hosted (Bing RSS) as current provider' });
+    expect(coolingSelector).toBeEnabled();
+
+    await fireEvent.click(coolingSelector);
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/network-search/status',
+      { current_provider_id: 'cooling' },
+    ));
+  });
+
   it.each([
     {
       name: 'Tavily',
-      row: { id: 'legacy-0', provider: 'tavily', tavily_api_key: 'tvly***cret' },
+      row: { id: 'row-0', provider: 'tavily', tavily_api_key: 'tvly***cret' },
       providers: {},
     },
     {
       name: 'Responses',
-      row: { id: 'legacy-0', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
+      row: { id: 'row-0', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
       providers: { search: { api_type: 'responses' } },
     },
     {
       name: 'self-hosted',
-      row: { id: 'legacy-0', provider: 'self_hosted_bing_browser' },
+      row: { id: 'row-0', provider: 'self_hosted_bing_browser' },
       providers: {},
     },
-  ])('unchanged canonical save preserves the backend-adapted legacy $name row', async ({ row, providers }) => {
+  ])('unchanged canonical save preserves the stable $name row', async ({ row, providers }) => {
     const rows = [{ ...row }];
     mockConfig(configResponse(rows, providers));
     apiMock.put.mockImplementation((_path: string, body: { web_search: { providers: Array<Record<string, string | undefined>> } }) => Promise.resolve({ server: { web_search: body.web_search } }));
     render(NetworkSearchPage);
-    await waitFor(() => expect(document.querySelector('tr[data-row-id="legacy-0"]')).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('tr[data-row-id="row-0"]')).not.toBeNull());
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 

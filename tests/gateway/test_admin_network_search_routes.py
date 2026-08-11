@@ -25,7 +25,11 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderChainCoordinator,
 )
 from codex_rosetta.gateway.search_provider_executor import SearchProviderExecutor
-from codex_rosetta.gateway.search_usage import TavilyUsageState
+from codex_rosetta.gateway.search_provider_candidates import (
+    TavilySearchProviderCandidate,
+    build_search_provider_candidates,
+)
+from codex_rosetta.gateway.search_usage import TavilyUsage, TavilyUsageState
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamResponse
 
@@ -75,9 +79,14 @@ def _config() -> GatewayConfig:
                     {"id": "test-client", "label": "Test", "key": "gateway-key"}
                 ],
                 "web_search": {
-                    "provider": "configured_responses_provider",
-                    "responses_model": "gpt-5.6-luna",
-                    "responses_provider": "search-provider",
+                    "providers": [
+                        {
+                            "id": "responses-search",
+                            "provider": "configured_responses_provider",
+                            "responses_model": "gpt-5.6-luna",
+                            "responses_provider": "search-provider",
+                        }
+                    ],
                 },
             },
         }
@@ -416,3 +425,109 @@ def test_admin_usage_zero_marks_tavily_row_quota_exhausted() -> None:
 
     assert response.status_code == 200
     assert coordinator.is_quota_exhausted(tavily_candidate)
+
+
+def test_status_exposes_only_current_and_routing_status_per_row() -> None:
+    config = _config()
+    config.web_search = WebSearchConfig(
+        [
+            {"id": "cooling", "provider": "self_hosted_google"},
+            {"id": "available", "provider": "self_hosted_bing"},
+            {"id": "empty", "provider": "tavily", "tavily_api_key": "secret"},
+        ]
+    )
+    config.web_search_candidates = tuple(
+        build_search_provider_candidates(
+            config.web_search.providers,
+            config.providers,
+            {name: value["api_type"] for name, value in config._raw_providers.items()},
+            allowed_responses_models=("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
+        )
+    )
+    coordinator = SearchProviderChainCoordinator()
+    cooling, _available, exhausted = config.web_search_candidates
+    assert isinstance(exhausted, TavilySearchProviderCandidate)
+    coordinator.mark_failed(
+        cooling,
+        SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE),
+    )
+    coordinator.apply_tavily_usage(
+        exhausted,
+        TavilyUsage(status="ok", used=10, limit=10, available_credits=0),
+    )
+
+    response = asyncio.run(
+        network_search.get_network_search_status(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    gateway_config=config,
+                    search_provider_coordinator=coordinator,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["current_provider_id"] == "cooling"
+    assert body["providers"] == [
+        {"id": "cooling", "status": "cooling", "current": True},
+        {"id": "available", "status": "available", "current": False},
+        {"id": "empty", "status": "exhausted", "current": False},
+    ]
+    assert "secret" not in response.body.decode()
+    assert all(set(item) == {"id", "status", "current"} for item in body["providers"])
+
+
+def test_manual_current_selection_clears_cooldown_and_rejects_exhausted() -> None:
+    config = _config()
+    config.web_search = WebSearchConfig(
+        [
+            {"id": "available", "provider": "self_hosted_google"},
+            {"id": "cooling", "provider": "self_hosted_bing"},
+            {"id": "empty", "provider": "tavily", "tavily_api_key": "secret"},
+        ]
+    )
+    config.web_search_candidates = tuple(
+        build_search_provider_candidates(
+            config.web_search.providers,
+            config.providers,
+            {name: value["api_type"] for name, value in config._raw_providers.items()},
+            allowed_responses_models=("gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"),
+        )
+    )
+    coordinator = SearchProviderChainCoordinator()
+    _available, cooling, exhausted = config.web_search_candidates
+    assert isinstance(exhausted, TavilySearchProviderCandidate)
+    coordinator.mark_failed(
+        cooling,
+        SearchProviderAttemptError(SearchProviderAttemptCategory.UPSTREAM_FAILURE),
+    )
+    coordinator.apply_tavily_usage(
+        exhausted,
+        TavilyUsage(status="ok", used=10, limit=10, available_credits=0),
+    )
+    app = SimpleNamespace(
+        gateway_config=config,
+        search_provider_coordinator=coordinator,
+    )
+
+    selected = asyncio.run(
+        network_search.select_network_search_provider(
+            SimpleNamespace(app=app, json=lambda: {"current_provider_id": "cooling"})
+        )
+    )
+
+    assert selected.status_code == 200
+    assert json.loads(selected.body) == {"ok": True, "current_provider_id": "cooling"}
+    assert coordinator.current_candidate(config.web_search_candidates) is cooling
+    assert coordinator.is_cooling(cooling) is False
+
+    rejected = asyncio.run(
+        network_search.select_network_search_provider(
+            SimpleNamespace(app=app, json=lambda: {"current_provider_id": "empty"})
+        )
+    )
+    assert rejected.status_code == 409
+    assert json.loads(rejected.body) == {"error": "Search provider quota is exhausted"}
+    assert coordinator.current_candidate(config.web_search_candidates) is cooling
