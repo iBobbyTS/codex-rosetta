@@ -434,8 +434,13 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
                 {"id": "test-client", "key": "test-gateway-key", "label": "Test"}
             ],
             "web_search": {
-                "provider": "tavily",
-                "tavily_api_key": "tvly-secret",
+                "providers": [
+                    {
+                        "id": "test-tavily-search",
+                        "provider": "tavily",
+                        "tavily_api_key": "tvly-secret",
+                    }
+                ]
             },
         },
     }

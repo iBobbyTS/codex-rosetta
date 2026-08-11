@@ -242,7 +242,8 @@ def test_request_route_adds_browser_capability_only_when_ready(monkeypatch):
 
     original, unavailable, available = asyncio.run(run())
 
-    assert unavailable is original
+    assert unavailable is not original
+    assert unavailable.web_run_search_capabilities == frozenset()
     assert WEB_RUN_SIDECAR_CAPABILITY not in unavailable.tool_runtime_capabilities
     assert WEB_RUN_SIDECAR_CAPABILITY in available.tool_runtime_capabilities
 
