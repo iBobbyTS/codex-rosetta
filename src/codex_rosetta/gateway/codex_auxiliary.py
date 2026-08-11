@@ -556,7 +556,7 @@ async def _handle_local_search(
                 error,
                 None,
             )
-        error = "搜索能力全部无效"
+        error = "Search unavailable; Please consider Browser Use"
         log_failure()
         return (
             error_response_for_source("openai_responses", 502, error),

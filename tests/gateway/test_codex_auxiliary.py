@@ -1569,6 +1569,9 @@ def test_browser_only_injection_is_not_used_as_a_search_dependency() -> None:
 
     assert response.status_code == 502
     assert b"AttributeError" not in response.body
+    assert json.loads(response.body)["error"]["message"].endswith(
+        "Search unavailable; Please consider Browser Use"
+    )
     request.app.transport.send_passthrough.assert_not_awaited()
 
 
