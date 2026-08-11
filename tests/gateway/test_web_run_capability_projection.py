@@ -500,6 +500,7 @@ def test_request_time_projection_uses_only_the_current_provider_contract() -> No
         resolved.web_run_search_capabilities
         == DEEPSEEK_NATIVE_RESPONSES_CONTRACT.capabilities
     )
+    assert resolved.web_run_search_capabilities is not None
     assert (
         SearchProviderCapability.DOMAIN_FILTER
         not in resolved.web_run_search_capabilities
@@ -552,7 +553,7 @@ def test_locked_capability_current_unavailable_rejects_before_search_state() -> 
             execute_local_codex_search(
                 body,
                 None,
-                reference_store=reference_store,
+                reference_store=cast(Any, reference_store),
                 principal_id="principal",
                 search_candidates=(_candidate(TAVILY_LOCAL_CONTRACT, "tavily"),),
                 search_coordinator=coordinator,
