@@ -27,7 +27,7 @@ def candidate(row_id: str, identity: str) -> TavilySearchProviderCandidate:
 
 
 class UsageState:
-    def __init__(self, *samples: TavilyUsage) -> None:
+    def __init__(self, *samples: TavilyUsage | Exception) -> None:
         self.samples = list(samples)
         self.calls: list[tuple[str, bool]] = []
 
@@ -35,7 +35,10 @@ class UsageState:
         self, api_key: str, *, refresh: bool = False, **_kwargs: Any
     ) -> TavilyUsage:
         self.calls.append((api_key, refresh))
-        return self.samples.pop(0)
+        sample = self.samples.pop(0)
+        if isinstance(sample, Exception):
+            raise sample
+        return sample
 
 
 def run(coro: Any) -> Any:
@@ -170,6 +173,52 @@ def test_zero_quota_persists_and_due_positive_refresh_recovers(tmp_path: Path) -
     assert calls == 1
     assert usage.calls == [("key-tavily", True), ("key-tavily", True)]
     assert not restarted.is_quota_exhausted(item)
+    persistence.close()
+
+
+@pytest.mark.parametrize(
+    "due_sample",
+    [
+        TavilyUsage(status="ok", available_credits=0),
+        TavilyUsage(status="ok", available_credits=None),
+        TavilyUsage(status="unavailable"),
+        RuntimeError("usage unavailable"),
+    ],
+)
+def test_due_quota_without_positive_recovery_defers_next_check(
+    tmp_path: Path, due_sample: TavilyUsage | Exception
+) -> None:
+    wall_time = 1_000.0
+    item = candidate("tavily", "identity")
+    usage = UsageState(due_sample)
+    persistence = PersistenceManager(str(tmp_path))
+    coordinator = SearchProviderChainCoordinator(
+        persistence=persistence,
+        tavily_usage_state=usage,
+        wall_clock=lambda: wall_time,
+    )
+    coordinator.apply_tavily_usage(item, TavilyUsage(status="ok", available_credits=0))
+    wall_time += 3600
+    calls = 0
+
+    async def succeed(_item: TavilySearchProviderCandidate) -> str:
+        nonlocal calls
+        calls += 1
+        return "unexpected"
+
+    with pytest.raises(Exception, match="Search unavailable"):
+        run(coordinator.run((item,), succeed))
+
+    assert calls == 0
+    assert usage.calls == [("key-tavily", True)]
+    assert persistence.load_search_provider_quota_check(
+        item.row_id, item.identity
+    ) == pytest.approx(wall_time + 3600)
+
+    wall_time += 3599
+    with pytest.raises(Exception, match="Search unavailable"):
+        run(coordinator.run((item,), succeed))
+    assert usage.calls == [("key-tavily", True)]
     persistence.close()
 
 

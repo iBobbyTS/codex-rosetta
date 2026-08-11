@@ -228,27 +228,28 @@ class SearchProviderChainCoordinator:
 
     def apply_tavily_usage(
         self, candidate: TavilySearchProviderCandidate, usage: TavilyUsage
-    ) -> bool:
+    ) -> bool | None:
         """Apply one safe Tavily usage sample to persistent routing state."""
         available = usage.available_credits if usage.status == "ok" else None
         key = (candidate.row_id, candidate.identity)
         if available == 0:
-            next_check_at = (
-                self._wall_clock() + DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
-            )
-            if self._persistence is not None:
-                self._persistence.set_search_provider_quota_exhausted(
-                    *key, next_check_at
-                )
-            else:
-                self._process_quota[key] = next_check_at
+            self._defer_quota_check(candidate)
             return True
         if available is not None and available > 0:
             if self._persistence is not None:
                 self._persistence.clear_search_provider_quota(*key)
             else:
                 self._process_quota.pop(key, None)
-        return False
+            return False
+        return None
+
+    def _defer_quota_check(self, candidate: SearchProviderCandidate) -> None:
+        key = (candidate.row_id, candidate.identity)
+        next_check_at = self._wall_clock() + DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
+        if self._persistence is not None:
+            self._persistence.set_search_provider_quota_exhausted(*key, next_check_at)
+        else:
+            self._process_quota[key] = next_check_at
 
     async def _refresh_tavily_quota(
         self, candidate: TavilySearchProviderCandidate
@@ -274,7 +275,11 @@ class SearchProviderChainCoordinator:
         if not isinstance(candidate, TavilySearchProviderCandidate):
             return False
         exhausted = await self._refresh_tavily_quota(candidate)
-        return exhausted is False
+        if exhausted is False:
+            return True
+        if exhausted is None:
+            self._defer_quota_check(candidate)
+        return False
 
     def is_cooling(self, candidate: SearchProviderCandidate) -> bool:
         """Return whether the candidate's current identity is cooling."""
