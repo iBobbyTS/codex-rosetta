@@ -412,10 +412,7 @@ def test_modified_web_run_projects_only_rosetta_supported_capabilities():
         "time",
         "response_length",
     }
-    assert set(parameters["properties"]["search_query"]["items"]["properties"]) == {
-        "q",
-        "domains",
-    }
+    assert set(parameters["properties"]["search_query"]["items"]["properties"]) == {"q"}
     assert set(parameters["properties"]["open"]["items"]["properties"]) == {
         "ref_id",
         "lineno",

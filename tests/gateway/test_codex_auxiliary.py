@@ -204,6 +204,34 @@ def _make_config(
             "models": {"secondary-model": {"model_info": model["model_info"]}},
         }
 
+    if search_providers is None:
+        search_providers = []
+        if responses_search_provider is not None:
+            search_providers.append(
+                {
+                    "id": "test-responses-search",
+                    "provider": "configured_responses_provider",
+                    "responses_provider": responses_search_provider,
+                    "responses_model": responses_search_model,
+                }
+            )
+        elif search_provider == "tavily":
+            if tavily_api_key:
+                search_providers.append(
+                    {
+                        "id": "test-tavily-search",
+                        "provider": "tavily",
+                        "tavily_api_key": tavily_api_key,
+                    }
+                )
+        else:
+            search_providers.append(
+                {
+                    "id": "test-self-hosted-search",
+                    "provider": search_provider,
+                }
+            )
+
     return GatewayConfig(
         {
             "providers": providers,
@@ -218,24 +246,7 @@ def _make_config(
                         "key": "gateway-key",
                     }
                 ],
-                "web_search": (
-                    {"providers": search_providers}
-                    if search_providers is not None
-                    else {
-                        "provider": search_provider,
-                        "tavily_api_key": tavily_api_key or "",
-                        **(
-                            {"responses_provider": responses_search_provider}
-                            if responses_search_provider is not None
-                            else {}
-                        ),
-                        **(
-                            {"responses_model": responses_search_model}
-                            if responses_search_provider is not None
-                            else {}
-                        ),
-                    }
-                ),
+                "web_search": {"providers": search_providers},
                 **(
                     {
                         "web_run": {
