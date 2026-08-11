@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import codex_rosetta.gateway.search_provider_candidates as candidates_module
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
     DeepSeekNativeResponsesSearchProviderCandidate,
@@ -510,6 +511,49 @@ def test_candidate_build_keeps_single_credential_stable_without_runtime_state():
     assert candidates[0].identity == rebuilt[0].identity
 
 
+def test_private_persistence_binding_survives_process_identity_key_change(
+    monkeypatch,
+):
+    row = {
+        "id": "responses",
+        "provider": "configured_responses_provider",
+        "responses_provider": "upstream",
+        "responses_model": "gpt-5.6-sol",
+    }
+
+    monkeypatch.setattr(
+        candidates_module, "secret_fingerprint", lambda *_args: "process-one"
+    )
+    baseline = _build(
+        [row],
+        {"upstream": _provider("responses", "credential")},
+        {"upstream": "responses"},
+    )[0]
+    monkeypatch.setattr(
+        candidates_module, "secret_fingerprint", lambda *_args: "process-two"
+    )
+    rebuilt = _build(
+        [row],
+        {"upstream": _provider("responses", "credential")},
+        {"upstream": "responses"},
+    )[0]
+    changed_credential = _build(
+        [row],
+        {"upstream": _provider("responses", "different")},
+        {"upstream": "responses"},
+    )[0]
+    changed_config = _build(
+        [{**row, "responses_model": "gpt-5.6-terra"}],
+        {"upstream": _provider("responses", "credential")},
+        {"upstream": "responses"},
+    )[0]
+
+    assert baseline.identity != rebuilt.identity
+    assert baseline._persistence_binding == rebuilt._persistence_binding
+    assert baseline._persistence_binding != changed_credential._persistence_binding
+    assert baseline._persistence_binding != changed_config._persistence_binding
+
+
 def test_rejects_duplicate_configured_responses_provider_by_row_id_only():
     rows = [
         {
@@ -622,4 +666,5 @@ def test_repr_and_safe_view_do_not_expose_secrets_identity_or_provider_details()
         assert tavily_secret not in public
         assert provider_secret not in public
         assert candidate.identity not in public
+        assert candidate._persistence_binding not in public
         assert "private-upstream" not in repr(candidate.safe_view())

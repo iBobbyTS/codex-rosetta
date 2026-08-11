@@ -6,8 +6,10 @@ from typing import Any
 
 import pytest
 
+import codex_rosetta.gateway.search_provider_candidates as candidates_module
 from codex_rosetta.gateway.search_provider_candidates import (
     TavilySearchProviderCandidate,
+    build_search_provider_candidates,
 )
 from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderAttemptCategory,
@@ -43,6 +45,76 @@ class UsageState:
 
 def run(coro: Any) -> Any:
     return asyncio.run(coro)
+
+
+def built_candidates(rows: list[dict[str, str]]):
+    return build_search_provider_candidates(rows, {}, {}, allowed_responses_models=())
+
+
+def test_built_current_and_quota_state_survive_process_identity_key_change(
+    tmp_path: Path, monkeypatch
+) -> None:
+    rows = [
+        {"id": "first", "provider": "self_hosted_google"},
+        {"id": "selected", "provider": "tavily", "tavily_api_key": "secret"},
+    ]
+    monkeypatch.setattr(
+        candidates_module, "secret_fingerprint", lambda *_args: "process-one"
+    )
+    first_build = built_candidates(rows)
+    selected = first_build[1]
+    assert isinstance(selected, TavilySearchProviderCandidate)
+    persistence = PersistenceManager(str(tmp_path))
+    coordinator = SearchProviderChainCoordinator(
+        persistence=persistence, wall_clock=lambda: 100.0
+    )
+    coordinator.select_current(selected)
+    persistence.close()
+
+    monkeypatch.setattr(
+        candidates_module, "secret_fingerprint", lambda *_args: "process-two"
+    )
+    second_build = built_candidates(rows)
+    rebuilt_selected = second_build[1]
+    assert isinstance(rebuilt_selected, TavilySearchProviderCandidate)
+    assert selected.identity != rebuilt_selected.identity
+    persistence = PersistenceManager(str(tmp_path))
+    restarted = SearchProviderChainCoordinator(
+        persistence=persistence, wall_clock=lambda: 100.0
+    )
+    calls: list[str] = []
+
+    async def succeed(item) -> str:
+        calls.append(item.row_id)
+        return item.row_id
+
+    assert run(restarted.run(second_build, succeed)) == "selected"
+    assert calls == ["selected"]
+    restarted.apply_tavily_usage(
+        rebuilt_selected, TavilyUsage(status="ok", available_credits=0)
+    )
+    persistence.close()
+
+    monkeypatch.setattr(
+        candidates_module, "secret_fingerprint", lambda *_args: "process-three"
+    )
+    third_build = built_candidates(rows)
+    rebuilt_again = third_build[1]
+    assert isinstance(rebuilt_again, TavilySearchProviderCandidate)
+    persistence = PersistenceManager(str(tmp_path))
+    restarted = SearchProviderChainCoordinator(
+        persistence=persistence, wall_clock=lambda: 100.0
+    )
+    assert restarted.is_quota_exhausted(rebuilt_again)
+
+    changed_rows = [rows[0], {**rows[1], "tavily_api_key": "changed"}]
+    changed = built_candidates(changed_rows)[1]
+    assert isinstance(changed, TavilySearchProviderCandidate)
+    assert not restarted.is_quota_exhausted(changed)
+    calls.clear()
+    assert run(restarted.run((third_build[0], changed), succeed)) == "first"
+    assert calls == ["first"]
+    persistence.close()
 
 
 def test_current_provider_survives_restart_and_identity_change_falls_back(

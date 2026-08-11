@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -55,6 +56,7 @@ class TavilySearchProviderCandidate:
     contract: SearchProviderContract = field(
         repr=False, compare=False, default=TAVILY_LOCAL_CONTRACT
     )
+    _persistence_binding: str = field(repr=False, compare=False, default="")
 
     def __post_init__(self) -> None:
         if self.contract is not TAVILY_LOCAL_CONTRACT:
@@ -78,6 +80,7 @@ class ConfiguredResponsesSearchProviderCandidate:
     contract: SearchProviderContract = field(
         repr=False, compare=False, default=GPT_PASSTHROUGH_CONTRACT
     )
+    _persistence_binding: str = field(repr=False, compare=False, default="")
 
     def __post_init__(self) -> None:
         if self.contract is not GPT_PASSTHROUGH_CONTRACT:
@@ -102,6 +105,7 @@ class SelfHostedSearchProviderCandidate:
     contract: SearchProviderContract = field(
         repr=False, compare=False, default=SELF_HOSTED_LOCAL_CONTRACT
     )
+    _persistence_binding: str = field(repr=False, compare=False, default="")
 
     def __post_init__(self) -> None:
         if self.contract is not SELF_HOSTED_LOCAL_CONTRACT:
@@ -127,6 +131,7 @@ class DeepSeekNativeResponsesSearchProviderCandidate:
     contract: SearchProviderContract = field(
         repr=False, compare=False, default=DEEPSEEK_NATIVE_RESPONSES_CONTRACT
     )
+    _persistence_binding: str = field(repr=False, compare=False, default="")
 
     def __post_init__(self) -> None:
         if self.contract is not DEEPSEEK_NATIVE_RESPONSES_CONTRACT:
@@ -176,6 +181,17 @@ def _identity_domain(
     )
 
 
+def _stable_persistence_binding(
+    identity_domain: str, credentials: Sequence[str]
+) -> str:
+    payload = json.dumps(
+        ["codex-rosetta.web-search-persistence.v1", identity_domain, credentials],
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(payload).hexdigest()}"
+
+
 def _overlap_error(first_row_id: str, second_row_id: str) -> ValueError:
     return ValueError(
         "config: web search provider rows "
@@ -222,16 +238,18 @@ def _configured_responses_candidate(
             "config: web search provider row "
             f"{row_id!r} must resolve exactly one provider credential"
         )
+    identity_domain = _identity_domain(row, provider_info=provider_info)
     return (
         ConfiguredResponsesSearchProviderCandidate(
             row_id=row_id,
             responses_provider=provider_name,
             responses_model=responses_model,
             provider_info=provider_info,
-            identity=secret_fingerprint(
-                _identity_domain(row, provider_info=provider_info), credentials
-            ),
+            identity=secret_fingerprint(identity_domain, credentials),
             contract=contract_for_wire_provider(CONFIGURED_RESPONSES_PROVIDER),
+            _persistence_binding=_stable_persistence_binding(
+                identity_domain, credentials
+            ),
         ),
         credentials,
     )
@@ -254,11 +272,13 @@ def _self_hosted_candidate(
             f"type {provider_type!r}; duplicate row {row_id!r}"
         )
     seen_provider_types.add(provider_type)
+    identity_domain = _identity_domain(row)
     return SelfHostedSearchProviderCandidate(
         row_id=row_id,
         provider=cast(SelfHostedProviderType, provider_type),
-        identity=secret_fingerprint(_identity_domain(row), ()),
+        identity=secret_fingerprint(identity_domain, ()),
         contract=contract_for_wire_provider(provider_type),
+        _persistence_binding=_stable_persistence_binding(identity_domain, ()),
     )
 
 
@@ -310,14 +330,14 @@ def _deepseek_native_responses_candidate(
             "config: web search provider row "
             f"{row_id!r} must resolve exactly one provider credential"
         )
+    identity_domain = _identity_domain(row, provider_info=provider_info)
     candidate = DeepSeekNativeResponsesSearchProviderCandidate(
         row_id=row_id,
         deepseek_provider=provider_name,
         provider_info=provider_info,
-        identity=secret_fingerprint(
-            _identity_domain(row, provider_info=provider_info), credentials
-        ),
+        identity=secret_fingerprint(identity_domain, credentials),
         contract=contract_for_wire_provider("deepseek_native_responses"),
+        _persistence_binding=_stable_persistence_binding(identity_domain, credentials),
     )
     return candidate, credentials
 
@@ -358,11 +378,15 @@ def build_search_provider_candidates(
         if provider_type == "tavily":
             api_key = str(row["tavily_api_key"])
             credentials = (api_key,)
+            identity_domain = _identity_domain(row)
             candidate: SearchProviderCandidate = TavilySearchProviderCandidate(
                 row_id=row_id,
                 api_key=api_key,
-                identity=secret_fingerprint(_identity_domain(row), credentials),
+                identity=secret_fingerprint(identity_domain, credentials),
                 contract=contract_for_wire_provider(provider_type),
+                _persistence_binding=_stable_persistence_binding(
+                    identity_domain, credentials
+                ),
             )
         elif provider_type == CONFIGURED_RESPONSES_PROVIDER:
             candidate, credentials = _configured_responses_candidate(

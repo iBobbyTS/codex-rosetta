@@ -209,16 +209,21 @@ class SearchProviderChainCoordinator:
         if self._record_current is not None:
             self._record_current(candidate)
             return
-        value = (candidate.row_id, candidate.identity)
         if self._persistence is not None:
-            self._persistence.set_current_search_provider(*value)
+            self._persistence.set_current_search_provider(
+                candidate.row_id, self._persistence_binding(candidate)
+            )
         else:
-            self._process_current = value
+            self._process_current = (candidate.row_id, candidate.identity)
+
+    @staticmethod
+    def _persistence_binding(candidate: SearchProviderCandidate) -> str:
+        return getattr(candidate, "_persistence_binding", "") or candidate.identity
 
     def _quota_check_at(self, candidate: SearchProviderCandidate) -> float | None:
         if self._persistence is not None:
             return self._persistence.load_search_provider_quota_check(
-                candidate.row_id, candidate.identity
+                candidate.row_id, self._persistence_binding(candidate)
             )
         return self._process_quota.get((candidate.row_id, candidate.identity))
 
@@ -231,7 +236,12 @@ class SearchProviderChainCoordinator:
     ) -> bool | None:
         """Apply one safe Tavily usage sample to persistent routing state."""
         available = usage.available_credits if usage.status == "ok" else None
-        key = (candidate.row_id, candidate.identity)
+        key = (
+            candidate.row_id,
+            self._persistence_binding(candidate)
+            if self._persistence is not None
+            else candidate.identity,
+        )
         if available == 0:
             self._defer_quota_check(candidate)
             return True
@@ -244,7 +254,12 @@ class SearchProviderChainCoordinator:
         return None
 
     def _defer_quota_check(self, candidate: SearchProviderCandidate) -> None:
-        key = (candidate.row_id, candidate.identity)
+        key = (
+            candidate.row_id,
+            self._persistence_binding(candidate)
+            if self._persistence is not None
+            else candidate.identity,
+        )
         next_check_at = self._wall_clock() + DEFAULT_SEARCH_PROVIDER_COOLDOWN_SECONDS
         if self._persistence is not None:
             self._persistence.set_search_provider_quota_exhausted(*key, next_check_at)
@@ -369,7 +384,14 @@ class SearchProviderChainCoordinator:
                 (
                     index
                     for index, item in enumerate(candidates)
-                    if item.row_id == row_id and item.identity == identity
+                    if item.row_id == row_id
+                    and (
+                        self._persistence_binding(item)
+                        if self._persistence is not None
+                        and self._current_provider is None
+                        else item.identity
+                    )
+                    == identity
                 ),
                 0,
             )
