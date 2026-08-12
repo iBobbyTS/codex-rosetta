@@ -973,7 +973,7 @@ class HttpTransport:
                     "Upstream response is not valid JSON"
                 ) from None
         else:
-            parsed_body = json.loads(raw_content) if resp.status_code < 400 else None
+            parsed_body = None
         return UpstreamResponse(
             status_code=resp.status_code,
             body=parsed_body,

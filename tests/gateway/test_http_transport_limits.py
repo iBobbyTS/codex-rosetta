@@ -90,6 +90,10 @@ class _FakeClient:
         self.calls.append(kwargs)
         return self.response
 
+    async def get(self, _url: str, **kwargs: Any) -> _FakeStreamingResponse:
+        self.calls.append(kwargs)
+        return self.response
+
 
 def _provider(base_url: str = "https://upstream.example/v1") -> ProviderInfo:
     return ProviderInfo(
@@ -701,7 +705,7 @@ def test_passthrough_success_json_memory_error_propagates(
     assert caught.value is failure
 
 
-def test_passthrough_redirect_preserves_valid_json_body(
+def test_passthrough_redirect_preserves_valid_json_raw_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     content = b'{"redirect":"preserved"}'
@@ -715,7 +719,7 @@ def test_passthrough_redirect_preserves_valid_json_body(
     )
 
     assert result.status_code == 302
-    assert result.body == {"redirect": "preserved"}
+    assert result.body is None
     assert result.raw_content == content
     assert response.closed is True
 
@@ -729,7 +733,7 @@ def test_passthrough_redirect_preserves_valid_json_body(
     ],
     ids=["utf-16", "utf-32", "utf-8-bom"],
 )
-def test_passthrough_redirect_keeps_json_bytes_autodetection(
+def test_passthrough_redirect_preserves_encoded_raw_body(
     monkeypatch: pytest.MonkeyPatch,
     content: bytes,
 ) -> None:
@@ -742,10 +746,11 @@ def test_passthrough_redirect_keeps_json_bytes_autodetection(
         )
     )
 
-    assert result.body == {"redirect": "preserved"}
+    assert result.body is None
+    assert result.raw_content == content
 
 
-def test_passthrough_redirect_keeps_non_standard_json_constant_behavior(
+def test_passthrough_redirect_preserves_non_standard_json_raw_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FakeStreamingResponse(302, [b'{"value":NaN}'])
@@ -757,23 +762,52 @@ def test_passthrough_redirect_keeps_non_standard_json_constant_behavior(
         )
     )
 
-    assert result.body is not None
-    assert math.isnan(result.body["value"])
+    assert result.body is None
+    assert result.raw_content == b'{"value":NaN}'
 
 
-def test_passthrough_redirect_preserves_invalid_json_error(
+def test_passthrough_redirect_preserves_invalid_json_raw_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FakeStreamingResponse(302, [b"not-json"])
     transport, _client = _transport(monkeypatch, response)
 
-    with pytest.raises(json.JSONDecodeError):
-        asyncio.run(
-            transport.send_passthrough(
-                _provider(), "https://upstream.example/v1/alpha/search", {}
-            )
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
         )
+    )
 
+    assert result.status_code == 302
+    assert result.body is None
+    assert result.raw_content == b"not-json"
+    assert response.closed is True
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"", b"<html><body>moved</body></html>"],
+    ids=["empty", "html"],
+)
+def test_passthrough_get_redirect_preserves_non_json_status_and_body(
+    monkeypatch: pytest.MonkeyPatch,
+    content: bytes,
+) -> None:
+    response = _FakeStreamingResponse(302, [content])
+    transport, _client = _transport(monkeypatch, response)
+
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(),
+            "https://upstream.example/v1/models",
+            {},
+            method="GET",
+        )
+    )
+
+    assert result.status_code == 302
+    assert result.body is None
+    assert result.raw_content == content
     assert response.closed is True
 
 
