@@ -32,6 +32,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderRequestFailover,
     SearchProviderRequestFailoverReason,
 )
+from codex_rosetta.gateway.search_usage import TavilyUsage
 
 
 class Clock:
@@ -962,6 +963,56 @@ def test_cancelled_failover_waiter_does_not_cancel_leader() -> None:
 
         release_second.set()
         assert await leader == "leader-ok"
+        assert coordinator.current_candidate((first, second)) is second
+
+    run(scenario())
+
+
+def test_cancelled_tavily_settlement_hands_failover_to_one_waiter() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        settlement_started = asyncio.Event()
+
+        class BlockingUsageState:
+            calls = 0
+
+            async def get(self, _api_key: str, *, refresh: bool = False) -> TavilyUsage:
+                assert refresh is True
+                self.calls += 1
+                if self.calls > 1:
+                    return TavilyUsage(status="unavailable")
+                settlement_started.set()
+                await asyncio.Event().wait()
+                raise AssertionError("unreachable")
+
+        usage_state: Any = BlockingUsageState()
+        coordinator = SearchProviderChainCoordinator(tavily_usage_state=usage_state)
+        waiter_calls: list[str] = []
+
+        async def leader_runner(item: TavilySearchProviderCandidate) -> str:
+            assert item is first
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.CONNECTION_ERROR
+            )
+
+        async def waiter_runner(item: TavilySearchProviderCandidate) -> str:
+            waiter_calls.append(item.row_id)
+            return "waiter-ok"
+
+        leader = asyncio.create_task(coordinator.run((first, second), leader_runner))
+        await settlement_started.wait()
+        waiter = asyncio.create_task(coordinator.run((first, second), waiter_runner))
+        await asyncio.sleep(0)
+
+        leader.cancel("client-left")
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await leader
+        assert caught.value.args == ("client-left",)
+
+        assert await waiter == "waiter-ok"
+        assert waiter_calls == ["second"]
+        assert usage_state.calls == 2
         assert coordinator.current_candidate((first, second)) is second
 
     run(scenario())

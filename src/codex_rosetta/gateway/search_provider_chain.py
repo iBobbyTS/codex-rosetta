@@ -135,6 +135,11 @@ class SearchProviderAttemptError(_ReasonedError[SearchProviderAttemptCategory]):
         return self._quota_exhausted
 
 
+_PendingProviderFailure = tuple[
+    SearchProviderCandidate, SearchProviderAttemptError, int
+]
+
+
 class SearchProviderRequestFailover(
     _ReasonedError[SearchProviderRequestFailoverReason]
 ):
@@ -194,6 +199,8 @@ class SearchProviderChainCoordinator:
         self._failover_condition = asyncio.Condition()
         self._failover_generation = 0
         self._failover_active = False
+        self._failover_orphaned = False
+        self._failover_pending_failure: _PendingProviderFailure | None = None
         self._failover_unavailable: SearchProviderChainUnavailableReason | None = None
 
     def _load_current(self) -> _CurrentProviderValue:
@@ -430,30 +437,66 @@ class SearchProviderChainCoordinator:
 
     async def _await_active_failover(
         self,
-    ) -> tuple[int, SearchProviderChainUnavailableReason | None, bool]:
+    ) -> tuple[
+        int,
+        SearchProviderChainUnavailableReason | None,
+        bool,
+        bool,
+        _PendingProviderFailure | None,
+    ]:
         waited = False
         async with self._failover_condition:
             while self._failover_active:
                 waited = True
+                if self._failover_orphaned:
+                    self._failover_orphaned = False
+                    pending_failure = self._failover_pending_failure
+                    self._failover_pending_failure = None
+                    return (
+                        self._failover_generation,
+                        None,
+                        waited,
+                        True,
+                        pending_failure,
+                    )
                 await self._failover_condition.wait()
-            return self._failover_generation, self._failover_unavailable, waited
+            return (
+                self._failover_generation,
+                self._failover_unavailable,
+                waited,
+                False,
+                None,
+            )
 
     async def _claim_failover(
         self, observed_generation: int
-    ) -> tuple[bool, int, SearchProviderChainUnavailableReason | None]:
+    ) -> tuple[
+        bool,
+        int,
+        SearchProviderChainUnavailableReason | None,
+        _PendingProviderFailure | None,
+    ]:
         async with self._failover_condition:
             while self._failover_active:
+                if self._failover_orphaned:
+                    self._failover_orphaned = False
+                    pending_failure = self._failover_pending_failure
+                    self._failover_pending_failure = None
+                    return True, self._failover_generation, None, pending_failure
                 await self._failover_condition.wait()
             if self._failover_generation != observed_generation:
                 return (
                     False,
                     self._failover_generation,
                     self._failover_unavailable,
+                    None,
                 )
             self._failover_generation += 1
             self._failover_active = True
+            self._failover_orphaned = False
+            self._failover_pending_failure = None
             self._failover_unavailable = None
-            return True, self._failover_generation, None
+            return True, self._failover_generation, None, None
 
     async def _publish_failover(
         self, unavailable: SearchProviderChainUnavailableReason | None
@@ -461,6 +504,16 @@ class SearchProviderChainCoordinator:
         async with self._failover_condition:
             self._failover_unavailable = unavailable
             self._failover_active = False
+            self._failover_orphaned = False
+            self._failover_pending_failure = None
+            self._failover_condition.notify_all()
+
+    async def _handoff_failover(
+        self, pending_failure: _PendingProviderFailure | None
+    ) -> None:
+        async with self._failover_condition:
+            self._failover_orphaned = True
+            self._failover_pending_failure = pending_failure
             self._failover_condition.notify_all()
 
     def _record_success(
@@ -497,7 +550,7 @@ class SearchProviderChainCoordinator:
 
     async def _settle_failure(
         self,
-        candidate: _CandidateT,
+        candidate: SearchProviderCandidate,
         error: SearchProviderAttemptError,
         attempt_index: int,
     ) -> None:
@@ -520,6 +573,17 @@ class SearchProviderChainCoordinator:
             error.category,
             cooldown_reason=reason,
         )
+
+    async def _settle_pending_failure(
+        self,
+        pending_failure: _PendingProviderFailure | None,
+        seen_rows: set[str],
+    ) -> None:
+        if pending_failure is None:
+            return
+        candidate, error, attempt_index = pending_failure
+        seen_rows.add(candidate.row_id)
+        await self._settle_failure(candidate, error, attempt_index)
 
     def _unavailable_reason(
         self, *, attempted: bool
@@ -557,13 +621,20 @@ class SearchProviderChainCoordinator:
         candidate_snapshot = tuple(candidates)
         if not candidate_snapshot:
             self._raise_unavailable(SearchProviderChainUnavailableReason.EMPTY_CHAIN)
-        generation, unavailable, waited = await self._await_active_failover()
+        (
+            generation,
+            unavailable,
+            waited,
+            failover_leader,
+            pending_failure,
+        ) = await self._await_active_failover()
         if waited and unavailable is not None:
             self._raise_unavailable(unavailable)
-        attempted = False
+        attempted = pending_failure is not None
         seen_rows: set[str] = set()
-        failover_leader = False
         try:
+            await self._settle_pending_failure(pending_failure, seen_rows)
+            pending_failure = None
             while True:
                 start = self._resolve_current_index(candidate_snapshot)
                 ordered = candidate_snapshot[start:] + candidate_snapshot[:start]
@@ -590,17 +661,34 @@ class SearchProviderChainCoordinator:
                             failover_leader = False
                         return cast(_ResultT, result)
                     if failover_leader:
+                        pending_failure = (candidate, failure, attempt_index)
                         await self._settle_failure(candidate, failure, attempt_index)
+                        pending_failure = None
                         continue
                     (
                         failover_leader,
                         generation,
                         unavailable,
+                        inherited_failure,
                     ) = await self._claim_failover(generation)
                     if unavailable is not None:
                         self._raise_unavailable(unavailable)
                     if failover_leader:
-                        await self._settle_failure(candidate, failure, attempt_index)
+                        pending_failure = inherited_failure or (
+                            candidate,
+                            failure,
+                            attempt_index,
+                        )
+                        inherited_candidate, inherited_error, inherited_index = (
+                            pending_failure
+                        )
+                        seen_rows.add(inherited_candidate.row_id)
+                        await self._settle_failure(
+                            inherited_candidate,
+                            inherited_error,
+                            inherited_index,
+                        )
+                        pending_failure = None
                     else:
                         restart_after_wait = True
                         break
@@ -614,7 +702,7 @@ class SearchProviderChainCoordinator:
                 self._raise_unavailable(reason)
         finally:
             if failover_leader:
-                await self._publish_failover(None)
+                await self._handoff_failover(pending_failure)
 
 
 class SearchProviderRequestBudget:
