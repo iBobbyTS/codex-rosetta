@@ -14,6 +14,7 @@ Higher-level factory logic (shim resolution, config parsing) stays in
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Sequence
+from urllib.parse import urlsplit, urlunsplit
 
 from .._ordered_failover import OrderedFailoverCoordinator
 
@@ -157,6 +158,33 @@ class ProviderInfo:
             else self._url_template
         )
         return tpl.format(base_url=self.base_url, model=model)
+
+    def current_url_for(self, url: str) -> str:
+        """Replace this Provider's configured origin with its current origin."""
+        parsed = urlsplit(url)
+        for candidate in self.base_urls:
+            candidate_parts = urlsplit(candidate)
+            candidate_path = candidate_parts.path.rstrip("/")
+            if (
+                parsed.scheme == candidate_parts.scheme
+                and parsed.netloc == candidate_parts.netloc
+                and (
+                    parsed.path == candidate_path
+                    or parsed.path.startswith(f"{candidate_path}/")
+                )
+            ):
+                suffix = parsed.path[len(candidate_path) :]
+                current = urlsplit(self.base_url)
+                return urlunsplit(
+                    (
+                        current.scheme,
+                        current.netloc,
+                        f"{current.path.rstrip('/')}{suffix}",
+                        parsed.query,
+                        parsed.fragment,
+                    )
+                )
+        raise ValueError("Passthrough URL is outside the configured Provider origins")
 
 
 # ---------------------------------------------------------------------------

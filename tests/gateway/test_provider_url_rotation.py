@@ -12,6 +12,18 @@ import pytest
 
 from codex_rosetta.gateway.app import _bind_provider_current_recorders
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.search_provider_candidates import (
+    ConfiguredResponsesSearchProviderCandidate,
+    SelfHostedSearchProviderCandidate,
+)
+from codex_rosetta.gateway.search_provider_chain import (
+    SearchProviderChainCoordinator,
+    SearchProviderRequestBudget,
+)
+from codex_rosetta.gateway.search_provider_executor import (
+    SearchProviderExecutor,
+    SearchRequest,
+)
 from codex_rosetta.gateway.transport import ProviderInfo, UpstreamProtocolError
 from codex_rosetta.gateway.transport.http import transport as transport_module
 from codex_rosetta.gateway.transport.http.transport import HttpTransport
@@ -465,5 +477,99 @@ def test_same_provider_concurrent_failures_publish_one_current_change(
         assert writes == [("row-a", second)]
         assert client.calls.count(f"{first}/responses") == 2
         assert client.calls.count(f"{second}/responses") == 2
+
+    asyncio.run(scenario())
+
+
+def test_passthrough_rotates_the_same_path_and_preserves_one_request_budget_charge(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/alpha/search",
+            _json_response(502, {"error": "bad"}),
+        )
+        client.add(
+            f"{second}/alpha/search",
+            _json_response(200, {"output": "ok", "results": []}),
+        )
+        budget = SearchProviderRequestBudget(max_external_calls=1)
+        candidate = ConfiguredResponsesSearchProviderCandidate(
+            row_id="responses",
+            responses_provider="row-a",
+            responses_model="search-model",
+            provider_info=provider,
+            identity="responses-identity",
+        )
+
+        result = await SearchProviderExecutor(
+            responses_transport=_transport(monkeypatch, client)
+        ).execute(candidate, SearchRequest.from_body({}), request_budget=budget)
+
+        assert result == {"output": "ok", "results": []}
+        assert budget.external_calls == 1
+        assert client.calls == [
+            f"{first}/alpha/search",
+            f"{second}/alpha/search",
+        ]
+        assert writes == [("row-a", second)]
+
+    asyncio.run(scenario())
+
+
+def test_search_chain_advances_provider_only_after_url_ring_exhaustion(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/alpha/search",
+            _json_response(502, {"error": "bad"}),
+        )
+        client.add(
+            f"{second}/alpha/search",
+            _json_response(502, {"error": "bad"}),
+        )
+        responses = ConfiguredResponsesSearchProviderCandidate(
+            row_id="responses",
+            responses_provider="row-a",
+            responses_model="search-model",
+            provider_info=provider,
+            identity="responses-identity",
+        )
+        fallback = SelfHostedSearchProviderCandidate(
+            row_id="fallback",
+            provider="self_hosted_google",
+            identity="fallback-identity",
+        )
+        executor = SearchProviderExecutor(
+            responses_transport=_transport(monkeypatch, client)
+        )
+        attempted: list[str] = []
+
+        async def run_candidate(candidate):
+            attempted.append(candidate.row_id)
+            if candidate is fallback:
+                return {"output": "fallback", "results": []}
+            return await executor.execute(candidate, SearchRequest.from_body({}))
+
+        result = await SearchProviderChainCoordinator().run(
+            (responses, fallback), run_candidate
+        )
+
+        assert result == {"output": "fallback", "results": []}
+        assert attempted == ["responses", "fallback"]
+        assert client.calls == [
+            f"{first}/alpha/search",
+            f"{second}/alpha/search",
+        ]
+        assert writes == [("row-a", second)]
 
     asyncio.run(scenario())

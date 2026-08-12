@@ -199,6 +199,7 @@ class UpstreamTransport(Protocol):
         body: dict[str, Any],
         *,
         extra_headers: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> UpstreamResponse:
         """Send a raw passthrough request (no format-specific URL or flags).
 

@@ -154,7 +154,8 @@ def _make_config(
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
             "api_key": "upstream-key",
-            "base_url": upstream_base_url,
+            "base_urls": [upstream_base_url],
+            "current_base_url": upstream_base_url,
         }
     }
     if responses_search_provider is not None:
@@ -162,7 +163,8 @@ def _make_config(
             "provider": "openai",
             "api_type": "responses",
             "api_key": "search-provider-key",
-            "base_url": "https://search-provider.example/v1",
+            "base_urls": ["https://search-provider.example/v1"],
+            "current_base_url": "https://search-provider.example/v1",
             "proxy": "http://search-proxy.example:8080",
             "allow_redirects": True,
         }
@@ -195,7 +197,8 @@ def _make_config(
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
             "api_key": "secondary-upstream-key",
-            "base_url": "https://secondary-upstream.example/v1",
+            "base_urls": ["https://secondary-upstream.example/v1"],
+            "current_base_url": "https://secondary-upstream.example/v1",
         }
         model_groups["secondary"] = {
             "provider": "secondary",

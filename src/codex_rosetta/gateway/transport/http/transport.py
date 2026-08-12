@@ -852,11 +852,70 @@ class HttpTransport:
         body: dict[str, Any],
         *,
         extra_headers: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> UpstreamResponse:
         """Send a raw passthrough request — no URL template or stream flags.
 
         Used for non-conversion endpoints (model listing, reranking, etc.).
         """
+        await provider_info.wait_for_url_rotation()
+        while True:
+            if not provider_info.has_available_base_url():
+                return UpstreamResponse(
+                    status_code=502,
+                    body=None,
+                    raw_content=_all_domains_502(len(provider_info.base_urls)),
+                )
+            observed = provider_info.base_url
+            response = await self._send_passthrough_once(
+                provider_info,
+                url,
+                body,
+                extra_headers=extra_headers,
+                method=method,
+            )
+            if not _is_base_url_rotation_trigger(
+                response.status_code, response.raw_content
+            ):
+                return response
+            if not await provider_info.claim_url_rotation(observed):
+                continue
+            try:
+                provider_info.mark_base_url_failed(observed)
+                while True:
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        return UpstreamResponse(
+                            status_code=502,
+                            body=None,
+                            raw_content=_all_domains_502(len(provider_info.base_urls)),
+                        )
+                    await provider_info.select_base_url(next_url)
+                    observed = next_url
+                    response = await self._send_passthrough_once(
+                        provider_info,
+                        url,
+                        body,
+                        extra_headers=extra_headers,
+                        method=method,
+                    )
+                    if not _is_base_url_rotation_trigger(
+                        response.status_code, response.raw_content
+                    ):
+                        return response
+                    provider_info.mark_base_url_failed(observed)
+            finally:
+                await provider_info.publish_url_rotation()
+
+    async def _send_passthrough_once(
+        self,
+        provider_info: ProviderInfo,
+        url: str,
+        body: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None,
+        method: str,
+    ) -> UpstreamResponse:
         headers = {"Content-Type": "application/json"}
         if extra_headers:
             overlay_headers_case_insensitive(headers, extra_headers)
@@ -868,24 +927,40 @@ class HttpTransport:
             allow_redirects=provider_info.allow_redirects,
         )
         try:
-            resp = await client.post(
-                url,
-                json=body,
-                headers=headers,
-                stream=True,
-            )
+            request_url = provider_info.current_url_for(url)
+            request_kwargs: dict[str, Any] = {
+                "headers": headers,
+                "stream": True,
+            }
+            if method == "POST":
+                request_kwargs["json"] = body
+                request_method = client.post
+            elif method == "GET":
+                request_method = client.get
+            else:
+                raise ValueError("Passthrough method must be GET or POST")
+            resp = await request_method(request_url, **request_kwargs)
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpClientError, ValueError) as exc:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
+        if resp.status_code == 502:
+            await resp.aclose()
+            return UpstreamResponse(status_code=502, body=None, raw_content=b"")
         max_bytes = (
             MAX_UPSTREAM_ERROR_BODY_BYTES
             if resp.status_code >= 400
             else MAX_UPSTREAM_SUCCESS_BODY_BYTES
         )
         raw_content = await _read_bounded_body(resp, max_bytes)
+        if _is_base_url_rotation_trigger(resp.status_code, raw_content):
+            return UpstreamResponse(
+                status_code=resp.status_code,
+                body=None,
+                raw_content=raw_content,
+            )
         if 200 <= resp.status_code < 300:
             invalid_json = False
             try:

@@ -6,7 +6,6 @@ import asyncio
 from collections.abc import Mapping
 from typing import Any
 
-from codex_rosetta._vendor.httpclient import AsyncClient
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.observability.redaction import SecretRedactor
 from codex_rosetta.shims.providers import builtin_provider_shims
@@ -53,7 +52,7 @@ from ...tool_profiles import (
     tool_profile_contract,
     validate_tool_profile_reference,
 )
-from ...transport.http.transport import request_bounded_response
+from ...transport import UpstreamProtocolError
 from ...transport.provider_info import ProviderInfo
 from ._shared import (
     _build_provider_entry,
@@ -1295,22 +1294,20 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
         # OpenAI-compatible (openai_chat, openai_responses, etc.)
         models_url = f"{pinfo.base_url}/models"
 
-    headers = pinfo.auth_headers()
-
     try:
-        async with AsyncClient(
-            timeout=_PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS,
-            proxy=pinfo.proxy_url,
-        ) as client:
-            resp = await request_bounded_response(
-                client,
-                "GET",
+        resp = await asyncio.wait_for(
+            request.app.transport.send_passthrough(
+                pinfo,
                 models_url,
-                headers=headers,
-                allow_redirects=pinfo.allow_redirects,
-            )
+                {},
+                method="GET",
+            ),
+            timeout=_PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS,
+        )
     except asyncio.CancelledError:
         raise
+    except UpstreamProtocolError:
+        return JSONResponse({"error": "Upstream returned non-JSON response"})
     except Exception as exc:
         safe_error = RuntimeError(redactor.redact_exact(str(exc)))
         safe_error.__cause__ = None
@@ -1333,7 +1330,7 @@ async def fetch_upstream_models(request: Any, **kwargs: Any) -> Response:
         )
 
     try:
-        body = resp.json()
+        body = resp.body
     except Exception:
         return JSONResponse(
             {"error": "Upstream returned non-JSON response"},

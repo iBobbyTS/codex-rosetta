@@ -6,15 +6,13 @@ import asyncio
 import json
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
-from codex_rosetta._vendor.httpclient import (
-    CaseInsensitiveDict,
-    Response as HttpResponse,
-)
 from codex_rosetta.gateway.admin.routes import config as config_routes
 from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.transport import UpstreamProtocolError, UpstreamResponse
 
 
 def _request(
@@ -29,7 +27,8 @@ def _request(
                 "test-provider": {
                     "provider": "custom",
                     "api_key": api_key,
-                    "base_url": "https://api.example.test/v1",
+                    "base_urls": ["https://api.example.test/v1"],
+                    "current_base_url": "https://api.example.test/v1",
                     "api_type": api_type,
                     "allow_redirects": allow_redirects,
                 }
@@ -54,152 +53,51 @@ def _request(
         }
     )
     return SimpleNamespace(
-        app=SimpleNamespace(gateway_config=config),
+        app=SimpleNamespace(gateway_config=config, transport=AsyncMock()),
         path_params={"name": "test-provider"},
     )
 
 
-def _response(content: bytes) -> HttpResponse:
-    return HttpResponse(
-        200,
-        CaseInsensitiveDict({"content-type": "application/json"}),
-        content,
-        "https://api.example.test/v1/models",
+def test_model_discovery_uses_common_provider_transport() -> None:
+    request = _request()
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body={"data": [{"id": "gpt-upstream"}]},
+        raw_content=b'{"data":[{"id":"gpt-upstream"}]}',
     )
 
+    response = asyncio.run(config_routes.fetch_upstream_models(request))
 
-@pytest.mark.parametrize(
-    ("outcome", "expected_error"),
-    [
-        ("success", None),
-        ("connection_error", "boom"),
-        ("parse_error", "non-JSON"),
-        ("cancelled", None),
-    ],
-)
-def test_model_discovery_closes_client_on_every_exit_path(
-    monkeypatch: pytest.MonkeyPatch,
-    outcome: str,
-    expected_error: str | None,
-):
-    instances: list[Any] = []
+    assert json.loads(response.body)["models"] == ["gpt-upstream"]
+    request.app.transport.send_passthrough.assert_awaited_once()
+    args = request.app.transport.send_passthrough.await_args
+    assert args.args[0] is request.app.gateway_config.providers["test-provider"]
+    assert args.args[1] == "https://api.example.test/v1/models"
+    assert args.kwargs["method"] == "GET"
 
-    class _FakeAsyncClient:
-        def __init__(self, **kwargs: Any) -> None:
-            self.enter_count = 0
-            self.exit_count = 0
-            instances.append(self)
 
-        async def __aenter__(self):
-            self.enter_count += 1
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            self.exit_count += 1
-
-        async def get(self, url: str, **kwargs: Any) -> HttpResponse:
-            if outcome == "connection_error":
-                raise RuntimeError("boom")
-            if outcome == "cancelled":
-                raise asyncio.CancelledError
-            if outcome == "parse_error":
-                return _response(b"not json")
-            return _response(b'{"data":[{"id":"gpt-upstream"}]}')
-
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-
-    async def _fake_bounded_request(client, method, url, **kwargs):
-        assert method == "GET"
-        assert kwargs.pop("allow_redirects") is False
-        return await client.get(url, **kwargs)
-
-    monkeypatch.setattr(
-        config_routes,
-        "request_bounded_response",
-        _fake_bounded_request,
+def test_model_discovery_uses_provider_redirect_policy() -> None:
+    request = _request(allow_redirects=True)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200, body={"data": []}, raw_content=b'{"data":[]}'
     )
 
-    if outcome == "cancelled":
-        with pytest.raises(asyncio.CancelledError):
-            asyncio.run(config_routes.fetch_upstream_models(_request()))
-    else:
-        response = asyncio.run(config_routes.fetch_upstream_models(_request()))
-        body = json.loads(response.body)
-        if expected_error is None:
-            assert body["models"] == ["gpt-upstream"]
-        else:
-            assert expected_error in body["error"]
-
-    assert len(instances) == 1
-    assert instances[0].enter_count == 1
-    assert instances[0].exit_count == 1
-
-
-def test_model_discovery_uses_provider_redirect_policy(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, Any] = {}
-
-    class _FakeAsyncClient:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            pass
-
-    async def _fake_bounded_request(client, method, url, **kwargs):
-        observed.update(kwargs)
-        return SimpleNamespace(status_code=200, json=lambda: {"data": []})
-
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(
-        config_routes,
-        "request_bounded_response",
-        _fake_bounded_request,
-    )
-
-    response = asyncio.run(
-        config_routes.fetch_upstream_models(_request(allow_redirects=True))
-    )
+    response = asyncio.run(config_routes.fetch_upstream_models(request))
 
     assert response.status_code == 200
-    assert observed["allow_redirects"] is True
+    assert request.app.gateway_config.providers["test-provider"].allow_redirects is True
+    request.app.transport.send_passthrough.assert_awaited_once()
 
 
-def test_model_discovery_rejects_redirect_before_applying_models(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class _FakeAsyncClient:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            pass
-
-    class _RedirectResponse:
-        status_code = 302
-
-        def json(self) -> dict[str, Any]:
-            raise AssertionError("redirect body must not be consumed as model data")
-
-    async def _fake_bounded_request(*args: Any, **kwargs: Any):
-        del args, kwargs
-        return _RedirectResponse()
-
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(
-        config_routes,
-        "request_bounded_response",
-        _fake_bounded_request,
+def test_model_discovery_rejects_redirect_before_applying_models() -> None:
+    request = _request()
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=302,
+        body={"redirect": "ignored"},
+        raw_content=b'{"redirect":"ignored"}',
     )
 
-    response = asyncio.run(config_routes.fetch_upstream_models(_request()))
+    response = asyncio.run(config_routes.fetch_upstream_models(request))
 
     assert json.loads(response.body) == {
         "error": (
@@ -208,9 +106,19 @@ def test_model_discovery_rejects_redirect_before_applying_models(
     }
 
 
+def test_model_discovery_preserves_non_json_error() -> None:
+    request = _request()
+    request.app.transport.send_passthrough.side_effect = UpstreamProtocolError(
+        "Upstream response is not valid JSON"
+    )
+
+    response = asyncio.run(config_routes.fetch_upstream_models(request))
+
+    assert json.loads(response.body) == {"error": "Upstream returned non-JSON response"}
+
+
 @pytest.mark.parametrize("outcome", ["success", "connection_error"])
 def test_model_discovery_uses_first_legacy_key_and_blocks_discarded_key(
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     outcome: str,
 ) -> None:
@@ -219,44 +127,26 @@ def test_model_discovery_uses_first_legacy_key_and_blocks_discarded_key(
     request = _request(api_key=f" {first_key}, , {wire_key} ")
     pinfo = request.app.gateway_config.providers["test-provider"]
     assert pinfo.auth_headers()["Authorization"] == f"Bearer {first_key}"
-    observed_headers: dict[str, str] = {}
-
-    class _FakeAsyncClient:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            pass
-
-    async def _fake_bounded_request(client, method, url, **kwargs):
-        observed_headers.update(kwargs["headers"])
-        if outcome == "connection_error":
-            raise RuntimeError(f"connection rejected credential={wire_key}")
-        return SimpleNamespace(
-            status_code=200,
-            json=lambda: {"data": [{"id": f"model-{wire_key}"}]},
+    if outcome == "connection_error":
+        request.app.transport.send_passthrough.side_effect = RuntimeError(
+            f"connection rejected credential={wire_key}"
         )
-
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(
-        config_routes,
-        "request_bounded_response",
-        _fake_bounded_request,
-    )
+    else:
+        request.app.transport.send_passthrough.return_value = UpstreamResponse(
+            status_code=200,
+            body={"data": [{"id": f"model-{wire_key}"}]},
+            raw_content=b"{}",
+        )
 
     response = asyncio.run(config_routes.fetch_upstream_models(request))
 
-    assert observed_headers["Authorization"] == f"Bearer {first_key}"
     response_text = response.body.decode("utf-8")
     assert first_key not in response_text
     assert wire_key not in response_text
     if outcome == "success":
         assert json.loads(response.body)["error"].endswith("response blocked")
     else:
-        assert "connection rejected credential=[REDACTED]" in response_text
+        assert "Failed to connect to upstream" in response_text
         assert wire_key not in caplog.text
         assert "connection rejected credential=[REDACTED]" in caplog.text
 
@@ -281,34 +171,17 @@ def test_model_discovery_uses_first_legacy_key_and_blocks_discarded_key(
     ],
 )
 def test_model_discovery_rejects_wrong_shape_json(
-    monkeypatch: pytest.MonkeyPatch,
     api_type: str,
     payload: Any,
 ) -> None:
-    class _FakeAsyncClient:
-        def __init__(self, **kwargs: Any) -> None:
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            pass
-
-    async def _fake_bounded_request(*args: Any, **kwargs: Any):
-        del args, kwargs
-        return SimpleNamespace(status_code=200, json=lambda: payload)
-
-    monkeypatch.setattr(config_routes, "AsyncClient", _FakeAsyncClient)
-    monkeypatch.setattr(
-        config_routes,
-        "request_bounded_response",
-        _fake_bounded_request,
+    request = _request(api_type=api_type)
+    request.app.transport.send_passthrough.return_value = UpstreamResponse(
+        status_code=200,
+        body=payload,
+        raw_content=b"{}",
     )
 
-    response = asyncio.run(
-        config_routes.fetch_upstream_models(_request(api_type=api_type))
-    )
+    response = asyncio.run(config_routes.fetch_upstream_models(request))
 
     assert json.loads(response.body) == {
         "error": "Upstream returned an invalid model list"

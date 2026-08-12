@@ -55,13 +55,15 @@ def _config() -> GatewayConfig:
                 "model-provider": {
                     "provider": "openai",
                     "api_type": "responses",
-                    "base_url": "https://model.example/v1",
+                    "base_urls": ["https://model.example/v1"],
+                    "current_base_url": "https://model.example/v1",
                     "api_key": "model-key",
                 },
                 "search-provider": {
                     "provider": "openai",
                     "api_type": "responses",
-                    "base_url": "https://search.example/v1",
+                    "base_urls": ["https://search.example/v1"],
+                    "current_base_url": "https://search.example/v1",
                     "api_key": "search-key",
                 },
             },

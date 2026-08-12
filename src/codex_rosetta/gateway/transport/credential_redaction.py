@@ -378,14 +378,18 @@ class CredentialRedactingTransport:
         body: dict[str, Any],
         *,
         extra_headers: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> UpstreamResponse:
+        kwargs: dict[str, Any] = {"extra_headers": extra_headers}
+        if method != "POST":
+            kwargs["method"] = method
         error: UpstreamConnectionError | None = None
         try:
             response = await self._transport.send_passthrough(
                 provider_info,
                 url,
                 body,
-                extra_headers=extra_headers,
+                **kwargs,
             )
         except Exception as exc:
             error = _sanitized_transport_error(provider_info, exc)
