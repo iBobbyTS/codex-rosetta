@@ -75,8 +75,9 @@ class _ReflectingTransport:
         body: dict[str, Any],
         *,
         extra_headers: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> UpstreamResponse:
-        del url
+        del url, method
         return await self.send_request(
             provider_info,
             "openai_responses",

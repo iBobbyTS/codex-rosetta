@@ -195,7 +195,8 @@ def _make_app():
                 "test-provider": {
                     "provider": "custom",
                     "api_key": "sk-test",
-                    "base_url": "https://api.example.test/v1",
+                    "base_urls": ["https://api.example.test/v1"],
+                    "current_base_url": "https://api.example.test/v1",
                     "api_type": "chat",
                 }
             },
@@ -744,7 +745,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
         "providers": {
             "test-provider": {
                 "api_key": "sk-test",
-                "base_url": "https://api.example.test/v1",
+                "base_urls": ["https://api.example.test/v1"],
+                "current_base_url": "https://api.example.test/v1",
                 "provider": "custom",
                 "api_type": "chat",
             }

@@ -28,7 +28,8 @@ def _config(
                 f"provider-{label}": {
                     "provider": "custom",
                     "api_key": f"sk-{label}",
-                    "base_url": f"https://{label}.example.test/v1",
+                    "base_urls": [f"https://{label}.example.test/v1"],
+                    "current_base_url": f"https://{label}.example.test/v1",
                     "api_type": "chat",
                 }
             },

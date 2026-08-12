@@ -80,8 +80,9 @@ class _StaticTransport:
         body: dict[str, Any],
         *,
         extra_headers: dict[str, str] | None = None,
+        method: str = "POST",
     ) -> UpstreamResponse:
-        del provider_info, url, body, extra_headers
+        del provider_info, url, body, extra_headers, method
         assert self.response is not None
         return self.response
 

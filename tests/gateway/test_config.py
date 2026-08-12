@@ -1463,7 +1463,8 @@ def test_cli_add_provider_persists_explicit_protocol(tmp_path):
     saved = json.loads((tmp_path / "config.jsonc").read_text(encoding="utf-8"))
     assert saved["providers"]["relay"] == {
         "api_key": "sk-test",
-        "base_url": "https://relay.example/v1",
+        "base_urls": ["https://relay.example/v1"],
+        "current_base_url": "https://relay.example/v1",
         "api_type": "responses",
     }
 

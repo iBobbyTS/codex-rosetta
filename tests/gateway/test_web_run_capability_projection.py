@@ -416,7 +416,8 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
         "providers": {
             "test": {
                 "api_key": "sk-test",
-                "base_url": "https://api.example.com",
+                "base_urls": ["https://api.example.com"],
+                "current_base_url": "https://api.example.com",
                 "provider": "custom",
                 "api_type": "chat",
             }

@@ -1423,7 +1423,8 @@ def test_manual_base_url_selection_persists_and_clears_only_selected_cooldown(
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     app = create_app(GatewayConfig(data), config_path=str(config_path))
-    provider = app.gateway_config.providers["openai"]
+    typed_app = cast(Any, app)
+    provider = typed_app.gateway_config.providers["openai"]
     provider.mark_base_url_failed("https://first.example/v1")
     provider.mark_base_url_failed("https://second.example/v1")
     request = SimpleNamespace(
@@ -1436,7 +1437,7 @@ def test_manual_base_url_selection_persists_and_clears_only_selected_cooldown(
         response = _run(select_provider_base_url(request))
 
         assert response.status_code == 200
-        assert app.gateway_config.providers["openai"] is provider
+        assert typed_app.gateway_config.providers["openai"] is provider
         assert provider.base_url == "https://second.example/v1"
         assert provider.base_url_statuses() == (
             ("https://first.example/v1", "cooling"),
@@ -1448,7 +1449,7 @@ def test_manual_base_url_selection_persists_and_clears_only_selected_cooldown(
             == "https://second.example/v1"
         )
     finally:
-        app.persistence.close()
+        typed_app.persistence.close()
 
 
 def test_manual_base_url_selection_rejects_non_member_without_write(tmp_path):
@@ -1469,7 +1470,7 @@ def test_manual_base_url_selection_rejects_non_member_without_write(tmp_path):
         assert response.status_code == 400
         assert config_path.read_bytes() == original
     finally:
-        app.persistence.close()
+        cast(Any, app).persistence.close()
 
 
 def test_get_config_canonicalizes_legacy_provider_mask_without_writing(tmp_path):

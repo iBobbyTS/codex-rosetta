@@ -23,7 +23,8 @@ def _config_data() -> dict[str, Any]:
             "test-provider": {
                 "provider": "custom",
                 "api_key": "sk-test",
-                "base_url": "https://api.example.test/v1",
+                "base_urls": ["https://api.example.test/v1"],
+                "current_base_url": "https://api.example.test/v1",
                 "api_type": "chat",
             }
         },

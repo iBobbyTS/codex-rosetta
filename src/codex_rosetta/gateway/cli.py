@@ -148,19 +148,22 @@ def _create_initial_config(config_path: str) -> None:
             "openai_chat": {
                 "provider": "openai",
                 "api_key": "${OPENAI_API_KEY}",
-                "base_url": "https://api.openai.com/v1",
+                "base_urls": ["https://api.openai.com/v1"],
+                "current_base_url": "https://api.openai.com/v1",
                 "api_type": "chat",
             },
             "anthropic": {
                 "provider": "anthropic",
                 "api_key": "${ANTHROPIC_API_KEY}",
-                "base_url": "https://api.anthropic.com",
+                "base_urls": ["https://api.anthropic.com"],
+                "current_base_url": "https://api.anthropic.com",
                 "api_type": "anthropic",
             },
             "google": {
                 "provider": "google",
                 "api_key": "${GOOGLE_API_KEY}",
-                "base_url": "https://generativelanguage.googleapis.com",
+                "base_urls": ["https://generativelanguage.googleapis.com"],
+                "current_base_url": "https://generativelanguage.googleapis.com",
                 "api_type": "google",
             },
         },
@@ -244,7 +247,8 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
 
     data.setdefault("providers", {})[name] = {
         "api_key": api_key,
-        "base_url": base_url,
+        "base_urls": [base_url],
+        "current_base_url": base_url,
         "api_type": args.api_type,
     }
     _write_jsonc(path, data)

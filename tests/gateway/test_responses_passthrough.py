@@ -117,7 +117,8 @@ def test_unadapted_provider_protocol_uses_standard_responses_behavior():
             "Qwen": {
                 "provider": "qwen",
                 "api_key": "sk-test",
-                "base_url": "https://qwen.example.test/v1",
+                "base_urls": ["https://qwen.example.test/v1"],
+                "current_base_url": "https://qwen.example.test/v1",
                 "api_type": "responses",
             }
         },
