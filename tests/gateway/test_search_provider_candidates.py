@@ -33,13 +33,14 @@ def _provider(
     name: str,
     keys: str,
     *,
+    additional_keys: tuple[tuple[str, str], ...] = (),
     base_url: str = "https://upstream.example/v1",
     proxy_url: str | None = None,
     allow_redirects: bool = False,
 ) -> ProviderInfo:
     return ProviderInfo(
         name,
-        api_key=keys,
+        api_keys=(("primary", keys), *additional_keys),
         base_url=base_url,
         auth_header_fn=openai_auth,
         url_template="{base_url}/responses",
@@ -187,6 +188,46 @@ def test_builds_immutable_secret_safe_deepseek_candidate_in_input_order():
 
 
 @pytest.mark.parametrize(
+    ("provider_name", "row"),
+    [
+        (
+            "responses",
+            {
+                "id": "responses",
+                "provider": "configured_responses_provider",
+                "responses_provider": "official",
+                "responses_model": "gpt-5.6-terra",
+            },
+        ),
+        (
+            "deepseek",
+            {
+                "id": "deepseek",
+                "provider": "deepseek_native_responses",
+                "deepseek_provider": "official",
+            },
+        ),
+    ],
+)
+def test_search_candidates_accept_provider_credential_ring(provider_name, row):
+    provider = _provider(
+        provider_name,
+        "key-first",
+        additional_keys=(("second", "key-second"),),
+        base_url=(
+            "https://api.deepseek.com"
+            if provider_name == "deepseek"
+            else "https://upstream.example/v1"
+        ),
+    )
+
+    candidate = _build([row], {"official": provider})[0]
+
+    assert candidate.provider_info is provider
+    assert provider.credential_values == ("key-first", "key-second")
+
+
+@pytest.mark.parametrize(
     ("providers", "message"),
     [
         ({}, "enabled DeepSeek provider"),
@@ -225,22 +266,21 @@ def test_rejects_invalid_deepseek_provider_identity_without_secret_leak(
     assert "hmac-sha256" not in rendered
 
 
-def test_rejects_deepseek_zero_or_multiple_credentials_locally():
+def test_rejects_deepseek_zero_credentials_locally():
     row = {
         "id": "deepseek-row",
         "provider": "deepseek_native_responses",
         "deepseek_provider": "official",
     }
-    for credentials in ((), ("one", "two")):
-        provider = SimpleNamespace(
-            name="deepseek",
-            base_url="https://api.deepseek.com",
-            proxy_url=None,
-            allow_redirects=False,
-            credential_values=credentials,
-        )
-        with pytest.raises(ValueError, match="exactly one provider credential"):
-            _build([row], {"official": provider})
+    provider = SimpleNamespace(
+        name="deepseek",
+        base_url="https://api.deepseek.com",
+        proxy_url=None,
+        allow_redirects=False,
+        credential_values=(),
+    )
+    with pytest.raises(ValueError, match="must resolve provider credentials"):
+        _build([row], {"official": provider})
 
 
 def test_rejects_deepseek_provider_without_responses_api_type():

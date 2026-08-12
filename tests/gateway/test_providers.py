@@ -158,6 +158,19 @@ def test_gateway_rejects_legacy_scalar_provider_credential():
         )
 
 
+def test_gateway_rejects_disabled_legacy_scalar_provider_credential():
+    with pytest.raises(ValueError, match="api_key is unsupported; use api_keys"):
+        _gateway_config(
+            {
+                "provider": "custom",
+                "api_type": "chat",
+                "api_key": "legacy-key",
+                "base_urls": ["https://upstream.example/v1"],
+                "enabled": False,
+            }
+        )
+
+
 def test_gateway_requires_unique_credential_ids_and_member_current():
     common = {
         "provider": "custom",

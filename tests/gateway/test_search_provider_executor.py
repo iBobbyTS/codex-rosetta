@@ -86,7 +86,10 @@ def configured_responses_candidate():
 
 
 def deepseek_candidate(
-    *, credential: str = "deepseek-secret", proxy_url: str | None = None
+    *,
+    credential: str = "deepseek-secret",
+    additional_credentials: tuple[tuple[str, str], ...] = (),
+    proxy_url: str | None = None,
 ):
     candidate = object.__new__(DeepSeekNativeResponsesSearchProviderCandidate)
     object.__setattr__(candidate, "row_id", "deepseek")
@@ -94,11 +97,14 @@ def deepseek_candidate(
     object.__setattr__(
         candidate,
         "provider_info",
-        SimpleNamespace(
-            name="deepseek",
-            base_url="https://api.deepseek.com",
+        ProviderInfo(
+            "deepseek",
+            configured_id="official",
+            api_keys=(("primary", credential), *additional_credentials),
+            base_urls=("https://api.deepseek.com",),
+            auth_header_fn=openai_auth,
+            url_template="{base_url}/responses",
             proxy_url=proxy_url,
-            credential_values=(credential,),
         ),
     )
     object.__setattr__(candidate, "provider", "deepseek_native_responses")
@@ -285,6 +291,69 @@ def test_deepseek_executor_forwards_candidate_proxy_to_factory():
     ]
 
 
+def test_deepseek_executor_rotates_only_literal_503_and_persists_current():
+    failure = FakeDeepSeekClient(
+        DeepSeekSearchError(DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=503)
+    )
+    success = FakeDeepSeekClient(DeepSeekSearchResult("answer", (), {}))
+    factories = []
+
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
+        return failure if credential == "key-first" else success
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+    )
+    writes = []
+
+    async def record(configured_id, credential_id):
+        writes.append((configured_id, credential_id))
+
+    candidate.provider_info.bind_current_credential_recorder(record)
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+
+    result = run(
+        SearchProviderExecutor(deepseek_client_factory=factory).execute(
+            candidate,
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            request_budget=budget,
+        )
+    )
+
+    assert result == {"output": "answer", "results": []}
+    assert [item[0] for item in factories] == ["key-first", "key-second"]
+    assert candidate.provider_info.current_credential_id == "second"
+    assert writes == [("official", "second")]
+    assert budget.external_calls == 1
+
+
+def test_deepseek_executor_non503_does_not_rotate_credential():
+    error = DeepSeekSearchError(DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=502)
+    factories = []
+
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
+        return FakeDeepSeekClient(error)
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+    )
+
+    with pytest.raises(SearchProviderAttemptError):
+        run(
+            SearchProviderExecutor(deepseek_client_factory=factory).execute(
+                candidate,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            )
+        )
+
+    assert [item[0] for item in factories] == ["key-first"]
+    assert candidate.provider_info.current_credential_id == "primary"
+
+
 @pytest.mark.parametrize(
     "search_request",
     [
@@ -351,11 +420,6 @@ def test_deepseek_contract_substitution_is_terminal_before_effects():
             base_url="https://api.deepseek.com",
             credential_values=(),
         ),
-        SimpleNamespace(
-            name="deepseek",
-            base_url="https://api.deepseek.com",
-            credential_values=("one", "two"),
-        ),
     ],
 )
 def test_deepseek_invalid_candidate_state_is_terminal_before_effects(provider_info):
@@ -402,7 +466,7 @@ def test_deepseek_exhausted_budget_does_not_enter_client_or_retry():
             )
         )
 
-    assert len(factories) == 1
+    assert factories == []
     assert client.calls == []
     assert budget.external_calls == 1
 

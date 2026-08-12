@@ -233,10 +233,10 @@ def _configured_responses_candidate(
             f"{row_id!r} has an unsupported Responses model"
         )
     credentials = provider_info.credential_values
-    if len(credentials) != 1:
+    if not credentials:
         raise ValueError(
             "config: web search provider row "
-            f"{row_id!r} must resolve exactly one provider credential"
+            f"{row_id!r} must resolve at least one provider credential"
         )
     identity_domain = _identity_domain(row, provider_info=provider_info)
     return (
@@ -321,14 +321,12 @@ def _deepseek_native_responses_candidate(
             f"{row_id!r} must use the official DeepSeek origin"
         ) from None
     credentials = provider_info.credential_values
-    if (
-        len(credentials) != 1
-        or type(credentials[0]) is not str
-        or not credentials[0].strip()
+    if not credentials or any(
+        type(item) is not str or not item.strip() for item in credentials
     ):
         raise ValueError(
             "config: web search provider row "
-            f"{row_id!r} must resolve exactly one provider credential"
+            f"{row_id!r} must resolve provider credentials"
         )
     identity_domain = _identity_domain(row, provider_info=provider_info)
     candidate = DeepSeekNativeResponsesSearchProviderCandidate(

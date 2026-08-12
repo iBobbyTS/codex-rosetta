@@ -292,21 +292,50 @@ class SearchProviderExecutor:
         request_budget: SearchProviderRequestBudget | None,
     ) -> dict[str, Any]:
         """Execute one already-validated DeepSeek hosted-search candidate."""
-        credential = candidate.provider_info.credential_values[0]
-        client = self._deepseek_client_factory(
-            credential,
-            DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
-            candidate.provider_info.proxy_url,
-        )
+        provider_info = candidate.provider_info
         query = request.queries[0][0]
 
         async def operation() -> DeepSeekSearchResult:
-            return await client.execute(
-                query,
-                model=DEEPSEEK_RESPONSES_SEARCH_MODEL,
-                max_output_tokens=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS,
-                citation_limit=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
-            )
+            await provider_info.wait_for_credential_rotation()
+            while True:
+                if not provider_info.has_available_credential():
+                    raise DeepSeekSearchError(
+                        DeepSeekSearchErrorCategory.HTTP_ERROR,
+                        status_code=503,
+                    )
+                observed = provider_info.current_credential_id
+                credential = dict(
+                    zip(provider_info.credential_ids, provider_info.credential_values)
+                )[observed]
+                client = self._deepseek_client_factory(
+                    credential,
+                    DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
+                    provider_info.proxy_url,
+                )
+                try:
+                    return await client.execute(
+                        query,
+                        model=DEEPSEEK_RESPONSES_SEARCH_MODEL,
+                        max_output_tokens=(
+                            DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS
+                        ),
+                        citation_limit=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+                    )
+                except DeepSeekSearchError as exc:
+                    if exc.status_code != 503:
+                        raise
+                    if not await provider_info.claim_credential_rotation(observed):
+                        continue
+                    try:
+                        provider_info.mark_credential_failed(observed)
+                        next_credential = provider_info.next_available_credential(
+                            observed
+                        )
+                        if next_credential is None:
+                            raise
+                        await provider_info.select_credential(next_credential)
+                    finally:
+                        await provider_info.publish_credential_rotation()
 
         try:
             result = await (
@@ -451,9 +480,8 @@ def _validate_candidate_execution_contract(  # noqa: C901
         if (
             provider_info.name != "deepseek"
             or official_origin != DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN
-            or len(credentials) != 1
-            or type(credentials[0]) is not str
-            or not credentials[0].strip()
+            or not credentials
+            or any(type(item) is not str or not item.strip() for item in credentials)
             or candidate.model != DEEPSEEK_RESPONSES_SEARCH_MODEL
         ):
             raise SearchProviderTerminalError("DeepSeek search provider is invalid")

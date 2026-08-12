@@ -843,8 +843,11 @@ class GatewayConfig:
         self.token_values = collect_token_values(raw)
         self.codex = normalize_codex_settings(raw.get("codex"))
         all_providers: dict[str, dict[str, Any]] = raw.get("providers", {})
-        for provider in all_providers.values():
-            if isinstance(provider, dict) and "api_keys" in provider:
+        for name, provider in all_providers.items():
+            if not isinstance(provider, dict):
+                raise ValueError(f"config: provider '{name}' must be an object")
+            self._validate_provider_credentials(name, provider)
+            if "api_keys" in provider:
                 self.token_values.update(provider_api_key_values(provider["api_keys"]))
 
         # Filter out disabled providers (enabled defaults to True)
@@ -1065,6 +1068,42 @@ class GatewayConfig:
                 )
 
     @staticmethod
+    def _validate_provider_credentials(name: str, cfg: dict[str, Any]) -> None:
+        """Validate canonical credentials for enabled and disabled rows."""
+        if "api_key" in cfg:
+            raise ValueError(
+                f"config: provider '{name}' api_key is unsupported; use api_keys"
+            )
+        raw_api_keys = cfg.get("api_keys")
+        if raw_api_keys is None:
+            return
+        if (
+            not isinstance(raw_api_keys, list)
+            or not raw_api_keys
+            or any(
+                not isinstance(item, dict)
+                or not isinstance(item.get("id"), str)
+                or not item["id"].strip()
+                or not isinstance(item.get("key"), str)
+                or not item["key"].strip()
+                for item in raw_api_keys
+            )
+        ):
+            raise ValueError(
+                f"config: provider '{name}' api_keys must be a non-empty object list"
+            )
+        if len({item["id"] for item in raw_api_keys}) != len(raw_api_keys):
+            raise ValueError(f"config: provider '{name}' api_keys IDs must be unique")
+        current_api_key = cfg.get("current_api_key", raw_api_keys[0]["id"])
+        if not isinstance(current_api_key, str) or current_api_key not in {
+            item["id"] for item in raw_api_keys
+        }:
+            raise ValueError(
+                f"config: provider '{name}' current_api_key must be a member of api_keys"
+            )
+        cfg["current_api_key"] = current_api_key
+
+    @staticmethod
     def _resolve_provider_types(
         raw_providers: dict[str, dict[str, Any]],
     ) -> tuple[dict[str, str], dict[str, str | None]]:
@@ -1076,39 +1115,7 @@ class GatewayConfig:
         provider_types: dict[str, str] = {}
         provider_shim_names: dict[str, str | None] = {}
         for name, cfg in raw_providers.items():
-            if "api_key" in cfg:
-                raise ValueError(
-                    f"config: provider '{name}' api_key is unsupported; use api_keys"
-                )
-            raw_api_keys = cfg.get("api_keys")
-            if raw_api_keys is not None:
-                if (
-                    not isinstance(raw_api_keys, list)
-                    or not raw_api_keys
-                    or any(
-                        not isinstance(item, dict)
-                        or not isinstance(item.get("id"), str)
-                        or not item["id"].strip()
-                        or not isinstance(item.get("key"), str)
-                        or not item["key"].strip()
-                        for item in raw_api_keys
-                    )
-                ):
-                    raise ValueError(
-                        f"config: provider '{name}' api_keys must be a non-empty object list"
-                    )
-                if len({item["id"] for item in raw_api_keys}) != len(raw_api_keys):
-                    raise ValueError(
-                        f"config: provider '{name}' api_keys IDs must be unique"
-                    )
-                current_api_key = cfg.get("current_api_key", raw_api_keys[0]["id"])
-                if not isinstance(current_api_key, str) or current_api_key not in {
-                    item["id"] for item in raw_api_keys
-                }:
-                    raise ValueError(
-                        f"config: provider '{name}' current_api_key must be a member of api_keys"
-                    )
-                cfg["current_api_key"] = current_api_key
+            GatewayConfig._validate_provider_credentials(name, cfg)
             if "base_url" in cfg:
                 raise ValueError(
                     f"config: provider '{name}' base_url is unsupported; use base_urls"
