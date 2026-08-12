@@ -153,7 +153,8 @@ def _make_config(
         "upstream": {
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
-            "api_key": "upstream-key",
+            "api_keys": [{"id": "primary", "key": "upstream-key"}],
+            "current_api_key": "primary",
             "base_urls": [upstream_base_url],
             "current_base_url": upstream_base_url,
         }
@@ -162,7 +163,8 @@ def _make_config(
         providers[responses_search_provider] = {
             "provider": "openai",
             "api_type": "responses",
-            "api_key": "search-provider-key",
+            "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+            "current_api_key": "primary",
             "base_urls": ["https://search-provider.example/v1"],
             "current_base_url": "https://search-provider.example/v1",
             "proxy": "http://search-proxy.example:8080",
@@ -196,7 +198,8 @@ def _make_config(
         providers["secondary"] = {
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
-            "api_key": "secondary-upstream-key",
+            "api_keys": [{"id": "primary", "key": "secondary-upstream-key"}],
+            "current_api_key": "primary",
             "base_urls": ["https://secondary-upstream.example/v1"],
             "current_base_url": "https://secondary-upstream.example/v1",
         }

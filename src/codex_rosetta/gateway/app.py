@@ -1151,7 +1151,7 @@ def _bind_provider_current_recorders(
     config: GatewayConfig,
     config_path: str | None,
 ) -> None:
-    """Bind one config-path-aware current-base-URL recorder per provider row."""
+    """Bind config-path-aware URL and credential recorders per provider row."""
     write_lock = asyncio.Lock()
 
     async def record(configured_id: str, base_url: str) -> None:
@@ -1175,8 +1175,30 @@ def _bind_provider_current_recorders(
                     "Provider base URL state could not be persisted"
                 ) from None
 
+    async def record_credential(configured_id: str, credential_id: str) -> None:
+        if config_path is None:
+            raise RuntimeError("Provider credential state cannot be persisted")
+        async with write_lock:
+            try:
+                document = load_config_raw(config_path)
+                providers = document.get("providers")
+                if not isinstance(providers, dict):
+                    raise ValueError
+                provider = providers.get(configured_id)
+                if not isinstance(provider, dict):
+                    raise ValueError
+                provider["current_api_key"] = credential_id
+                write_config(config_path, document)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise RuntimeError(
+                    "Provider credential state could not be persisted"
+                ) from None
+
     for provider_info in config.providers.values():
         provider_info.bind_current_base_url_recorder(record)
+        provider_info.bind_current_credential_recorder(record_credential)
 
 
 # ---------------------------------------------------------------------------

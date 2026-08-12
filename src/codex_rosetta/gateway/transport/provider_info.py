@@ -21,6 +21,7 @@ from .._ordered_failover import OrderedFailoverCoordinator
 # Type alias for auth-header builder callables
 AuthHeaderFn = Callable[[str], dict[str, str]]
 CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
+CurrentCredentialRecorder = Callable[[str, str], Awaitable[None]]
 
 
 # ---------------------------------------------------------------------------
@@ -31,8 +32,8 @@ CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
 class ProviderInfo:
     """Runtime representation of a single configured provider.
 
-    Encapsulates one credential, base URL, auth-header construction, and
-    upstream URL building.
+    Encapsulates ordered credential and base-URL rings, auth-header
+    construction, and upstream URL building.
     """
 
     def __init__(
@@ -40,7 +41,9 @@ class ProviderInfo:
         name: str,
         *,
         configured_id: str | None = None,
-        api_key: str,
+        api_key: str | None = None,
+        api_keys: Sequence[tuple[str, str]] | None = None,
+        current_api_key: str | None = None,
         base_url: str | None = None,
         base_urls: Sequence[str] | None = None,
         current_base_url: str | None = None,
@@ -76,9 +79,32 @@ class ProviderInfo:
         self.configured_id = configured_id or name
         self._url_ring = OrderedFailoverCoordinator(normalized_urls, normalized_current)
         self._record_current_base_url: CurrentBaseUrlRecorder | None = None
-        self._credential = api_key.strip()
-        if not self._credential:
+        if api_keys is None:
+            if api_key is None:
+                raise ValueError("No API keys configured")
+            api_keys = (("primary", api_key),)
+        elif api_key is not None:
+            raise ValueError("api_key and api_keys are mutually exclusive")
+        normalized_credentials = tuple(
+            (credential_id.strip(), credential.strip())
+            for credential_id, credential in api_keys
+        )
+        if not normalized_credentials or any(
+            not credential_id or not credential
+            for credential_id, credential in normalized_credentials
+        ):
             raise ValueError("No API keys configured")
+        credential_ids = tuple(item[0] for item in normalized_credentials)
+        if len(set(credential_ids)) != len(credential_ids):
+            raise ValueError("Provider credential IDs must be unique")
+        selected_credential = current_api_key or credential_ids[0]
+        if selected_credential not in credential_ids:
+            raise ValueError("current_api_key must be a member of api_keys")
+        self._credentials = dict(normalized_credentials)
+        self._credential_ring = OrderedFailoverCoordinator(
+            credential_ids, selected_credential
+        )
+        self._record_current_credential: CurrentCredentialRecorder | None = None
         self._auth_header_fn = auth_header_fn
         self._url_template = url_template
         self._stream_url_template = stream_url_template
@@ -153,15 +179,75 @@ class ProviderInfo:
         await self._url_ring.publish()
 
     @property
+    def credential_ids(self) -> tuple[str, ...]:
+        """Return stable credential identifiers in configured order."""
+        return self._credential_ring.candidates
+
+    @property
+    def current_credential_id(self) -> str:
+        """Return the selected credential identifier without its secret."""
+        return self._credential_ring.current
+
+    def bind_current_credential_recorder(
+        self, recorder: CurrentCredentialRecorder | None
+    ) -> None:
+        """Bind the app-owned persistence callback for credential selection."""
+        self._record_current_credential = recorder
+
+    async def wait_for_credential_rotation(self) -> None:
+        await self._credential_ring.wait()
+
+    def available_credentials(self) -> tuple[str, ...]:
+        return self._credential_ring.available()
+
+    def has_available_credential(self) -> bool:
+        return bool(self._credential_ring.available())
+
+    async def claim_credential_rotation(self, observed: str) -> bool:
+        return await self._credential_ring.claim(observed)
+
+    def mark_credential_failed(self, credential_id: str) -> None:
+        self._credential_ring.mark_failed(credential_id)
+
+    def credential_statuses(self) -> tuple[tuple[str, str], ...]:
+        """Return credential IDs with process-local availability."""
+        return self._credential_ring.status_snapshot()
+
+    async def select_credential(self, credential_id: str) -> None:
+        if credential_id == self.current_credential_id:
+            return
+        if self._record_current_credential is not None:
+            await self._record_current_credential(self.configured_id, credential_id)
+        self._credential_ring.set_current(credential_id)
+
+    async def manually_select_credential(self, credential_id: str) -> None:
+        """Persist a manual credential selection and clear only its cooldown."""
+        if credential_id not in self.credential_ids:
+            raise ValueError("current_api_key must be a member of api_keys")
+        if (
+            credential_id != self.current_credential_id
+            and self._record_current_credential is not None
+        ):
+            await self._record_current_credential(self.configured_id, credential_id)
+        self._credential_ring.clear_cooldown(credential_id)
+        self._credential_ring.set_current(credential_id)
+
+    def next_available_credential(self, failed: str) -> str | None:
+        return self._credential_ring.next_available_after(failed)
+
+    async def publish_credential_rotation(self) -> None:
+        await self._credential_ring.publish()
+
+    @property
     def credential_values(self) -> tuple[str, ...]:
-        """Return the provider's single wire credential as a read-only view."""
-        return (self._credential,)
+        """Return wire credentials in configured order as a read-only view."""
+        return tuple(self._credentials[item] for item in self.credential_ids)
 
     # -- public helpers used by the proxy -----------------------------------
 
     def auth_headers(self) -> dict[str, str]:
         """Return auth headers using the configured credential."""
-        return self._auth_header_fn(self._credential)
+        return self._auth_header_fn(self._credentials[self.current_credential_id])
 
     def upstream_url(self, model: str, *, stream: bool = False) -> str:
         """Build the upstream URL for the given model."""

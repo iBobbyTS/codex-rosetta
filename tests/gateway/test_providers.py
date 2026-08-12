@@ -20,7 +20,7 @@ class TestBuildProviderInfo:
         info = build_provider_info(
             "openai_responses",
             {
-                "api_key": "test",
+                "api_keys": [{"id": "primary", "key": "test"}],
                 "base_urls": [
                     "https://first.example/v1/",
                     "https://second.example/v1",
@@ -41,8 +41,8 @@ class TestBuildProviderInfo:
         info = build_provider_info(
             "openai_responses",
             {
-                "api_key": "test",
-                "base_url": "https://upstream.example/v1",
+                "api_keys": [{"id": "primary", "key": "test"}],
+                "base_urls": ["https://upstream.example/v1"],
                 "force_rosetta_compaction": True,
             },
         )
@@ -96,43 +96,40 @@ def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
     )
 
 
-def test_provider_legacy_parser_preserves_inventory_and_selects_first_non_empty():
-    value = " first , , second,first, third ,, "
+def test_provider_canonical_parser_preserves_inventory_and_selects_first():
+    value = [{"id": "first", "key": "first"}, {"id": "second", "key": "second"}]
 
-    assert provider_api_key_values(value) == ("first", "second", "first", "third")
+    assert provider_api_key_values(value) == ("first", "second")
     assert normalize_provider_api_key(value) == "first"
-    assert normalize_provider_api_key(" , , ") == ""
 
 
-def test_gateway_canonicalizes_legacy_csv_and_redacts_every_discarded_credential():
-    raw_keys = " prefix ,prefix-long, , prefix,final "
+def test_gateway_canonical_credentials_preserve_inventory_and_redaction():
     config = _gateway_config(
         {
             "provider": "custom",
             "api_type": "chat",
-            "api_key": raw_keys,
+            "api_keys": [
+                {"id": "first", "key": "prefix"},
+                {"id": "second", "key": "final"},
+            ],
+            "current_api_key": "first",
             "base_urls": ["https://upstream.example/v1"],
             "current_base_url": "https://upstream.example/v1",
         }
     )
 
-    assert config._raw_providers["upstream"]["api_key"] == "prefix"
-    assert config.providers["upstream"].credential_values == ("prefix",)
+    assert config._raw_providers["upstream"]["current_api_key"] == "first"
+    assert config.providers["upstream"].credential_values == ("prefix", "final")
     assert config.providers["upstream"].auth_headers() == {
         "Authorization": "Bearer prefix"
     }
-    assert config.providers["upstream"].auth_headers() == {
-        "Authorization": "Bearer prefix"
-    }
-    assert {raw_keys, "prefix", "prefix-long", "final"} <= config.token_values
+    assert {"prefix", "final"} <= config.token_values
     assert not hasattr(config.providers["upstream"], "key_ring")
     assert not hasattr(provider_info_module, "KeyRing")
 
 
 def test_gateway_registers_environment_fallback_credential(monkeypatch):
-    monkeypatch.setenv(
-        "OPENAI_API_KEY", " environment-provider-key,discarded-environment-key "
-    )
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-provider-key")
 
     config = _gateway_config(
         {
@@ -146,9 +143,45 @@ def test_gateway_registers_environment_fallback_credential(monkeypatch):
     assert config.providers["upstream"].credential_values == (
         "environment-provider-key",
     )
-    assert {"environment-provider-key", "discarded-environment-key"} <= (
-        config.token_values
-    )
+    assert "environment-provider-key" in config.token_values
+
+
+def test_gateway_rejects_legacy_scalar_provider_credential():
+    with pytest.raises(ValueError, match="api_key is unsupported; use api_keys"):
+        _gateway_config(
+            {
+                "provider": "custom",
+                "api_type": "chat",
+                "api_key": "legacy-key",
+                "base_urls": ["https://upstream.example/v1"],
+            }
+        )
+
+
+def test_gateway_requires_unique_credential_ids_and_member_current():
+    common = {
+        "provider": "custom",
+        "api_type": "chat",
+        "base_urls": ["https://upstream.example/v1"],
+    }
+    with pytest.raises(ValueError, match="api_keys IDs must be unique"):
+        _gateway_config(
+            {
+                **common,
+                "api_keys": [
+                    {"id": "same", "key": "one"},
+                    {"id": "same", "key": "two"},
+                ],
+            }
+        )
+    with pytest.raises(ValueError, match="current_api_key must be a member"):
+        _gateway_config(
+            {
+                **common,
+                "api_keys": [{"id": "first", "key": "one"}],
+                "current_api_key": "missing",
+            }
+        )
 
 
 def test_gateway_rejects_legacy_scalar_provider_base_url():
@@ -157,7 +190,7 @@ def test_gateway_rejects_legacy_scalar_provider_base_url():
             {
                 "provider": "custom",
                 "api_type": "chat",
-                "api_key": "test",
+                "api_keys": [{"id": "primary", "key": "test"}],
                 "base_url": "https://upstream.example/v1",
             }
         )
@@ -169,7 +202,7 @@ def test_gateway_requires_current_base_url_to_belong_to_ring():
             {
                 "provider": "custom",
                 "api_type": "chat",
-                "api_key": "test",
+                "api_keys": [{"id": "primary", "key": "test"}],
                 "base_urls": ["https://upstream.example/v1"],
                 "current_base_url": "https://other.example/v1",
             }

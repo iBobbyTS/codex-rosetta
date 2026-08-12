@@ -67,30 +67,35 @@ class _RoutingClient:
     def __init__(self) -> None:
         self.responses: dict[str, deque[_FakeStreamingResponse]] = defaultdict(deque)
         self.calls: list[str] = []
+        self.headers: list[dict[str, str]] = []
         self.before_response: dict[str, Any] = {}
 
     def add(self, url: str, *responses: _FakeStreamingResponse) -> None:
         self.responses[url].extend(responses)
 
     async def post(self, url: str, **kwargs: Any) -> _FakeStreamingResponse:
-        del kwargs
         self.calls.append(url)
+        self.headers.append(dict(kwargs.get("headers", {})))
+        response = self.responses[url].popleft()
         hook = self.before_response.get(url)
         if hook is not None:
             await hook()
-        return self.responses[url].popleft()
+        return response
 
 
 def _provider(
     row_id: str,
     *base_urls: str,
     current: str | None = None,
+    credentials: tuple[tuple[str, str], ...] = (("primary", "provider-key"),),
+    current_credential: str | None = None,
 ) -> tuple[ProviderInfo, list[tuple[str, str]]]:
     writes: list[tuple[str, str]] = []
     provider = ProviderInfo(
         "openai_responses",
         configured_id=row_id,
-        api_key="provider-key",
+        api_keys=credentials,
+        current_api_key=current_credential,
         base_urls=base_urls,
         current_base_url=current or base_urls[0],
         auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
@@ -102,6 +107,410 @@ def _provider(
 
     provider.bind_current_base_url_recorder(record)
     return provider, writes
+
+
+def _auth_key(provider: ProviderInfo) -> str:
+    return provider.auth_headers()["Authorization"].removeprefix("Bearer ")
+
+
+def test_provider_success_does_not_round_robin_credentials() -> None:
+    provider, _ = _provider(
+        "row-a",
+        "https://first.example/v1",
+        credentials=(("first", "key-first"), ("second", "key-second")),
+    )
+    assert [_auth_key(provider), _auth_key(provider)] == ["key-first", "key-first"]
+
+
+def test_provider_manual_credential_selection_uses_selected_secret() -> None:
+    async def scenario() -> None:
+        provider, _ = _provider(
+            "row-a",
+            "https://first.example/v1",
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        provider.mark_credential_failed("first")
+        provider.mark_credential_failed("second")
+        await provider.manually_select_credential("second")
+        assert provider.current_credential_id == "second"
+        assert _auth_key(provider) == "key-second"
+        assert provider.credential_statuses() == (
+            ("first", "cooling"),
+            ("second", "available"),
+        )
+        assert writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_503_rotates_only_credential(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        client.add(f"{first}/responses", _json_response(503, {"error": "busy"}))
+        client.add(f"{first}/responses", _json_response(200, {"ok": True}))
+
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert provider.base_url == first
+        assert provider.current_credential_id == "second"
+        assert writes == []
+        assert credential_writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_alternating_502_then_503_rotates_independent_rings(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        client.add(f"{first}/responses", _json_response(502, {"error": "url"}))
+        client.add(f"{second}/responses", _json_response(503, {"error": "key"}))
+        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert provider.base_url == second
+        assert provider.current_credential_id == "second"
+        assert writes == [("row-a", second)]
+        assert credential_writes == [("row-a", "second")]
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_alternating_503_then_502_rotates_independent_rings(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        client.add(f"{first}/responses", _json_response(503, {"error": "key"}))
+        client.add(f"{first}/responses", _json_response(502, {"error": "url"}))
+        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert provider.base_url == second
+        assert provider.current_credential_id == "second"
+        assert writes == [("row-a", second)]
+        assert credential_writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [400, 401, 429, 500, 504])
+def test_nonstream_non503_does_not_rotate_credential(monkeypatch, status: int) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            first,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(f"{first}/responses", _json_response(status, {"error": "x"}))
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+        assert result.status_code == status
+        assert provider.current_credential_id == "first"
+        assert client.calls == [f"{first}/responses"]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            first,
+            credentials=(("first", "secret-one"), ("second", "secret-two")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            _json_response(503, {"error": "first"}),
+            _json_response(503, {"error": "second"}),
+        )
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+        calls_after_exhaustion = list(client.calls)
+        cooling_result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+        assert result.status_code == 503
+        assert cooling_result.status_code == 503
+        assert result.raw_content == (
+            b'{"error":{"message":"All 2 credentials responded with HTTP 503",'
+            b'"type":"upstream_error"}}'
+        )
+        assert b"secret" not in result.raw_content
+        assert client.calls == calls_after_exhaustion
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_503_with_cdn_marker_does_not_rotate_url(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            _FakeStreamingResponse(
+                503,
+                _CDN_502_HTML,
+                content_type="text/html",
+            ),
+            _json_response(200, {"ok": True}),
+        )
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+        assert result.status_code == 200
+        assert provider.base_url == first
+        assert provider.current_credential_id == "second"
+        assert client.calls == [f"{first}/responses", f"{first}/responses"]
+
+    asyncio.run(scenario())
+
+
+def test_streaming_503_rotates_credential_before_output(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            first,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            _json_response(503, {"error": "busy"}),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+        result = await _transport(monkeypatch, client).send_streaming(
+            provider, "openai_responses", {}, "model"
+        )
+        assert result.status_code == 200
+        assert provider.base_url == first
+        assert provider.current_credential_id == "second"
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_passthrough_503_rotates_credential_on_same_url(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            first,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{first}/models",
+            _json_response(503, {"error": "busy"}),
+            _json_response(200, {"data": []}),
+        )
+        result = await _transport(monkeypatch, client).send_passthrough(
+            provider, f"{first}/models", {}, method="POST"
+        )
+        assert result.status_code == 200
+        assert provider.base_url == first
+        assert provider.current_credential_id == "second"
+
+    asyncio.run(scenario())
+
+
+def test_search_passthrough_exhausts_credential_ring_before_provider_failure(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/alpha/search",
+            _json_response(503, {"error": "first"}),
+            _json_response(200, {"output": "ok", "results": []}),
+        )
+        budget = SearchProviderRequestBudget(max_external_calls=1)
+        candidate = ConfiguredResponsesSearchProviderCandidate(
+            row_id="responses",
+            responses_provider="row-a",
+            responses_model="search-model",
+            provider_info=provider,
+            identity="responses-identity",
+        )
+
+        result = await SearchProviderExecutor(
+            responses_transport=_transport(monkeypatch, client)
+        ).execute(candidate, SearchRequest.from_body({}), request_budget=budget)
+
+        assert result == {"output": "ok", "results": []}
+        assert budget.external_calls == 1
+        assert provider.current_credential_id == "second"
+        assert client.calls == [
+            f"{origin}/alpha/search",
+            f"{origin}/alpha/search",
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_status_503_rotates_before_oversized_content_length(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            _FakeStreamingResponse(
+                503,
+                b"unread",
+                headers={
+                    "content-length": str(
+                        transport_module.MAX_UPSTREAM_ERROR_BODY_BYTES + 1
+                    )
+                },
+            ),
+            _json_response(200, {"ok": True}),
+        )
+
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert provider.current_credential_id == "second"
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_streaming_status_503_rotates_before_content_encoding_validation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            _FakeStreamingResponse(
+                503,
+                b"unread",
+                headers={"content-encoding": "gzip"},
+            ),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+
+        result = await _transport(monkeypatch, client).send_streaming(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert provider.current_credential_id == "second"
+        assert len(client.calls) == 2
+
+    asyncio.run(scenario())
 
 
 def _transport(
@@ -228,14 +637,19 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                 "row-a": {
                     "provider": "openai",
                     "api_type": "responses",
-                    "api_key": "row-a-key",
+                    "api_keys": [
+                        {"id": "primary", "key": "row-a-key"},
+                        {"id": "secondary", "key": "row-a-key-2"},
+                    ],
+                    "current_api_key": "primary",
                     "base_urls": [first, second],
                     "current_base_url": first,
                 },
                 "row-b": {
                     "provider": "openai",
                     "api_type": "responses",
-                    "api_key": "row-b-key",
+                    "api_keys": [{"id": "primary", "key": "row-b-key"}],
+                    "current_api_key": "primary",
                     "base_urls": [other],
                     "current_base_url": other,
                 },
@@ -257,11 +671,15 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
         config = GatewayConfig(document)
         _bind_provider_current_recorders(config, str(config_path))
 
-        await config.providers["row-a"].select_base_url(second)
+        provider = config.providers["row-a"]
+        await provider.select_base_url(second)
+        await provider.select_credential("secondary")
 
         saved = json.loads(config_path.read_text())
         assert saved["providers"]["row-a"]["current_base_url"] == second
+        assert saved["providers"]["row-a"]["current_api_key"] == "secondary"
         assert saved["providers"]["row-b"]["current_base_url"] == other
+        assert saved["providers"]["row-b"]["current_api_key"] == "primary"
 
     asyncio.run(scenario())
 
@@ -477,6 +895,61 @@ def test_same_provider_concurrent_failures_publish_one_current_change(
         assert writes == [("row-a", second)]
         assert client.calls.count(f"{first}/responses") == 2
         assert client.calls.count(f"{second}/responses") == 2
+
+    asyncio.run(scenario())
+
+
+def test_same_provider_concurrent_503s_publish_one_credential_change(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        both_started = asyncio.Event()
+        started = 0
+
+        async def synchronize_failures() -> None:
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+
+        client.before_response[f"{origin}/responses"] = synchronize_failures
+        client.add(
+            f"{origin}/responses",
+            _json_response(503, {"error": "busy"}),
+            _json_response(503, {"error": "busy"}),
+            _json_response(200, {"ok": 1}),
+            _json_response(200, {"ok": 2}),
+        )
+        transport = _transport(monkeypatch, client)
+
+        first_result, second_result = await asyncio.gather(
+            transport.send_request(provider, "openai_responses", {}, "model"),
+            transport.send_request(provider, "openai_responses", {}, "model"),
+        )
+
+        assert first_result.status_code == second_result.status_code == 200
+        assert provider.current_credential_id == "second"
+        assert credential_writes == [("row-a", "second")]
+        assert [item["Authorization"] for item in client.headers].count(
+            "Bearer key-first"
+        ) == 2
+        assert [item["Authorization"] for item in client.headers].count(
+            "Bearer key-second"
+        ) == 2
 
     asyncio.run(scenario())
 

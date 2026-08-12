@@ -92,20 +92,21 @@ def known_provider_types() -> list[str]:
 
 
 def provider_api_key_values(value: Any) -> tuple[str, ...]:
-    """Return non-empty credentials from a canonical or legacy Provider value.
-
-    Legacy Gateway configurations represented multiple upstream credentials as
-    a comma-separated string.  This parser remains solely at the persistent
-    Provider configuration boundary so discarded values can still enter the
-    redaction inventory during migration.
-    """
-    if not isinstance(value, str):
-        raise ValueError("config: provider api_key must be a string")
-    return tuple(part for item in value.split(",") if (part := item.strip()))
+    """Return credentials from the canonical provider credential list."""
+    if not isinstance(value, list):
+        raise ValueError("config: provider api_keys must be a list")
+    values: list[str] = []
+    for item in value:
+        if not isinstance(item, dict) or not isinstance(item.get("key"), str):
+            raise ValueError("config: provider api_keys entries must contain key")
+        key = item["key"].strip()
+        if key:
+            values.append(key)
+    return tuple(values)
 
 
 def normalize_provider_api_key(value: Any) -> str:
-    """Return the first non-empty Provider credential from a legacy value."""
+    """Return the first non-empty Provider credential from canonical values."""
     values = provider_api_key_values(value)
     return values[0] if values else ""
 
@@ -126,7 +127,8 @@ def build_provider_info(
     as fallbacks when the config does not specify them.
 
     *cfg* is the dict from the JSONC config, e.g.
-    ``{"api_key": "sk-...", "base_url": "https://..."}``
+    ``{"api_keys": [{"id": "primary", "key": "sk-..."}],
+    "base_urls": ["https://..."]}``
 
     *global_proxy* is the server-level proxy URL (from ``server.proxy``).
     A per-provider ``"proxy"`` key in *cfg* takes precedence.
@@ -146,10 +148,10 @@ def build_provider_info(
         # Apply shim defaults where config is missing
         if "base_urls" not in cfg and "base_url" not in cfg and shim.default_base_url:
             cfg = {**cfg, "base_urls": [shim.default_base_url]}
-        if "api_key" not in cfg and shim.default_api_key_env:
+        if "api_keys" not in cfg and shim.default_api_key_env:
             env_val = os.environ.get(shim.default_api_key_env, "")
             if env_val:
-                cfg = {**cfg, "api_key": env_val}
+                cfg = {**cfg, "api_keys": [{"id": "primary", "key": env_val}]}
     else:
         base_type = provider_type
 
@@ -174,11 +176,11 @@ def build_provider_info(
         default_url = get_default_base_url(base_type)
         if default_url:
             cfg = {**cfg, "base_urls": [default_url]}
-    if "api_key" not in cfg:
+    if "api_keys" not in cfg:
         default_env = get_default_api_key_env(base_type)
         env_val = os.environ.get(default_env, "")
         if env_val:
-            cfg = {**cfg, "api_key": env_val}
+            cfg = {**cfg, "api_keys": [{"id": "primary", "key": env_val}]}
 
     # Per-provider proxy overrides global proxy
     proxy_url = cfg.get("proxy") or global_proxy or None
@@ -192,15 +194,25 @@ def build_provider_info(
     if not isinstance(force_rosetta_compaction, bool):
         raise ValueError("config: provider force_rosetta_compaction must be a boolean")
 
-    credential_values = provider_api_key_values(cfg["api_key"])
+    raw_credentials = cfg.get("api_keys")
+    if not isinstance(raw_credentials, list):
+        raise ValueError("config: provider api_keys must be a list")
+    credential_values = provider_api_key_values(raw_credentials)
     if credential_inventory is not None:
         credential_inventory.update(credential_values)
-    api_key = credential_values[0] if credential_values else ""
+    credential_entries = tuple(
+        (item["id"], item["key"])
+        for item in raw_credentials
+        if isinstance(item, dict)
+        and isinstance(item.get("id"), str)
+        and isinstance(item.get("key"), str)
+    )
 
     return ProviderInfo(
         name=provider_type,
         configured_id=configured_id,
-        api_key=api_key,
+        api_keys=credential_entries,
+        current_api_key=cfg.get("current_api_key"),
         **(
             {
                 "base_urls": cfg["base_urls"],

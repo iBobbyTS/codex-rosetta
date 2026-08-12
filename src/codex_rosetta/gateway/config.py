@@ -20,7 +20,6 @@ from codex_rosetta.routing import ResolvedRoute
 
 from .providers import (
     build_provider_info,
-    normalize_provider_api_key,
     provider_api_key_values,
 )
 from .provider_profiles import (
@@ -845,18 +844,14 @@ class GatewayConfig:
         self.codex = normalize_codex_settings(raw.get("codex"))
         all_providers: dict[str, dict[str, Any]] = raw.get("providers", {})
         for provider in all_providers.values():
-            if isinstance(provider, dict) and "api_key" in provider:
-                self.token_values.update(provider_api_key_values(provider["api_key"]))
+            if isinstance(provider, dict) and "api_keys" in provider:
+                self.token_values.update(provider_api_key_values(provider["api_keys"]))
 
         # Filter out disabled providers (enabled defaults to True)
         self._raw_providers: dict[str, dict[str, Any]] = {
             name: {
                 **cfg,
-                **(
-                    {"api_key": normalize_provider_api_key(cfg["api_key"])}
-                    if "api_key" in cfg
-                    else {}
-                ),
+                **({"api_keys": cfg["api_keys"]} if "api_keys" in cfg else {}),
             }
             for name, cfg in all_providers.items()
             if cfg.get("enabled", True) is not False
@@ -981,7 +976,7 @@ class GatewayConfig:
             entry["key"]: entry["id"] for entry in self.api_keys
         }
 
-        # Build ProviderInfo objects with one canonical credential each.
+        # Build ProviderInfo objects with each provider's canonical credentials.
         self.providers: dict[str, ProviderInfo] = {
             name: build_provider_info(
                 self.provider_types[name],
@@ -1081,6 +1076,39 @@ class GatewayConfig:
         provider_types: dict[str, str] = {}
         provider_shim_names: dict[str, str | None] = {}
         for name, cfg in raw_providers.items():
+            if "api_key" in cfg:
+                raise ValueError(
+                    f"config: provider '{name}' api_key is unsupported; use api_keys"
+                )
+            raw_api_keys = cfg.get("api_keys")
+            if raw_api_keys is not None:
+                if (
+                    not isinstance(raw_api_keys, list)
+                    or not raw_api_keys
+                    or any(
+                        not isinstance(item, dict)
+                        or not isinstance(item.get("id"), str)
+                        or not item["id"].strip()
+                        or not isinstance(item.get("key"), str)
+                        or not item["key"].strip()
+                        for item in raw_api_keys
+                    )
+                ):
+                    raise ValueError(
+                        f"config: provider '{name}' api_keys must be a non-empty object list"
+                    )
+                if len({item["id"] for item in raw_api_keys}) != len(raw_api_keys):
+                    raise ValueError(
+                        f"config: provider '{name}' api_keys IDs must be unique"
+                    )
+                current_api_key = cfg.get("current_api_key", raw_api_keys[0]["id"])
+                if not isinstance(current_api_key, str) or current_api_key not in {
+                    item["id"] for item in raw_api_keys
+                }:
+                    raise ValueError(
+                        f"config: provider '{name}' current_api_key must be a member of api_keys"
+                    )
+                cfg["current_api_key"] = current_api_key
             if "base_url" in cfg:
                 raise ValueError(
                     f"config: provider '{name}' base_url is unsupported; use base_urls"

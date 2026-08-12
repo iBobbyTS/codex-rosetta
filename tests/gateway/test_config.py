@@ -137,7 +137,8 @@ def test_unified_responses_protocol_resolves_direct_profile(
     raw = {
         "providers": {
             "upstream": {
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": [base_url],
                 "current_base_url": base_url,
                 "provider": provider,
@@ -238,7 +239,8 @@ def _minimal_raw(**server_overrides) -> dict:
     raw = {
         "providers": {
             "test": {
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "provider": "custom",
@@ -526,7 +528,10 @@ class TestEnvironmentSubstitution:
             admin_password="${SPECIAL_ADMIN_PASSWORD}",
             credential_visible=False,
         )
-        raw["providers"]["test"]["api_key"] = "prefix-${SPECIAL_ADMIN_PASSWORD}-suffix"
+        raw["providers"]["test"]["api_keys"] = [
+            {"id": "primary", "key": "prefix-${SPECIAL_ADMIN_PASSWORD}-suffix"}
+        ]
+        raw["providers"]["test"].pop("current_api_key", None)
         path = tmp_path / "config.jsonc"
         path.write_text(json.dumps(raw), encoding="utf-8")
 
@@ -535,7 +540,9 @@ class TestEnvironmentSubstitution:
         assert loaded["server"]["admin_password"] == special
         assert loaded["server"]["credential_visible"] is False
         assert "injected" not in loaded["server"]
-        assert loaded["providers"]["test"]["api_key"] == f"prefix-{special}-suffix"
+        assert loaded["providers"]["test"]["api_keys"][0]["key"] == (
+            f"prefix-{special}-suffix"
+        )
         assert GatewayConfig(loaded).admin_password == special
 
     def test_admin_candidate_substitution_keeps_special_value_as_data(
@@ -754,7 +761,8 @@ class TestWebSearchConfig:
             }
         )
         raw["providers"]["official-deepseek"] = {
-            "api_key": "deepseek-secret",
+            "api_keys": [{"id": "primary", "key": "deepseek-secret"}],
+            "current_api_key": "primary",
             "base_urls": ["https://api.deepseek.com"],
             "current_base_url": "https://api.deepseek.com",
             "provider": "deepseek",
@@ -1003,7 +1011,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "DeepSeek": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.deepseek.com"],
                     "current_base_url": "https://api.deepseek.com",
                     "provider": "deepseek",
@@ -1028,7 +1037,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "MiniMax": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.minimaxi.com/anthropic"],
                     "current_base_url": "https://api.minimaxi.com/anthropic",
                     "provider": "minimax",
@@ -1057,7 +1067,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Pixel": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
                     "provider": "custom",
@@ -1089,7 +1100,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "DeepSeek": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.deepseek.com/"],
                     "current_base_url": "https://api.deepseek.com/",
                     "api_type": "chat",
@@ -1114,7 +1126,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Relay": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://relay.example/v1"],
                     "current_base_url": "https://relay.example/v1",
                     "api_type": "chat",
@@ -1139,7 +1152,8 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Qwen": {
-                    "api_key": "sk-test",
+                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
                     "provider": "qwen",
@@ -1197,7 +1211,8 @@ class TestProviderApiTypeResolution:
     def test_custom_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["test"] = {
-            "api_key": "sk-test",
+            "api_keys": [{"id": "primary", "key": "sk-test"}],
+            "current_api_key": "primary",
             "base_urls": ["https://provider.example"],
             "current_base_url": "https://provider.example",
             "provider": "custom",
@@ -1208,7 +1223,8 @@ class TestProviderApiTypeResolution:
     def test_preset_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["openai"] = {
-            "api_key": "sk-test",
+            "api_keys": [{"id": "primary", "key": "sk-test"}],
+            "current_api_key": "primary",
             "base_urls": ["https://api.openai.com/v1"],
             "current_base_url": "https://api.openai.com/v1",
             "provider": "openai",
@@ -1412,7 +1428,8 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
             {
                 "providers": {
                     "test": {
-                        "api_key": "sk-test",
+                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "api_type": "chat",
@@ -1462,7 +1479,8 @@ def test_cli_add_provider_persists_explicit_protocol(tmp_path):
 
     saved = json.loads((tmp_path / "config.jsonc").read_text(encoding="utf-8"))
     assert saved["providers"]["relay"] == {
-        "api_key": "sk-test",
+        "api_keys": [{"id": "primary", "key": "sk-test"}],
+        "current_api_key": "primary",
         "base_urls": ["https://relay.example/v1"],
         "current_base_url": "https://relay.example/v1",
         "api_type": "responses",
@@ -1476,7 +1494,8 @@ def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path
             {
                 "providers": {
                     "test": {
-                        "api_key": "sk-test",
+                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",
@@ -1512,7 +1531,8 @@ def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
             {
                 "providers": {
                     "test": {
-                        "api_key": "sk-test",
+                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",

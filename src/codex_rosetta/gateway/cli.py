@@ -147,21 +147,24 @@ def _create_initial_config(config_path: str) -> None:
         "providers": {
             "openai_chat": {
                 "provider": "openai",
-                "api_key": "${OPENAI_API_KEY}",
+                "api_keys": [{"id": "primary", "key": "${OPENAI_API_KEY}"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.openai.com/v1"],
                 "current_base_url": "https://api.openai.com/v1",
                 "api_type": "chat",
             },
             "anthropic": {
                 "provider": "anthropic",
-                "api_key": "${ANTHROPIC_API_KEY}",
+                "api_keys": [{"id": "primary", "key": "${ANTHROPIC_API_KEY}"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.anthropic.com"],
                 "current_base_url": "https://api.anthropic.com",
                 "api_type": "anthropic",
             },
             "google": {
                 "provider": "google",
-                "api_key": "${GOOGLE_API_KEY}",
+                "api_keys": [{"id": "primary", "key": "${GOOGLE_API_KEY}"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://generativelanguage.googleapis.com"],
                 "current_base_url": "https://generativelanguage.googleapis.com",
                 "api_type": "google",
@@ -246,7 +249,8 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     data.setdefault("providers", {})[name] = {
-        "api_key": api_key,
+        "api_keys": [{"id": "primary", "key": api_key}],
+        "current_api_key": "primary",
         "base_urls": [base_url],
         "current_base_url": base_url,
         "api_type": args.api_type,
