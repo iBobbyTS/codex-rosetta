@@ -158,8 +158,8 @@ class SearchProviderChainCoordinator:
 
     ``current_provider`` may be a row id, candidate, or zero-argument getter.
     ``record_current`` is an optional state seam called only after a candidate
-    succeeds.  The coordinator intentionally keeps no reservation, waiter,
-    cohort, or generation state: one request owns one immutable circular pass.
+    succeeds. Provider failures are coordinated within one process so one
+    request advances the chain while affected concurrent requests wait.
     """
 
     def __init__(
@@ -191,6 +191,10 @@ class SearchProviderChainCoordinator:
         self._wall_clock = wall_clock
         self._process_current: tuple[str, str] | None = None
         self._process_quota: dict[tuple[str, str], float] = {}
+        self._failover_condition = asyncio.Condition()
+        self._failover_generation = 0
+        self._failover_active = False
+        self._failover_unavailable: SearchProviderChainUnavailableReason | None = None
 
     def _load_current(self) -> _CurrentProviderValue:
         if self._current_provider is not None:
@@ -424,8 +428,125 @@ class SearchProviderChainCoordinator:
             return None
         return candidate_snapshot[self._resolve_current_index(candidate_snapshot)]
 
-    def _record_success(self, candidate: _CandidateT) -> None:
-        self.select_current(candidate)
+    async def _await_active_failover(
+        self,
+    ) -> tuple[int, SearchProviderChainUnavailableReason | None, bool]:
+        waited = False
+        async with self._failover_condition:
+            while self._failover_active:
+                waited = True
+                await self._failover_condition.wait()
+            return self._failover_generation, self._failover_unavailable, waited
+
+    async def _claim_failover(
+        self, observed_generation: int
+    ) -> tuple[bool, int, SearchProviderChainUnavailableReason | None]:
+        async with self._failover_condition:
+            while self._failover_active:
+                await self._failover_condition.wait()
+            if self._failover_generation != observed_generation:
+                return (
+                    False,
+                    self._failover_generation,
+                    self._failover_unavailable,
+                )
+            self._failover_generation += 1
+            self._failover_active = True
+            self._failover_unavailable = None
+            return True, self._failover_generation, None
+
+    async def _publish_failover(
+        self, unavailable: SearchProviderChainUnavailableReason | None
+    ) -> None:
+        async with self._failover_condition:
+            self._failover_unavailable = unavailable
+            self._failover_active = False
+            self._failover_condition.notify_all()
+
+    def _record_success(
+        self,
+        candidate: _CandidateT,
+        *,
+        observed_generation: int,
+        failover_leader: bool,
+    ) -> None:
+        if failover_leader or observed_generation == self._failover_generation:
+            self.select_current(candidate)
+
+    async def _candidate_is_eligible(
+        self, candidate: _CandidateT, attempt_index: int
+    ) -> bool:
+        if not await self._quota_allows_attempt(candidate):
+            self._observe_candidate(
+                candidate,
+                attempt_index,
+                "quota_exhausted",
+                cooldown_reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
+            )
+            return False
+        cooling_reason = self._state.cooldown_reason(candidate)
+        if cooling_reason is None:
+            return True
+        self._observe_candidate(
+            candidate,
+            attempt_index,
+            "cooling",
+            cooldown_reason=cooling_reason,
+        )
+        return False
+
+    async def _settle_failure(
+        self,
+        candidate: _CandidateT,
+        error: SearchProviderAttemptError,
+        attempt_index: int,
+    ) -> None:
+        try:
+            quota_exhausted = (
+                await self._refresh_tavily_quota(candidate)
+                if isinstance(candidate, TavilySearchProviderCandidate)
+                else None
+            )
+            reason = (
+                SearchProviderAttemptCategory.QUOTA_EXHAUSTED
+                if quota_exhausted is True
+                else self.mark_failed(candidate, error)
+            )
+        except BaseException as settlement_error:
+            raise settlement_error from None
+        self._observe_candidate(
+            candidate,
+            attempt_index,
+            error.category,
+            cooldown_reason=reason,
+        )
+
+    def _unavailable_reason(
+        self, *, attempted: bool
+    ) -> SearchProviderChainUnavailableReason:
+        return (
+            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+            if attempted
+            else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
+        )
+
+    def _raise_unavailable(self, reason: SearchProviderChainUnavailableReason) -> None:
+        self._observe({"final_reason": reason.value})
+        raise SearchProviderChainUnavailable(reason)
+
+    async def _attempt_candidate(
+        self,
+        candidate: _CandidateT,
+        attempt_index: int,
+        runner: Callable[[_CandidateT], Awaitable[_ResultT]],
+    ) -> tuple[_ResultT | None, SearchProviderAttemptError | None]:
+        try:
+            return await runner(candidate), None
+        except SearchProviderAttemptError as error:
+            return None, error
+        except SearchProviderRequestFailover:
+            self._observe_candidate(candidate, attempt_index, "request_rejected")
+            raise
 
     async def run(
         self,
@@ -435,77 +556,65 @@ class SearchProviderChainCoordinator:
         """Try each non-cooling candidate once and return the first success."""
         candidate_snapshot = tuple(candidates)
         if not candidate_snapshot:
-            reason = SearchProviderChainUnavailableReason.EMPTY_CHAIN
-            self._observe({"final_reason": reason.value})
-            raise SearchProviderChainUnavailable(reason)
-        start = self._resolve_current_index(candidate_snapshot)
-        ordered = candidate_snapshot[start:] + candidate_snapshot[:start]
+            self._raise_unavailable(SearchProviderChainUnavailableReason.EMPTY_CHAIN)
+        generation, unavailable, waited = await self._await_active_failover()
+        if waited and unavailable is not None:
+            self._raise_unavailable(unavailable)
         attempted = False
         seen_rows: set[str] = set()
-        for attempt_index, candidate in enumerate(ordered):
-            if candidate.row_id in seen_rows:
-                continue
-            seen_rows.add(candidate.row_id)
-            if not await self._quota_allows_attempt(candidate):
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    "quota_exhausted",
-                    cooldown_reason=SearchProviderAttemptCategory.QUOTA_EXHAUSTED,
-                )
-                continue
-            cooling_reason = self._state.cooldown_reason(candidate)
-            if cooling_reason is not None:
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    "cooling",
-                    cooldown_reason=cooling_reason,
-                )
-                continue
-            attempted = True
-            try:
-                result = await runner(candidate)
-            except SearchProviderAttemptError as error:
-                try:
-                    quota_exhausted = (
-                        await self._refresh_tavily_quota(candidate)
-                        if isinstance(candidate, TavilySearchProviderCandidate)
-                        else None
+        failover_leader = False
+        try:
+            while True:
+                start = self._resolve_current_index(candidate_snapshot)
+                ordered = candidate_snapshot[start:] + candidate_snapshot[:start]
+                restart_after_wait = False
+                for attempt_index, candidate in enumerate(ordered):
+                    if candidate.row_id in seen_rows:
+                        continue
+                    seen_rows.add(candidate.row_id)
+                    if not await self._candidate_is_eligible(candidate, attempt_index):
+                        continue
+                    attempted = True
+                    result, failure = await self._attempt_candidate(
+                        candidate, attempt_index, runner
                     )
-                    reason = (
-                        SearchProviderAttemptCategory.QUOTA_EXHAUSTED
-                        if quota_exhausted is True
-                        else self.mark_failed(candidate, error)
-                    )
-                except BaseException as settlement_error:
-                    raise settlement_error from None
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    error.category,
-                    cooldown_reason=reason,
-                )
-                continue
-            except SearchProviderRequestFailover:
-                self._observe_candidate(
-                    candidate,
-                    attempt_index,
-                    "request_rejected",
-                )
-                raise
-            else:
-                self._record_success(candidate)
-                self._observe_candidate(candidate, attempt_index, "success")
-                return result
+                    if failure is None:
+                        self._record_success(
+                            candidate,
+                            observed_generation=generation,
+                            failover_leader=failover_leader,
+                        )
+                        self._observe_candidate(candidate, attempt_index, "success")
+                        if failover_leader:
+                            await self._publish_failover(None)
+                            failover_leader = False
+                        return cast(_ResultT, result)
+                    if failover_leader:
+                        await self._settle_failure(candidate, failure, attempt_index)
+                        continue
+                    (
+                        failover_leader,
+                        generation,
+                        unavailable,
+                    ) = await self._claim_failover(generation)
+                    if unavailable is not None:
+                        self._raise_unavailable(unavailable)
+                    if failover_leader:
+                        await self._settle_failure(candidate, failure, attempt_index)
+                    else:
+                        restart_after_wait = True
+                        break
 
-        reason = (
-            SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
-            if attempted
-            else SearchProviderChainUnavailableReason.ALL_CANDIDATES_COOLING
-        )
-        self._observe({"final_reason": reason.value})
-        raise SearchProviderChainUnavailable(reason)
+                if restart_after_wait:
+                    continue
+                reason = self._unavailable_reason(attempted=attempted)
+                if failover_leader:
+                    await self._publish_failover(reason)
+                    failover_leader = False
+                self._raise_unavailable(reason)
+        finally:
+            if failover_leader:
+                await self._publish_failover(None)
 
 
 class SearchProviderRequestBudget:

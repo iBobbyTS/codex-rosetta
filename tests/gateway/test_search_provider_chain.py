@@ -839,6 +839,240 @@ def test_chain_starts_at_current_row_wraps_once_and_records_success() -> None:
     assert recorded == ["last"]
 
 
+def test_concurrent_failures_share_one_failover_and_waiters_use_replacement() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        coordinator = SearchProviderChainCoordinator()
+        release_first = asyncio.Event()
+        release_second = asyncio.Event()
+        both_first_started = asyncio.Event()
+        leader_reached_second = asyncio.Event()
+        first_calls = 0
+        second_calls = 0
+
+        async def runner(item: TavilySearchProviderCandidate) -> str:
+            nonlocal first_calls, second_calls
+            if item is first:
+                first_calls += 1
+                if first_calls == 2:
+                    both_first_started.set()
+                await release_first.wait()
+                raise SearchProviderAttemptError(
+                    SearchProviderAttemptCategory.CONNECTION_ERROR
+                )
+            second_calls += 1
+            leader_reached_second.set()
+            await release_second.wait()
+            return "ok"
+
+        requests = [
+            asyncio.create_task(coordinator.run((first, second), runner))
+            for _ in range(2)
+        ]
+        await both_first_started.wait()
+        release_first.set()
+        await leader_reached_second.wait()
+        await asyncio.sleep(0)
+        assert second_calls == 1
+
+        release_second.set()
+        assert await asyncio.gather(*requests) == ["ok", "ok"]
+        assert first_calls == 2
+        assert second_calls == 2
+        assert coordinator.current_candidate((first, second)) is second
+
+    run(scenario())
+
+
+def test_request_arriving_during_failover_waits_for_replacement() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        coordinator = SearchProviderChainCoordinator()
+        leader_reached_second = asyncio.Event()
+        release_second = asyncio.Event()
+        calls: list[tuple[str, str]] = []
+
+        async def leader_runner(item: TavilySearchProviderCandidate) -> str:
+            calls.append(("leader", item.row_id))
+            if item is first:
+                raise SearchProviderAttemptError(
+                    SearchProviderAttemptCategory.CONNECTION_ERROR
+                )
+            leader_reached_second.set()
+            await release_second.wait()
+            return "leader-ok"
+
+        async def later_runner(item: TavilySearchProviderCandidate) -> str:
+            calls.append(("later", item.row_id))
+            return "later-ok"
+
+        leader = asyncio.create_task(coordinator.run((first, second), leader_runner))
+        await leader_reached_second.wait()
+        later = asyncio.create_task(coordinator.run((first, second), later_runner))
+        await asyncio.sleep(0)
+        assert ("later", "first") not in calls
+        assert ("later", "second") not in calls
+
+        release_second.set()
+        assert await leader == "leader-ok"
+        assert await later == "later-ok"
+        assert calls == [
+            ("leader", "first"),
+            ("leader", "second"),
+            ("later", "second"),
+        ]
+
+    run(scenario())
+
+
+def test_cancelled_failover_waiter_does_not_cancel_leader() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        coordinator = SearchProviderChainCoordinator()
+        leader_reached_second = asyncio.Event()
+        release_second = asyncio.Event()
+        waiter_calls = 0
+
+        async def leader_runner(item: TavilySearchProviderCandidate) -> str:
+            if item is first:
+                raise SearchProviderAttemptError(
+                    SearchProviderAttemptCategory.CONNECTION_ERROR
+                )
+            leader_reached_second.set()
+            await release_second.wait()
+            return "leader-ok"
+
+        async def waiter_runner(_item: TavilySearchProviderCandidate) -> str:
+            nonlocal waiter_calls
+            waiter_calls += 1
+            return "waiter-ok"
+
+        leader = asyncio.create_task(coordinator.run((first, second), leader_runner))
+        await leader_reached_second.wait()
+        waiter = asyncio.create_task(coordinator.run((first, second), waiter_runner))
+        await asyncio.sleep(0)
+        waiter.cancel("stop-waiting")
+        with pytest.raises(asyncio.CancelledError) as caught:
+            await waiter
+        assert caught.value.args == ("stop-waiting",)
+        assert waiter_calls == 0
+
+        release_second.set()
+        assert await leader == "leader-ok"
+        assert coordinator.current_candidate((first, second)) is second
+
+    run(scenario())
+
+
+def test_concurrent_waiter_reuses_all_unavailable_outcome() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        coordinator = SearchProviderChainCoordinator()
+        release_first = asyncio.Event()
+        both_first_started = asyncio.Event()
+        first_calls = 0
+        second_calls = 0
+
+        async def runner(item: TavilySearchProviderCandidate) -> None:
+            nonlocal first_calls, second_calls
+            if item is first:
+                first_calls += 1
+                if first_calls == 2:
+                    both_first_started.set()
+                await release_first.wait()
+            else:
+                second_calls += 1
+            raise SearchProviderAttemptError(
+                SearchProviderAttemptCategory.UPSTREAM_FAILURE
+            )
+
+        requests = [
+            asyncio.create_task(coordinator.run((first, second), runner))
+            for _ in range(2)
+        ]
+        await both_first_started.wait()
+        release_first.set()
+        results = await asyncio.gather(*requests, return_exceptions=True)
+
+        assert all(
+            isinstance(result, SearchProviderChainUnavailable) for result in results
+        )
+        assert all(
+            result.reason is SearchProviderChainUnavailableReason.ALL_ATTEMPTS_FAILED
+            for result in results
+            if isinstance(result, SearchProviderChainUnavailable)
+        )
+        assert first_calls == 2
+        assert second_calls == 1
+
+    run(scenario())
+
+
+def test_healthy_searches_remain_concurrent() -> None:
+    async def scenario() -> None:
+        item = candidate("current", "identity-current")
+        coordinator = SearchProviderChainCoordinator()
+        release = asyncio.Event()
+        both_started = asyncio.Event()
+        started = 0
+
+        async def runner(_item: TavilySearchProviderCandidate) -> str:
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await release.wait()
+            return "ok"
+
+        requests = [
+            asyncio.create_task(coordinator.run((item,), runner)) for _ in range(2)
+        ]
+        await asyncio.wait_for(both_started.wait(), timeout=1)
+        release.set()
+        assert await asyncio.gather(*requests) == ["ok", "ok"]
+
+    run(scenario())
+
+
+def test_stale_inflight_success_cannot_restore_pre_failover_current() -> None:
+    async def scenario() -> None:
+        first = candidate("first", "identity-first")
+        second = candidate("second", "identity-second")
+        coordinator = SearchProviderChainCoordinator()
+        stale_started = asyncio.Event()
+        release_stale = asyncio.Event()
+
+        async def stale_runner(item: TavilySearchProviderCandidate) -> str:
+            assert item is first
+            stale_started.set()
+            await release_stale.wait()
+            return "stale-ok"
+
+        async def switching_runner(item: TavilySearchProviderCandidate) -> str:
+            if item is first:
+                raise SearchProviderAttemptError(
+                    SearchProviderAttemptCategory.CONNECTION_ERROR
+                )
+            return "replacement-ok"
+
+        stale = asyncio.create_task(coordinator.run((first, second), stale_runner))
+        await stale_started.wait()
+        assert (
+            await coordinator.run((first, second), switching_runner) == "replacement-ok"
+        )
+        assert coordinator.current_candidate((first, second)) is second
+
+        release_stale.set()
+        assert await stale == "stale-ok"
+        assert coordinator.current_candidate((first, second)) is second
+
+    run(scenario())
+
+
 @pytest.mark.parametrize(
     "failure",
     [
