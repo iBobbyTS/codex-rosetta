@@ -140,6 +140,23 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         ordered = self._candidates[start:] + self._candidates[:start]
         return tuple(item for item in ordered if item not in self._cooldown_until)
 
+    def status_snapshot(self) -> tuple[tuple[_CandidateT, str], ...]:
+        """Return configured candidates with their current cooldown state."""
+        self._prune()
+        return tuple(
+            (
+                candidate,
+                "cooling" if candidate in self._cooldown_until else "available",
+            )
+            for candidate in self._candidates
+        )
+
+    def clear_cooldown(self, candidate: _CandidateT) -> None:
+        """Clear only one configured candidate's process-local cooldown."""
+        if candidate not in self._candidates:
+            raise ValueError("candidate must belong to ordered candidates")
+        self._cooldown_until.pop(candidate, None)
+
     def next_available_after(self, candidate: _CandidateT) -> _CandidateT | None:
         self._prune()
         start = self._candidates.index(candidate)

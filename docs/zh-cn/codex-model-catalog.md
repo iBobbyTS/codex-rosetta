@@ -213,7 +213,7 @@ Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命�
 
 Provider runtime override 暂时只支持 `temperature` 和 `top_p`，且目前只有 OpenCode Go Provider Profile 声明这两个字段。数值会替换请求 IR 中对应的采样参数；显式 `null` 会删除该参数，字段缺失则继承请求值。其他 Provider 会拒绝这些 override。OpenCode catalog 会把已知默认值绑定到精确模型名，匹配时优先使用 `upstream_model`，未命中再回退到暴露模型名，因此独立的额外配置弹窗可以自动填充，而请求序列化不需要增加模型名分支。配置只保存相对该模型级 Provider preset 的差异。存在有效差异时状态显示黄色；清除额外配置会恢复命中的 preset。输入模态和 reasoning 档位仍属于普通 `model_info` 能力。同一个 `ResolvedModelProfile` 同时供生成 Codex catalog 和 Gateway 请求约束使用。不支持的 reasoning effort 会降到最近的已声明档位并记录 warning；不支持图片时沿用现有兼容占位行为并记录 trace。
 
-只有 provider 主选项与 `api_type` 决定 wire converter 和 provider 扩展；endpoint 子选项及 `base_url` 只决定连接地址。模型名只用于 preset 匹配、catalog 元数据、能力、上游 `model` 值和日志，禁止参与请求字段构造。Tool Profile 数据继续独占模型可见工具曝光与 schema 修改职责。
+只有 provider 主选项与 `api_type` 决定 wire converter 和 provider 扩展；endpoint 子选项及 Provider 的有序 `base_urls` / `current_base_url` 只决定连接地址。模型名只用于 preset 匹配、catalog 元数据、能力、上游 `model` 值和日志，禁止参与请求字段构造。Tool Profile 数据继续独占模型可见工具曝光与 schema 修改职责。
 
 ### 当前第三方模型的固定基线
 

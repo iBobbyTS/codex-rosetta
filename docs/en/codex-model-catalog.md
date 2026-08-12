@@ -290,8 +290,9 @@ declared level with a warning, and unsupported image input follows the existing
 placeholder behavior with a trace record.
 
 Provider identity plus `api_type`—never the model name—selects the wire
-converter and provider extensions. Endpoint variants and `base_url` select only
-the connection address. Model identity is limited to preset matching, catalog
+converter and provider extensions. Endpoint variants and the Provider's
+ordered `base_urls` / `current_base_url` select only the connection address.
+Model identity is limited to preset matching, catalog
 metadata, capabilities, the upstream `model` value, and logs. Tool Profile data
 remains the sole owner of model-visible tool exposure and schema changes.
 

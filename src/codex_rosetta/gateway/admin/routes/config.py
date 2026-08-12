@@ -649,6 +649,16 @@ async def get_config(request: Any) -> Response:
             masked["default_tool_profile"] = default_tool_profile_for_provider(
                 runtime_cfg
             )
+            runtime_provider = request.app.gateway_config.providers.get(name)
+            if runtime_provider is not None:
+                masked["base_url_statuses"] = [
+                    {
+                        "base_url": base_url,
+                        "current": base_url == runtime_provider.base_url,
+                        "status": status,
+                    }
+                    for base_url, status in runtime_provider.base_url_statuses()
+                ]
         masked_providers[name] = masked
 
     # ``models`` is an effective read-only runtime view. ``model_groups`` is
@@ -752,7 +762,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     api_key = body.get("api_key", "")
     if not isinstance(api_key, str):
         return JSONResponse({"error": "'api_key' must be a string"}, status_code=400)
-    base_url = body.get("base_url", "")
+    base_urls = body.get("base_urls")
+    current_base_url = body.get("current_base_url")
     provider = body.get("provider")
 
     try:
@@ -772,18 +783,32 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     if (
         not api_key
-        or not base_url
+        or not isinstance(base_urls, list)
+        or not base_urls
+        or any(not isinstance(value, str) or not value for value in base_urls)
+        or not isinstance(current_base_url, str)
+        or current_base_url not in base_urls
         or not isinstance(provider, str)
         or not provider.strip()
     ):
         return JSONResponse(
-            {"error": "'api_key', 'base_url', and 'provider' are required"},
+            {
+                "error": (
+                    "'api_key', non-empty 'base_urls', member "
+                    "'current_base_url', and 'provider' are required"
+                )
+            },
             status_code=400,
         )
     body["provider"] = provider.strip()
 
     provider_entry = _build_provider_entry(
-        body, api_key, base_url, existing_providers, resolve_name
+        body,
+        api_key,
+        base_urls,
+        current_base_url,
+        existing_providers,
+        resolve_name,
     )
 
     # Handle rename: remove old entry and update model references
@@ -815,6 +840,31 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             "providers": list(new_config.providers.keys()),
         }
     )
+
+
+async def select_provider_base_url(request: Any, **kwargs: Any) -> Response:
+    """Make one configured Provider URL current without rebuilding runtime state."""
+    name = request.path_params["name"]
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    if set(body) != {"current_base_url"} or not isinstance(
+        body.get("current_base_url"), str
+    ):
+        return JSONResponse(
+            {"error": "'current_base_url' must be the only string field"},
+            status_code=400,
+        )
+    provider = request.app.gateway_config.providers.get(name)
+    if provider is None:
+        return JSONResponse({"error": f"Provider '{name}' not found"}, status_code=404)
+    try:
+        await provider.manually_select_base_url(body["current_base_url"])
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    except RuntimeError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    return JSONResponse({"ok": True, "provider": name})
 
 
 async def delete_provider(request: Any, **kwargs: Any) -> Response:

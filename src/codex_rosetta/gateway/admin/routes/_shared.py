@@ -309,6 +309,9 @@ def _activate_gateway_config(
         if activation.metrics is not None:
             state, value = activation.metrics
             state._redactor = value
+        from ...app import _bind_provider_current_recorders
+
+        _bind_provider_current_recorders(new_config, getattr(app, "config_path", None))
         app.admin_cors_origins = activation.admin_cors_origins
         app.max_body_size = activation.max_body_size
         app.gateway_config = new_config
@@ -539,7 +542,8 @@ def _sync_persistence_redaction(app: Any, config: GatewayConfig) -> None:
 def _build_provider_entry(
     body: dict[str, Any],
     api_key: str,
-    base_url: str,
+    base_urls: list[str],
+    current_base_url: str,
     existing_providers: dict[str, Any],
     resolve_name: str,
 ) -> dict[str, Any]:
@@ -547,7 +551,11 @@ def _build_provider_entry(
     if "***" in api_key and resolve_name in existing_providers:
         api_key = existing_providers[resolve_name].get("api_key", api_key)
 
-    entry: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
+    entry: dict[str, Any] = {
+        "api_key": api_key,
+        "base_urls": base_urls,
+        "current_base_url": current_base_url,
+    }
 
     provider = body.get("provider")
     if provider:

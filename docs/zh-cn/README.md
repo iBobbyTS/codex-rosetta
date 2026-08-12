@@ -39,6 +39,17 @@ Chromium 就绪，并在退出时清理托管 service。
 `error` 只打印错误。完整请求历史请在 WebUI 的 **请求日志（Request Log）** 中查看；
 流式 trace 诊断请使用 WebUI 的 **网关日志（Gateway Logs）**。
 
+### Provider Base URL
+
+每个 Provider 保存一个有序、非空的 `base_urls` 列表，并将其中一个成员保存为
+`current_base_url`。现有的**服务方**页面可编辑顺序，并显示每个 URL 是可用、冷却中
+还是当前 URL。手动选择冷却中的 URL 会立即将其设为当前 URL，并且只清除该 URL 的
+冷却状态。
+
+在向客户端输出任何内容之前，上游 HTTP 502（或被窄范围识别的 CDN 502 页面）会静默
+尝试下一个未冷却 URL；其他响应保持原行为。失败 URL 在进程内冷却一小时，当前 URL
+则持久化保存。此轮换不增加多个 API Key，也不实现 Key 轮换。
+
 ## Codex 工具本地化
 
 - [基础对话](codex-tool-localization/basic-conversation.md)

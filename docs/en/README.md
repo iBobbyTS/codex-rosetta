@@ -41,6 +41,19 @@ or error starts on a new line, and the counters resume on the next request.
 request history, use **Request Log** in the WebUI. For streaming trace
 diagnostics, use **Gateway Logs** in the WebUI.
 
+### Provider Base URLs
+
+A Provider stores an ordered, non-empty `base_urls` list and one member as
+`current_base_url`. The existing **Providers** page edits that order and shows
+each URL as available, cooling, or current. Selecting a cooling URL makes it
+current immediately and clears only that URL's cooldown.
+
+Before any client-visible output, an upstream HTTP 502 (or the narrowly
+recognized CDN 502 page) silently tries the next non-cooling URL. Other
+responses retain their existing behavior. Failed URLs cool for one hour in
+process memory, while the current URL is persisted. This rotation does not add
+multiple API keys or key rotation.
+
 ## Codex tool localization
 
 - [Basic conversation](codex-tool-localization/basic-conversation.md)

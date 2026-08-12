@@ -126,11 +126,24 @@ class ProviderInfo:
     def mark_base_url_failed(self, base_url: str) -> None:
         self._url_ring.mark_failed(base_url)
 
+    def base_url_statuses(self) -> tuple[tuple[str, str], ...]:
+        """Return each configured URL and its process-local availability."""
+        return self._url_ring.status_snapshot()
+
     async def select_base_url(self, base_url: str) -> None:
         if base_url == self.base_url:
             return
         if self._record_current_base_url is not None:
             await self._record_current_base_url(self.configured_id, base_url)
+        self._url_ring.set_current(base_url)
+
+    async def manually_select_base_url(self, base_url: str) -> None:
+        """Persist a manual selection, then clear only its cooldown."""
+        if base_url not in self.base_urls:
+            raise ValueError("current_base_url must be a member of base_urls")
+        if base_url != self.base_url and self._record_current_base_url is not None:
+            await self._record_current_base_url(self.configured_id, base_url)
+        self._url_ring.clear_cooldown(base_url)
         self._url_ring.set_current(base_url)
 
     def next_available_base_url(self, failed: str) -> str | None:

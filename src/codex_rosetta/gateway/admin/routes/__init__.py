@@ -42,6 +42,7 @@ from .config import (
     put_provider,
     put_server_settings,
     reload_config,
+    select_provider_base_url,
     toggle_provider,
 )
 from .keys import (
@@ -123,6 +124,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>", methods=["DELETE"])(delete_provider)
     app.route("/admin/api/config/providers/<name>/toggle", methods=["POST"])(
         toggle_provider
+    )
+    app.route("/admin/api/config/providers/<name>/current-base-url", methods=["POST"])(
+        select_provider_base_url
     )
     app.route("/admin/api/config/providers/<name>/key", methods=["GET"])(
         get_provider_key
