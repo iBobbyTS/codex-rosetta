@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 import codex_rosetta.gateway.transport.provider_info as provider_info_module
 
 from codex_rosetta.gateway.config import GatewayConfig
@@ -14,6 +16,27 @@ from codex_rosetta.shims.providers import load_providers
 
 
 class TestBuildProviderInfo:
+    def test_canonical_base_url_ring_preserves_configured_row_identity(self):
+        info = build_provider_info(
+            "openai_responses",
+            {
+                "api_key": "test",
+                "base_urls": [
+                    "https://first.example/v1/",
+                    "https://second.example/v1",
+                ],
+                "current_base_url": "https://second.example/v1",
+            },
+            configured_id="second-row",
+        )
+
+        assert info.configured_id == "second-row"
+        assert info.base_urls == (
+            "https://first.example/v1",
+            "https://second.example/v1",
+        )
+        assert info.base_url == "https://second.example/v1"
+
     def test_force_rosetta_compaction_is_propagated(self):
         info = build_provider_info(
             "openai_responses",
@@ -88,7 +111,8 @@ def test_gateway_canonicalizes_legacy_csv_and_redacts_every_discarded_credential
             "provider": "custom",
             "api_type": "chat",
             "api_key": raw_keys,
-            "base_url": "https://upstream.example/v1",
+            "base_urls": ["https://upstream.example/v1"],
+            "current_base_url": "https://upstream.example/v1",
         }
     )
 
@@ -114,7 +138,8 @@ def test_gateway_registers_environment_fallback_credential(monkeypatch):
         {
             "provider": "openai",
             "api_type": "chat",
-            "base_url": "https://upstream.example/v1",
+            "base_urls": ["https://upstream.example/v1"],
+            "current_base_url": "https://upstream.example/v1",
         }
     )
 
@@ -124,3 +149,28 @@ def test_gateway_registers_environment_fallback_credential(monkeypatch):
     assert {"environment-provider-key", "discarded-environment-key"} <= (
         config.token_values
     )
+
+
+def test_gateway_rejects_legacy_scalar_provider_base_url():
+    with pytest.raises(ValueError, match="base_url is unsupported; use base_urls"):
+        _gateway_config(
+            {
+                "provider": "custom",
+                "api_type": "chat",
+                "api_key": "test",
+                "base_url": "https://upstream.example/v1",
+            }
+        )
+
+
+def test_gateway_requires_current_base_url_to_belong_to_ring():
+    with pytest.raises(ValueError, match="current_base_url must be a member"):
+        _gateway_config(
+            {
+                "provider": "custom",
+                "api_type": "chat",
+                "api_key": "test",
+                "base_urls": ["https://upstream.example/v1"],
+                "current_base_url": "https://other.example/v1",
+            }
+        )

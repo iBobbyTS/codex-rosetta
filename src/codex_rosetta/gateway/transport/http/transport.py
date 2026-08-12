@@ -13,7 +13,7 @@ import logging
 import math
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from codex_rosetta._vendor.httpclient import (
     DEFAULT_MAX_REDIRECTS,
@@ -49,6 +49,21 @@ _READ_CHUNK_BYTES = 64 * 1024
 DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS = 10 * 60.0
 DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS = 5 * 60.0
 DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS = 5.0
+_CDN_502_MARKERS = (
+    "网站请求超时".encode(),
+    "回源请求被中断".encode(),
+    b">502<",
+)
+
+
+class _ClosedSyntheticResponse:
+    """Minimal closed response backing a pre-output synthetic stream error."""
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+
+    async def aclose(self) -> None:
+        return None
 
 
 def _consume_background_task_result(task: asyncio.Task[Any]) -> None:
@@ -263,6 +278,23 @@ async def _read_bounded_body(
     return b"".join(chunks)
 
 
+def _is_base_url_rotation_trigger(status_code: int, content: bytes) -> bool:
+    """Match the frozen real-502 or observed CDN-page trigger whitelist."""
+    return status_code == 502 or all(marker in content for marker in _CDN_502_MARKERS)
+
+
+def _all_domains_502(count: int) -> bytes:
+    return json.dumps(
+        {
+            "error": {
+                "message": f"All {count} domains responded with HTTP 502",
+                "type": "upstream_error",
+            }
+        },
+        separators=(",", ":"),
+    ).encode()
+
+
 async def request_bounded_response(
     client: Any,
     method: str,
@@ -366,6 +398,7 @@ class HttpUpstreamStream(UpstreamStream):
         resp: HttpStreamingResponse,
         *,
         error_text: str | None = None,
+        prefetched_raw: bytes | None = None,
         response_closed: bool = False,
         idle_timeout: float = DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS,
         close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,
@@ -373,6 +406,7 @@ class HttpUpstreamStream(UpstreamStream):
         self.status_code = resp.status_code
         self._resp = resp
         self._error_text = error_text
+        self._prefetched_raw = prefetched_raw
         self._closed = response_closed
         self._idle_timeout = idle_timeout
         self._close_timeout = close_timeout
@@ -419,6 +453,8 @@ class HttpUpstreamStream(UpstreamStream):
         Uses the vendored W3C-compliant SSE parser.  Detects OpenAI's
         ``[DONE]`` marker and stops iteration.
         """
+        if self._prefetched_raw is not None:
+            raise UpstreamProtocolError("Upstream SSE data is not valid JSON")
         try:
             async for event in AsyncEventSource(
                 self._iter_lines_with_idle_timeout(),
@@ -451,6 +487,9 @@ class HttpUpstreamStream(UpstreamStream):
         """Yield raw upstream response bytes without parsing SSE events."""
 
         async def bounded_raw_stream() -> AsyncIterator[bytes]:
+            if self._prefetched_raw is not None:
+                yield self._prefetched_raw
+                return
             tracker = _SSEWireLimitTracker(
                 max_line_bytes=MAX_UPSTREAM_SSE_LINE_BYTES,
                 max_event_bytes=MAX_UPSTREAM_SSE_EVENT_BYTES,
@@ -529,6 +568,64 @@ class HttpTransport:
         extra_headers: dict[str, str] | None = None,
     ) -> UpstreamResponse:
         """Send a non-streaming request and return the full response."""
+        await provider_info.wait_for_url_rotation()
+        while True:
+            if not provider_info.has_available_base_url():
+                return UpstreamResponse(
+                    status_code=502,
+                    body=None,
+                    raw_content=_all_domains_502(len(provider_info.base_urls)),
+                )
+            observed = provider_info.base_url
+            response = await self._send_request_once(
+                provider_info,
+                target_provider,
+                body,
+                model,
+                extra_headers=extra_headers,
+            )
+            if not _is_base_url_rotation_trigger(
+                response.status_code, response.raw_content
+            ):
+                return response
+            if not await provider_info.claim_url_rotation(observed):
+                continue
+            try:
+                provider_info.mark_base_url_failed(observed)
+                while True:
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        return UpstreamResponse(
+                            status_code=502,
+                            body=None,
+                            raw_content=_all_domains_502(len(provider_info.base_urls)),
+                        )
+                    await provider_info.select_base_url(next_url)
+                    observed = next_url
+                    response = await self._send_request_once(
+                        provider_info,
+                        target_provider,
+                        body,
+                        model,
+                        extra_headers=extra_headers,
+                    )
+                    if not _is_base_url_rotation_trigger(
+                        response.status_code, response.raw_content
+                    ):
+                        return response
+                    provider_info.mark_base_url_failed(observed)
+            finally:
+                await provider_info.publish_url_rotation()
+
+    async def _send_request_once(
+        self,
+        provider_info: ProviderInfo,
+        target_provider: ProviderType,
+        body: dict[str, Any],
+        model: str,
+        *,
+        extra_headers: dict[str, str] | None,
+    ) -> UpstreamResponse:
         url, headers, req_body = _prepare_upstream(
             target_provider,
             provider_info,
@@ -542,17 +639,11 @@ class HttpTransport:
             allow_redirects=provider_info.allow_redirects,
         )
         try:
-            resp = await client.post(
-                url,
-                json=req_body,
-                headers=headers,
-                stream=True,
-            )
+            resp = await client.post(url, json=req_body, headers=headers, stream=True)
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpClientError, ValueError) as exc:
             raise UpstreamConnectionError(str(exc)) from exc
-
         assert isinstance(resp, HttpStreamingResponse)
         max_bytes = (
             MAX_UPSTREAM_ERROR_BODY_BYTES
@@ -562,7 +653,12 @@ class HttpTransport:
         raw_content = await _read_bounded_body(resp, max_bytes)
         return UpstreamResponse(
             status_code=resp.status_code,
-            body=json.loads(raw_content) if resp.status_code < 400 else None,
+            body=(
+                json.loads(raw_content)
+                if resp.status_code < 400
+                and not _is_base_url_rotation_trigger(resp.status_code, raw_content)
+                else None
+            ),
             raw_content=raw_content,
         )
 
@@ -578,6 +674,72 @@ class HttpTransport:
         wire_headers: dict[str, str] | None = None,
     ) -> HttpUpstreamStream:
         """Send a streaming request and return an async chunk iterator."""
+        await provider_info.wait_for_url_rotation()
+        while True:
+            if not provider_info.has_available_base_url():
+                message = _all_domains_502(len(provider_info.base_urls))
+                return HttpUpstreamStream(
+                    cast(Any, _ClosedSyntheticResponse(502)),
+                    error_text=message.decode(),
+                    response_closed=True,
+                    idle_timeout=self._stream_idle_timeout,
+                    close_timeout=self._close_timeout,
+                )
+            observed = provider_info.base_url
+            result, trigger = await self._send_streaming_once(
+                provider_info,
+                target_provider,
+                body,
+                model,
+                extra_headers=extra_headers,
+                wire_body=wire_body,
+                wire_headers=wire_headers,
+            )
+            if not trigger:
+                return result
+            if not await provider_info.claim_url_rotation(observed):
+                continue
+            try:
+                provider_info.mark_base_url_failed(observed)
+                while True:
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        message = _all_domains_502(len(provider_info.base_urls))
+                        return HttpUpstreamStream(
+                            cast(Any, _ClosedSyntheticResponse(502)),
+                            error_text=message.decode(),
+                            response_closed=True,
+                            idle_timeout=self._stream_idle_timeout,
+                            close_timeout=self._close_timeout,
+                        )
+                    await provider_info.select_base_url(next_url)
+                    observed = next_url
+                    result, trigger = await self._send_streaming_once(
+                        provider_info,
+                        target_provider,
+                        body,
+                        model,
+                        extra_headers=extra_headers,
+                        wire_body=wire_body,
+                        wire_headers=wire_headers,
+                    )
+                    if not trigger:
+                        return result
+                    provider_info.mark_base_url_failed(observed)
+            finally:
+                await provider_info.publish_url_rotation()
+
+    async def _send_streaming_once(
+        self,
+        provider_info: ProviderInfo,
+        target_provider: ProviderType,
+        body: dict[str, Any],
+        model: str,
+        *,
+        extra_headers: dict[str, str] | None,
+        wire_body: bytes | None,
+        wire_headers: dict[str, str] | None,
+    ) -> tuple[HttpUpstreamStream, bool]:
         url, headers, req_body = _prepare_upstream(
             target_provider,
             provider_info,
@@ -627,17 +789,45 @@ class HttpTransport:
                 resp,
                 MAX_UPSTREAM_ERROR_BODY_BYTES,
             )
-            return HttpUpstreamStream(
+            stream = HttpUpstreamStream(
                 resp,
                 error_text=raw_error.decode("utf-8", errors="replace"),
                 response_closed=True,
                 idle_timeout=self._stream_idle_timeout,
                 close_timeout=self._close_timeout,
             )
-        return HttpUpstreamStream(
-            resp,
-            idle_timeout=self._stream_idle_timeout,
-            close_timeout=self._close_timeout,
+            return stream, _is_base_url_rotation_trigger(resp.status_code, raw_error)
+        content_type = str(resp.headers.get("content-type", "")).lower()
+        if "text/html" in content_type:
+            raw_content = await _read_bounded_body(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
+            if _is_base_url_rotation_trigger(resp.status_code, raw_content):
+                return (
+                    HttpUpstreamStream(
+                        resp,
+                        prefetched_raw=raw_content,
+                        response_closed=True,
+                        idle_timeout=self._stream_idle_timeout,
+                        close_timeout=self._close_timeout,
+                    ),
+                    True,
+                )
+            return (
+                HttpUpstreamStream(
+                    resp,
+                    prefetched_raw=raw_content,
+                    response_closed=True,
+                    idle_timeout=self._stream_idle_timeout,
+                    close_timeout=self._close_timeout,
+                ),
+                False,
+            )
+        return (
+            HttpUpstreamStream(
+                resp,
+                idle_timeout=self._stream_idle_timeout,
+                close_timeout=self._close_timeout,
+            ),
+            False,
         )
 
     async def send_passthrough(

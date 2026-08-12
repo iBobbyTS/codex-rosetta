@@ -986,6 +986,7 @@ class GatewayConfig:
             name: build_provider_info(
                 self.provider_types[name],
                 cfg,
+                configured_id=name,
                 global_proxy=self.proxy,
                 credential_inventory=self.token_values,
             )
@@ -1080,6 +1081,37 @@ class GatewayConfig:
         provider_types: dict[str, str] = {}
         provider_shim_names: dict[str, str | None] = {}
         for name, cfg in raw_providers.items():
+            if "base_url" in cfg:
+                raise ValueError(
+                    f"config: provider '{name}' base_url is unsupported; use base_urls"
+                )
+            raw_base_urls = cfg.get("base_urls")
+            if raw_base_urls is not None:
+                if (
+                    not isinstance(raw_base_urls, list)
+                    or not raw_base_urls
+                    or any(
+                        not isinstance(url, str) or not url.strip()
+                        for url in raw_base_urls
+                    )
+                ):
+                    raise ValueError(
+                        f"config: provider '{name}' base_urls must be a non-empty string list"
+                    )
+                cfg["base_urls"] = [url.rstrip("/") for url in raw_base_urls]
+                if len(set(cfg["base_urls"])) != len(cfg["base_urls"]):
+                    raise ValueError(
+                        f"config: provider '{name}' base_urls must be unique"
+                    )
+                current = cfg.get("current_base_url", cfg["base_urls"][0])
+                if (
+                    not isinstance(current, str)
+                    or current.rstrip("/") not in cfg["base_urls"]
+                ):
+                    raise ValueError(
+                        f"config: provider '{name}' current_base_url must be a member of base_urls"
+                    )
+                cfg["current_base_url"] = current.rstrip("/")
             allow_redirects = cfg.get("allow_redirects", False)
             if not isinstance(allow_redirects, bool):
                 raise ValueError(

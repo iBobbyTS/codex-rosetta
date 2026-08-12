@@ -114,6 +114,7 @@ def build_provider_info(
     provider_type: str,
     cfg: dict[str, Any],
     *,
+    configured_id: str | None = None,
     global_proxy: str | None = None,
     credential_inventory: set[str] | None = None,
 ) -> ProviderInfo:
@@ -143,8 +144,8 @@ def build_provider_info(
     if shim is not None:
         base_type = shim.base
         # Apply shim defaults where config is missing
-        if "base_url" not in cfg and shim.default_base_url:
-            cfg = {**cfg, "base_url": shim.default_base_url}
+        if "base_urls" not in cfg and "base_url" not in cfg and shim.default_base_url:
+            cfg = {**cfg, "base_urls": [shim.default_base_url]}
         if "api_key" not in cfg and shim.default_api_key_env:
             env_val = os.environ.get(shim.default_api_key_env, "")
             if env_val:
@@ -169,10 +170,10 @@ def build_provider_info(
         )
 
     # Fall back to base-type defaults if still missing
-    if "base_url" not in cfg:
+    if "base_urls" not in cfg and "base_url" not in cfg:
         default_url = get_default_base_url(base_type)
         if default_url:
-            cfg = {**cfg, "base_url": default_url}
+            cfg = {**cfg, "base_urls": [default_url]}
     if "api_key" not in cfg:
         default_env = get_default_api_key_env(base_type)
         env_val = os.environ.get(default_env, "")
@@ -198,8 +199,16 @@ def build_provider_info(
 
     return ProviderInfo(
         name=provider_type,
+        configured_id=configured_id,
         api_key=api_key,
-        base_url=cfg["base_url"],
+        **(
+            {
+                "base_urls": cfg["base_urls"],
+                "current_base_url": cfg.get("current_base_url"),
+            }
+            if "base_urls" in cfg
+            else {"base_url": cfg["base_url"]}
+        ),
         auth_header_fn=auth_fn,
         url_template=url_tpl,
         stream_url_template=stream_tpl,

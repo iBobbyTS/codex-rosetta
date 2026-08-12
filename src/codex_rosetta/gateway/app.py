@@ -31,7 +31,7 @@ from .auth import (
     api_key_principal_var,
     create_auth_hook,
 )
-from .config import GatewayConfig, resolve_codex_home
+from .config import GatewayConfig, load_config_raw, resolve_codex_home, write_config
 from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
 from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
@@ -1147,6 +1147,38 @@ def _flush_now(app: App) -> None:
     logger.info("Persistence flushed and closed on shutdown")
 
 
+def _bind_provider_current_recorders(
+    config: GatewayConfig,
+    config_path: str | None,
+) -> None:
+    """Bind one config-path-aware current-base-URL recorder per provider row."""
+    write_lock = asyncio.Lock()
+
+    async def record(configured_id: str, base_url: str) -> None:
+        if config_path is None:
+            raise RuntimeError("Provider base URL state cannot be persisted")
+        async with write_lock:
+            try:
+                document = load_config_raw(config_path)
+                providers = document.get("providers")
+                if not isinstance(providers, dict):
+                    raise ValueError
+                provider = providers.get(configured_id)
+                if not isinstance(provider, dict):
+                    raise ValueError
+                provider["current_base_url"] = base_url
+                write_config(config_path, document)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise RuntimeError(
+                    "Provider base URL state could not be persisted"
+                ) from None
+
+    for provider_info in config.providers.values():
+        provider_info.bind_current_base_url_recorder(record)
+
+
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -1174,6 +1206,7 @@ def create_app(
     image_fetch_workers = ImageFetchWorkerPool()
     web_run_health_state = WebRunHealthState()
     transport = HttpTransport()
+    _bind_provider_current_recorders(config, config_path)
 
     app = GatewayApp(
         max_body_size=config.request_body_limit_bytes,

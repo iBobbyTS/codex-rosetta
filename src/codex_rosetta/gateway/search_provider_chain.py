@@ -10,6 +10,7 @@ from contextlib import suppress
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Generic, TypeVar, cast
 
+from ._ordered_failover import FailoverGate
 from .search_provider_candidates import (
     SearchProviderCandidate,
     TavilySearchProviderCandidate,
@@ -196,12 +197,9 @@ class SearchProviderChainCoordinator:
         self._wall_clock = wall_clock
         self._process_current: tuple[str, str] | None = None
         self._process_quota: dict[tuple[str, str], float] = {}
-        self._failover_condition = asyncio.Condition()
-        self._failover_generation = 0
-        self._failover_active = False
-        self._failover_orphaned = False
-        self._failover_pending_failure: _PendingProviderFailure | None = None
-        self._failover_unavailable: SearchProviderChainUnavailableReason | None = None
+        self._failover_gate = FailoverGate[
+            SearchProviderChainUnavailableReason, _PendingProviderFailure
+        ]()
 
     def _load_current(self) -> _CurrentProviderValue:
         if self._current_provider is not None:
@@ -444,29 +442,7 @@ class SearchProviderChainCoordinator:
         bool,
         _PendingProviderFailure | None,
     ]:
-        waited = False
-        async with self._failover_condition:
-            while self._failover_active:
-                waited = True
-                if self._failover_orphaned:
-                    self._failover_orphaned = False
-                    pending_failure = self._failover_pending_failure
-                    self._failover_pending_failure = None
-                    return (
-                        self._failover_generation,
-                        None,
-                        waited,
-                        True,
-                        pending_failure,
-                    )
-                await self._failover_condition.wait()
-            return (
-                self._failover_generation,
-                self._failover_unavailable,
-                waited,
-                False,
-                None,
-            )
+        return await self._failover_gate.await_active()
 
     async def _claim_failover(
         self, observed_generation: int
@@ -476,45 +452,17 @@ class SearchProviderChainCoordinator:
         SearchProviderChainUnavailableReason | None,
         _PendingProviderFailure | None,
     ]:
-        async with self._failover_condition:
-            while self._failover_active:
-                if self._failover_orphaned:
-                    self._failover_orphaned = False
-                    pending_failure = self._failover_pending_failure
-                    self._failover_pending_failure = None
-                    return True, self._failover_generation, None, pending_failure
-                await self._failover_condition.wait()
-            if self._failover_generation != observed_generation:
-                return (
-                    False,
-                    self._failover_generation,
-                    self._failover_unavailable,
-                    None,
-                )
-            self._failover_generation += 1
-            self._failover_active = True
-            self._failover_orphaned = False
-            self._failover_pending_failure = None
-            self._failover_unavailable = None
-            return True, self._failover_generation, None, None
+        return await self._failover_gate.claim(observed_generation)
 
     async def _publish_failover(
         self, unavailable: SearchProviderChainUnavailableReason | None
     ) -> None:
-        async with self._failover_condition:
-            self._failover_unavailable = unavailable
-            self._failover_active = False
-            self._failover_orphaned = False
-            self._failover_pending_failure = None
-            self._failover_condition.notify_all()
+        await self._failover_gate.publish(unavailable)
 
     async def _handoff_failover(
         self, pending_failure: _PendingProviderFailure | None
     ) -> None:
-        async with self._failover_condition:
-            self._failover_orphaned = True
-            self._failover_pending_failure = pending_failure
-            self._failover_condition.notify_all()
+        await self._failover_gate.handoff(pending_failure)
 
     def _record_success(
         self,
@@ -523,7 +471,7 @@ class SearchProviderChainCoordinator:
         observed_generation: int,
         failover_leader: bool,
     ) -> None:
-        if failover_leader or observed_generation == self._failover_generation:
+        if failover_leader or observed_generation == self._failover_gate.generation:
             self.select_current(candidate)
 
     async def _candidate_is_eligible(

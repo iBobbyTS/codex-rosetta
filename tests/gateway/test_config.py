@@ -138,7 +138,8 @@ def test_unified_responses_protocol_resolves_direct_profile(
         "providers": {
             "upstream": {
                 "api_key": "sk-test",
-                "base_url": base_url,
+                "base_urls": [base_url],
+                "current_base_url": base_url,
                 "provider": provider,
                 "api_type": "responses",
             }
@@ -238,7 +239,8 @@ def _minimal_raw(**server_overrides) -> dict:
         "providers": {
             "test": {
                 "api_key": "sk-test",
-                "base_url": "https://api.example.com",
+                "base_urls": ["https://api.example.com"],
+                "current_base_url": "https://api.example.com",
                 "provider": "custom",
                 "api_type": "chat",
             }
@@ -753,7 +755,8 @@ class TestWebSearchConfig:
         )
         raw["providers"]["official-deepseek"] = {
             "api_key": "deepseek-secret",
-            "base_url": "https://api.deepseek.com",
+            "base_urls": ["https://api.deepseek.com"],
+            "current_base_url": "https://api.deepseek.com",
             "provider": "deepseek",
             "api_type": "responses",
         }
@@ -1001,7 +1004,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "DeepSeek": {
                     "api_key": "sk-test",
-                    "base_url": "https://api.deepseek.com",
+                    "base_urls": ["https://api.deepseek.com"],
+                    "current_base_url": "https://api.deepseek.com",
                     "provider": "deepseek",
                     "api_type": "chat",
                     "type": "anthropic",
@@ -1025,7 +1029,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "MiniMax": {
                     "api_key": "sk-test",
-                    "base_url": "https://api.minimaxi.com/anthropic",
+                    "base_urls": ["https://api.minimaxi.com/anthropic"],
+                    "current_base_url": "https://api.minimaxi.com/anthropic",
                     "provider": "minimax",
                     "api_type": "anthropic",
                 }
@@ -1053,7 +1058,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "Pixel": {
                     "api_key": "sk-test",
-                    "base_url": "https://api.example.com",
+                    "base_urls": ["https://api.example.com"],
+                    "current_base_url": "https://api.example.com",
                     "provider": "custom",
                     "api_type": "responses",
                 }
@@ -1084,7 +1090,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "DeepSeek": {
                     "api_key": "sk-test",
-                    "base_url": "https://api.deepseek.com/",
+                    "base_urls": ["https://api.deepseek.com/"],
+                    "current_base_url": "https://api.deepseek.com/",
                     "api_type": "chat",
                 }
             },
@@ -1108,7 +1115,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "Relay": {
                     "api_key": "sk-test",
-                    "base_url": "https://relay.example/v1",
+                    "base_urls": ["https://relay.example/v1"],
+                    "current_base_url": "https://relay.example/v1",
                     "api_type": "chat",
                 }
             },
@@ -1132,7 +1140,8 @@ class TestProviderApiTypeResolution:
             "providers": {
                 "Qwen": {
                     "api_key": "sk-test",
-                    "base_url": "https://api.example.com",
+                    "base_urls": ["https://api.example.com"],
+                    "current_base_url": "https://api.example.com",
                     "provider": "qwen",
                     "api_type": "responses",
                 }
@@ -1189,7 +1198,8 @@ class TestProviderApiTypeResolution:
         raw = _minimal_raw()
         raw["providers"]["test"] = {
             "api_key": "sk-test",
-            "base_url": "https://provider.example",
+            "base_urls": ["https://provider.example"],
+            "current_base_url": "https://provider.example",
             "provider": "custom",
         }
         with pytest.raises(ValueError, match="requires api_type"):
@@ -1199,7 +1209,8 @@ class TestProviderApiTypeResolution:
         raw = _minimal_raw()
         raw["providers"]["openai"] = {
             "api_key": "sk-test",
-            "base_url": "https://api.openai.com/v1",
+            "base_urls": ["https://api.openai.com/v1"],
+            "current_base_url": "https://api.openai.com/v1",
             "provider": "openai",
         }
         with pytest.raises(ValueError, match="requires api_type"):
@@ -1208,7 +1219,8 @@ class TestProviderApiTypeResolution:
     def test_deepseek_preset_url_without_explicit_protocol_fails_closed(self):
         raw = _minimal_raw()
         raw["providers"]["test"].pop("api_type")
-        raw["providers"]["test"]["base_url"] = "https://api.deepseek.com"
+        raw["providers"]["test"]["base_urls"] = ["https://api.deepseek.com"]
+        raw["providers"]["test"]["current_base_url"] = "https://api.deepseek.com"
         raw["providers"]["test"]["provider"] = "deepseek"
 
         with pytest.raises(ValueError, match="requires api_type"):
@@ -1401,7 +1413,8 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
                 "providers": {
                     "test": {
                         "api_key": "sk-test",
-                        "base_url": "https://api.example.test",
+                        "base_urls": ["https://api.example.test"],
+                        "current_base_url": "https://api.example.test",
                         "api_type": "chat",
                     }
                 },
@@ -1463,7 +1476,8 @@ def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path
                 "providers": {
                     "test": {
                         "api_key": "sk-test",
-                        "base_url": "https://api.example.test",
+                        "base_urls": ["https://api.example.test"],
+                        "current_base_url": "https://api.example.test",
                         "provider": "custom",
                         "api_type": "responses",
                     }
@@ -1498,7 +1512,8 @@ def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
                 "providers": {
                     "test": {
                         "api_key": "sk-test",
-                        "base_url": "https://api.example.test",
+                        "base_urls": ["https://api.example.test"],
+                        "current_base_url": "https://api.example.test",
                         "provider": "custom",
                         "api_type": "responses",
                     }
