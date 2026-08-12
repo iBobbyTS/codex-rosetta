@@ -645,6 +645,9 @@ class HttpTransport:
         except (HttpClientError, ValueError) as exc:
             raise UpstreamConnectionError(str(exc)) from exc
         assert isinstance(resp, HttpStreamingResponse)
+        if resp.status_code == 502:
+            await resp.aclose()
+            return UpstreamResponse(status_code=502, body=None, raw_content=b"")
         max_bytes = (
             MAX_UPSTREAM_ERROR_BODY_BYTES
             if resp.status_code >= 400
@@ -783,6 +786,18 @@ class HttpTransport:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
+        if resp.status_code == 502:
+            await resp.aclose()
+            return (
+                HttpUpstreamStream(
+                    resp,
+                    error_text="",
+                    response_closed=True,
+                    idle_timeout=self._stream_idle_timeout,
+                    close_timeout=self._close_timeout,
+                ),
+                True,
+            )
         await _enforce_identity_encoding(resp)
         if resp.status_code >= 400:
             raw_error = await _read_bounded_body(

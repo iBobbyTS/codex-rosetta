@@ -30,9 +30,11 @@ class _FakeStreamingResponse:
         body: bytes,
         *,
         content_type: str = "application/json",
+        headers: dict[str, str] | None = None,
     ) -> None:
         self.status_code = status_code
         self.headers = {"content-type": content_type}
+        self.headers.update(headers or {})
         self._body = body
         self.closed = False
 
@@ -128,6 +130,75 @@ def test_nonstream_rotates_real_502_and_persists_new_current(monkeypatch) -> Non
         assert result.body == {"ok": True}
         assert client.calls == [f"{first}/responses", f"{second}/responses"]
         assert provider.base_url == second
+        assert writes == [("row-a", second)]
+
+    asyncio.run(scenario())
+
+
+def test_nonstream_status_502_rotates_before_oversized_content_length(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            _FakeStreamingResponse(
+                502,
+                b"unread",
+                headers={
+                    "content-length": str(
+                        transport_module.MAX_UPSTREAM_ERROR_BODY_BYTES + 1
+                    )
+                },
+            ),
+        )
+        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert client.calls == [f"{first}/responses", f"{second}/responses"]
+        assert writes == [("row-a", second)]
+
+    asyncio.run(scenario())
+
+
+def test_streaming_status_502_rotates_before_content_encoding_validation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            _FakeStreamingResponse(
+                502,
+                b"unread",
+                headers={"content-encoding": "gzip"},
+            ),
+        )
+        client.add(
+            f"{second}/responses",
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+
+        result = await _transport(monkeypatch, client).send_streaming(
+            provider, "openai_responses", {}, "model"
+        )
+
+        assert result.status_code == 200
+        assert client.calls == [f"{first}/responses", f"{second}/responses"]
         assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
