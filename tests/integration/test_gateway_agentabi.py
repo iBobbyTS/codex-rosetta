@@ -35,8 +35,6 @@ MODELS = [
     "gpt-5-nano",  # OpenAI pass-through
     "o4-mini",  # OpenAI reasoning
     "claude-haiku-4-5",  # Anthropic direct
-    "argo:claude-opus-4.7",  # Anthropic via Argo (reasoning)
-    "argo:gemini-2.5-flash",  # Google via Argo
     "gemini-3.5-flash",  # Google direct
     "deepseek-v4-flash",  # DeepSeek (non-vision)
     "MiniMax-M3",  # MiniMax

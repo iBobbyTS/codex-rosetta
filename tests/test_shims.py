@@ -152,8 +152,6 @@ class TestBuiltinShims:
     def test_third_party_providers_registered(self):
         for name in (
             "deepseek",
-            "volcengine--openai_chat",
-            "volcengine--openai_responses",
             "openrouter--openai_chat",
             "openrouter--anthropic",
             "minimax--openai_chat",
@@ -176,12 +174,6 @@ class TestBuiltinShims:
         shim = get_shim("anthropic")
         assert shim is not None
         assert shim.base == "anthropic"
-
-    def test_argo_anthropic_preserves_unsigned_reasoning_blocks(self):
-        shim = get_shim("argo--anthropic")
-        assert shim is not None
-        assert shim.reasoning is not None
-        assert shim.reasoning.unsigned_reasoning_blocks == "preserve"
 
     def test_google_base_type(self):
         shim = get_shim("google")
@@ -208,13 +200,6 @@ class TestShimConverterIntegration:
         converter = get_converter_for_provider("deepseek")
         assert isinstance(converter, OpenAIChatConverter)
 
-    def test_volcengine_resolves_to_openai_chat_converter(self):
-        from codex_rosetta.auto_detect import get_converter_for_provider
-        from codex_rosetta.converters import OpenAIChatConverter
-
-        converter = get_converter_for_provider("volcengine--openai_chat")
-        assert isinstance(converter, OpenAIChatConverter)
-
     def test_base_types_still_work(self):
         from codex_rosetta.auto_detect import get_converter_for_provider
         from codex_rosetta.converters import (
@@ -237,57 +222,20 @@ class TestShimConverterIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Grouped provider directories (e.g. argo/anthropic/, argo/openai_chat/)
+# Removed built-in providers
 # ---------------------------------------------------------------------------
 
 
-class TestGroupedProviders:
-    @pytest.fixture(autouse=True)
-    def _load_builtins(self):
-        """Load provider shims from the YAML directory."""
+class TestRemovedProviders:
+    def test_removed_provider_shims_are_not_registered(self):
         from codex_rosetta.shims.providers import load_providers
 
         load_providers()
-
-    def test_grouped_providers_registered(self):
-        """Shims under a group folder register with their YAML name."""
-        for name in ("argo--anthropic", "argo--openai_chat"):
-            shim = get_shim(name)
-            assert shim is not None, f"Grouped shim '{name}' not registered"
-
-    def test_grouped_provider_base_types(self):
-        """Grouped shims resolve to the correct base converter."""
-        anth = get_shim("argo--anthropic")
-        oai = get_shim("argo--openai_chat")
-        assert anth is not None and anth.base == "anthropic"
-        assert oai is not None and oai.base == "openai_chat"
-
-    def test_grouped_provider_transforms_loaded(self):
-        """Grouped shims have their transforms.py imported."""
-        anth = get_shim("argo--anthropic")
-        assert anth is not None
-        # argo_anthropic has from_transforms (to_transforms retired)
-        assert len(anth.from_transforms) > 0
-
-    def test_grouped_provider_reasoning_configs_loaded(self):
-        """Grouped shims load reasoning capability configs."""
-        anth = get_shim("argo--anthropic")
-        oai = get_shim("argo--openai_chat")
-        assert anth is not None and anth.reasoning is not None
-        assert oai is not None and oai.reasoning is not None
-        assert anth.reasoning.effort_field == "output_config.effort"
-        assert anth.reasoning.effort_map["xhigh"] == "xhigh"
-        assert oai.reasoning.effort_map["max"] == "max"
-
-    def test_argo_anthropic_provider_thinking_type(self):
-        """Argo anthropic provider-level thinking_type is enabled."""
-        anth = get_shim("argo--anthropic")
-        assert anth is not None and anth.reasoning is not None
-        assert anth.reasoning.thinking_type == "enabled"
-
-    def test_mixed_flat_and_grouped(self):
-        """Flat shims and grouped shims coexist in the registry."""
-        flat_names = ("openai", "anthropic", "deepseek", "google")
-        grouped_names = ("argo--anthropic", "argo--openai_chat")
-        for name in (*flat_names, *grouped_names):
-            assert get_shim(name) is not None, f"Shim '{name}' not found"
+        removed = (
+            "argo--anthropic",
+            "argo--openai_chat",
+            "volcengine--openai_chat",
+            "volcengine--openai_responses",
+            "xai",
+        )
+        assert all(get_shim(name) is None for name in removed)

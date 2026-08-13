@@ -14,7 +14,7 @@
 #   STREAM=false ./scripts/run_gateway_integration.sh     # non-streaming only
 #   STREAM=true  ./scripts/run_gateway_integration.sh     # streaming only
 #   GATEWAY_URL=http://host:9000 ./scripts/run_gateway_integration.sh
-#   MODELS="argo:claude-opus-4.6" ./scripts/run_gateway_integration.sh
+#   MODELS="claude-opus-4.6" ./scripts/run_gateway_integration.sh
 #   SDKS=anthropic ./scripts/run_gateway_integration.sh   # single provider
 #   SDKS="anthropic google_genai" MODELS=gpt-5-nano ./scripts/run_gateway_integration.sh
 
@@ -35,7 +35,7 @@ STREAM="${STREAM:-both}"
 
 # Models to test — override with MODELS env var (space-separated)
 if [ -z "${MODELS:-}" ]; then
-    MODELS="gpt-5-nano gpt-4.1-nano argo:claude-opus-4.6 gemini-2.5-flash-lite gemini-3.1-flash-lite-preview"
+    MODELS="gpt-5-nano gpt-4.1-nano claude-opus-4.6 gemini-2.5-flash-lite gemini-3.1-flash-lite-preview"
 fi
 
 # SDKs/providers to test — override with SDKS env var (space-separated)

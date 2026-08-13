@@ -7,8 +7,6 @@ const openai = new URL('../assets/provider-logos/openai.svg', import.meta.url).h
 const opencode = new URL('../assets/provider-logos/opencode.png', import.meta.url).href;
 const openrouter = new URL('../assets/provider-logos/openrouter.svg', import.meta.url).href;
 const qwen = new URL('../assets/provider-logos/qwen.svg', import.meta.url).href;
-const volcengine = new URL('../assets/provider-logos/volcengine.svg', import.meta.url).href;
-const xai = new URL('../assets/provider-logos/xai.svg', import.meta.url).href;
 const zhipu = new URL('../assets/provider-logos/zhipu.svg', import.meta.url).href;
 
 const logos: Readonly<Record<string, string>> = {
@@ -24,9 +22,6 @@ const logos: Readonly<Record<string, string>> = {
   'openrouter--anthropic': openrouter,
   'openrouter--openai_chat': openrouter,
   qwen,
-  'volcengine--openai_chat': volcengine,
-  'volcengine--openai_responses': volcengine,
-  xai,
   zhipu,
 };
 

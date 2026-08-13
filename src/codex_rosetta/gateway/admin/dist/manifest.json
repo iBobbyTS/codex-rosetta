@@ -1,6 +1,6 @@
 {
   "admin.html": {
-    "file": "assets/admin-BQ_I6mAd.js",
+    "file": "assets/admin-lhXpWEW6.js",
     "name": "admin",
     "src": "admin.html",
     "isEntry": true,
@@ -17,8 +17,6 @@
       "assets/opencode-CQ6-Ag_g.png",
       "assets/openrouter-CurrtRVf.svg",
       "assets/qwen-C7wsqEnO.svg",
-      "assets/volcengine-CzlqGJ1H.svg",
-      "assets/xai-CAL-Vlf0.svg",
       "assets/zhipu-4xYs0ZEH.svg"
     ]
   },
@@ -57,14 +55,6 @@
   "src/admin/assets/provider-logos/qwen.svg": {
     "file": "assets/qwen-C7wsqEnO.svg",
     "src": "src/admin/assets/provider-logos/qwen.svg"
-  },
-  "src/admin/assets/provider-logos/volcengine.svg": {
-    "file": "assets/volcengine-CzlqGJ1H.svg",
-    "src": "src/admin/assets/provider-logos/volcengine.svg"
-  },
-  "src/admin/assets/provider-logos/xai.svg": {
-    "file": "assets/xai-CAL-Vlf0.svg",
-    "src": "src/admin/assets/provider-logos/xai.svg"
   },
   "src/admin/assets/provider-logos/zhipu.svg": {
     "file": "assets/zhipu-4xYs0ZEH.svg",

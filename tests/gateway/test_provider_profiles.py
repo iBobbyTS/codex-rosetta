@@ -32,6 +32,7 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
     assert providers["openai"]["runtime_capabilities_by_model"] == {}
     assert providers["deepseek"]["soft_interrupt_default"] is True
     assert providers["openai"]["soft_interrupt_default"] is False
+    assert {"argo", "volcengine", "xai"}.isdisjoint(providers)
 
 
 def test_soft_interrupt_defaults_are_protocol_scoped_and_overridable() -> None:

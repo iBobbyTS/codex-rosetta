@@ -107,7 +107,7 @@ class ProviderShim:
         logo: URL to the provider's logo image (SVG preferred).
         model_id_field: JSON field name to use as model identifier when
             fetching the upstream model list.  Defaults to ``"id"``
-            when ``None``.  Useful for providers like Argo that place
+            when ``None``. Useful for providers that place
             the actual model identifier in a non-standard field.
         from_transforms: Transforms applied when data comes FROM this
             provider (normalise dialect → standard).

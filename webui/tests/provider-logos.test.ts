@@ -17,9 +17,6 @@ describe('provider logos', () => {
       'openrouter--anthropic': 'openrouter.svg',
       'openrouter--openai_chat': 'openrouter.svg',
       qwen: 'qwen.svg',
-      'volcengine--openai_chat': 'volcengine.svg',
-      'volcengine--openai_responses': 'volcengine.svg',
-      xai: 'xai.svg',
       zhipu: 'zhipu.svg',
     };
 
@@ -33,7 +30,6 @@ describe('provider logos', () => {
     expect(providerLogo('minimax--anthropic')).toBe(providerLogo('minimax--openai_chat'));
     expect(providerLogo('openai')).toBe(providerLogo('openai_responses'));
     expect(providerLogo('openrouter--anthropic')).toBe(providerLogo('openrouter--openai_chat'));
-    expect(providerLogo('volcengine--openai_chat')).toBe(providerLogo('volcengine--openai_responses'));
     expect(providerLogo('custom')).toBe('');
     for (const name of bundledProviderLogoNames) {
       expect(providerLogoNeedsDarkInversion(name)).toBe(name !== 'opencode_go');

@@ -55,7 +55,7 @@ class ResolvedRoute:
         provider_name: User-configured provider name
             (e.g. ``"deepseek"``, ``"my-openai"``).
         shim_name: Shim/type identifier for transform lookup
-            (e.g. ``"volcengine--openai_chat"``), or ``None``.
+            (e.g. ``"openrouter--openai_chat"``), or ``None``.
         upstream_model: Actual model ID to send upstream, or ``None``
             when the gateway model name is used as-is.
         input_modalities: Input modalities declared by the bundled model preset,

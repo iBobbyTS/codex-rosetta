@@ -38,10 +38,10 @@ def _clean_registry():
 
 
 @pytest.fixture()
-def volcengine_shim():
-    """Register a volcengine-like shim with to_transforms that strip fields."""
+def stripping_shim():
+    """Register a test shim with request-field stripping transforms."""
     shim = ProviderShim(
-        name="test-volcengine",
+        name="test-stripping-provider",
         base="openai_chat",
         to_transforms=(strip_fields("logprobs", "top_logprobs"),),
     )
@@ -78,9 +78,9 @@ class TestPipelineTransformResolution:
         assert p._from_transforms == ()
         assert p._to_transforms == ()
 
-    def test_volcengine_shim(self, volcengine_shim):
-        p = ConversionPipeline("openai_chat", "openai_chat", "test-volcengine")
-        assert p._to_transforms == volcengine_shim.to_transforms
+    def test_stripping_shim(self, stripping_shim):
+        p = ConversionPipeline("openai_chat", "openai_chat", "test-stripping-provider")
+        assert p._to_transforms == stripping_shim.to_transforms
         assert p._from_transforms == ()
 
     def test_shim_with_both_transforms(self, shim_with_transforms):
@@ -149,7 +149,7 @@ def _make_route(
 
 
 class TestNonStreamingTransforms:
-    def test_to_transforms_strip_fields(self, volcengine_shim):
+    def test_to_transforms_strip_fields(self, stripping_shim):
         """to_transforms should strip fields from the target request body."""
         captured_body: dict[str, Any] = {}
         transport = _make_mock_transport(
@@ -162,7 +162,7 @@ class TestNonStreamingTransforms:
 
         async def run():
             await handle_non_streaming(
-                _make_route(shim_name="volcengine--openai_chat"),
+                _make_route(shim_name="test-stripping-provider"),
                 _make_provider_info(),
                 {
                     "model": "test-model",

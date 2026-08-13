@@ -23,7 +23,7 @@ may export ``to_transforms`` and/or ``from_transforms`` tuples.
 
 **Grouped directories** are also supported: a child directory that does
 NOT contain ``provider.yaml`` but DOES contain subdirectories with one is
-treated as a *group folder* (e.g. ``argo/anthropic/``, ``argo/openai_chat/``).
+treated as a *group folder* when its children contain provider definitions.
 
 Plugin shims
 ------------
@@ -187,7 +187,7 @@ def load_providers_from_dir(
 
     * **Flat** — a direct child with ``provider.yaml`` (e.g. ``openai/``).
     * **Grouped** — a child WITHOUT ``provider.yaml`` whose own children
-      each contain one (e.g. ``argo/anthropic/``, ``argo/openai_chat/``).
+      each contain one.
 
     Args:
         providers_dir: Root directory to scan for provider subdirectories.

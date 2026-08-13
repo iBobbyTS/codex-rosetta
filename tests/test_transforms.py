@@ -205,20 +205,6 @@ class TestBuiltinTransforms:
 
         load_providers()
 
-    def test_volcengine_has_to_transforms(self):
-        shim = get_shim("volcengine--openai_chat")
-        assert shim is not None
-        assert len(shim.to_transforms) > 0
-
-    def test_volcengine_strips_logprobs(self):
-        shim = get_shim("volcengine--openai_chat")
-        assert shim is not None
-        body = {"model": "test", "logprobs": True, "top_logprobs": 5, "messages": []}
-        result = apply_transforms(shim.to_transforms, body)
-        assert "logprobs" not in result
-        assert "top_logprobs" not in result
-        assert result["model"] == "test"
-
     def test_deepseek_strips_unsupported(self):
         shim = get_shim("deepseek")
         assert shim is not None
@@ -236,20 +222,6 @@ class TestBuiltinTransforms:
         assert "seed" not in result
         assert result["model"] == "deepseek-chat"
         assert result["temperature"] == 0.7
-
-    def test_xai_strips_logit_bias(self):
-        shim = get_shim("xai")
-        assert shim is not None
-        body = {
-            "model": "grok-3",
-            "logit_bias": {"50256": -100},
-            "temperature": 1.0,
-            "messages": [],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert "logit_bias" not in result
-        assert result["model"] == "grok-3"
-        assert result["temperature"] == 1.0
 
     def test_moonshot_strips_unsupported(self):
         shim = get_shim("moonshot")
@@ -504,72 +476,3 @@ class TestDefaultMessageField:
     def test_repr(self):
         t = default_message_field("content", "")
         assert repr(t) == "default_message_field('content', '')"
-
-
-# ---------------------------------------------------------------------------
-# Argo OpenAI Chat shim integration
-# ---------------------------------------------------------------------------
-
-
-class TestArgoOpenaiChatTransforms:
-    @pytest.fixture(autouse=True)
-    def _load_builtins(self):
-        from codex_rosetta.shims.providers import load_providers
-
-        load_providers()
-
-    def test_argo_downgrades_developer_role(self):
-        shim = get_shim("argo--openai_chat")
-        assert shim is not None
-        body = {
-            "model": "gpt-4",
-            "messages": [{"role": "developer", "content": "system prompt"}],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert result["messages"][0]["role"] == "system"
-
-    def test_argo_normalizes_null_content(self):
-        shim = get_shim("argo--openai_chat")
-        assert shim is not None
-        body = {
-            "model": "gpt-4",
-            "messages": [
-                {"role": "assistant", "content": None, "tool_calls": []},
-            ],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert result["messages"][0]["content"] == ""
-
-    def test_argo_does_not_apply_model_scoped_temperature_transform(self):
-        shim = get_shim("argo--openai_chat")
-        assert shim is not None
-        body = {
-            "model": "claudeopus47",
-            "temperature": 0.7,
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert result["temperature"] == 0.7
-
-    def test_argo_keeps_temperature_for_other_models(self):
-        shim = get_shim("argo--openai_chat")
-        assert shim is not None
-        body = {
-            "model": "gpt-4o",
-            "temperature": 0.7,
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert result["temperature"] == 0.7
-
-    def test_argo_renames_max_tokens(self):
-        shim = get_shim("argo--openai_chat")
-        assert shim is not None
-        body = {
-            "model": "gpt-4",
-            "max_tokens": 100,
-            "messages": [{"role": "user", "content": "hi"}],
-        }
-        result = apply_transforms(shim.to_transforms, body)
-        assert "max_tokens" not in result
-        assert result["max_completion_tokens"] == 100

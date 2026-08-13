@@ -92,8 +92,6 @@ class TestLoadProviders:
         shims = load_providers()
         names = {s.name for s in shims}
         assert names == {
-            "argo--anthropic",
-            "argo--openai_chat",
             "openai",
             "openai_responses",
             "openrouter--openai_chat",
@@ -106,9 +104,6 @@ class TestLoadProviders:
             "moonshot",
             "opencode_go",
             "qwen",
-            "volcengine--openai_chat",
-            "volcengine--openai_responses",
-            "xai",
             "zhipu",
         }
 
@@ -122,9 +117,6 @@ class TestLoadProviders:
             "anthropic",
             "google",
             "deepseek",
-            "volcengine--openai_chat",
-            "volcengine--openai_responses",
-            "xai",
             "qwen",
             "moonshot",
             "minimax--openai_chat",
@@ -134,19 +126,6 @@ class TestLoadProviders:
             shim = get_shim(name)
             assert shim is not None
             assert shim.name == name
-
-    def test_volcengine_has_transforms(self):
-        """Volcengine shim should have strip_fields transforms loaded."""
-        load_providers()
-        v = get_shim("volcengine--openai_chat")
-        assert v is not None
-        assert len(v.to_transforms) == 1
-        assert len(v.from_transforms) == 0
-        # Verify it strips the right fields
-        body = {"logprobs": True, "top_logprobs": 5, "messages": []}
-        result = v.to_transforms[0](body)
-        assert "logprobs" not in result
-        assert "messages" in result
 
     def test_deepseek_has_transforms(self):
         """DeepSeek shim should strip n, logit_bias, seed."""
@@ -160,18 +139,6 @@ class TestLoadProviders:
         assert "n" not in result
         assert "logit_bias" not in result
         assert "seed" not in result
-        assert "messages" in result
-
-    def test_xai_has_transforms(self):
-        """xAI shim should strip logit_bias."""
-        load_providers()
-        s = get_shim("xai")
-        assert s is not None
-        assert len(s.to_transforms) == 1
-        assert len(s.from_transforms) == 0
-        body = {"logit_bias": {"50256": -100}, "messages": []}
-        result = s.to_transforms[0](body)
-        assert "logit_bias" not in result
         assert "messages" in result
 
     def test_moonshot_has_transforms(self):
@@ -271,9 +238,6 @@ class TestLoadProviders:
             "minimax--anthropic": "anthropic",
             "moonshot": "openai_chat",
             "qwen": "openai_chat",
-            "volcengine--openai_chat": "openai_chat",
-            "volcengine--openai_responses": "openai_responses",
-            "xai": "openai_chat",
             "zhipu": "openai_chat",
         }
         for name, base in expected.items():
@@ -283,15 +247,10 @@ class TestLoadProviders:
                 f"{name}: expected base={base!r}, got {shim.base!r}"
             )
 
-    # Shims that intentionally have no public logo
-    _LOGO_EXEMPT = {"argo--anthropic", "argo--openai_chat"}
-
     def test_all_shims_have_logos(self):
-        """Every built-in shim (except exempted ones) should have a logo URL."""
+        """Every built-in shim should have a logo URL."""
         shims = load_providers()
         for shim in shims:
-            if shim.name in self._LOGO_EXEMPT:
-                continue
             assert shim.logo is not None, f"Shim {shim.name!r} missing logo"
             assert shim.logo.startswith("https://"), (
                 f"Shim {shim.name!r} logo should be an HTTPS URL"

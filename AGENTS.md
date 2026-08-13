@@ -48,7 +48,7 @@ declare the differences.
 |-----------|------|---------|
 | `ProviderShim` / `ModelShim` | `shims/provider_shim.py` | Data classes + registry |
 | `Transform` primitives | `shims/transforms.py` | `strip_fields`, `rename_field`, `set_defaults` |
-| Built-in shims | `shims/builtins.py` | OpenAI, Anthropic, Google, DeepSeek, Volcengine |
+| Built-in shims | `shims/providers/` | OpenAI, Anthropic, Google, DeepSeek, and others |
 
 ### Gateway
 
