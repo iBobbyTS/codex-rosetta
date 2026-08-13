@@ -133,7 +133,7 @@
   {/if}
 </div>
 
-<Modal open={modalOpen} labelledby="provider-modal-title" onclose={()=>modalOpen=false}>
+<Modal open={modalOpen} className="provider-modal" labelledby="provider-modal-title" onclose={()=>modalOpen=false}>
   {#snippet header()}<h3 id="provider-modal-title">{editingName?t('modal.editProvider'):t('modal.addProvider')}</h3>{/snippet}
   <div class="form-group"><label for="provName">{t('label.providerName')}</label><input id="provName" bind:value={name} placeholder={t('placeholder.providerName')} /></div>
   <div class="form-group"><label for="provProvider">{t('label.providerVendor')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" class:invert-in-dark={providerLogoNeedsDarkInversion(selectedVendor.logo_shim)} src={logoFor(selectedVendor)} alt="" />{/if}<Dropdown id="provProvider" value={vendorId} options={vendors().map((vendor)=>({value:vendor.id,label:t(vendor.label_key)}))} fitViewport={true} onChange={(value:DropdownValue)=>chooseVendor(String(value))} /></div><Dropdown ariaLabel={t('aria.providerVariant')} value={variantId} options={Object.keys(selectedVendor.variants).map((item)=>({value:item,label:t(`providerVariant.${item}`)}))} fitViewport={true} onChange={(value:DropdownValue)=>chooseVariant(String(value))} /></div></div>
@@ -147,7 +147,15 @@
   {#snippet actions()}<button class="btn" onclick={()=>modalOpen=false}>{t('btn.cancel')}</button><button class="btn btn-primary" disabled={busy} onclick={()=>void save()}>{t('btn.save')}</button>{/snippet}
 </Modal>
 
-<style>.provider-url-status{display:flex;align-items:center;gap:6px;margin:5px 0;padding:5px 7px;border-radius:var(--radius);font-size:11px}.provider-url-status.available{background:color-mix(in srgb,var(--green) 10%,transparent)}.provider-url-status.cooling{background:color-mix(in srgb,var(--orange) 12%,transparent)}.provider-url-status code{min-width:0;flex:1}.provider-key-actions{display:flex;gap:6px;margin-top:6px}</style>
+<style>
+  .provider-url-status{display:flex;align-items:center;gap:6px;margin:5px 0;padding:5px 7px;border-radius:var(--radius);font-size:11px}
+  .provider-url-status.available{background:color-mix(in srgb,var(--green) 10%,transparent)}
+  .provider-url-status.cooling{background:color-mix(in srgb,var(--orange) 12%,transparent)}
+  .provider-url-status code{min-width:0;flex:1}
+  .provider-key-actions{display:flex;gap:6px;margin-top:6px}
+  /* Dropdown menus must escape the form's scroll viewport. */
+  :global(.provider-modal), :global(.provider-modal .modal-body){overflow:visible}
+</style>
 
 <Modal open={deleteOpen} labelledby="delete-provider-title" onclose={()=>deleteOpen=false}>
   {#snippet header()}<h3 id="delete-provider-title">{t('confirm.deleteProviderTitle')}</h3>{/snippet}
