@@ -641,16 +641,21 @@ class HttpTransport:
                 continue
             try:
                 provider_info.mark_base_url_failed(observed)
+                advance_url = True
                 while True:
-                    next_url = provider_info.next_available_base_url(observed)
-                    if next_url is None:
-                        return UpstreamResponse(
-                            status_code=502,
-                            body=None,
-                            raw_content=_all_domains_502(len(provider_info.base_urls)),
-                        )
-                    await provider_info.select_base_url(next_url)
-                    observed = next_url
+                    if advance_url:
+                        next_url = provider_info.next_available_base_url(observed)
+                        if next_url is None:
+                            return UpstreamResponse(
+                                status_code=502,
+                                body=None,
+                                raw_content=_all_domains_502(
+                                    len(provider_info.base_urls)
+                                ),
+                            )
+                        await provider_info.select_base_url(next_url)
+                        observed = next_url
+                    advance_url = True
                     observed_credential = provider_info.current_credential_id
                     response = await self._send_request_once(
                         provider_info,
@@ -665,6 +670,7 @@ class HttpTransport:
                         )
                         if exhausted is not None:
                             return exhausted
+                        advance_url = False
                         continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
@@ -788,19 +794,22 @@ class HttpTransport:
                 continue
             try:
                 provider_info.mark_base_url_failed(observed)
+                advance_url = True
                 while True:
-                    next_url = provider_info.next_available_base_url(observed)
-                    if next_url is None:
-                        message = _all_domains_502(len(provider_info.base_urls))
-                        return HttpUpstreamStream(
-                            cast(Any, _ClosedSyntheticResponse(502)),
-                            error_text=message.decode(),
-                            response_closed=True,
-                            idle_timeout=self._stream_idle_timeout,
-                            close_timeout=self._close_timeout,
-                        )
-                    await provider_info.select_base_url(next_url)
-                    observed = next_url
+                    if advance_url:
+                        next_url = provider_info.next_available_base_url(observed)
+                        if next_url is None:
+                            message = _all_domains_502(len(provider_info.base_urls))
+                            return HttpUpstreamStream(
+                                cast(Any, _ClosedSyntheticResponse(502)),
+                                error_text=message.decode(),
+                                response_closed=True,
+                                idle_timeout=self._stream_idle_timeout,
+                                close_timeout=self._close_timeout,
+                            )
+                        await provider_info.select_base_url(next_url)
+                        observed = next_url
+                    advance_url = True
                     observed_credential = provider_info.current_credential_id
                     result, trigger = await self._send_streaming_once(
                         provider_info,
@@ -823,6 +832,7 @@ class HttpTransport:
                                 idle_timeout=self._stream_idle_timeout,
                                 close_timeout=self._close_timeout,
                             )
+                        advance_url = False
                         continue
                     if not trigger:
                         return result
@@ -1007,16 +1017,21 @@ class HttpTransport:
                 continue
             try:
                 provider_info.mark_base_url_failed(observed)
+                advance_url = True
                 while True:
-                    next_url = provider_info.next_available_base_url(observed)
-                    if next_url is None:
-                        return UpstreamResponse(
-                            status_code=502,
-                            body=None,
-                            raw_content=_all_domains_502(len(provider_info.base_urls)),
-                        )
-                    await provider_info.select_base_url(next_url)
-                    observed = next_url
+                    if advance_url:
+                        next_url = provider_info.next_available_base_url(observed)
+                        if next_url is None:
+                            return UpstreamResponse(
+                                status_code=502,
+                                body=None,
+                                raw_content=_all_domains_502(
+                                    len(provider_info.base_urls)
+                                ),
+                            )
+                        await provider_info.select_base_url(next_url)
+                        observed = next_url
+                    advance_url = True
                     observed_credential = provider_info.current_credential_id
                     response = await self._send_passthrough_once(
                         provider_info,
@@ -1031,6 +1046,7 @@ class HttpTransport:
                         )
                         if exhausted is not None:
                             return exhausted
+                        advance_url = False
                         continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content

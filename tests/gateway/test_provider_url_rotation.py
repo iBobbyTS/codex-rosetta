@@ -259,6 +259,99 @@ def test_nonstream_alternating_503_then_502_rotates_independent_rings(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize(
+    "failure_order", ["url-then-credential", "credential-then-url"]
+)
+def test_three_url_alternating_failures_preserve_independent_rings(
+    monkeypatch,
+    path_kind: str,
+    failure_order: str,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        third = "https://third.example/v1"
+        provider, url_writes = _provider(
+            "row-a",
+            first,
+            second,
+            third,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        first_url = f"{first}/{suffix}"
+        second_url = f"{second}/{suffix}"
+        success = (
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            )
+            if path_kind == "streaming"
+            else _json_response(200, {"ok": True})
+        )
+        if failure_order == "url-then-credential":
+            client.add(first_url, _json_response(502, {"error": "url"}))
+            client.add(
+                second_url,
+                _json_response(503, {"error": "credential"}),
+                success,
+            )
+            expected_calls = [first_url, second_url, second_url]
+            expected_headers = [
+                "Bearer key-first",
+                "Bearer key-first",
+                "Bearer key-second",
+            ]
+        else:
+            client.add(
+                first_url,
+                _json_response(503, {"error": "credential"}),
+                _json_response(502, {"error": "url"}),
+            )
+            client.add(second_url, success)
+            expected_calls = [first_url, first_url, second_url]
+            expected_headers = [
+                "Bearer key-first",
+                "Bearer key-second",
+                "Bearer key-second",
+            ]
+
+        transport = _transport(monkeypatch, client)
+        if path_kind == "request":
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+        elif path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+        else:
+            result = await transport.send_passthrough(
+                provider, first_url, {}, method="POST"
+            )
+
+        assert result.status_code == 200
+        assert client.calls == expected_calls
+        assert [headers["Authorization"] for headers in client.headers] == (
+            expected_headers
+        )
+        assert provider.base_url == second
+        assert provider.current_credential_id == "second"
+        assert url_writes == [("row-a", second)]
+        assert credential_writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("status", [400, 401, 429, 500, 504])
 def test_nonstream_non503_does_not_rotate_credential(monkeypatch, status: int) -> None:
     async def scenario() -> None:
