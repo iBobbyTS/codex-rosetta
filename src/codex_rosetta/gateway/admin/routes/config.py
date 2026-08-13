@@ -132,10 +132,9 @@ def _web_search_contract_for_admin(
             except ValueError:
                 continue
             credentials = provider_info.credential_values
-            if (
-                len(credentials) == 1
-                and type(credentials[0]) is str
-                and bool(credentials[0].strip())
+            if credentials and all(
+                type(credential) is str and bool(credential.strip())
+                for credential in credentials
             ):
                 deepseek_providers.append(str(name))
     return {

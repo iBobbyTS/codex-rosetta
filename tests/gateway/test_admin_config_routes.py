@@ -856,7 +856,10 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                 "api_type": "responses",
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
-                "api_keys": [{"id": "primary", "key": "eligible-secret"}],
+                "api_keys": [
+                    {"id": "primary", "key": "eligible-secret"},
+                    {"id": "fallback", "key": "eligible-fallback-secret"},
+                ],
                 "current_api_key": "primary",
             },
             "wrong-api": {
@@ -889,7 +892,12 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
     serialized = response.body.decode("utf-8")
     assert all(
         secret not in serialized
-        for secret in ("eligible-secret", "wrong-api-secret", "wrong-origin-secret")
+        for secret in (
+            "eligible-secret",
+            "eligible-fallback-secret",
+            "wrong-api-secret",
+            "wrong-origin-secret",
+        )
     )
     assert json.loads(serialized)["web_search_contract"]["deepseek_providers"] == [
         "eligible"
