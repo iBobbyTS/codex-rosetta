@@ -85,7 +85,7 @@
   async function openEdit(providerName: string, provider: Provider, clone = false): Promise<void> {
     editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; urls=[...(provider.base_urls??[])];if(!urls.length)urls=[''];currentUrl=firstUrl(provider); proxy=provider.proxy ?? '';
     apiType = allowedTypes().includes(provider.api_type ?? '') ? provider.api_type ?? '' : allowedTypes()[0] ?? '';
-    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true;credentials=(provider.api_keys??[]).map((item)=>({...item}));if(!credentials.length)credentials=[{id:'primary',key:''}];currentCredential=provider.current_api_key??credentials[0].id;keyVisible=false;deriveSelection();modalOpen=true;error='';
+    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true;credentials=(provider.api_keys??[]).map((item)=>({...item,key:clone?'':item.key}));if(!credentials.length)credentials=[{id:'primary',key:''}];currentCredential=provider.current_api_key??credentials[0].id;keyVisible=false;deriveSelection();modalOpen=true;error='';
   }
   async function load(signal?: AbortSignal): Promise<void> { try { config=await api.get<Config>('/admin/api/config',signal); error=''; } catch(cause){ if (!(cause instanceof DOMException && cause.name==='AbortError')) error=message(cause); } finally { loading=false; } }
   async function save(): Promise<void> {

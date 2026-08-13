@@ -245,6 +245,46 @@ describe('ProvidersPage', () => {
     expect(screen.getByLabelText('Late instruction cache compatibility')).not.toBeChecked();
   });
 
+  it('requires fresh credential secrets when cloning a provider', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai',
+          base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
+          current_base_url: 'https://backup.example/v1',
+          api_type: 'responses',
+          proxy: 'http://proxy.example:8080',
+          api_keys: [
+            { id: 'primary', key: 'prim***cret' },
+            { id: 'fallback', key: 'fall***cret' },
+          ],
+          current_api_key: 'fallback',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Clone' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    expect(dialog.getByLabelText('Provider Name')).toHaveValue('relay-copy');
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://relay.example/v1');
+    expect(dialog.getByLabelText('Base URL 2')).toHaveValue('https://backup.example/v1');
+    expect(dialog.getByLabelText(/^Proxy URL/)).toHaveValue('http://proxy.example:8080');
+    expect(dialog.getByLabelText('Credential ID primary')).toHaveValue('primary');
+    expect(dialog.getByLabelText('Credential ID fallback')).toHaveValue('fallback');
+    expect(dialog.getByLabelText('Credential key primary')).toHaveValue('');
+    expect(dialog.getByLabelText('Credential key fallback')).toHaveValue('');
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    expect(apiMock.put).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent('A provider credential is required when creating a provider.');
+  });
+
   it('shows forced prompt compaction only for Responses and preserves it when editing and cloning', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
