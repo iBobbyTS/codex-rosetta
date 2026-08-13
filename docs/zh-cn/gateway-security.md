@@ -43,9 +43,11 @@ codex-rosetta-gateway init
 codex-rosetta-gateway --host 127.0.0.1
 ```
 
-`init` 会在配置文件中生成高强度随机的 `server.admin_password` 和一条
-`server.api_keys` 记录。配置、锁和备份文件均以仅当前用户可读写的权限保存。
-向客户端分发前，请先把生成的凭证保存到密码管理器中。
+`init` 会将 `server.admin_password` 设置为默认密码 `columbina`，并生成一条随机的
+`server.api_keys` 记录。将网关暴露给受信任的本机之外的环境前，请先修改默认 Admin
+密码。配置、锁和备份文件均以仅当前用户可读写的权限保存。向客户端分发前，请先把凭证
+保存到密码管理器中。
+`init` 命令也会将默认 Admin 密码打印到终端。
 
 首次以配置文件启动 Gateway 时，还会在 `config.jsonc` 同目录创建仅当前用户可读写的
 `admin-session.key`。这个独立随机 secret 只用于派生浏览器 Admin token：普通 Gateway

@@ -53,10 +53,13 @@ codex-rosetta-gateway init
 codex-rosetta-gateway --host 127.0.0.1
 ```
 
-`init` generates a strong random `server.admin_password` and one
-`server.api_keys` entry in the config file. The config, lock, and backup files
+`init` sets `server.admin_password` to the default password `columbina` and
+generates one random `server.api_keys` entry in the config file. Change the
+default Admin password before exposing the gateway beyond a trusted local
+machine. The config, lock, and backup files
 are written with owner-only permissions. Store the generated credentials in a
-password manager before distributing them to clients.
+password manager before distributing them to clients. The `init` command also
+prints the default Admin password to the terminal.
 
 The first configured Gateway startup also creates `admin-session.key` beside
 `config.jsonc` with owner-only permissions. This independent random secret is

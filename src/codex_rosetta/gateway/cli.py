@@ -96,7 +96,7 @@ def _secure_server_template() -> dict[str, Any]:
         "local_mode": True,
         "local_mode_confirmed": False,
         "request_body_limit_mb": DEFAULT_REQUEST_BODY_LIMIT_MB,
-        "admin_password": secrets.token_urlsafe(32),
+        "admin_password": "columbina",
         "credential_visible": False,
         "api_keys": [
             {
@@ -195,8 +195,11 @@ def _create_initial_config(config_path: str) -> None:
     _write_jsonc(config_path, template)
     print(f"Created config at {config_path}")
     print(
-        "Generated a mandatory Admin password and gateway access key under "
-        "server. Store them securely."
+        "Default Admin password: columbina"
+    )
+    print(
+        "A gateway access key was generated under server. Store both credentials "
+        "securely and change the default Admin password before exposing the gateway."
     )
 
 

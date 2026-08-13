@@ -217,7 +217,7 @@ def test_discover_config_checks_config_jsonc_inside_default_directory(
     assert discover_config() == str(config_path)
 
 
-def test_init_uses_the_single_default_config_directory(tmp_path, monkeypatch) -> None:
+def test_init_uses_the_single_default_config_directory(tmp_path, monkeypatch, capsys) -> None:
     config_dir = tmp_path / "xdg"
     config_path = config_dir / "config.jsonc"
     monkeypatch.setattr("codex_rosetta.gateway.cli.DEFAULT_CONFIG_DIR", str(config_dir))
@@ -226,6 +226,7 @@ def test_init_uses_the_single_default_config_directory(tmp_path, monkeypatch) ->
 
     assert config_path.is_file()
     assert load_config(str(config_path))["tool_profiles"] == {}
+    assert "Default Admin password: columbina" in capsys.readouterr().out
 
 
 def _secure_server(**overrides) -> dict:
@@ -609,13 +610,14 @@ class TestGatewayAccessKeys:
         assert cfg.host == "127.0.0.1"
         assert cfg.credential_visible is False
 
-    def test_cli_scaffold_generates_unique_mandatory_credentials(self):
+    def test_cli_scaffold_uses_fixed_default_admin_password_and_unique_access_keys(self):
         first = _empty_config_template()
         second = _empty_config_template()
 
         first_config = GatewayConfig(first)
         second_config = GatewayConfig(second)
-        assert first_config.admin_password != second_config.admin_password
+        assert first_config.admin_password == "columbina"
+        assert second_config.admin_password == "columbina"
         assert first_config.api_keys[0]["key"] != second_config.api_keys[0]["key"]
         assert first_config.host == "127.0.0.1"
         assert first_config.credential_visible is False
