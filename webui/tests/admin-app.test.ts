@@ -39,6 +39,8 @@ describe('Admin application session', () => {
       : new Response(JSON.stringify({ providers: {}, model_groups: {} }), { status: 200 }));
     render(AdminApp);
     await screen.findByRole('navigation', { name: 'Admin pages' });
+    expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#0f1117');
+    expect(localStorage.getItem('codex-rosetta-theme')).toBe('dark');
     await selectDropdown(screen.getByLabelText('Theme'), 'Dark');
     expect(localStorage.getItem('codex-rosetta-theme')).toBe('dark');
     expect(document.documentElement.style.getPropertyValue('--bg')).toBe('#0f1117');

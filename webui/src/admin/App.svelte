@@ -20,7 +20,7 @@
   let busy = $state(false);
   let error = $state('');
   let restartRequired = $state(false);
-  let theme = $state(localStorage.getItem('codex-rosetta-theme') ?? 'light');
+  let theme = $state(localStorage.getItem('codex-rosetta-theme') ?? 'dark');
   let settingsOpen = $state(false);
   let configPath = $state('');
   let version = $state('');
