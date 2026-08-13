@@ -5,7 +5,7 @@ import time
 import traceback
 import weakref
 from collections.abc import Awaitable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -33,6 +33,7 @@ from codex_rosetta.gateway.search_provider_chain import (
     SearchProviderRequestFailoverReason,
 )
 from codex_rosetta.gateway.search_usage import TavilyUsage
+from codex_rosetta.gateway.transport.provider_info import ProviderInfo
 
 
 class Clock:
@@ -53,7 +54,7 @@ def _deepseek_candidate(row_id: str) -> DeepSeekNativeResponsesSearchProviderCan
     return DeepSeekNativeResponsesSearchProviderCandidate(
         row_id=row_id,
         deepseek_provider="official",
-        provider_info=object(),
+        provider_info=cast(ProviderInfo, object()),
         identity=f"identity-{row_id}",
     )
 

@@ -398,6 +398,7 @@ def test_missing_persistence_returns_exact_503_before_summary_call(
     )
 
     assert response.status_code == 503
+    assert isinstance(response, Response)
     assert "Codex Rosetta: SQLite is not available for prompt compaction" in (
         response.body.decode("utf-8")
     )

@@ -795,18 +795,20 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": "'api_keys' must be a list"}, status_code=400)
     merged_keys: list[dict[str, str]] = []
     for index, entry in enumerate(api_keys):
+        credential_id_value = entry.get("id") if isinstance(entry, dict) else None
+        key_value = entry.get("key") if isinstance(entry, dict) else None
         if (
             not isinstance(entry, dict)
-            or not isinstance(entry.get("id"), str)
-            or not entry["id"].strip()
-            or not isinstance(entry.get("key"), str)
+            or not isinstance(credential_id_value, str)
+            or not credential_id_value.strip()
+            or not isinstance(key_value, str)
         ):
             return JSONResponse(
                 {"error": f"'api_keys[{index}]' must contain string 'id' and 'key'"},
                 status_code=400,
             )
-        credential_id = entry["id"].strip()
-        key = entry["key"].strip()
+        credential_id = credential_id_value.strip()
+        key = key_value.strip()
         if "***" in key:
             saved_key = existing_keys.get(credential_id)
             if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:

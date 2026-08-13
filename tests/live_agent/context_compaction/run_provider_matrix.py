@@ -297,7 +297,8 @@ def _database_evidence(run_root: Path) -> dict[str, Any]:
     requests = []
     for request_id, model, status, provider, raw_profile in rows:
         profile = json.loads(raw_profile) if raw_profile else {}
-        usage = profile.get("usage") if isinstance(profile.get("usage"), dict) else {}
+        usage_value = profile.get("usage")
+        usage: dict[str, Any] = usage_value if isinstance(usage_value, dict) else {}
         requests.append(
             {
                 "request_id": request_id,

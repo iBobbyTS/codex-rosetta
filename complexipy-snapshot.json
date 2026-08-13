@@ -110,6 +110,68 @@
     ]
   },
   {
+    "path": "src/codex_rosetta/gateway/admin/routes/_shared.py",
+    "file_name": "_shared.py",
+    "functions": [
+      {
+        "name": "_handle_provider_rename",
+        "complexity": 31
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/admin/routes/config.py",
+    "file_name": "config.py",
+    "functions": [
+      {
+        "name": "_apply_canonical_web_search",
+        "complexity": 26
+      },
+      {
+        "name": "put_provider",
+        "complexity": 31
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/code_mode_projection.py",
+    "file_name": "code_mode_projection.py",
+    "functions": [
+      {
+        "name": "_build_standard_exec_script",
+        "complexity": 28
+      },
+      {
+        "name": "plan_exec_tool_definitions",
+        "complexity": 30
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/codex_auxiliary.py",
+    "file_name": "codex_auxiliary.py",
+    "functions": [
+      {
+        "name": "handle_codex_auxiliary",
+        "complexity": 54
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/codex_search.py",
+    "file_name": "codex_search.py",
+    "functions": [
+      {
+        "name": "_execute_search_queries",
+        "complexity": 44
+      },
+      {
+        "name": "execute_local_codex_search",
+        "complexity": 55
+      }
+    ]
+  },
+  {
     "path": "src/codex_rosetta/gateway/config.py",
     "file_name": "config.py",
     "functions": [
@@ -118,8 +180,32 @@
         "complexity": 26
       },
       {
+        "name": "_normalize_web_search_provider",
+        "complexity": 27
+      },
+      {
         "name": "write_config",
         "complexity": 27
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/deepseek_responses_search.py",
+    "file_name": "deepseek_responses_search.py",
+    "functions": [
+      {
+        "name": "_parse_output_items",
+        "complexity": 41
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/providers.py",
+    "file_name": "providers.py",
+    "functions": [
+      {
+        "name": "build_provider_info",
+        "complexity": 26
       }
     ]
   },
@@ -129,6 +215,10 @@
     "functions": [
       {
         "name": "ProviderMetadataStore::_put_many",
+        "complexity": 26
+      },
+      {
+        "name": "handle_streaming",
         "complexity": 26
       },
       {
@@ -142,6 +232,54 @@
       {
         "name": "_web_search_stream_event_generator",
         "complexity": 79
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/search_provider_chain.py",
+    "file_name": "search_provider_chain.py",
+    "functions": [
+      {
+        "name": "SearchProviderChainCoordinator::run",
+        "complexity": 47
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/search_provider_executor.py",
+    "file_name": "search_provider_executor.py",
+    "functions": [
+      {
+        "name": "_validate_candidate_execution_contract",
+        "complexity": 38
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/tool_adaptation.py",
+    "file_name": "tool_adaptation.py",
+    "functions": [
+      {
+        "name": "localize_code_editing_chat_request",
+        "complexity": 26
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/transport/http/transport.py",
+    "file_name": "transport.py",
+    "functions": [
+      {
+        "name": "HttpTransport::send_passthrough",
+        "complexity": 39
+      },
+      {
+        "name": "HttpTransport::send_request",
+        "complexity": 39
+      },
+      {
+        "name": "HttpTransport::send_streaming",
+        "complexity": 39
       }
     ]
   },

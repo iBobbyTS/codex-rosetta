@@ -109,13 +109,15 @@ async def test_usage_normalizes_finite_numbers_and_rejects_nonfinite(
         return payload
 
     usage = await state.get("numeric-key", fetcher=fetch)
+    account = payload["account"]
+    assert isinstance(account, dict)
 
     if any(
         isinstance(value, float)
         and value != value
         or isinstance(value, float)
         and value == float("inf")
-        for value in payload["account"].values()  # type: ignore[union-attr]
+        for value in account.values()
     ):
         assert usage.status == "unavailable"
     else:

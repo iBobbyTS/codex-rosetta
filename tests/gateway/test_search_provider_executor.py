@@ -4,7 +4,7 @@ import asyncio
 import socket
 import subprocess
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock
 
 import pytest
@@ -373,7 +373,7 @@ def test_deepseek_local_request_conflicts_are_terminal_before_effects(search_req
     with pytest.raises(SearchProviderTerminalError):
         run(
             SearchProviderExecutor(
-                deepseek_client_factory=lambda *args: factories.append(args)
+                deepseek_client_factory=cast(Any, lambda *args: factories.append(args))
             ).execute(deepseek_candidate(), search_request, request_budget=budget)
         )
 
@@ -390,7 +390,7 @@ def test_deepseek_contract_substitution_is_terminal_before_effects():
     with pytest.raises(SearchProviderTerminalError):
         run(
             SearchProviderExecutor(
-                deepseek_client_factory=lambda *args: factories.append(args)
+                deepseek_client_factory=cast(Any, lambda *args: factories.append(args))
             ).execute(
                 candidate,
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
@@ -431,7 +431,7 @@ def test_deepseek_invalid_candidate_state_is_terminal_before_effects(provider_in
     with pytest.raises(SearchProviderTerminalError):
         run(
             SearchProviderExecutor(
-                deepseek_client_factory=lambda *args: factories.append(args)
+                deepseek_client_factory=cast(Any, lambda *args: factories.append(args))
             ).execute(
                 candidate,
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
@@ -459,7 +459,7 @@ def test_deepseek_exhausted_budget_does_not_enter_client_or_retry():
     run(budget.run_external_call(consume))
     with pytest.raises(SearchProviderBudgetExceeded):
         run(
-            SearchProviderExecutor(deepseek_client_factory=factory).execute(
+            SearchProviderExecutor(deepseek_client_factory=cast(Any, factory)).execute(
                 deepseek_candidate(),
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
                 request_budget=budget,
@@ -479,7 +479,9 @@ def test_deepseek_invalid_normalized_mapping_is_attempt_failure():
 
     with pytest.raises(SearchProviderAttemptError) as caught:
         run(
-            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+            SearchProviderExecutor(
+                deepseek_client_factory=cast(Any, lambda *_: client)
+            ).execute(
                 deepseek_candidate(),
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
                 request_budget=budget,
@@ -499,7 +501,9 @@ def test_deepseek_factory_signal_and_unknown_client_error_propagate_unchanged():
 
     with pytest.raises(KeyboardInterrupt) as caught:
         run(
-            SearchProviderExecutor(deepseek_client_factory=failed_factory).execute(
+            SearchProviderExecutor(
+                deepseek_client_factory=cast(Any, failed_factory)
+            ).execute(
                 deepseek_candidate(),
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
             )
@@ -510,7 +514,9 @@ def test_deepseek_factory_signal_and_unknown_client_error_propagate_unchanged():
     client = FakeDeepSeekClient(client_error)
     with pytest.raises(RuntimeError) as caught:
         run(
-            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+            SearchProviderExecutor(
+                deepseek_client_factory=cast(Any, lambda *_: client)
+            ).execute(
                 deepseek_candidate(),
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
             )
@@ -618,7 +624,7 @@ def test_deepseek_adapter_error_mapping(category, status, expected, quota):
         ):
             run(
                 SearchProviderExecutor(
-                    deepseek_client_factory=lambda *_: client
+                    deepseek_client_factory=cast(Any, lambda *_: client)
                 ).execute(
                     deepseek_candidate(),
                     SearchRequest.from_body({}, [("q", WebSearchSettings())]),
@@ -629,7 +635,7 @@ def test_deepseek_adapter_error_mapping(category, status, expected, quota):
         with pytest.raises(SearchProviderAttemptError) as caught:
             run(
                 SearchProviderExecutor(
-                    deepseek_client_factory=lambda *_: client
+                    deepseek_client_factory=cast(Any, lambda *_: client)
                 ).execute(
                     deepseek_candidate(),
                     SearchRequest.from_body({}, [("q", WebSearchSettings())]),
@@ -655,7 +661,9 @@ def test_deepseek_control_signals_propagate_identity_without_retry(signal):
     client = FakeDeepSeekClient(signal)
     with pytest.raises(type(signal)) as caught:
         run(
-            SearchProviderExecutor(deepseek_client_factory=lambda *_: client).execute(
+            SearchProviderExecutor(
+                deepseek_client_factory=cast(Any, lambda *_: client)
+            ).execute(
                 deepseek_candidate(),
                 SearchRequest.from_body({}, [("q", WebSearchSettings())]),
             )

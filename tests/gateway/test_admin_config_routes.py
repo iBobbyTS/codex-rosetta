@@ -1505,7 +1505,8 @@ def test_manual_credential_selection_uses_runtime_owner_and_preserves_url_state(
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     app = create_app(GatewayConfig(data), config_path=str(config_path))
-    provider = app.gateway_config.providers["openai"]
+    runtime_app = cast(Any, app)
+    provider = runtime_app.gateway_config.providers["openai"]
     provider.mark_credential_failed("second")
     original_provider = provider
     original_url = provider.base_url
@@ -1519,7 +1520,7 @@ def test_manual_credential_selection_uses_runtime_owner_and_preserves_url_state(
         response = _run(select_provider_base_url(request))
 
         assert response.status_code == 200
-        assert app.gateway_config.providers["openai"] is original_provider
+        assert runtime_app.gateway_config.providers["openai"] is original_provider
         assert provider.current_credential_id == "second"
         assert provider.credential_statuses() == (
             ("first", "available"),
@@ -1547,6 +1548,7 @@ def test_provider_current_selector_requires_exactly_one_string_field(
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     app = create_app(GatewayConfig(data), config_path=str(config_path))
+    runtime_app = cast(Any, app)
     request = SimpleNamespace(
         app=app, path_params={"name": "openai"}, json=lambda: body
     )
@@ -1554,7 +1556,10 @@ def test_provider_current_selector_requires_exactly_one_string_field(
     try:
         response = _run(select_provider_base_url(request))
         assert response.status_code == 400
-        assert app.gateway_config.providers["openai"].current_credential_id == "primary"
+        assert (
+            runtime_app.gateway_config.providers["openai"].current_credential_id
+            == "primary"
+        )
     finally:
         cast(Any, app).persistence.close()
 

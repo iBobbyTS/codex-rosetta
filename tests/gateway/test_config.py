@@ -29,6 +29,9 @@ from codex_rosetta.gateway.config import (
     load_config,
     resolve_codex_home,
 )
+from codex_rosetta.gateway.search_provider_candidates import (
+    DeepSeekNativeResponsesSearchProviderCandidate,
+)
 from codex_rosetta.gateway.web_run_capabilities import (
     WEB_RUN_BASIC_SEARCH_CAPABILITY,
     WEB_RUN_SIDECAR_CAPABILITY,
@@ -780,7 +783,9 @@ class TestWebSearchConfig:
                 }
             ]
         }
-        assert config.web_search_candidates[0].model == "deepseek-v4-flash"
+        candidate = config.web_search_candidates[0]
+        assert isinstance(candidate, DeepSeekNativeResponsesSearchProviderCandidate)
+        assert candidate.model == "deepseek-v4-flash"
 
     @pytest.mark.parametrize(
         "provider",
