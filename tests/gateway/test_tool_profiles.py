@@ -471,7 +471,8 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -567,7 +568,8 @@ def test_gateway_config_rejects_unknown_group_profile():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -597,7 +599,8 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -630,7 +633,8 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -662,7 +666,8 @@ def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type)
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -700,7 +705,8 @@ def test_gateway_config_uses_no_default_profile_for_anthropic_and_google(api_typ
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -730,7 +736,8 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -778,7 +785,8 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -1221,7 +1229,8 @@ def test_later_external_candidate_projects_search_on_all_shared_surfaces(
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",

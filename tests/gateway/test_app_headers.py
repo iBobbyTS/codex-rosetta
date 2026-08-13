@@ -30,7 +30,8 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
         "providers": {
             "test-provider": {
                 "provider": "custom",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",
                 "api_type": "chat",

@@ -36,6 +36,7 @@ from codex_rosetta.gateway.transport._base import (
     UpstreamResponseContractError,
     UpstreamResponseTooLargeError,
 )
+from codex_rosetta.gateway.transport.provider_info import ProviderInfo, openai_auth
 from codex_rosetta.gateway.codex_search_references import (
     CodexSearchReferenceScope,
     CodexSearchReferenceStore,
@@ -152,9 +153,9 @@ class _FakeSelfHostedGoogleClient(_FakeBrowserClient):
 
 class _FakeDeepSeekClient:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.calls: list[tuple[object, dict[str, Any]]] = []
 
-    async def execute(self, query: str, **kwargs: Any) -> DeepSeekSearchResult:
+    async def execute(self, query: object, **kwargs: Any) -> DeepSeekSearchResult:
         self.calls.append((query, kwargs))
         return DeepSeekSearchResult(
             output="DeepSeek answer",
@@ -170,16 +171,13 @@ class _FakeDeepSeekClient:
 
 
 def _deepseek_candidate() -> DeepSeekNativeResponsesSearchProviderCandidate:
-    provider_info = type(
-        "ProviderInfoStub",
-        (),
-        {
-            "name": "deepseek",
-            "base_url": "https://api.deepseek.com",
-            "credential_values": ("deepseek-secret",),
-            "proxy_url": None,
-        },
-    )()
+    provider_info = ProviderInfo(
+        "deepseek",
+        api_keys=(("primary", "deepseek-secret"),),
+        base_url="https://api.deepseek.com",
+        auth_header_fn=openai_auth,
+        url_template="{base_url}/responses",
+    )
     return DeepSeekNativeResponsesSearchProviderCandidate(
         row_id="deepseek-row",
         deepseek_provider="official-deepseek",
@@ -191,7 +189,14 @@ def _deepseek_candidate() -> DeepSeekNativeResponsesSearchProviderCandidate:
 def test_deepseek_chain_publishes_answer_references_attribution_and_cache():
     candidate = _deepseek_candidate()
     client = _FakeDeepSeekClient()
-    executor = SearchProviderExecutor(deepseek_client_factory=lambda *_: client)
+
+    def client_factory(
+        credential: str, origin: str, proxy_url: str | None
+    ) -> _FakeDeepSeekClient:
+        del credential, origin, proxy_url
+        return client
+
+    executor = SearchProviderExecutor(deepseek_client_factory=client_factory)
     coordinator = SearchProviderChainCoordinator()
     store = CodexSearchReferenceStore()
     query = "private-query-marker"

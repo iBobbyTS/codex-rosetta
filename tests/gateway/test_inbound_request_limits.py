@@ -22,7 +22,8 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
             "providers": {
                 "test-provider": {
                     "provider": "custom",
-                    "api_key": "sk-upstream-test",
+                    "api_keys": [{"id": "primary", "key": "sk-upstream-test"}],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
                     "api_type": "chat",

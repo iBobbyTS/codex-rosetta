@@ -57,14 +57,16 @@ def _config() -> GatewayConfig:
                     "api_type": "responses",
                     "base_urls": ["https://model.example/v1"],
                     "current_base_url": "https://model.example/v1",
-                    "api_key": "model-key",
+                    "api_keys": [{"id": "primary", "key": "model-key"}],
+                    "current_api_key": "primary",
                 },
                 "search-provider": {
                     "provider": "openai",
                     "api_type": "responses",
                     "base_urls": ["https://search.example/v1"],
                     "current_base_url": "https://search.example/v1",
-                    "api_key": "search-key",
+                    "api_keys": [{"id": "primary", "key": "search-key"}],
+                    "current_api_key": "primary",
                 },
             },
             "model_groups": {

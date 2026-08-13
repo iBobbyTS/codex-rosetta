@@ -19,6 +19,7 @@ def _request(
     *,
     allow_redirects: bool = False,
     api_key: str = "sk-test",
+    additional_api_keys: tuple[str, ...] = (),
     api_type: str = "chat",
 ) -> SimpleNamespace:
     config = GatewayConfig(
@@ -26,7 +27,14 @@ def _request(
             "providers": {
                 "test-provider": {
                     "provider": "custom",
-                    "api_key": api_key,
+                    "api_keys": [
+                        {"id": "primary", "key": api_key},
+                        *(
+                            {"id": f"additional-{index}", "key": key}
+                            for index, key in enumerate(additional_api_keys, start=1)
+                        ),
+                    ],
+                    "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
                     "api_type": api_type,
@@ -118,13 +126,13 @@ def test_model_discovery_preserves_non_json_error() -> None:
 
 
 @pytest.mark.parametrize("outcome", ["success", "connection_error"])
-def test_model_discovery_uses_first_legacy_key_and_blocks_discarded_key(
+def test_model_discovery_uses_current_key_and_blocks_additional_key(
     caplog: pytest.LogCaptureFixture,
     outcome: str,
 ) -> None:
     first_key = "admin-model-first-secret"
     wire_key = "admin-model-wire-secret"
-    request = _request(api_key=f" {first_key}, , {wire_key} ")
+    request = _request(api_key=first_key, additional_api_keys=(wire_key,))
     pinfo = request.app.gateway_config.providers["test-provider"]
     assert pinfo.auth_headers()["Authorization"] == f"Bearer {first_key}"
     if outcome == "connection_error":
