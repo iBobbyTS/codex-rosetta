@@ -283,6 +283,27 @@ describe('ProvidersPage', () => {
 
     expect(apiMock.put).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toHaveTextContent('A provider credential is required when creating a provider.');
+
+    await fireEvent.input(dialog.getByLabelText('Credential key primary'), { target: { value: 'fresh-primary-secret' } });
+    await fireEvent.input(dialog.getByLabelText('Credential key fallback'), { target: { value: 'fresh-fallback-secret' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    const expectedBody = {
+      provider: 'openai',
+      api_type: 'responses',
+      base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
+      current_base_url: 'https://backup.example/v1',
+      api_keys: [
+        { id: 'primary', key: 'fresh-primary-secret' },
+        { id: 'fallback', key: 'fresh-fallback-secret' },
+      ],
+      current_api_key: 'fallback',
+      proxy: 'http://proxy.example:8080',
+      allow_redirects: false,
+      force_rosetta_compaction: false,
+    };
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay-copy', expectedBody));
+    expect(JSON.stringify(apiMock.put.mock.calls[0][1])).not.toContain('***');
   });
 
   it('shows forced prompt compaction only for Responses and preserves it when editing and cloning', async () => {
