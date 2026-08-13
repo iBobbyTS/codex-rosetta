@@ -27,7 +27,6 @@ from codex_rosetta.gateway.admin.routes.config import (
 from codex_rosetta.gateway.admin.routes.network_search import (
     get_network_search_status,
 )
-from codex_rosetta.gateway.admin.routes.observability import get_provider_key
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.auth import AuthState
 from codex_rosetta.gateway.config import (
@@ -63,7 +62,8 @@ def _config_data() -> dict[str, Any]:
                 "api_type": "chat",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
-                "api_key": "sk-test",
+                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "current_api_key": "primary",
             }
         },
         "model_groups": {
@@ -255,7 +255,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     updated_data["server"]["api_keys"][0]["key"] = "rotated-gateway-token"
     updated_data["server"]["proxy"] = "http://user:ordinary-proxy-password@example.test"
     updated_data["server"]["request_body_limit_mb"] = 512
-    updated_data["providers"]["openai"]["api_key"] = "rotated-provider-token"
+    updated_data["providers"]["openai"]["api_keys"][0]["key"] = "rotated-provider-token"
     updated_data["providers"]["openai"]["client_secret"] = "ordinary-client-secret"
     config_path.write_text(json.dumps(updated_data), encoding="utf-8")
 
@@ -269,6 +269,7 @@ def test_reload_config_rotates_runtime_admin_credentials(tmp_path):
     assert health_invalidations == [True]
     assert persistence._redactor == {
         "internal-token",
+        "primary",
         "rotated-gateway-token",
         "rotated-provider-token",
     }
@@ -303,20 +304,23 @@ def _assert_exact_tokens(
             assert redactor.redact(token) == token
 
 
-def test_startup_registers_every_legacy_provider_key_in_all_runtime_redactors(
+def test_startup_registers_every_provider_key_in_all_runtime_redactors(
     tmp_path,
 ) -> None:
     data = _config_data()
-    raw_keys = " first-startup , , startup-prefix,startup-prefix-long,first-startup "
-    data["providers"]["openai"]["api_key"] = raw_keys
+    raw_keys = ("first-startup", "startup-prefix", "startup-prefix-long")
+    data["providers"]["openai"]["api_keys"] = [
+        {"id": f"key-{index}", "key": key} for index, key in enumerate(raw_keys)
+    ]
+    data["providers"]["openai"]["current_api_key"] = "key-0"
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     config = GatewayConfig(data)
     app = cast(Any, create_app(config, config_path=str(config_path)))
 
     try:
-        assert config.providers["openai"].credential_values == ("first-startup",)
-        assert raw_keys in config.token_values
+        assert config.providers["openai"].credential_values == raw_keys
+        assert set(raw_keys).issubset(config.token_values)
         _assert_exact_tokens(
             _runtime_redactors(app),
             hidden=("first-startup", "startup-prefix", "startup-prefix-long"),
@@ -331,16 +335,20 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
     old_tokens = ("old-first", "old-prefix", "old-prefix-long")
     new_tokens = ("new-first", "new-prefix", "new-prefix-long")
     initial_data = _config_data()
-    initial_data["providers"]["openai"]["api_key"] = ",".join(old_tokens)
+    initial_data["providers"]["openai"]["api_keys"] = [
+        {"id": f"key-{index}", "key": key} for index, key in enumerate(old_tokens)
+    ]
+    initial_data["providers"]["openai"]["current_api_key"] = "key-0"
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(initial_data), encoding="utf-8")
     initial_config = GatewayConfig(initial_data)
     app = cast(Any, create_app(initial_config, config_path=str(config_path)))
 
     candidate = _config_data()
-    candidate["providers"]["openai"]["api_key"] = (
-        " new-first, ,new-prefix,new-prefix-long,new-first "
-    )
+    candidate["providers"]["openai"]["api_keys"] = [
+        {"id": f"key-{index}", "key": key} for index, key in enumerate(new_tokens)
+    ]
+    candidate["providers"]["openai"]["current_api_key"] = "key-0"
     new_config = GatewayConfig(candidate)
 
     try:
@@ -357,9 +365,7 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
         )
 
         assert app.gateway_config is new_config
-        assert app.gateway_config.providers["openai"].credential_values == (
-            "new-first",
-        )
+        assert app.gateway_config.providers["openai"].credential_values == new_tokens
         _assert_exact_tokens(
             _runtime_redactors(app), hidden=new_tokens, visible=old_tokens
         )
@@ -367,9 +373,7 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
         _shared._rollback_gateway_activation(SimpleNamespace(app=app), rollback)
 
         assert app.gateway_config is initial_config
-        assert app.gateway_config.providers["openai"].credential_values == (
-            "old-first",
-        )
+        assert app.gateway_config.providers["openai"].credential_values == old_tokens
         _assert_exact_tokens(
             _runtime_redactors(app), hidden=old_tokens, visible=new_tokens
         )
@@ -714,7 +718,8 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
         "api_type": "responses",
         "base_urls": ["https://search.example.com/v1"],
         "current_base_url": "https://search.example.com/v1",
-        "api_key": "search-provider-key",
+        "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+        "current_api_key": "primary",
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -851,21 +856,24 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                 "api_type": "responses",
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
-                "api_key": "eligible-secret",
+                "api_keys": [{"id": "primary", "key": "eligible-secret"}],
+                "current_api_key": "primary",
             },
             "wrong-api": {
                 "provider": "deepseek",
                 "api_type": "chat",
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
-                "api_key": "wrong-api-secret",
+                "api_keys": [{"id": "primary", "key": "wrong-api-secret"}],
+                "current_api_key": "primary",
             },
             "wrong-origin": {
                 "provider": "deepseek",
                 "api_type": "responses",
                 "base_urls": ["https://relay.example/v1"],
                 "current_base_url": "https://relay.example/v1",
-                "api_key": "wrong-origin-secret",
+                "api_keys": [{"id": "primary", "key": "wrong-origin-secret"}],
+                "current_api_key": "primary",
             },
         }
     )
@@ -949,7 +957,8 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
         "api_type": "responses",
         "base_urls": ["https://search.example.test/v1"],
         "current_base_url": "https://search.example.test/v1",
-        "api_key": "search-provider-key",
+        "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+        "current_api_key": "primary",
     }
     config["server"]["web_search"] = {"providers": rows}
     config_path = tmp_path / "config.jsonc"
@@ -1054,7 +1063,8 @@ def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
         "api_type": "responses",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_key": "deepseek-secret",
+        "api_keys": [{"id": "primary", "key": "deepseek-secret"}],
+        "current_api_key": "primary",
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -1342,7 +1352,8 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
             "https://api.deepseek.example/v1",
         ],
         "current_base_url": "https://api.deepseek.example/v1",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "allow_redirects": True,
         "soft_interrupt": False,
     }
@@ -1352,7 +1363,8 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["DeepSeek"] == {
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "base_urls": [
             "https://api.deepseek.com",
             "https://api.deepseek.example/v1",
@@ -1473,11 +1485,79 @@ def test_manual_base_url_selection_rejects_non_member_without_write(tmp_path):
         cast(Any, app).persistence.close()
 
 
-def test_get_config_canonicalizes_legacy_provider_mask_without_writing(tmp_path):
+def test_manual_credential_selection_uses_runtime_owner_and_preserves_url_state(
+    tmp_path,
+) -> None:
     data = _config_data()
-    data["providers"]["openai"]["api_key"] = (
-        " first-provider-secret, discarded-provider-secret "
+    data["providers"]["openai"]["api_keys"] = [
+        {"id": "first", "key": "first-secret"},
+        {"id": "second", "key": "second-secret"},
+    ]
+    data["providers"]["openai"]["current_api_key"] = "first"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    app = create_app(GatewayConfig(data), config_path=str(config_path))
+    provider = app.gateway_config.providers["openai"]
+    provider.mark_credential_failed("second")
+    original_provider = provider
+    original_url = provider.base_url
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "openai"},
+        json=lambda: {"credential_id": "second"},
     )
+
+    try:
+        response = _run(select_provider_base_url(request))
+
+        assert response.status_code == 200
+        assert app.gateway_config.providers["openai"] is original_provider
+        assert provider.current_credential_id == "second"
+        assert provider.credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
+        assert provider.base_url == original_url
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert saved["providers"]["openai"]["current_api_key"] == "second"
+    finally:
+        cast(Any, app).persistence.close()
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {},
+        {"current_base_url": "https://api.example.com", "credential_id": "primary"},
+        {"credential_id": 1},
+    ],
+)
+def test_provider_current_selector_requires_exactly_one_string_field(
+    tmp_path, body
+) -> None:
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    app = create_app(GatewayConfig(data), config_path=str(config_path))
+    request = SimpleNamespace(
+        app=app, path_params={"name": "openai"}, json=lambda: body
+    )
+
+    try:
+        response = _run(select_provider_base_url(request))
+        assert response.status_code == 400
+        assert app.gateway_config.providers["openai"].current_credential_id == "primary"
+    finally:
+        cast(Any, app).persistence.close()
+
+
+def test_get_config_masks_canonical_provider_credentials_without_writing(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["api_keys"] = [
+        {"id": "first", "key": "first-provider-secret"},
+        {"id": "second", "key": "discarded-provider-secret"},
+    ]
+    data["providers"]["openai"]["current_api_key"] = "second"
     config_path = tmp_path / "config.jsonc"
     original = json.dumps(data, indent=2).encode()
     config_path.write_bytes(original)
@@ -1494,38 +1574,22 @@ def test_get_config_canonicalizes_legacy_provider_mask_without_writing(tmp_path)
 
     assert response.status_code == 200
     body = json.loads(response.body)
-    assert body["providers"]["openai"]["api_key"] == "firs***cret"
-    assert config._raw_providers["openai"]["api_key"] == "first-provider-secret"
+    assert body["providers"]["openai"]["api_keys"] == [
+        {"id": "first", "key": "firs***cret"},
+        {"id": "second", "key": "disc***cret"},
+    ]
+    assert body["providers"]["openai"]["current_api_key"] == "second"
     assert "discarded-provider-secret" in config.token_values
     assert config_path.read_bytes() == original
 
 
-def test_get_provider_key_returns_first_legacy_credential_without_writing(tmp_path):
+def test_put_provider_preserves_matching_masks(tmp_path):
     data = _config_data()
-    data["providers"]["openai"]["api_key"] = " first-secret, discarded-secret "
-    data["server"]["credential_visible"] = True
-    config_path = tmp_path / "config.jsonc"
-    original = json.dumps(data, indent=2).encode()
-    config_path.write_bytes(original)
-    request = SimpleNamespace(
-        app=SimpleNamespace(
-            config_path=str(config_path), gateway_config=GatewayConfig(data)
-        ),
-        path_params={"name": "openai"},
-    )
-
-    response = _run(get_provider_key(request))
-
-    assert json.loads(response.body) == {"api_key": "first-secret"}
-    assert config_path.read_bytes() == original
-
-
-@pytest.mark.parametrize("submitted_key", [None, "", "firs***cret"])
-def test_put_provider_without_new_key_converges_existing_legacy_csv(
-    tmp_path, submitted_key
-):
-    data = _config_data()
-    data["providers"]["openai"]["api_key"] = " first-secret, discarded-secret "
+    data["providers"]["openai"]["api_keys"] = [
+        {"id": "first", "key": "first-secret-value"},
+        {"id": "second", "key": "second-secret-value"},
+    ]
+    data["providers"]["openai"]["current_api_key"] = "second"
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     initial_config = GatewayConfig(data)
@@ -1534,9 +1598,12 @@ def test_put_provider_without_new_key_converges_existing_legacy_csv(
         "api_type": "chat",
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
+        "api_keys": [
+            {"id": "second", "key": "seco***alue"},
+            {"id": "first", "key": "firs***alue"},
+        ],
+        "current_api_key": "second",
     }
-    if submitted_key is not None:
-        body["api_key"] = submitted_key
     request = SimpleNamespace(
         app=SimpleNamespace(
             config_path=str(config_path),
@@ -1551,14 +1618,13 @@ def test_put_provider_without_new_key_converges_existing_legacy_csv(
     response = _run(put_provider(request))
 
     assert response.status_code == 200
-    assert json.loads(config_path.read_text())["providers"]["openai"]["api_key"] == (
-        "first-secret"
-    )
+    assert json.loads(config_path.read_text())["providers"]["openai"]["api_keys"] == [
+        {"id": "second", "key": "second-secret-value"},
+        {"id": "first", "key": "first-secret-value"},
+    ]
 
 
-def test_put_provider_normalizes_submitted_csv_and_rejects_empty_csv_without_write(
-    tmp_path,
-):
+def test_put_provider_rejects_empty_credential_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
@@ -1577,15 +1643,16 @@ def test_put_provider_normalizes_submitted_csv_and_rejects_empty_csv_without_wri
         "api_type": "chat",
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
-        "api_key": " first-new, discarded-new ",
+        "api_keys": [{"id": "new", "key": "first-new"}],
+        "current_api_key": "new",
     }
 
     response = _run(put_provider(request))
 
     assert response.status_code == 200
-    assert json.loads(config_path.read_text())["providers"]["openai"]["api_key"] == (
-        "first-new"
-    )
+    assert json.loads(config_path.read_text())["providers"]["openai"]["api_keys"] == [
+        {"id": "new", "key": "first-new"}
+    ]
 
     persisted = config_path.read_bytes()
     request.json = lambda: {
@@ -1593,7 +1660,8 @@ def test_put_provider_normalizes_submitted_csv_and_rejects_empty_csv_without_wri
         "api_type": "chat",
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
-        "api_key": " , , ",
+        "api_keys": [{"id": "new", "key": ""}],
+        "current_api_key": "new",
     }
     response = _run(put_provider(request))
 
@@ -1618,7 +1686,8 @@ def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):
         "api_type": "anthropic",
         "base_urls": ["https://api.deepseek.com/anthropic"],
         "current_base_url": "https://api.deepseek.com/anthropic",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "soft_interrupt": True,
     }
 
@@ -1646,7 +1715,8 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
         "api_type": "responses",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "force_rosetta_compaction": True,
     }
 
@@ -1662,7 +1732,8 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
         "api_type": "responses",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "force_rosetta_compaction": False,
     }
     response = _run(put_provider(request))
@@ -1690,7 +1761,8 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
         "force_rosetta_compaction": True,
     }
 
@@ -1704,7 +1776,8 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
 def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
     config = _config_data()
     config["providers"]["zulu"] = {
-        "api_key": "sk-zulu",
+        "api_keys": [{"id": "primary", "key": "sk-zulu"}],
+        "current_api_key": "primary",
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -1726,7 +1799,8 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
             "api_type": "chat",
             "base_urls": ["https://alpha.example.test"],
             "current_base_url": "https://alpha.example.test",
-            "api_key": "sk-alpha",
+            "api_keys": [{"id": "primary", "key": "sk-alpha"}],
+            "current_api_key": "primary",
         },
     )
 
@@ -1741,7 +1815,8 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
 def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
     config = _config_data()
     config["providers"]["Zulu"] = {
-        "api_key": "sk-zulu",
+        "api_keys": [{"id": "primary", "key": "sk-zulu"}],
+        "current_api_key": "primary",
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -1779,7 +1854,8 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
 def test_put_provider_rename_updates_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["search"] = {
-        "api_key": "search-key",
+        "api_keys": [{"id": "primary", "key": "search-key"}],
+        "current_api_key": "primary",
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -1822,7 +1898,8 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
 def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["official-deepseek"] = {
-        "api_key": "deepseek-key",
+        "api_keys": [{"id": "primary", "key": "deepseek-key"}],
+        "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -1867,7 +1944,8 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
 def test_delete_provider_rejects_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["search"] = {
-        "api_key": "search-key",
+        "api_keys": [{"id": "primary", "key": "search-key"}],
+        "current_api_key": "primary",
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -1898,7 +1976,8 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
 def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["official-deepseek"] = {
-        "api_key": "deepseek-key",
+        "api_keys": [{"id": "primary", "key": "deepseek-key"}],
+        "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -1941,7 +2020,8 @@ def test_put_provider_rejects_missing_persisted_provider(tmp_path):
             "api_type": "chat",
             "base_urls": ["https://api.example.test"],
             "current_base_url": "https://api.example.test",
-            "api_key": "sk-new",
+            "api_keys": [{"id": "primary", "key": "sk-new"}],
+            "current_api_key": "primary",
         },
     )
 
@@ -1970,7 +2050,8 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
         "api_type": "responses",
         "base_urls": ["https://qwen.example.test/v1"],
         "current_base_url": "https://qwen.example.test/v1",
-        "api_key": "sk-new",
+        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "current_api_key": "primary",
     }
 
     response = _run(put_provider(request))
@@ -1986,7 +2067,8 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     """Editing a new-style provider with a masked key keeps the old secret."""
     config = _config_data()
     config["providers"]["DeepSeek"] = {
-        "api_key": "sk-1234567890",
+        "api_keys": [{"id": "primary", "key": "sk-1234567890"}],
+        "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2013,14 +2095,17 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_key": "sk-1***7890",
+        "api_keys": [{"id": "primary", "key": "sk-1***7890"}],
+        "current_api_key": "primary",
     }
 
     response = _run(put_provider(request))
 
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["DeepSeek"]["api_key"] == "sk-1234567890"
+    assert saved["providers"]["DeepSeek"]["api_keys"] == [
+        {"id": "primary", "key": "sk-1234567890"}
+    ]
     assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
     assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
     assert "type" not in saved["providers"]["DeepSeek"]
@@ -2263,7 +2348,8 @@ def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://opencode.ai/zen/go/v1"],
         "current_base_url": "https://opencode.ai/zen/go/v1",
-        "api_key": "test-opencode-key",
+        "api_keys": [{"id": "primary", "key": "test-opencode-key"}],
+        "current_api_key": "primary",
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")

@@ -38,7 +38,6 @@ from ...model_profiles import (
     resolve_model_profile,
 )
 from ...provider_profiles import provider_catalog_for_admin, resolve_soft_interrupt
-from ...providers import normalize_provider_api_key
 from ...search_provider_contract import (
     SearchProviderCapability,
     contract_for_wire_provider,
@@ -616,10 +615,11 @@ async def get_config(request: Any) -> Response:
     provider_errors: dict[str, str] = {}
     for name, cfg in providers.items():
         masked = dict(cfg)
-        if "api_key" in masked:
-            masked["api_key"] = _mask_api_key(
-                normalize_provider_api_key(masked["api_key"])
-            )
+        if "api_keys" in masked:
+            masked["api_keys"] = [
+                {"id": entry["id"], "key": _mask_api_key(entry["key"])}
+                for entry in masked["api_keys"]
+            ]
         masked.pop("shim", None)
         masked.pop("type", None)
         masked.pop("validation_error", None)
@@ -658,6 +658,15 @@ async def get_config(request: Any) -> Response:
                         "status": status,
                     }
                     for base_url, status in runtime_provider.base_url_statuses()
+                ]
+                masked["credential_statuses"] = [
+                    {
+                        "id": credential_id,
+                        "current": credential_id
+                        == runtime_provider.current_credential_id,
+                        "status": status,
+                    }
+                    for credential_id, status in runtime_provider.credential_statuses()
                 ]
         masked_providers[name] = masked
 
@@ -759,9 +768,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     if isinstance(body, Response):
         return body
 
-    api_key = body.get("api_key", "")
-    if not isinstance(api_key, str):
-        return JSONResponse({"error": "'api_key' must be a string"}, status_code=400)
+    api_keys = body.get("api_keys")
+    current_api_key = body.get("current_api_key")
     base_urls = body.get("base_urls")
     current_base_url = body.get("current_base_url")
     provider = body.get("provider")
@@ -775,14 +783,49 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     resolve_name = body.get("rename_from", name) or name
     is_new_provider = name not in existing_providers
 
-    # An omitted or masked edit preserves the existing credential, while the
-    # save itself silently converges any legacy CSV value to its first key.
-    if (not api_key or "***" in api_key) and resolve_name in existing_providers:
-        api_key = existing_providers[resolve_name].get("api_key", "")
-    api_key = normalize_provider_api_key(api_key)
+    existing_provider = existing_providers.get(resolve_name, {})
+    if api_keys is None and existing_provider:
+        api_keys = existing_provider.get("api_keys")
+        current_api_key = current_api_key or existing_provider.get("current_api_key")
+    existing_keys = {
+        entry.get("id"): entry.get("key")
+        for entry in existing_provider.get("api_keys", [])
+        if isinstance(entry, dict)
+    }
+    if not isinstance(api_keys, list):
+        return JSONResponse({"error": "'api_keys' must be a list"}, status_code=400)
+    merged_keys: list[dict[str, str]] = []
+    for index, entry in enumerate(api_keys):
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("id"), str)
+            or not entry["id"].strip()
+            or not isinstance(entry.get("key"), str)
+        ):
+            return JSONResponse(
+                {"error": f"'api_keys[{index}]' must contain string 'id' and 'key'"},
+                status_code=400,
+            )
+        credential_id = entry["id"].strip()
+        key = entry["key"].strip()
+        if "***" in key:
+            saved_key = existing_keys.get(credential_id)
+            if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:
+                return JSONResponse(
+                    {
+                        "error": f"'api_keys[{index}].key' mask does not match saved credential"
+                    },
+                    status_code=400,
+                )
+            key = saved_key
+        merged_keys.append({"id": credential_id, "key": key})
 
     if (
-        not api_key
+        not merged_keys
+        or any(not entry["key"] for entry in merged_keys)
+        or len({entry["id"] for entry in merged_keys}) != len(merged_keys)
+        or not isinstance(current_api_key, str)
+        or current_api_key not in {entry["id"] for entry in merged_keys}
         or not isinstance(base_urls, list)
         or not base_urls
         or any(not isinstance(value, str) or not value for value in base_urls)
@@ -794,8 +837,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         return JSONResponse(
             {
                 "error": (
-                    "'api_key', non-empty 'base_urls', member "
-                    "'current_base_url', and 'provider' are required"
+                    "non-empty unique 'api_keys', member 'current_api_key', "
+                    "non-empty 'base_urls', member 'current_base_url', and "
+                    "'provider' are required"
                 )
             },
             status_code=400,
@@ -804,7 +848,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
     provider_entry = _build_provider_entry(
         body,
-        api_key,
+        merged_keys,
+        current_api_key,
         base_urls,
         current_base_url,
         existing_providers,
@@ -843,23 +888,34 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 
 
 async def select_provider_base_url(request: Any, **kwargs: Any) -> Response:
-    """Make one configured Provider URL current without rebuilding runtime state."""
+    """Select one Provider URL or credential without rebuilding runtime state."""
     name = request.path_params["name"]
     body = _parse_json_object(request)
     if isinstance(body, Response):
         return body
-    if set(body) != {"current_base_url"} or not isinstance(
-        body.get("current_base_url"), str
-    ):
+    if set(body) not in ({"current_base_url"}, {"credential_id"}):
         return JSONResponse(
-            {"error": "'current_base_url' must be the only string field"},
+            {
+                "error": (
+                    "exactly one of 'current_base_url' or 'credential_id' "
+                    "must be provided"
+                )
+            },
             status_code=400,
+        )
+    selected = next(iter(body.values()))
+    if not isinstance(selected, str):
+        return JSONResponse(
+            {"error": "the selected value must be a string"}, status_code=400
         )
     provider = request.app.gateway_config.providers.get(name)
     if provider is None:
         return JSONResponse({"error": f"Provider '{name}' not found"}, status_code=404)
     try:
-        await provider.manually_select_base_url(body["current_base_url"])
+        if "current_base_url" in body:
+            await provider.manually_select_base_url(body["current_base_url"])
+        else:
+            await provider.manually_select_credential(body["credential_id"])
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
     except RuntimeError as exc:

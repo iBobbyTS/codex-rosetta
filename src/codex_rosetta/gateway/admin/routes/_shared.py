@@ -541,18 +541,17 @@ def _sync_persistence_redaction(app: Any, config: GatewayConfig) -> None:
 
 def _build_provider_entry(
     body: dict[str, Any],
-    api_key: str,
+    api_keys: list[dict[str, str]],
+    current_api_key: str,
     base_urls: list[str],
     current_base_url: str,
     existing_providers: dict[str, Any],
     resolve_name: str,
 ) -> dict[str, Any]:
-    """Build a provider entry dict from request body, resolving masked keys."""
-    if "***" in api_key and resolve_name in existing_providers:
-        api_key = existing_providers[resolve_name].get("api_key", api_key)
-
+    """Build one canonical provider entry from validated Admin input."""
     entry: dict[str, Any] = {
-        "api_key": api_key,
+        "api_keys": api_keys,
+        "current_api_key": current_api_key,
         "base_urls": base_urls,
         "current_base_url": current_base_url,
     }

@@ -39,26 +39,22 @@ beforeEach(() => {
 describe('ProvidersPage', () => {
   it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
-      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_type: 'responses', proxy: 'http://proxy.example:8080' } },
+      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       provider_catalog: providerCatalog,
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
       credential_visible: true,
     };
-    apiMock.get.mockImplementation((path: string) => path.endsWith('/key')
-      ? Promise.resolve({ api_key: 'provider-secret' })
-      : Promise.resolve(config));
+    apiMock.get.mockResolvedValue(config);
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'openai');
     expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
-    expect(await screen.findByDisplayValue('provider-secret')).toBeInTheDocument();
-    expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config/providers/official/key');
+    expect(await screen.findByDisplayValue('prov***cret')).toBeInTheDocument();
+    expect(apiMock.get).not.toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
-    expect(dialog.getAllByLabelText(/^API Key/)).toHaveLength(1);
-    expect(dialog.queryByRole('button', { name: /Add key/i })).not.toBeInTheDocument();
-    expect(dialog.queryByRole('button', { name: /Remove key/i })).not.toBeInTheDocument();
+    expect(dialog.getAllByLabelText(/^Credential key/)).toHaveLength(1);
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
     expect(screen.getByRole('status')).toHaveTextContent("Provider 'official' saved");
@@ -72,7 +68,8 @@ describe('ProvidersPage', () => {
       allow_redirects: false,
       api_type: 'responses',
       force_rosetta_compaction: false,
-      api_key: 'provider-secret',
+      api_keys: [{ id: 'primary', key: 'prov***cret' }],
+      current_api_key: 'primary',
     });
     expect(body).not.toHaveProperty('preset');
     expect(body).not.toHaveProperty('base');
@@ -94,6 +91,9 @@ describe('ProvidersPage', () => {
             { base_url: 'https://two.example/v1', current: true, status: 'available' },
             { base_url: 'https://three.example/v1', current: false, status: 'cooling' },
           ],
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
+          credential_statuses: [{ id: 'primary', current: true, status: 'available' }],
           api_type: 'responses',
         },
       },
@@ -120,6 +120,34 @@ describe('ProvidersPage', () => {
     await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/current-base-url', {
       current_base_url: 'https://three.example/v1',
     }));
+  });
+
+  it('edits ordered masked credentials and manually selects a cooling credential', async () => {
+    const config = {
+      providers: { relay: {
+        provider: 'openai', api_type: 'responses',
+        base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
+        base_url_statuses: [{ base_url: 'https://one.example/v1', current: true, status: 'available' }],
+        api_keys: [{ id: 'first', key: 'firs***cret' }, { id: 'second', key: 'seco***cret' }],
+        current_api_key: 'first',
+        credential_statuses: [{ id: 'first', current: true, status: 'available' }, { id: 'second', current: false, status: 'cooling' }],
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog, registered_shims: [], credential_visible: false,
+    };
+    apiMock.get.mockResolvedValue(config);
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Move second up' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      api_keys: [{ id: 'second', key: 'seco***cret' }, { id: 'first', key: 'firs***cret' }],
+      current_api_key: 'first',
+    })));
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Make credential second current' }));
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/current-base-url', { credential_id: 'second' }));
   });
 
   it('derives a child option from persisted provider and URL without using api_type', async () => {
@@ -185,7 +213,7 @@ describe('ProvidersPage', () => {
     expect(dialog.queryByLabelText('Late instruction cache compatibility')).not.toBeInTheDocument();
     await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'deepseek-anthropic' } });
     await fireEvent.input(dialog.getByPlaceholderText('https://api.openai.com/v1'), { target: { value: 'https://api.deepseek.com/anthropic' } });
-    await fireEvent.input(dialog.getByLabelText(/^API Key/), { target: { value: 'sk-test' } });
+    await fireEvent.input(dialog.getByLabelText(/^Credential key/), { target: { value: 'sk-test' } });
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
     expect(apiMock.put.mock.calls[0][1]).not.toHaveProperty('soft_interrupt');
@@ -200,6 +228,8 @@ describe('ProvidersPage', () => {
           current_base_url: 'https://api.deepseek.com',
           api_type: 'chat',
           soft_interrupt: false,
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -224,6 +254,8 @@ describe('ProvidersPage', () => {
           current_base_url: 'https://cockpit.example/v1',
           api_type: 'responses',
           force_rosetta_compaction: true,
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],

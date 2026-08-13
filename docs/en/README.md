@@ -41,7 +41,7 @@ or error starts on a new line, and the counters resume on the next request.
 request history, use **Request Log** in the WebUI. For streaming trace
 diagnostics, use **Gateway Logs** in the WebUI.
 
-### Provider Base URLs
+### Provider Base URLs and Credentials
 
 A Provider stores an ordered, non-empty `base_urls` list and one member as
 `current_base_url`. The existing **Providers** page edits that order and shows
@@ -51,8 +51,15 @@ current immediately and clears only that URL's cooldown.
 Before any client-visible output, an upstream HTTP 502 (or the narrowly
 recognized CDN 502 page) silently tries the next non-cooling URL. Other
 responses retain their existing behavior. Failed URLs cool for one hour in
-process memory, while the current URL is persisted. This rotation does not add
-multiple API keys or key rotation.
+process memory, while the current URL is persisted.
+
+Each Provider also stores an ordered, non-empty `api_keys` list of stable IDs
+and masked credentials, plus a member `current_api_key`. Only HTTP 503 rotates
+the credential ring; 502 rotates only the URL ring. Either ring can advance in
+one request without resetting the other. A failed credential cools for one
+hour, and exhausting the finite ring reports only its size. Manual selection
+may restore a cooling entry and clears only that entry's cooldown. Successful
+request counts never rotate credentials.
 
 ## Codex tool localization
 

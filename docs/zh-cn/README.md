@@ -39,7 +39,7 @@ Chromium 就绪，并在退出时清理托管 service。
 `error` 只打印错误。完整请求历史请在 WebUI 的 **请求日志（Request Log）** 中查看；
 流式 trace 诊断请使用 WebUI 的 **网关日志（Gateway Logs）**。
 
-### Provider Base URL
+### Provider Base URL 与凭据
 
 每个 Provider 保存一个有序、非空的 `base_urls` 列表，并将其中一个成员保存为
 `current_base_url`。现有的**服务方**页面可编辑顺序，并显示每个 URL 是可用、冷却中
@@ -48,7 +48,13 @@ Chromium 就绪，并在退出时清理托管 service。
 
 在向客户端输出任何内容之前，上游 HTTP 502（或被窄范围识别的 CDN 502 页面）会静默
 尝试下一个未冷却 URL；其他响应保持原行为。失败 URL 在进程内冷却一小时，当前 URL
-则持久化保存。此轮换不增加多个 API Key，也不实现 Key 轮换。
+则持久化保存。
+
+每个 Provider 还保存一个带稳定 ID 和掩码凭据的有序、非空 `api_keys` 列表，并将其中
+一个成员保存为 `current_api_key`。只有 HTTP 503 会轮换凭据环；502 只轮换 URL 环。
+同一请求可以依次推进两个环，且互不重置。失败凭据在进程内冷却一小时；有限环全部耗尽
+时只报告凭据数量。手动选择允许恢复冷却中的条目，并且只清除该条目的冷却状态。成功
+请求不会按请求次数轮换凭据。
 
 ## Codex 工具本地化
 

@@ -68,7 +68,6 @@ from .observability import (
     get_error_dumps,
     get_host_ip,
     get_metrics,
-    get_provider_key,
     get_request_key_labels,
     get_requests,
     network_diagnostics,
@@ -127,9 +126,6 @@ def register_admin_routes(app: Any) -> None:
     )
     app.route("/admin/api/config/providers/<name>/current-base-url", methods=["POST"])(
         select_provider_base_url
-    )
-    app.route("/admin/api/config/providers/<name>/key", methods=["GET"])(
-        get_provider_key
     )
     app.route("/admin/api/config/model-groups/<path:name>", methods=["PUT"])(
         put_model_group

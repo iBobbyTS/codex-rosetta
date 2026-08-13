@@ -4,6 +4,7 @@
   import { t } from '../../shared/i18n.svelte';
   import { createSerialPoll } from '../lib/polling';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
+  import OrderedListEditor, { type OrderedListItem } from '../components/OrderedListEditor.svelte';
 
   type SearchProviderType =
     | 'tavily'
@@ -114,6 +115,7 @@
       || (row.provider === 'deepseek_native_responses' && !row.deepseek_provider)
     )),
   );
+  const orderedRows = $derived(rows.map((row):OrderedListItem=>({id:row.id})));
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
   const aborted = (value: unknown) =>
@@ -458,11 +460,10 @@
               <td class="search-name-cell">
                 <div class="row-order-controls">
                   <button class="drag-handle" draggable={!saving} disabled={saving} aria-label={t('aria.dragSearchProvider')} title={t('aria.dragSearchProvider')} ondragstart={(event) => startDrag(event, row.id)} ondragend={() => draggedId = null}>⋮⋮</button>
-                  <button class="order-button" disabled={saving || index === 0} aria-label={t('aria.moveSearchProviderUp')} onclick={() => moveRow(row.id, -1)}>↑</button>
-                  <button class="order-button" disabled={saving || index === rows.length - 1} aria-label={t('aria.moveSearchProviderDown')} onclick={() => moveRow(row.id, 1)}>↓</button>
+                  <OrderedListEditor items={orderedRows} renderId={row.id} disabled={saving} compact onmove={moveRow} moveUpLabel={()=>t('aria.moveSearchProviderUp')} moveDownLabel={()=>t('aria.moveSearchProviderDown')} />
                 </div>
                 <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
-                <Dropdown id={`search-provider-type-${row.id}`} className="provider-type" value={row.provider} disabled={saving} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
+                <Dropdown id={`search-provider-type-${row.id}`} value={row.provider} disabled={saving} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
                 {#if row.provider === 'configured_responses_provider'}
                   <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
                   <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={saving || !responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
