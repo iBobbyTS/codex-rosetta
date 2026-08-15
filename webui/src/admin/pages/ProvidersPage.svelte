@@ -21,7 +21,7 @@
 
   let config = $state<Config>({});
   let loading = $state(true); let busy = $state(false); let error = $state(''); let notice = $state('');
-  let search = $state(''); let view = $state(localStorage.getItem('provider-view') === 'list' ? 'list' : 'grid');
+  let search = $state(''); let view = $state(localStorage.getItem('provider-view') === 'grid' ? 'grid' : 'list');
   let modalOpen = $state(false); let deleteOpen = $state(false); let editingName = $state('');
   let name = $state(''); let urls = $state<string[]>(['']); let currentUrl = $state(''); let proxy = $state(''); let apiType = $state(''); let allowRedirects = $state(false); let softInterrupt = $state(false); let forceRosettaCompaction = $state(false);
   let vendorId = $state('custom'); let variantId = $state('custom'); let credentials = $state<Credential[]>([{id:'primary',key:''}]); let currentCredential = $state('primary'); let keyVisible = $state(false);
