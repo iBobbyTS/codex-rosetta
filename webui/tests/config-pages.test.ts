@@ -184,6 +184,10 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
     const protocol = within(screen.getByRole('dialog', { name: 'Add Provider' })).getByLabelText('Protocol');
     await fireEvent.click(protocol);
+    expect(screen.getByRole('listbox').parentElement).toHaveClass(
+      'suu-dropdown__menu--fit-content',
+      'suu-dropdown__menu--left',
+    );
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => [option.getAttribute('data-value'), option.textContent?.trim()])).toEqual([
       ['responses', 'OpenAI Responses'],
       ['chat', 'OpenAI Chat Completions'],
