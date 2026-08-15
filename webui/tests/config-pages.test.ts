@@ -37,6 +37,133 @@ beforeEach(() => {
 });
 
 describe('ProvidersPage', () => {
+  it('round-trips an untouched canonical credential mask', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai',
+          base_urls: ['https://relay.example/v1'],
+          current_base_url: 'https://relay.example/v1',
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
+          api_type: 'responses',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      api_keys: [{ id: 'primary', key: 'prov***cret' }],
+      current_api_key: 'primary',
+    })));
+  });
+
+  it('round-trips an untouched environment variable credential placeholder', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai',
+          base_urls: ['https://relay.example/v1'],
+          current_base_url: 'https://relay.example/v1',
+          api_keys: [{ id: 'primary', key: '${OPENAI_API_KEY}' }],
+          current_api_key: 'primary',
+          api_type: 'responses',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('textbox', { name: 'Credential key primary' })).toHaveValue('${OPENAI_API_KEY}');
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      api_keys: [{ id: 'primary', key: '${OPENAI_API_KEY}' }],
+      current_api_key: 'primary',
+    })));
+  });
+
+  it('keeps the credential name editable while the saved key is read-only', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai',
+          base_urls: ['https://relay.example/v1'],
+          current_base_url: 'https://relay.example/v1',
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
+          api_type: 'responses',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const nameInput = dialog.getByRole('textbox', { name: 'Credential ID primary' });
+    const keyDisplay = dialog.getByRole('textbox', { name: 'Credential key primary' });
+    expect(nameInput).not.toBeDisabled();
+    expect(nameInput).not.toHaveAttribute('readonly');
+    expect(keyDisplay).toHaveAttribute('readonly');
+
+    await fireEvent.input(nameInput, { target: { value: 'production' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      api_keys: [{ id: 'production', key: 'prov***cret' }],
+      current_api_key: 'production',
+    })));
+  });
+
+  it('clears a credential only in local state until Save', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai',
+          base_urls: ['https://relay.example/v1'],
+          current_base_url: 'https://relay.example/v1',
+          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          current_api_key: 'primary',
+          api_type: 'responses',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
+    expect(dialog.queryByRole('button', { name: 'Toggle visibility' })).not.toBeInTheDocument();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Clear credential key primary' }));
+    expect(apiMock.put).not.toHaveBeenCalled();
+    expect(apiMock.post).not.toHaveBeenCalled();
+    const input = dialog.getByLabelText('Credential key primary');
+    expect(input).toHaveAttribute('type', 'password');
+    await fireEvent.input(input, { target: { value: 'replacement-secret' } });
+    expect(apiMock.put).not.toHaveBeenCalled();
+    expect(apiMock.post).not.toHaveBeenCalled();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      api_keys: [{ id: 'primary', key: 'replacement-secret' }],
+      current_api_key: 'primary',
+    })));
+  });
+
   it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
       providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', proxy: 'http://proxy.example:8080' } },
@@ -51,7 +178,7 @@ describe('ProvidersPage', () => {
     expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'openai');
     expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
-    expect(await screen.findByDisplayValue('prov***cret')).toBeInTheDocument();
+    expect(await screen.findByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
     expect(apiMock.get).not.toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
     expect(dialog.getAllByLabelText(/^Credential key/)).toHaveLength(1);
