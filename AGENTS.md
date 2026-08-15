@@ -134,6 +134,8 @@ Tooling config (ruff, ty, complexipy) lives in `pyproject.toml`.
 
 ### Local gateway process safety
 
+- After changing frontend code, proactively complete the relevant frontend
+  production build so the bundled gateway static assets match the source.
 - Do not proactively restart the main gateway listening on port `8765`. Tell the
   developer that a restart is required and let them restart it manually.
 - Temporary gateway processes may be started on other ports for testing, but

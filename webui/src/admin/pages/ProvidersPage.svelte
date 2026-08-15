@@ -148,6 +148,7 @@
 </Modal>
 
 <style>
+  :global(.modal.provider-modal) { width: 880px; max-width: 80vw; max-height: 80vh; }
   .provider-url-status{display:flex;align-items:center;gap:6px;margin:5px 0;padding:5px 7px;border-radius:var(--radius);font-size:11px}
   .provider-url-status.available{background:color-mix(in srgb,var(--green) 10%,transparent)}
   .provider-url-status.cooling{background:color-mix(in srgb,var(--orange) 12%,transparent)}
