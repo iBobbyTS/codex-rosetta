@@ -25,8 +25,10 @@ from ...config import (
     normalize_local_mode_settings,
     normalize_web_search,
     provider_supports_tool_profiles,
+    resolve_provider_config_type_and_shim,
     resolve_provider_api_type,
 )
+from ...providers import build_provider_info
 from ...deepseek_responses_search import normalize_deepseek_responses_origin
 from ...local_mode import config_toml_has_model_catalog
 from ...model_presets import (
@@ -64,6 +66,7 @@ from ._shared import (
     _parse_json_object,
     _reload_gateway_config,
 )
+from ..request_encoding_detection import detect_responses_request_encoding
 
 import logging
 
@@ -815,40 +818,10 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     if api_keys is None and existing_provider:
         api_keys = existing_provider.get("api_keys")
         current_api_key = current_api_key or existing_provider.get("current_api_key")
-    existing_keys = {
-        entry.get("id"): entry.get("key")
-        for entry in existing_provider.get("api_keys", [])
-        if isinstance(entry, dict)
-    }
-    if not isinstance(api_keys, list):
-        return JSONResponse({"error": "'api_keys' must be a list"}, status_code=400)
-    merged_keys: list[dict[str, str]] = []
-    for index, entry in enumerate(api_keys):
-        credential_id_value = entry.get("id") if isinstance(entry, dict) else None
-        key_value = entry.get("key") if isinstance(entry, dict) else None
-        if (
-            not isinstance(entry, dict)
-            or not isinstance(credential_id_value, str)
-            or not credential_id_value.strip()
-            or not isinstance(key_value, str)
-        ):
-            return JSONResponse(
-                {"error": f"'api_keys[{index}]' must contain string 'id' and 'key'"},
-                status_code=400,
-            )
-        credential_id = credential_id_value.strip()
-        key = key_value.strip()
-        if "***" in key:
-            saved_key = existing_keys.get(credential_id)
-            if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:
-                return JSONResponse(
-                    {
-                        "error": f"'api_keys[{index}].key' mask does not match saved credential"
-                    },
-                    status_code=400,
-                )
-            key = saved_key
-        merged_keys.append({"id": credential_id, "key": key})
+    try:
+        merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
 
     if (
         not merged_keys
@@ -915,6 +888,157 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             "providers": list(new_config.providers.keys()),
         }
     )
+
+
+def _resolve_draft_provider_api_keys(
+    api_keys: Any,
+    existing_provider: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Resolve canonical draft credentials, including matching saved masks."""
+    existing_keys = {
+        entry.get("id"): entry.get("key")
+        for entry in existing_provider.get("api_keys", [])
+        if isinstance(entry, dict)
+    }
+    if not isinstance(api_keys, list):
+        raise ValueError("'api_keys' must be a list")
+    merged_keys: list[dict[str, str]] = []
+    for index, entry in enumerate(api_keys):
+        credential_id_value = entry.get("id") if isinstance(entry, dict) else None
+        key_value = entry.get("key") if isinstance(entry, dict) else None
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(credential_id_value, str)
+            or not credential_id_value.strip()
+            or not isinstance(key_value, str)
+        ):
+            raise ValueError(f"'api_keys[{index}]' must contain string 'id' and 'key'")
+        credential_id = credential_id_value.strip()
+        key = key_value.strip()
+        if "***" in key:
+            saved_key = existing_keys.get(credential_id)
+            if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:
+                raise ValueError(
+                    f"'api_keys[{index}].key' mask does not match saved credential"
+                )
+            key = saved_key
+        merged_keys.append({"id": credential_id, "key": key})
+    return merged_keys
+
+
+async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Response:
+    """Probe identity and Zstd against only the selected Responses draft endpoint."""
+    config_path = _get_config_path(request)
+    if not config_path:
+        return JSONResponse({"error": "No config file path available"}, status_code=500)
+
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    if body.get("api_type") != "responses":
+        return JSONResponse(
+            {"error": "Request encoding detection requires api_type 'responses'"},
+            status_code=400,
+        )
+
+    name = request.path_params["name"]
+    model = body.get("model")
+    provider = body.get("provider")
+    current_base_url = body.get("current_base_url")
+    current_api_key = body.get("current_api_key")
+    proxy = body.get("proxy", "")
+    allow_redirects = body.get("allow_redirects", False)
+    if (
+        not isinstance(model, str)
+        or not model.strip()
+        or not isinstance(provider, str)
+        or not provider.strip()
+        or not isinstance(current_base_url, str)
+        or not current_base_url.startswith(("http://", "https://"))
+        or not isinstance(current_api_key, str)
+        or not current_api_key.strip()
+        or not isinstance(proxy, str)
+        or not isinstance(allow_redirects, bool)
+    ):
+        return JSONResponse(
+            {
+                "error": (
+                    "non-empty 'model', 'provider', HTTP(S) 'current_base_url', "
+                    "and 'current_api_key' plus string 'proxy' and boolean "
+                    "'allow_redirects' are required"
+                )
+            },
+            status_code=400,
+        )
+
+    try:
+        data = load_config_raw(config_path)
+    except Exception as exc:
+        return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
+    existing_providers = data.get("providers", {})
+    resolve_name = body.get("rename_from", name) or name
+    existing_provider = existing_providers.get(resolve_name, {})
+    try:
+        resolved_keys = _resolve_draft_provider_api_keys(
+            body.get("api_keys"), existing_provider
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    selected_keys = [
+        entry for entry in resolved_keys if entry["id"] == current_api_key.strip()
+    ]
+    if len(selected_keys) != 1 or not selected_keys[0]["key"]:
+        return JSONResponse(
+            {"error": "'current_api_key' must select one non-empty draft credential"},
+            status_code=400,
+        )
+
+    provider_config = {
+        "provider": provider.strip(),
+        "api_type": "responses",
+        "base_urls": [current_base_url],
+        "current_base_url": current_base_url,
+        "api_keys": selected_keys,
+        "current_api_key": current_api_key.strip(),
+        "proxy": proxy.strip(),
+        "allow_redirects": allow_redirects,
+    }
+    try:
+        provider_type, _shim_name = resolve_provider_config_type_and_shim(
+            name, provider_config
+        )
+        if provider_type != "openai_responses":
+            raise ValueError("draft does not resolve to the Responses protocol")
+        identity_provider = build_provider_info(
+            provider_type,
+            {**provider_config, "request_encoding": "identity"},
+            configured_id=name,
+            global_proxy=request.app.gateway_config.proxy,
+        )
+        zstd_provider = build_provider_info(
+            provider_type,
+            {**provider_config, "request_encoding": "zstd"},
+            configured_id=name,
+            global_proxy=request.app.gateway_config.proxy,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+    result = await detect_responses_request_encoding(
+        request.app.transport,
+        identity_provider=identity_provider,
+        zstd_provider=zstd_provider,
+        model=model.strip(),
+    )
+    redactor = SecretRedactor(
+        {*request.app.gateway_config.token_values, selected_keys[0]["key"]}
+    )
+    payload = result.to_dict()
+    for probe_name in ("identity", "zstd"):
+        error = payload[probe_name]["error"]
+        if error is not None:
+            payload[probe_name]["error"] = redactor.redact(error)
+    return JSONResponse(payload)
 
 
 async def select_provider_base_url(request: Any, **kwargs: Any) -> Response:

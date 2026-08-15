@@ -1,11 +1,11 @@
 {
   "admin.html": {
-    "file": "assets/admin-ChJHYaqq.js",
+    "file": "assets/admin-C4tjtbDa.js",
     "name": "admin",
     "src": "admin.html",
     "isEntry": true,
     "css": [
-      "assets/admin-D4ynB7gW.css"
+      "assets/admin-aDrOhrE2.css"
     ],
     "assets": [
       "assets/anthropic-CW3-N5kA.svg",

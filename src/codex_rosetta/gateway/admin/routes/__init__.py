@@ -35,6 +35,7 @@ from .auth import (
 from .config import (
     delete_model_group,
     delete_provider,
+    detect_provider_request_encoding,
     fetch_upstream_models,
     get_config,
     put_codex_settings,
@@ -136,6 +137,10 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>/models", methods=["GET"])(
         fetch_upstream_models
     )
+    app.route(
+        "/admin/api/config/providers/<name>/detect-request-encoding",
+        methods=["POST"],
+    )(detect_provider_request_encoding)
     app.route("/admin/api/config/server", methods=["PUT"])(put_server_settings)
     app.route("/admin/api/config/codex", methods=["PUT"])(put_codex_settings)
     app.route("/admin/api/config/reload", methods=["POST"])(reload_config)

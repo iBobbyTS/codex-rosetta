@@ -16,6 +16,7 @@ from codex_rosetta.gateway import web_run_health
 from codex_rosetta.gateway.admin.routes.config import (
     delete_model_group,
     delete_provider,
+    detect_provider_request_encoding,
     get_config,
     put_codex_settings,
     put_model_group,
@@ -1640,6 +1641,188 @@ def test_put_provider_preserves_matching_masks(tmp_path):
         {"id": "second", "key": "second-secret-value"},
         {"id": "first", "key": "first-secret-value"},
     ]
+
+
+class _DetectionStream:
+    def __init__(self, request_encoding: str, *, fail_with: str | None = None) -> None:
+        self.request_encoding = request_encoding
+        self.status_code = 400 if fail_with is not None else 200
+        self.fail_with = fail_with
+
+    @property
+    def is_error(self) -> bool:
+        return self.status_code >= 400
+
+    async def read_error(self) -> str:
+        return self.fail_with or ""
+
+    def __aiter__(self):
+        async def events():
+            yield {"type": "response.completed"}
+
+        return events()
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
+
+
+class _DetectionTransport:
+    def __init__(self, *, fail_with: str | None = None) -> None:
+        self.fail_with = fail_with
+        self.calls: list[tuple[Any, str, dict[str, Any], str]] = []
+
+    async def send_streaming(self, provider_info, target_provider, body, model, **_):
+        self.calls.append((provider_info, target_provider, body, model))
+        return _DetectionStream(
+            provider_info.request_encoding,
+            fail_with=self.fail_with,
+        )
+
+
+def _responses_detection_data() -> dict[str, Any]:
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["api_type"] = "responses"
+    provider["request_encoding"] = "passthrough"
+    provider["api_keys"] = [
+        {"id": "primary", "key": "primary-secret"},
+        {"id": "selected", "key": "selected-secret"},
+    ]
+    provider["current_api_key"] = "selected"
+    return data
+
+
+def test_detect_request_encoding_uses_only_current_masked_draft_target(tmp_path):
+    data = _responses_detection_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    transport = _DetectionTransport()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(data),
+            transport=transport,
+        ),
+        path_params={"name": "renamed"},
+        json=lambda: {
+            "rename_from": "openai",
+            "provider": "openai",
+            "api_type": "responses",
+            "model": "manual-model",
+            "current_base_url": "https://selected.example/v1",
+            "api_keys": [{"id": "selected", "key": "sele***cret"}],
+            "current_api_key": "selected",
+            "proxy": "http://draft-proxy.example:8080",
+            "allow_redirects": True,
+        },
+    )
+
+    response = _run(detect_provider_request_encoding(request))
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["selected"] == "passthrough"
+    assert len(transport.calls) == 2
+    for provider_info, target_provider, body, model in transport.calls:
+        assert provider_info.base_urls == ("https://selected.example/v1",)
+        assert provider_info.credential_values == ("selected-secret",)
+        assert provider_info.proxy_url == "http://draft-proxy.example:8080"
+        assert provider_info.allow_redirects is True
+        assert target_provider == "openai_responses"
+        assert body == {"model": "manual-model", "input": "hi", "stream": True}
+        assert model == "manual-model"
+
+
+def test_detect_request_encoding_accepts_unsaved_raw_draft_without_writing(tmp_path):
+    data = _responses_detection_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    original = config_path.read_bytes()
+    transport = _DetectionTransport()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(data),
+            transport=transport,
+        ),
+        path_params={"name": "unsaved"},
+        json=lambda: {
+            "provider": "openai",
+            "api_type": "responses",
+            "model": "manual-model",
+            "current_base_url": "https://unsaved.example/v1",
+            "api_keys": [{"id": "fresh", "key": "fresh-secret"}],
+            "current_api_key": "fresh",
+            "proxy": "",
+            "allow_redirects": False,
+        },
+    )
+
+    response = _run(detect_provider_request_encoding(request))
+
+    assert response.status_code == 200
+    assert len(transport.calls) == 2
+    assert config_path.read_bytes() == original
+
+
+def test_detect_request_encoding_redacts_complete_failures(tmp_path):
+    data = _responses_detection_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    transport = _DetectionTransport(
+        fail_with='{"error":"selected-secret invalid JSON request body"}'
+    )
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(data),
+            transport=transport,
+        ),
+        path_params={"name": "openai"},
+        json=lambda: {
+            "provider": "openai",
+            "api_type": "responses",
+            "model": "manual-model",
+            "current_base_url": "https://api.example.com",
+            "api_keys": [{"id": "selected", "key": "sele***cret"}],
+            "current_api_key": "selected",
+            "proxy": "",
+            "allow_redirects": False,
+        },
+    )
+
+    response = _run(detect_provider_request_encoding(request))
+
+    payload = json.loads(response.body)
+    assert payload["selected"] is None
+    assert payload["identity"]["error"] == (
+        'HTTP 400: {"error":"[REDACTED] invalid JSON request body"}'
+    )
+    assert payload["zstd"]["error"] == payload["identity"]["error"]
+    assert "selected-secret" not in response.body.decode()
+
+
+def test_detect_request_encoding_rejects_non_responses_without_io(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    transport = _DetectionTransport()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig(data),
+            transport=transport,
+        ),
+        path_params={"name": "openai"},
+        json=lambda: {"api_type": "chat"},
+    )
+
+    response = _run(detect_provider_request_encoding(request))
+
+    assert response.status_code == 400
+    assert transport.calls == []
 
 
 def test_put_provider_rejects_empty_credential_without_write(tmp_path):

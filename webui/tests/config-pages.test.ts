@@ -569,6 +569,89 @@ describe('ProvidersPage', () => {
     expect(screen.getByLabelText('强制 Rosetta 提示词压缩')).toBeInTheDocument();
     expect(screen.getByText(/SQLite 中以明文保存摘要七天/)).toBeInTheDocument();
   });
+
+  it('detects only the selected draft endpoint and updates the encoding draft without saving', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai', api_type: 'responses', request_encoding: 'identity',
+          base_urls: ['https://one.example/v1', 'https://current.example/v1'],
+          current_base_url: 'https://current.example/v1',
+          api_keys: [{ id: 'first', key: 'firs***cret' }, { id: 'current', key: 'curr***cret' }],
+          current_api_key: 'current', proxy: 'http://proxy.example:8080', allow_redirects: true,
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockResolvedValue({
+      selected: 'zstd',
+      identity: { ok: false, status_code: 400, error: 'invalid JSON' },
+      zstd: { ok: true, status_code: 200, error: null },
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.input(dialog.getByLabelText('Detection model'), { target: { value: 'manual-model' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Auto-detect' }));
+
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay/detect-request-encoding',
+      {
+        provider: 'openai', api_type: 'responses', model: 'manual-model',
+        current_base_url: 'https://current.example/v1',
+        api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+        proxy: 'http://proxy.example:8080', allow_redirects: true,
+      },
+    ));
+    expect(apiMock.put).not.toHaveBeenCalled();
+    expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'zstd');
+    expect(screen.getByRole('status')).toHaveTextContent('Save to apply it');
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
+    expect(apiMock.put.mock.calls[0][1]).toMatchObject({ request_encoding: 'zstd' });
+  });
+
+  it('shows both complete detection failures without changing the draft encoding', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai', api_type: 'responses', request_encoding: 'identity',
+          base_urls: ['https://current.example/v1'], current_base_url: 'https://current.example/v1',
+          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockResolvedValue({
+      selected: null,
+      identity: { ok: false, status_code: 400, error: 'HTTP 400: identity full error' },
+      zstd: { ok: false, status_code: 502, error: 'HTTP 502: zstd full error' },
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.input(dialog.getByLabelText('Detection model'), { target: { value: 'manual-model' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Auto-detect' }));
+
+    const failure = await dialog.findByRole('alert');
+    expect(failure).toHaveTextContent('HTTP 400: identity full error');
+    expect(failure).toHaveTextContent('HTTP 502: zstd full error');
+    expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
+    expect(apiMock.put).not.toHaveBeenCalled();
+  });
+
+  it('hides request encoding detection for non-Responses protocols', async () => {
+    apiMock.get.mockResolvedValue({ providers: {}, known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    await selectDropdown(dialog.getByLabelText('Protocol'), 'OpenAI Chat Completions');
+    expect(dialog.queryByRole('button', { name: 'Auto-detect' })).not.toBeInTheDocument();
+    expect(dialog.queryByLabelText('Detection model')).not.toBeInTheDocument();
+  });
 });
 
 describe('SettingsPage', () => {
