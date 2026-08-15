@@ -4,7 +4,7 @@
   import { t } from '../../shared/i18n.svelte';
   import { createSerialPoll } from '../lib/polling';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
-  import { SortableTable } from '@ibobbyts/svelte-ui-utils/sortable-table';
+  import { SortableTableEnhanced, type SortableTableRowColorPreset } from '@ibobbyts/svelte-ui-utils/sortable-table';
 
   type SearchProviderType =
     | 'tavily'
@@ -155,6 +155,18 @@
     status?.providers?.find((entry) => entry.id === id);
   const routingLabel = (entry: RoutingEntry): string =>
     t(`network.routing.${entry.status}`);
+  const currentProviderId = $derived(status?.current_provider_id ?? null);
+  const currentDisabled = (row: SearchRow): boolean => {
+    const entry = routingEntry(row.id);
+    return selectingCurrentId !== null || !entry || entry.status === 'exhausted';
+  };
+  const rowColorPreset = (row: SearchRow): SortableTableRowColorPreset | null => {
+    const entry = routingEntry(row.id);
+    if (!entry) return null;
+    if (entry.status === 'exhausted') return 'red';
+    if (entry.status === 'cooling') return 'yellow';
+    return 'green';
+  };
 
   function displayUsage(id: string): DisplayUsage | null {
     const entry = usageById.get(id);
@@ -407,13 +419,18 @@
   {:else}
       {#if rows.length}
       <div class="table-scroll search-provider-table">
-          <SortableTable
+          <SortableTableEnhanced
             items={rows}
             disabled={saving}
             onReorder={reorderRows}
             onRemove={(item) => removeRow(item.id)}
             allowRemoveLast={true}
             tableClass="search-provider-table__table"
+            currentId={currentProviderId}
+            getCurrentDisabled={currentDisabled}
+            getCurrentLabel={(row) => t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })}
+            getRowColorPreset={rowColorPreset}
+            onCurrentChange={(row) => void selectCurrent(row)}
           >
           {#snippet header()}
             <th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th>
@@ -435,11 +452,7 @@
                 {/if}
                 {#if routing}
                   <span class={`routing-status routing-status-${routing.status}`}>{routingLabel(routing)}</span>
-                  {#if routing.current}
-                    <span class="current-provider">{t('network.routing.current')}</span>
-                  {:else}
-                    <button class="btn btn-sm current-provider-selector" aria-label={t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })} disabled={saving || selectingCurrentId !== null || routing.status === 'exhausted'} onclick={() => void selectCurrent(row)}>{t('network.routing.select')}</button>
-                  {/if}
+                  {#if routing.current}<span class="current-provider">{t('network.routing.current')}</span>{/if}
                 {/if}
               </div>
             </td>
@@ -478,7 +491,7 @@
               {/if}
             </td>
           {/snippet}
-          </SortableTable>
+          </SortableTableEnhanced>
       </div>
       {:else}
       <div class="table-scroll search-provider-table">

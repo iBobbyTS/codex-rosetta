@@ -136,6 +136,13 @@ describe('NetworkSearchPage', () => {
     };
   }
 
+  function dragAt(element: Element, type: string, dataTransfer: ReturnType<typeof transfer>, clientY = 0): Promise<boolean> {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clientY', { configurable: true, value: clientY });
+    Object.defineProperty(event, 'dataTransfer', { configurable: true, value: dataTransfer });
+    return fireEvent(element, event);
+  }
+
   function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void; reject: (reason?: unknown) => void } {
     let resolve!: (value: T) => void;
     let reject!: (reason?: unknown) => void;
@@ -182,23 +189,24 @@ describe('NetworkSearchPage', () => {
         ],
       });
     });
-    apiMock.put.mockResolvedValue({ ok: true, current_provider_id: 'cooling' });
+    const pending = deferred<unknown>();
+    apiMock.put.mockReturnValue(pending.promise);
     render(NetworkSearchPage);
 
     await waitFor(() => expect(document.querySelector('tr[data-sortable-id="available"]')).not.toBeNull());
     const available = document.querySelector<HTMLElement>('tr[data-sortable-id="available"]')!;
     const cooling = document.querySelector<HTMLElement>('tr[data-sortable-id="cooling"]')!;
     const exhausted = document.querySelector<HTMLElement>('tr[data-sortable-id="exhausted"]')!;
-    await waitFor(() => expect(available).toHaveClass('routing-available'));
-    expect(cooling).toHaveClass('routing-cooling');
-    expect(exhausted).toHaveClass('routing-exhausted');
+    await waitFor(() => expect(available).toHaveClass('suu-sortable-table-enhanced__row--green'));
+    expect(cooling).toHaveClass('suu-sortable-table-enhanced__row--yellow');
+    expect(exhausted).toHaveClass('suu-sortable-table-enhanced__row--red');
     expect(within(available).getByText('Current')).toBeInTheDocument();
     expect(within(available).getByText('Available')).toBeInTheDocument();
     expect(within(cooling).getByText('Cooling')).toBeInTheDocument();
     expect(within(exhausted).getByText('Quota exhausted')).toBeInTheDocument();
-    const exhaustedSelector = within(exhausted).getByRole('button', { name: 'Set Tavily as current provider' });
+    const exhaustedSelector = within(exhausted).getByRole('radio', { name: 'Set Tavily as current provider' });
     expect(exhaustedSelector).toBeDisabled();
-    const coolingSelector = within(cooling).getByRole('button', { name: 'Set Self-hosted (Bing RSS) as current provider' });
+    const coolingSelector = within(cooling).getByRole('radio', { name: 'Set Self-hosted (Bing RSS) as current provider' });
     expect(coolingSelector).toBeEnabled();
 
     await fireEvent.click(coolingSelector);
@@ -207,6 +215,11 @@ describe('NetworkSearchPage', () => {
       '/admin/api/network-search/status',
       { current_provider_id: 'cooling' },
     ));
+    expect(coolingSelector).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: /^Drag / }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getAllByRole('button', { name: /^Remove / }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
+    pending.resolve({ ok: true, current_provider_id: 'cooling' });
+    await waitFor(() => expect(coolingSelector).toBeChecked());
   });
 
   it('loads routing status after initial usage can mark a Tavily row exhausted', async () => {
@@ -245,9 +258,9 @@ describe('NetworkSearchPage', () => {
 
     await waitFor(() => expect(statusReads).toBe(1));
     const row = document.querySelector<HTMLElement>('tr[data-sortable-id="tavily"]')!;
-    await waitFor(() => expect(row).toHaveClass('routing-exhausted'));
+    await waitFor(() => expect(row).toHaveClass('suu-sortable-table-enhanced__row--red'));
     expect(within(row).getByText('Quota exhausted')).toBeInTheDocument();
-    expect(within(row).getByRole('button', { name: 'Set Tavily as current provider' })).toBeDisabled();
+    expect(within(row).getByRole('radio', { name: 'Set Tavily as current provider' })).toBeDisabled();
   });
 
   it.each([
@@ -375,7 +388,7 @@ describe('NetworkSearchPage', () => {
         configured_providers: [{ id: 'local', provider: 'self_hosted_google', family: 'self_hosted_local', execution_mode: 'local_query_adapter', capabilities: ['search_query'] }],
         chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
       },
-      mutate: async () => fireEvent.click(screen.getByRole('button', { name: 'Remove' })),
+      mutate: async () => fireEvent.click(screen.getByRole('button', { name: /^Remove / })),
     },
     {
       name: 'provider reorder',
@@ -391,7 +404,7 @@ describe('NetworkSearchPage', () => {
         chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
       },
       mutate: async () => {
-        const source = document.querySelector('tr[data-sortable-id="first"] .drag-handle')!;
+        const source = document.querySelector('tr[data-sortable-id="first"] .suu-sortable-table__drag-handle')!;
         const target = document.querySelector('tr[data-sortable-id="second"]')!;
         await fireEvent.dragStart(source);
         await fireEvent.drop(target);
@@ -482,8 +495,9 @@ describe('NetworkSearchPage', () => {
       expect(screen.getByLabelText('Responses Provider')).toBeDisabled();
       expect(screen.getByLabelText('Search Model')).toBeDisabled();
       expect(screen.getByLabelText('API Key')).toBeDisabled();
-      expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
-      expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'false' && button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('button', { name: /^Remove / }).every((button) => button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('button', { name: /^Drag / }).every((button) => button.getAttribute('draggable') === 'false' && button.hasAttribute('disabled'))).toBe(true);
+      expect(screen.getAllByRole('radio').every((radio) => radio.hasAttribute('disabled'))).toBe(true);
     };
     const attemptProgrammaticMutations = async () => {
       await fireEvent.input(key, { target: { value: 'request-in-flight-edit' } });
@@ -560,8 +574,8 @@ describe('NetworkSearchPage', () => {
     expect(screen.getByLabelText('Responses Provider')).toBeEnabled();
     expect(screen.getByLabelText('Search Model')).toBeEnabled();
     expect(screen.getByLabelText('API Key')).toBeEnabled();
-    expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
-    expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'true' && !button.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getAllByRole('button', { name: /^Remove / }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
+    expect(screen.getAllByRole('button', { name: /^Drag / }).every((button) => button.getAttribute('draggable') === 'true' && !button.hasAttribute('disabled'))).toBe(true);
 
     status.reject(new Error('sidecar unavailable'));
     expect(await screen.findByText('Offline')).toBeInTheDocument();
@@ -632,6 +646,7 @@ describe('NetworkSearchPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' }));
     const type = screen.getByLabelText('Search provider type');
     expect(type).toHaveAttribute('data-value', 'tavily');
+    expect(screen.getByRole('radio')).toBeDisabled();
     expect(screen.getByLabelText('API Key')).toBeInTheDocument();
     await chooseDropdown(type, 'configured_responses_provider');
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
@@ -639,7 +654,7 @@ describe('NetworkSearchPage', () => {
     await chooseDropdown(type, 'self_hosted_google');
     expect(screen.queryByLabelText('Responses Provider')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Search Model')).not.toBeInTheDocument();
-    await fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    await fireEvent.click(screen.getByRole('button', { name: /^Remove / }));
     expect(screen.getByText('No web search providers configured.')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: '+ Add search provider' }));
     await chooseDropdown(screen.getByLabelText('Search provider type'), 'self_hosted_google');
@@ -693,15 +708,16 @@ describe('NetworkSearchPage', () => {
     render(NetworkSearchPage);
     await screen.findByDisplayValue('first***mask');
 
-    const source = document.querySelector(`tr[data-sortable-id="${sourceId}"] .drag-handle`);
+    const source = document.querySelector(`tr[data-sortable-id="${sourceId}"] .suu-sortable-table__drag-handle`);
     const target = document.querySelector(`tr[data-sortable-id="${targetId}"]`);
     expect(source).not.toBeNull();
     expect(target).not.toBeNull();
     const dataTransfer = transfer();
-    await fireEvent.dragStart(source!, { dataTransfer });
+    await dragAt(source!, 'dragstart', dataTransfer);
     Object.defineProperty(target!, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
-    await fireEvent.dragOver(target!, { dataTransfer, clientY });
-    await fireEvent.drop(target!, { dataTransfer });
+    await dragAt(target!, 'dragover', dataTransfer, clientY);
+    expect(target).toHaveClass(clientY < 50 ? 'suu-sortable-table__row--drop-before' : 'suu-sortable-table__row--drop-after');
+    await dragAt(target!, 'drop', dataTransfer, clientY);
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', {
