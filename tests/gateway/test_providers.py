@@ -25,6 +25,7 @@ class TestBuildProviderInfo:
                     "https://second.example/v1",
                 ],
                 "current_base_url": "https://second.example/v1",
+                "request_encoding": "passthrough",
             },
             configured_id="second-row",
         )
@@ -42,6 +43,7 @@ class TestBuildProviderInfo:
             {
                 "api_keys": [{"id": "primary", "key": "test"}],
                 "base_urls": ["https://upstream.example/v1"],
+                "request_encoding": "passthrough",
                 "force_rosetta_compaction": True,
             },
         )
@@ -50,6 +52,9 @@ class TestBuildProviderInfo:
 
 
 def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
+    provider = dict(provider)
+    if provider.get("api_type") == "responses":
+        provider["request_encoding"] = "passthrough"
     return GatewayConfig(
         {
             "providers": {"upstream": provider},

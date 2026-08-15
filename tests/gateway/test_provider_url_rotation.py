@@ -100,6 +100,7 @@ def _provider(
         current_base_url=current or base_urls[0],
         auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
         url_template="{base_url}/responses",
+        request_encoding="passthrough",
     )
 
     async def record(configured_id: str, base_url: str) -> None:
@@ -730,6 +731,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                 "row-a": {
                     "provider": "openai",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                     "api_keys": [
                         {"id": "primary", "key": "row-a-key"},
                         {"id": "secondary", "key": "row-a-key-2"},
@@ -741,6 +743,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                 "row-b": {
                     "provider": "openai",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                     "api_keys": [{"id": "primary", "key": "row-b-key"}],
                     "current_api_key": "primary",
                     "base_urls": [other],

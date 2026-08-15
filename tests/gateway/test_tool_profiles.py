@@ -476,6 +476,11 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
+                **(
+                    {"request_encoding": "passthrough"}
+                    if api_type == "responses"
+                    else {}
+                ),
             }
         },
         "tool_profiles": {
@@ -573,6 +578,7 @@ def test_gateway_config_rejects_unknown_group_profile():
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "tool_profiles": {},
@@ -604,6 +610,7 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "model_groups": {
@@ -741,6 +748,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "tool_profile_input_overrides": {
@@ -790,6 +798,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "tool_profiles": {"custom": {"api_types": ["responses"], "tools": tools}},
@@ -1234,6 +1243,7 @@ def test_later_external_candidate_projects_search_on_all_shared_surfaces(
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "model_groups": {

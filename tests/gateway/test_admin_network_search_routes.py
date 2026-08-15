@@ -55,6 +55,7 @@ def _config() -> GatewayConfig:
                 "model-provider": {
                     "provider": "openai",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                     "base_urls": ["https://model.example/v1"],
                     "current_base_url": "https://model.example/v1",
                     "api_keys": [{"id": "primary", "key": "model-key"}],
@@ -63,6 +64,7 @@ def _config() -> GatewayConfig:
                 "search-provider": {
                     "provider": "openai",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                     "base_urls": ["https://search.example/v1"],
                     "current_base_url": "https://search.example/v1",
                     "api_keys": [{"id": "primary", "key": "search-key"}],

@@ -159,10 +159,13 @@ def _make_config(
             "current_base_url": upstream_base_url,
         }
     }
+    if api_type == "responses":
+        providers["upstream"]["request_encoding"] = "passthrough"
     if responses_search_provider is not None:
         providers[responses_search_provider] = {
             "provider": "openai",
             "api_type": "responses",
+            "request_encoding": "passthrough",
             "api_keys": [{"id": "primary", "key": "search-provider-key"}],
             "current_api_key": "primary",
             "base_urls": ["https://search-provider.example/v1"],
