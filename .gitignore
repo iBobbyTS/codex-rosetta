@@ -225,6 +225,7 @@ __marimo__/
 .claude/
 .opencode/
 .codex/
+.agent-work/
 
 # Tool caches
 .complexipy_cache/
