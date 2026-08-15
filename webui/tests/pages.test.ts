@@ -200,10 +200,11 @@ describe('NetworkSearchPage', () => {
     await waitFor(() => expect(available).toHaveClass('suu-sortable-table-enhanced__row--green'));
     expect(cooling).toHaveClass('suu-sortable-table-enhanced__row--yellow');
     expect(exhausted).toHaveClass('suu-sortable-table-enhanced__row--red');
-    expect(within(available).getByText('Current')).toBeInTheDocument();
-    expect(within(available).getByText('Available')).toBeInTheDocument();
-    expect(within(cooling).getByText('Cooling')).toBeInTheDocument();
-    expect(within(exhausted).getByText('Quota exhausted')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Status' })).toBeInTheDocument();
+    expect(within(available.querySelector<HTMLElement>('.search-status-cell')!).getByText('Available')).toBeInTheDocument();
+    expect(within(cooling.querySelector<HTMLElement>('.search-status-cell')!).getByText('Cooling')).toBeInTheDocument();
+    expect(within(exhausted.querySelector<HTMLElement>('.search-status-cell')!).getByText('Quota exhausted')).toBeInTheDocument();
+    expect(screen.queryByText('Current')).not.toBeInTheDocument();
     const exhaustedSelector = within(exhausted).getByRole('radio', { name: 'Set Tavily as current provider' });
     expect(exhaustedSelector).toBeDisabled();
     const coolingSelector = within(cooling).getByRole('radio', { name: 'Set Self-hosted (Bing RSS) as current provider' });
