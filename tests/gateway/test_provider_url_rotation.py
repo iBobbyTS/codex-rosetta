@@ -749,7 +749,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
             },
             "model_groups": {
                 "models": {
-                    "provider": "row-a",
+                    "provider": ["row-a"],
                     "type": "llm",
                     "models": {"gpt-5.6-terra": {}},
                 }

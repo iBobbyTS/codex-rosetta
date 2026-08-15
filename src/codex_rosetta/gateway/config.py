@@ -174,6 +174,22 @@ def resolve_provider_api_type(
     )
 
 
+def model_group_provider_names(value: Any, *, field: str) -> list[str]:
+    """Validate and return one model group's ordered provider names."""
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"config: {field} must be a non-empty list")
+    if any(
+        not isinstance(item, str) or not item or item != item.strip() for item in value
+    ):
+        raise ValueError(f"config: {field} entries must be non-empty provider names")
+    return list(value)
+
+
+def active_model_group_provider(value: Any, *, field: str) -> str:
+    """Return the active provider from a model group's ordered provider list."""
+    return model_group_provider_names(value, field=field)[0]
+
+
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
     """Return validated local-mode enablement and first-run confirmation."""
     mapping = server if isinstance(server, dict) else {}
@@ -554,9 +570,12 @@ def resolve_model_tool_profile_names(
     for group_name, group in raw_model_groups.items():
         if not isinstance(group, dict) or group.get("type") != "llm":
             continue
-        provider_name = group.get("provider")
+        provider_name = active_model_group_provider(
+            group.get("provider"),
+            field=f"model_groups.{group_name}.provider",
+        )
         provider_config = raw_providers.get(provider_name)
-        if not isinstance(provider_name, str) or not isinstance(provider_config, dict):
+        if not isinstance(provider_config, dict):
             continue
         api_type = resolve_provider_api_type(provider_name, provider_config)
         if not provider_supports_tool_profiles(provider_config, api_type=api_type):
@@ -1239,11 +1258,10 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: invalid model group entry for '{group_name}'"
                 )
-            provider_name = group_value.get("provider")
-            if not provider_name:
-                raise ValueError(
-                    f"config: model group '{group_name}' requires a provider"
-                )
+            provider_name = active_model_group_provider(
+                group_value.get("provider"),
+                field=f"model_groups.{group_name}.provider",
+            )
             group_type = group_value.get("type")
             if group_type != "llm":
                 raise ValueError(

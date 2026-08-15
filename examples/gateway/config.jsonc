@@ -39,7 +39,7 @@
   // filtering is supplied by exact matches in the bundled model presets.
   "model_groups": {
     "OpenAI Chat": {
-      "provider": "openai_chat",
+      "provider": ["openai_chat"],
       "type": "llm",
       "tool_profile": "builtin",
       "models": {
@@ -51,7 +51,7 @@
       }
     },
     "Anthropic": {
-      "provider": "anthropic",
+      "provider": ["anthropic"],
       "type": "llm",
       "models": {
         "claude-sonnet-4-20250514": {},
@@ -59,7 +59,7 @@
       }
     },
     "Google": {
-      "provider": "google",
+      "provider": ["google"],
       "type": "llm",
       "models": {
         "gemini-2.0-flash": {},

@@ -150,7 +150,7 @@ def test_unified_responses_protocol_resolves_direct_profile(
         },
         "model_groups": {
             "models": {
-                "provider": "upstream",
+                "provider": ["upstream"],
                 "type": "llm",
                 "models": {"test-model": {"upstream_model": "gpt-5.6-terra"}},
             }
@@ -217,7 +217,9 @@ def test_discover_config_checks_config_jsonc_inside_default_directory(
     assert discover_config() == str(config_path)
 
 
-def test_init_uses_the_single_default_config_directory(tmp_path, monkeypatch, capsys) -> None:
+def test_init_uses_the_single_default_config_directory(
+    tmp_path, monkeypatch, capsys
+) -> None:
     config_dir = tmp_path / "xdg"
     config_path = config_dir / "config.jsonc"
     monkeypatch.setattr("codex_rosetta.gateway.cli.DEFAULT_CONFIG_DIR", str(config_dir))
@@ -253,7 +255,7 @@ def _minimal_raw(**server_overrides) -> dict:
         },
         "model_groups": {
             "test-llm": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
@@ -610,7 +612,9 @@ class TestGatewayAccessKeys:
         assert cfg.host == "127.0.0.1"
         assert cfg.credential_visible is False
 
-    def test_cli_scaffold_uses_fixed_default_admin_password_and_unique_access_keys(self):
+    def test_cli_scaffold_uses_fixed_default_admin_password_and_unique_access_keys(
+        self,
+    ):
         first = _empty_config_template()
         second = _empty_config_template()
 
@@ -1029,7 +1033,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "DeepSeek": {
-                    "provider": "DeepSeek",
+                    "provider": ["DeepSeek"],
                     "type": "llm",
                     "models": {"deepseek-test": {}},
                 }
@@ -1054,7 +1058,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "MiniMax": {
-                    "provider": "MiniMax",
+                    "provider": ["MiniMax"],
                     "type": "llm",
                     "models": {"minimax-test": {"upstream_model": "minimax-m3"}},
                 }
@@ -1084,7 +1088,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "Pixel": {
-                    "provider": "Pixel",
+                    "provider": ["Pixel"],
                     "type": "llm",
                     "models": {"pixel-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
@@ -1116,7 +1120,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "DeepSeek": {
-                    "provider": "DeepSeek",
+                    "provider": ["DeepSeek"],
                     "type": "llm",
                     "models": {"deepseek-test": {}},
                 }
@@ -1142,7 +1146,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "Relay": {
-                    "provider": "Relay",
+                    "provider": ["Relay"],
                     "type": "llm",
                     "models": {"relay-test": {}},
                 }
@@ -1169,7 +1173,7 @@ class TestProviderApiTypeResolution:
             },
             "model_groups": {
                 "Qwen": {
-                    "provider": "Qwen",
+                    "provider": ["Qwen"],
                     "type": "llm",
                     "models": {"qwen-test": {"upstream_model": "qwen3.7-plus"}},
                 }
@@ -1265,11 +1269,44 @@ class TestModelGroups:
 
         assert "selects unadapted profile custom:chat" in caplog.text
 
+    def test_provider_list_uses_only_first_entry(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+
+        config = GatewayConfig(raw)
+
+        assert config.models == {"gpt-test": "test"}
+        route, _provider = config.resolve("openai_responses", "gpt-test")
+        assert route.provider_name == "test"
+
+    @pytest.mark.parametrize(
+        ("provider", "message"),
+        [
+            ("test", "must be a non-empty list"),
+            ([], "must be a non-empty list"),
+            ([""], "entries must be non-empty provider names"),
+            ([" test"], "entries must be non-empty provider names"),
+            (["test "], "entries must be non-empty provider names"),
+            ([1], "entries must be non-empty provider names"),
+        ],
+    )
+    def test_provider_list_rejects_invalid_values(self, provider, message):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["provider"] = provider
+
+        with pytest.raises(ValueError, match=message):
+            GatewayConfig(raw)
+
     def test_llm_group_uses_compact_preset_modalities(self):
         raw = _minimal_raw()
         raw["model_groups"] = {
             "OpenAI": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"qwen-public": {"upstream_model": "qwen3.7-plus"}},
             }
@@ -1298,7 +1335,7 @@ class TestModelGroups:
         raw = _minimal_raw()
         raw["model_groups"] = {
             "Embeddings": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "embedding",
                 "models": {"embed-public": "embed-upstream"},
             }
@@ -1332,7 +1369,7 @@ class TestModelGroups:
     def test_duplicate_names_across_groups_are_rejected(self):
         raw = _minimal_raw()
         raw["model_groups"]["second"] = {
-            "provider": "test",
+            "provider": ["test"],
             "type": "llm",
             "models": {"gpt-test": {}},
         }
@@ -1466,7 +1503,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
 
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["Test LLMs"] == {
-        "provider": "test",
+        "provider": ["test"],
         "type": "llm",
         "tool_profile": "builtin",
         "models": {"gpt-test": {}},

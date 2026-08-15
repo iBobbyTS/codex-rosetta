@@ -55,7 +55,7 @@ def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
             "providers": {"upstream": provider},
             "model_groups": {
                 "test": {
-                    "provider": "upstream",
+                    "provider": ["upstream"],
                     "type": "llm",
                     "models": {"test-model": {"upstream_model": "gpt-5.6-terra"}},
                 }

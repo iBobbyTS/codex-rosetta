@@ -31,7 +31,7 @@ def _config(request_body_limit_mb: int | str = 128) -> GatewayConfig:
             },
             "model_groups": {
                 "test": {
-                    "provider": "test-provider",
+                    "provider": ["test-provider"],
                     "type": "llm",
                     "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }

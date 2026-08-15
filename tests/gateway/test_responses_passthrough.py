@@ -125,7 +125,7 @@ def test_unadapted_provider_protocol_uses_standard_responses_behavior():
         },
         "model_groups": {
             "Qwen": {
-                "provider": "Qwen",
+                "provider": ["Qwen"],
                 "type": "llm",
                 "models": {"qwen-test": {"upstream_model": "qwen3.7-plus"}},
             }

@@ -492,7 +492,7 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "custom",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -578,7 +578,7 @@ def test_gateway_config_rejects_unknown_group_profile():
         "tool_profiles": {},
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "missing",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -608,7 +608,7 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "builtin",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -642,7 +642,7 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "builtin",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -681,7 +681,7 @@ def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type)
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "custom",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -714,7 +714,7 @@ def test_gateway_config_uses_no_default_profile_for_anthropic_and_google(api_typ
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
@@ -753,7 +753,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "web-run-injection",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -795,7 +795,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
         "tool_profiles": {"custom": {"api_types": ["responses"], "tools": tools}},
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "custom",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
@@ -1238,7 +1238,7 @@ def test_later_external_candidate_projects_search_on_all_shared_surfaces(
         },
         "model_groups": {
             "Test": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "tool_profile": "responses-tool-mapping",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},

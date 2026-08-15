@@ -10,6 +10,7 @@ import pytest
 
 from codex_rosetta.gateway.local_mode import (
     CodexLocalModeTransaction,
+    _configured_model_specs,
     _materialize_model_preset,
     build_model_catalog,
     catalog_path,
@@ -43,6 +44,7 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
     raw = {
         "model_groups": {
             "llm": {
+                "provider": ["first", "second"],
                 "type": "llm",
                 "models": {
                     "gpt-5.6-sol": {},
@@ -53,6 +55,10 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
         }
     }
 
+    raw["providers"] = {
+        "first": {"provider": "openai"},
+        "second": {"provider": "anthropic"},
+    }
     catalog = build_model_catalog(raw)
     models = catalog["models"]
     slugs = [model["slug"] for model in models]
@@ -75,6 +81,7 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
     custom = next(model for model in models if model["slug"] == "alpha-model")
     assert custom["slug"] == "alpha-model"
     assert custom["display_name"] == terra["display_name"]
+    assert _configured_model_specs(raw)["alpha-model"]["provider_id"] == "openai"
     for key, value in terra.items():
         if key != "slug":
             assert custom[key] == value
@@ -89,6 +96,7 @@ def test_catalog_emits_legacy_summary_capability_for_codex_0144_clients() -> Non
     raw = {
         "model_groups": {
             "third-party": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"deepseek-v4-flash": {}, "minimax-m3": {}},
             }
@@ -104,6 +112,7 @@ def test_catalog_applies_auto_review_override_to_every_selected_model() -> None:
         "codex": {"auto_review_model_override": "review-alias"},
         "model_groups": {
             "models": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {
                     "review-alias": {"upstream_model": "gpt-5.6-terra"},
@@ -125,6 +134,7 @@ def test_catalog_preserves_official_bundled_entries_for_configured_slugs() -> No
     raw = {
         "model_groups": {
             "llm": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"gpt-5.5": {}, "gpt-5.6-terra": {}},
             }
@@ -153,6 +163,7 @@ def test_catalog_preserves_auto_review_tool_mode_without_model_mapping(
     raw = {
         "model_groups": {
             "review": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"codex-auto-review": model_config},
             }
@@ -179,6 +190,7 @@ def test_catalog_uses_upstream_preset_for_mapped_auto_review_model(
     raw = {
         "model_groups": {
             "review": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"codex-auto-review": model_config},
             }
@@ -275,6 +287,7 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
     raw = {
         "model_groups": {
             "third-party": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {slug: {} for slug in expected},
             }
@@ -389,6 +402,7 @@ def test_catalog_detects_preset_from_upstream_model_for_an_exposed_alias() -> No
     raw = {
         "model_groups": {
             "third-party": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"deepseek-alias": {"upstream_model": "deepseek-v4-pro"}},
             }
@@ -423,7 +437,7 @@ def test_catalog_honors_explicit_preset_compaction_hash(
         raw = {
             "model_groups": {
                 "third-party": {
-                    "provider": provider,
+                    "provider": [provider],
                     "type": "llm",
                     "models": {alias: model_config},
                 }
@@ -441,7 +455,7 @@ def test_catalog_rejects_unknown_upstream_without_complete_model_info() -> None:
         raw = {
             "model_groups": {
                 "models": {
-                    "provider": provider,
+                    "provider": [provider],
                     "type": "llm",
                     "models": {alias: {"upstream_model": upstream}},
                 }
@@ -474,6 +488,7 @@ def test_catalog_applies_complete_manual_model_info_to_an_exposed_alias() -> Non
     raw = {
         "model_groups": {
             "custom": {
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"custom-alias": {"model_info": model_info}},
             }
@@ -515,7 +530,15 @@ def test_catalog_compaction_hash_groups_are_stable_and_non_null() -> None:
         "kimi-k2.7-code": {},
     }
     catalog = build_model_catalog(
-        {"model_groups": {"models": {"type": "llm", "models": requested}}}
+        {
+            "model_groups": {
+                "models": {
+                    "provider": ["test"],
+                    "type": "llm",
+                    "models": requested,
+                }
+            }
+        }
     )
     hashes = {model["slug"]: model["comp_hash"] for model in catalog["models"]}
     assert all(isinstance(value, str) and value for value in hashes.values())

@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from importlib import resources
 from typing import Any
 
-from .config import _atomic_write_bytes, normalize_codex_settings
+from .config import (
+    _atomic_write_bytes,
+    active_model_group_provider,
+    normalize_codex_settings,
+)
 from .model_presets import (
     MODEL_INFO_FIELDS,
     MODEL_PRESET_EXTRA_OVERRIDE_FIELDS,
@@ -598,7 +602,7 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
         return configured
 
     providers = raw_config.get("providers", {})
-    for group in model_groups.values():
+    for group_name, group in model_groups.items():
         if not isinstance(group, dict):
             continue
         models = group.get("models", {})
@@ -607,9 +611,16 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
         for name, raw_model in models.items():
             if not isinstance(name, str) or not name:
                 continue
+            try:
+                provider_name = active_model_group_provider(
+                    group.get("provider"),
+                    field=f"model_groups.{group_name}.provider",
+                )
+            except ValueError:
+                continue
             configured[name] = _configured_model_spec(
                 raw_model,
-                provider_name=group.get("provider"),
+                provider_name=provider_name,
                 providers=providers,
             )
     return configured

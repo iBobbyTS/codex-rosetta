@@ -365,7 +365,7 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
             },
             "model_groups": {
                 "private": {
-                    "provider": "private-provider",
+                    "provider": ["private-provider"],
                     "type": "llm",
                     "models": {"model-a": {"upstream_model": "gpt-5.6-terra"}},
                 }

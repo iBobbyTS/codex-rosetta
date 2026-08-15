@@ -172,18 +172,18 @@ def _create_initial_config(config_path: str) -> None:
         },
         "model_groups": {
             "OpenAI": {
-                "provider": "openai_chat",
+                "provider": ["openai_chat"],
                 "type": "llm",
                 "tool_profile": "builtin",
                 "models": {"gpt-5.6-terra": {}},
             },
             "Anthropic": {
-                "provider": "anthropic",
+                "provider": ["anthropic"],
                 "type": "llm",
                 "models": {},
             },
             "Google": {
-                "provider": "google",
+                "provider": ["google"],
                 "type": "llm",
                 "models": {},
             },
@@ -194,9 +194,7 @@ def _create_initial_config(config_path: str) -> None:
 
     _write_jsonc(config_path, template)
     print(f"Created config at {config_path}")
-    print(
-        "Default Admin password: columbina"
-    )
+    print("Default Admin password: columbina")
     print(
         "A gateway access key was generated under server. Store both credentials "
         "securely and change the default Admin password before exposing the gateway."
@@ -294,7 +292,7 @@ def _cmd_add_model_group(args: argparse.Namespace) -> None:
     provider_api_type = resolve_provider_api_type(args.provider, provider_config)
     default_tool_profile = default_tool_profile_for_provider(provider_config)
     groups[args.name] = {
-        "provider": args.provider,
+        "provider": [args.provider],
         "type": "llm",
         **(
             {"tool_profile": default_tool_profile}

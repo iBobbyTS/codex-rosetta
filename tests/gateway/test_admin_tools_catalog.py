@@ -203,7 +203,7 @@ def _make_app():
             },
             "model_groups": {
                 "test": {
-                    "provider": "test-provider",
+                    "provider": ["test-provider"],
                     "type": "llm",
                     "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }
@@ -756,7 +756,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
         "tool_profiles": {},
         "model_groups": {
             "Test": {
-                "provider": "test-provider",
+                "provider": ["test-provider"],
                 "type": "llm",
                 "tool_profile": "builtin",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},

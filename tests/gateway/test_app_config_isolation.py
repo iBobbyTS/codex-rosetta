@@ -36,7 +36,7 @@ def _config(
             },
             "model_groups": {
                 f"group-{label}": {
-                    "provider": f"provider-{label}",
+                    "provider": [f"provider-{label}"],
                     "type": "llm",
                     "models": {f"model-{label}": {"upstream_model": "gpt-5.6-terra"}},
                 }

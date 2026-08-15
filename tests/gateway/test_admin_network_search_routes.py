@@ -71,7 +71,7 @@ def _config() -> GatewayConfig:
             },
             "model_groups": {
                 "Models": {
-                    "provider": "model-provider",
+                    "provider": ["model-provider"],
                     "type": "llm",
                     "tool_profile": "modified-search",
                     "models": {"gpt-5.6-terra": {}},

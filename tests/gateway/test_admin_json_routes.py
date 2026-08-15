@@ -31,7 +31,7 @@ def _config_data() -> dict[str, Any]:
         },
         "model_groups": {
             "test": {
-                "provider": "test-provider",
+                "provider": ["test-provider"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
@@ -237,7 +237,7 @@ def test_model_group_provider_change_does_not_rewrite_codex_files_or_require_res
         assert response.status_code == 200
         assert "X-Codex-Restart-Required" not in response.headers
         saved = json.loads(config_path.read_text(encoding="utf-8"))
-        assert saved["model_groups"]["test"]["provider"] == "second-provider"
+        assert saved["model_groups"]["test"]["provider"] == ["second-provider"]
         assert {
             path: (path.read_bytes(), path.stat().st_ino, path.stat().st_mtime_ns)
             for path in managed_files

@@ -7,6 +7,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from ...config import (
+    active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
     provider_supports_tool_profiles,
@@ -55,16 +56,22 @@ def _tool_profile_references(data: dict[str, Any]) -> dict[str, list[str]]:
     for group_name, group in model_groups.items():
         if not isinstance(group, dict) or group.get("type") != "llm":
             continue
-        provider_name = group.get("provider")
+        try:
+            provider_name = active_model_group_provider(
+                group.get("provider"),
+                field=f"model_groups.{group_name}.provider",
+            )
+        except ValueError:
+            continue
         provider_config = providers.get(provider_name)
-        if not isinstance(provider_name, str) or not isinstance(provider_config, dict):
+        if not isinstance(provider_config, dict):
             continue
         api_type = resolve_provider_api_type(provider_name, provider_config)
         if not provider_supports_tool_profiles(provider_config, api_type=api_type):
             continue
         profile_name = group.get(
             "tool_profile",
-            default_tool_profile_for_provider(providers.get(group.get("provider"))),
+            default_tool_profile_for_provider(provider_config),
         )
         if profile_name is None:
             continue

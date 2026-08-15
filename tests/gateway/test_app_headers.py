@@ -39,7 +39,7 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
         },
         "model_groups": {
             "test": {
-                "provider": "test-provider",
+                "provider": ["test-provider"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }

@@ -425,7 +425,7 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
         },
         "model_groups": {
             "test-llm": {
-                "provider": "test",
+                "provider": ["test"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }

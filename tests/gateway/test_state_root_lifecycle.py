@@ -34,7 +34,7 @@ def _config() -> GatewayConfig:
             },
             "model_groups": {
                 "test": {
-                    "provider": "test-provider",
+                    "provider": ["test-provider"],
                     "type": "llm",
                     "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
                 }

@@ -172,7 +172,7 @@ def _make_config(
         }
     model_groups = {
         "codex": {
-            "provider": "upstream",
+            "provider": ["upstream"],
             "type": "llm",
             **({"tool_profile": tool_profile} if tool_profile is not None else {}),
             "models": {"gateway-model": model},
@@ -204,7 +204,7 @@ def _make_config(
             "current_base_url": "https://secondary-upstream.example/v1",
         }
         model_groups["secondary"] = {
-            "provider": "secondary",
+            "provider": ["secondary"],
             "type": "llm",
             "tool_profile": secondary_profile,
             "models": {"secondary-model": {"model_info": model["model_info"]}},

@@ -607,8 +607,13 @@ def _handle_provider_rename(
     model_groups = data.get("model_groups", {})
     if isinstance(model_groups, dict):
         for group_val in model_groups.values():
-            if isinstance(group_val, dict) and group_val.get("provider") == rename_from:
-                group_val["provider"] = name
+            if not isinstance(group_val, dict):
+                continue
+            provider_names = group_val.get("provider")
+            if isinstance(provider_names, list):
+                group_val["provider"] = [
+                    name if item == rename_from else item for item in provider_names
+                ]
     server = data.get("server")
     web_search = server.get("web_search") if isinstance(server, dict) else None
     if isinstance(web_search, dict):

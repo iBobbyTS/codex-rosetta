@@ -17,8 +17,10 @@ from ...config import (
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
+    active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
+    model_group_provider_names,
     normalize_codex_settings,
     normalize_local_mode_settings,
     normalize_web_search,
@@ -411,7 +413,15 @@ def _normalize_model_groups_for_admin(
     for group_name, group_value in raw_model_groups.items():
         if not isinstance(group_value, dict):
             continue
-        provider = group_value.get("provider", "")
+        try:
+            provider = active_model_group_provider(
+                group_value.get("provider"),
+                field=f"model_groups.{group_name}.provider",
+            )
+            group_provider_error = None
+        except ValueError as exc:
+            provider = ""
+            group_provider_error = str(exc)
         group_type = group_value.get("type", "")
         raw_group_models = group_value.get("models", {})
         models: dict[str, Any] = {}
@@ -429,8 +439,10 @@ def _normalize_model_groups_for_admin(
             "type": group_type,
             "models": models,
         }
+        if group_provider_error:
+            normalized_group["validation_error"] = group_provider_error
         provider_error = provider_errors.get(provider)
-        if provider_error:
+        if provider_error and not group_provider_error:
             normalized_group["validation_error"] = provider_error
         provider_config = raw_providers.get(provider)
         try:
@@ -521,7 +533,7 @@ def _handle_model_group_rename(
             {"error": f"Model group '{name}' already exists"},
             status_code=409,
         )
-    del model_groups[rename_from]
+    model_groups[name] = model_groups.pop(rename_from)
     return None
 
 
@@ -538,6 +550,23 @@ def _clean_group_models(
             clean_name, model_value, provider_id=provider_id
         )
     return cleaned_models
+
+
+def _updated_model_group_providers(
+    model_groups: dict[str, Any], group_name: str, active_provider: str
+) -> list[str]:
+    """Replace the active provider while preserving an existing hidden tail."""
+    existing_group = model_groups.get(group_name)
+    if not isinstance(existing_group, dict):
+        return [active_provider]
+    try:
+        existing_providers = model_group_provider_names(
+            existing_group.get("provider"),
+            field=f"model_groups.{group_name}.provider",
+        )
+    except ValueError:
+        return [active_provider]
+    return [active_provider, *existing_providers[1:]]
 
 
 def _model_group_duplicate_response(
@@ -947,7 +976,9 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
     referencing_groups = [
         group_name
         for group_name, group in model_groups.items()
-        if isinstance(group, dict) and group.get("provider") == name
+        if isinstance(group, dict)
+        and isinstance(group.get("provider"), list)
+        and name in group["provider"]
     ]
 
     from ._shared import _qp
@@ -1059,8 +1090,9 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return body
 
     provider = body.get("provider")
-    if not provider:
+    if not isinstance(provider, str) or not provider.strip():
         return JSONResponse({"error": "'provider' is required"}, status_code=400)
+    provider = provider.strip()
 
     group_type = body.get("type")
     if group_type != "llm":
@@ -1088,7 +1120,6 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         )
 
     rename_from = body.get("rename_from")
-    resolve_name = rename_from or name
     rename_error = _handle_model_group_rename(model_groups, rename_from, name)
     if rename_error is not None:
         return rename_error
@@ -1106,7 +1137,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
     duplicate_error = _model_group_duplicate_response(
         model_groups,
         cleaned_models,
-        exclude_group=resolve_name,
+        exclude_group=name,
     )
     if duplicate_error is not None:
         return duplicate_error
@@ -1123,7 +1154,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return profile_error
 
     model_groups[name] = {
-        "provider": provider,
+        "provider": _updated_model_group_providers(model_groups, name, provider),
         "type": group_type,
         **({"tool_profile": tool_profile} if tool_profile is not None else {}),
         "models": cleaned_models,

@@ -68,7 +68,7 @@ def _config_data() -> dict[str, Any]:
         },
         "model_groups": {
             "OpenAI": {
-                "provider": "openai",
+                "provider": ["openai"],
                 "type": "llm",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
@@ -1835,6 +1835,7 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
         "provider": "openai",
         "api_type": "chat",
     }
+    config["model_groups"]["OpenAI"]["provider"] = ["Zulu", "openai"]
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     initial_config = GatewayConfig(config)
@@ -1860,7 +1861,7 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert list(saved["providers"]) == ["beta", "Zulu"]
-    assert saved["model_groups"]["OpenAI"]["provider"] == "beta"
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["Zulu", "beta"]
     assert json.loads(response.body)["providers"] == ["beta", "Zulu"]
 
 
@@ -1986,6 +1987,28 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
     assert b"web search rows" in response.body
 
 
+def test_delete_provider_rejects_non_active_model_group_dependency(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.test"],
+        "current_base_url": "https://secondary.example.test",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(config_path=str(config_path)),
+        path_params={"name": "secondary"},
+        query_params={},
+    )
+
+    response = _run(delete_provider(request))
+
+    assert response.status_code == 409
+    assert b"referenced by model groups" in response.body
+
+
 def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["official-deepseek"] = {
@@ -2088,7 +2111,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
         "api_type": "chat",
     }
     config["model_groups"]["DeepSeek"] = {
-        "provider": "DeepSeek",
+        "provider": ["DeepSeek"],
         "type": "llm",
         "models": {"deepseek-test": {"upstream_model": "deepseek-v4-flash"}},
     }
@@ -2131,7 +2154,7 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
     config["models"] = {"standalone": "openai"}
     config["model_groups"] = {
         "OpenAI": {
-            "provider": "openai",
+            "provider": ["openai"],
             "type": "llm",
             "models": {"grouped": {"upstream_model": "gpt-5.6-terra"}},
         }
@@ -2337,7 +2360,7 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"] == {
-        "provider": "openai",
+        "provider": ["openai"],
         "type": "llm",
         "tool_profile": "builtin",
         "models": {
@@ -2351,6 +2374,92 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     assert route.upstream_model == "gpt-5.6-terra"
     assert route.input_modalities == ["text", "image"]
     assert route.tool_profile_name == "builtin"
+
+
+def test_get_config_exposes_only_active_model_group_provider(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+
+    response = _run(get_config(SimpleNamespace(app=app)))
+
+    assert response.status_code == 200
+    assert json.loads(response.body)["model_groups"]["OpenAI"]["provider"] == "openai"
+
+
+def test_put_model_group_preserves_hidden_provider_tail(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "provider": "openai",
+            "type": "llm",
+            "tool_profile": "builtin",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["openai", "secondary"]
+
+
+def test_put_model_group_rename_preserves_hidden_provider_tail(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path), gateway_config=GatewayConfig(config)
+    )
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "Renamed"},
+        json=lambda: {
+            "rename_from": "OpenAI",
+            "provider": "openai",
+            "type": "llm",
+            "tool_profile": "builtin",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "OpenAI" not in saved["model_groups"]
+    assert saved["model_groups"]["Renamed"]["provider"] == ["openai", "secondary"]
 
 
 def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
@@ -2843,7 +2952,7 @@ def test_delete_model_group_removes_group_and_runtime_models(tmp_path):
     config = _config_data()
     config["model_groups"] = {
         "OpenAI": {
-            "provider": "openai",
+            "provider": ["openai"],
             "type": "llm",
             "models": {"gpt-grouped": "gpt-5.6-terra"},
         }
