@@ -185,10 +185,10 @@ describe('NetworkSearchPage', () => {
     apiMock.put.mockResolvedValue({ ok: true, current_provider_id: 'cooling' });
     render(NetworkSearchPage);
 
-    await waitFor(() => expect(document.querySelector('tr[data-row-id="available"]')).not.toBeNull());
-    const available = document.querySelector<HTMLElement>('tr[data-row-id="available"]')!;
-    const cooling = document.querySelector<HTMLElement>('tr[data-row-id="cooling"]')!;
-    const exhausted = document.querySelector<HTMLElement>('tr[data-row-id="exhausted"]')!;
+    await waitFor(() => expect(document.querySelector('tr[data-sortable-id="available"]')).not.toBeNull());
+    const available = document.querySelector<HTMLElement>('tr[data-sortable-id="available"]')!;
+    const cooling = document.querySelector<HTMLElement>('tr[data-sortable-id="cooling"]')!;
+    const exhausted = document.querySelector<HTMLElement>('tr[data-sortable-id="exhausted"]')!;
     await waitFor(() => expect(available).toHaveClass('routing-available'));
     expect(cooling).toHaveClass('routing-cooling');
     expect(exhausted).toHaveClass('routing-exhausted');
@@ -234,7 +234,7 @@ describe('NetworkSearchPage', () => {
     });
     render(NetworkSearchPage);
 
-    await waitFor(() => expect(document.querySelector('tr[data-row-id="tavily"]')).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('tr[data-sortable-id="tavily"]')).not.toBeNull());
     expect(statusReads).toBe(0);
 
     usage.resolve({
@@ -244,7 +244,7 @@ describe('NetworkSearchPage', () => {
     });
 
     await waitFor(() => expect(statusReads).toBe(1));
-    const row = document.querySelector<HTMLElement>('tr[data-row-id="tavily"]')!;
+    const row = document.querySelector<HTMLElement>('tr[data-sortable-id="tavily"]')!;
     await waitFor(() => expect(row).toHaveClass('routing-exhausted'));
     expect(within(row).getByText('Quota exhausted')).toBeInTheDocument();
     expect(within(row).getByRole('button', { name: 'Set Tavily as current provider' })).toBeDisabled();
@@ -271,7 +271,7 @@ describe('NetworkSearchPage', () => {
     mockConfig(configResponse(rows, providers));
     apiMock.put.mockImplementation((_path: string, body: { web_search: { providers: Array<Record<string, string | undefined>> } }) => Promise.resolve({ server: { web_search: body.web_search } }));
     render(NetworkSearchPage);
-    await waitFor(() => expect(document.querySelector('tr[data-row-id="row-0"]')).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('tr[data-sortable-id="row-0"]')).not.toBeNull());
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
@@ -306,8 +306,8 @@ describe('NetworkSearchPage', () => {
     expect(within(modelSelect.parentElement!).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(contract.responses_models);
     expect(screen.getByLabelText('No configuration required')).toBeInTheDocument();
     expect(await screen.findByText('Quota unavailable')).toBeInTheDocument();
-    expect(document.querySelector('tr[data-row-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
-    expect(document.querySelector('tr[data-row-id="sh"] .search-quota-cell')).toBeEmptyDOMElement();
+    expect(document.querySelector('tr[data-sortable-id="rp"] .search-quota-cell')).toBeEmptyDOMElement();
+    expect(document.querySelector('tr[data-sortable-id="sh"] .search-quota-cell')).toBeEmptyDOMElement();
   });
 
   it('renders DeepSeek official rows from the contract and saves only the provider name', async () => {
@@ -352,9 +352,9 @@ describe('NetworkSearchPage', () => {
 
     expect(await screen.findByText(/mixed GPT\/local chain/)).toBeInTheDocument();
     expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).toHaveTextContent('one search_query');
-    expect(document.querySelector('[data-row-id="rp"] [data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
-    expect(document.querySelector('[data-row-id="tv"] [data-provider-family="tavily_local"]')).toHaveTextContent('Tavily: local query adapter');
-    expect(document.querySelector('[data-row-id="sh"] [data-provider-family="self_hosted_local"]')).toHaveTextContent('Self-hosted: sidecar adapter');
+    expect(document.querySelector('[data-sortable-id="rp"] [data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
+    expect(document.querySelector('[data-sortable-id="tv"] [data-provider-family="tavily_local"]')).toHaveTextContent('Tavily: local query adapter');
+    expect(document.querySelector('[data-sortable-id="sh"] [data-provider-family="self_hosted_local"]')).toHaveTextContent('Self-hosted: sidecar adapter');
     expect(screen.getAllByText(/Capabilities:/)).toHaveLength(3);
   });
 
@@ -390,7 +390,12 @@ describe('NetworkSearchPage', () => {
         ],
         chain: { mode: 'local_query_adapter', capabilities: ['search_query'], limitations: [] },
       },
-      mutate: async () => fireEvent.click(screen.getAllByRole('button', { name: 'Move search provider down' })[0]),
+      mutate: async () => {
+        const source = document.querySelector('tr[data-sortable-id="first"] .drag-handle')!;
+        const target = document.querySelector('tr[data-sortable-id="second"]')!;
+        await fireEvent.dragStart(source);
+        await fireEvent.drop(target);
+      },
     },
   ])('hides stale saved contracts during dirty edits: $name', async ({ rows, savedContract, mutate }) => {
     mockConfig(configResponse(rows, { search: { api_type: 'responses' } }, savedContract));
@@ -469,8 +474,8 @@ describe('NetworkSearchPage', () => {
     render(NetworkSearchPage);
     const key = await screen.findByLabelText('API Key');
     const originalOrder = ['tv', 'rp', 'sh'];
-    const currentOrder = () => Array.from(document.querySelectorAll('tr[data-row-id]'))
-      .map((row) => row.getAttribute('data-row-id'));
+    const currentOrder = () => Array.from(document.querySelectorAll('tr[data-sortable-id]'))
+      .map((row) => row.getAttribute('data-sortable-id'));
     const expectLocked = () => {
       expect(screen.getByRole('button', { name: '+ Add search provider' })).toBeDisabled();
       expect(screen.getAllByLabelText('Search provider type').every((control) => control.hasAttribute('disabled'))).toBe(true);
@@ -478,15 +483,13 @@ describe('NetworkSearchPage', () => {
       expect(screen.getByLabelText('Search Model')).toBeDisabled();
       expect(screen.getByLabelText('API Key')).toBeDisabled();
       expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
-      expect(screen.getAllByRole('button', { name: 'Move search provider up' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
-      expect(screen.getAllByRole('button', { name: 'Move search provider down' }).every((button) => button.hasAttribute('disabled'))).toBe(true);
       expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'false' && button.hasAttribute('disabled'))).toBe(true);
     };
     const attemptProgrammaticMutations = async () => {
       await fireEvent.input(key, { target: { value: 'request-in-flight-edit' } });
       const dataTransfer = transfer();
       dataTransfer.setData('text/plain', 'tv');
-      await fireEvent.drop(document.querySelector('tr[data-row-id="sh"]')!, { dataTransfer });
+      await fireEvent.drop(document.querySelector('tr[data-sortable-id="sh"]')!, { dataTransfer });
       expect(currentOrder()).toEqual(originalOrder);
       expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).not.toBeNull();
     };
@@ -558,9 +561,6 @@ describe('NetworkSearchPage', () => {
     expect(screen.getByLabelText('Search Model')).toBeEnabled();
     expect(screen.getByLabelText('API Key')).toBeEnabled();
     expect(screen.getAllByRole('button', { name: 'Remove' }).every((button) => !button.hasAttribute('disabled'))).toBe(true);
-    const middleRow = document.querySelector<HTMLElement>('tr[data-row-id="rp"]')!;
-    expect(within(middleRow).getByRole('button', { name: 'Move search provider up' })).toBeEnabled();
-    expect(within(middleRow).getByRole('button', { name: 'Move search provider down' })).toBeEnabled();
     expect(screen.getAllByRole('button', { name: 'Drag to reorder search provider' }).every((button) => button.getAttribute('draggable') === 'true' && !button.hasAttribute('disabled'))).toBe(true);
 
     status.reject(new Error('sidecar unavailable'));
@@ -581,10 +581,10 @@ describe('NetworkSearchPage', () => {
     ] });
     render(NetworkSearchPage);
 
-    await waitFor(() => expect(document.querySelector('tr[data-row-id="first"]')).not.toBeNull());
-    const first = document.querySelector<HTMLElement>('tr[data-row-id="first"]')!;
-    const second = document.querySelector<HTMLElement>('tr[data-row-id="second"]')!;
-    const responses = document.querySelector<HTMLElement>('tr[data-row-id="responses"]')!;
+    await waitFor(() => expect(document.querySelector('tr[data-sortable-id="first"]')).not.toBeNull());
+    const first = document.querySelector<HTMLElement>('tr[data-sortable-id="first"]')!;
+    const second = document.querySelector<HTMLElement>('tr[data-sortable-id="second"]')!;
+    const responses = document.querySelector<HTMLElement>('tr[data-sortable-id="responses"]')!;
     await waitFor(() => expect(within(first).getByText('120/100')).toBeInTheDocument());
     expect(within(first).getByRole('progressbar')).toHaveValue(100);
     expect(within(first).getByText('Resets 2026/10/01')).toBeInTheDocument();
@@ -593,9 +593,8 @@ describe('NetworkSearchPage', () => {
     expect(responses.querySelector('.search-quota-cell')).toBeEmptyDOMElement();
     expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1);
 
-    await fireEvent.click(within(first).getByRole('button', { name: 'Move search provider down' }));
-    expect(within(document.querySelector<HTMLElement>('tr[data-row-id="first"]')!).getByText('120/100')).toBeInTheDocument();
-    expect(within(document.querySelector<HTMLElement>('tr[data-row-id="second"]')!).getByText('25/100')).toBeInTheDocument();
+    expect(within(document.querySelector<HTMLElement>('tr[data-sortable-id="first"]')!).getByText('120/100')).toBeInTheDocument();
+    expect(within(document.querySelector<HTMLElement>('tr[data-sortable-id="second"]')!).getByText('25/100')).toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Test' }));
     expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1);
@@ -621,7 +620,7 @@ describe('NetworkSearchPage', () => {
 
     await screen.findByLabelText('No configuration required');
     await waitFor(() => expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/network-search/usage')).toHaveLength(1));
-    expect(document.querySelector('tr[data-row-id="local"] .search-quota-cell')).toBeEmptyDOMElement();
+    expect(document.querySelector('tr[data-sortable-id="local"] .search-quota-cell')).toBeEmptyDOMElement();
   });
 
   it('supports an empty list, adding and deleting rows, and cleans fields when changing type', async () => {
@@ -660,47 +659,29 @@ describe('NetworkSearchPage', () => {
     expect(add).toBeDisabled();
   });
 
-  it('reorders by keyboard without detaching a stable ID from its masked key', async () => {
-    const rows = [
-      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
-      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
-      { id: 'third', provider: 'self_hosted_google' },
-    ];
-    mockConfig(configResponse(rows));
-    apiMock.put.mockResolvedValue({ server: { web_search: { providers: [] } } });
-    render(NetworkSearchPage);
-    await screen.findByDisplayValue('first***mask');
-
-    await fireEvent.click(screen.getAllByRole('button', { name: 'Move search provider down' })[0]);
-    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-
-    expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: [
-      { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
-      { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
-      { id: 'third', provider: 'self_hosted_google' },
-    ] } });
-  });
-
   it.each([
     {
       name: 'upward',
       sourceId: 'third',
       targetId: 'second',
       expectedIds: ['first', 'third', 'second'],
+      clientY: 10,
     },
     {
       name: 'downward to the adjacent row',
       sourceId: 'second',
       targetId: 'third',
       expectedIds: ['first', 'third', 'second'],
+      clientY: 90,
     },
     {
       name: 'to the end',
       sourceId: 'first',
       targetId: 'third',
       expectedIds: ['second', 'third', 'first'],
+      clientY: 90,
     },
-  ])('supports an $name drag while keeping IDs and masked keys on the same rows', async ({ sourceId, targetId, expectedIds }) => {
+  ])('supports an $name drag while keeping IDs and masked keys on the same rows', async ({ sourceId, targetId, expectedIds, clientY }) => {
     const rows = [
       { id: 'first', provider: 'tavily', tavily_api_key: 'first***mask' },
       { id: 'second', provider: 'tavily', tavily_api_key: 'second***mask' },
@@ -712,12 +693,14 @@ describe('NetworkSearchPage', () => {
     render(NetworkSearchPage);
     await screen.findByDisplayValue('first***mask');
 
-    const source = document.querySelector(`tr[data-row-id="${sourceId}"] .drag-handle`);
-    const target = document.querySelector(`tr[data-row-id="${targetId}"]`);
+    const source = document.querySelector(`tr[data-sortable-id="${sourceId}"] .drag-handle`);
+    const target = document.querySelector(`tr[data-sortable-id="${targetId}"]`);
     expect(source).not.toBeNull();
     expect(target).not.toBeNull();
     const dataTransfer = transfer();
     await fireEvent.dragStart(source!, { dataTransfer });
+    Object.defineProperty(target!, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
+    await fireEvent.dragOver(target!, { dataTransfer, clientY });
     await fireEvent.drop(target!, { dataTransfer });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 

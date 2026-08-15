@@ -4,7 +4,7 @@
   import { t } from '../../shared/i18n.svelte';
   import { createSerialPoll } from '../lib/polling';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
-  import OrderedListEditor, { type OrderedListItem } from '../components/OrderedListEditor.svelte';
+  import { SortableTable } from '@ibobbyts/svelte-ui-utils/sortable-table';
 
   type SearchProviderType =
     | 'tavily'
@@ -89,7 +89,6 @@
   let providerContracts = $state<SearchProviderContract[]>([]);
   let chainContract = $state<SearchChainContract | null>(null);
   let contractsCurrent = $state(false);
-  let draggedId = $state<string | null>(null);
   let status = $state<Status | null>(null);
   let usageById = $state<Map<string, UsageEntry>>(new Map());
   let usageLoading = $state(true);
@@ -115,7 +114,6 @@
       || (row.provider === 'deepseek_native_responses' && !row.deepseek_provider)
     )),
   );
-  const orderedRows = $derived(rows.map((row):OrderedListItem=>({id:row.id})));
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
   const aborted = (value: unknown) =>
@@ -227,51 +225,10 @@
     contractsCurrent = false;
   }
 
-  function moveRow(id: string, offset: -1 | 1): void {
+  function reorderRows(next: SearchRow[]): void {
     if (saving) return;
-    const index = rows.findIndex((row) => row.id === id);
-    const target = index + offset;
-    if (index < 0 || target < 0 || target >= rows.length) return;
-    const next = [...rows];
-    [next[index], next[target]] = [next[target], next[index]];
     rows = next;
     contractsCurrent = false;
-  }
-
-  function moveToTargetIndex(sourceId: string, targetId: string): void {
-    if (saving) return;
-    if (sourceId === targetId) return;
-    const sourceIndex = rows.findIndex((row) => row.id === sourceId);
-    const targetIndex = rows.findIndex((row) => row.id === targetId);
-    if (sourceIndex < 0 || targetIndex < 0) return;
-    // A dropped row occupies the target row's pre-drop index in either direction.
-    const next = [...rows];
-    const [source] = next.splice(sourceIndex, 1);
-    next.splice(targetIndex, 0, source);
-    rows = next;
-    contractsCurrent = false;
-  }
-
-  function startDrag(event: DragEvent, id: string): void {
-    if (saving) {
-      event.preventDefault();
-      draggedId = null;
-      return;
-    }
-    draggedId = id;
-    event.dataTransfer?.setData('text/plain', id);
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
-  }
-
-  function dropRow(event: DragEvent, targetId: string): void {
-    event.preventDefault();
-    if (saving) {
-      draggedId = null;
-      return;
-    }
-    const sourceId = event.dataTransfer?.getData('text/plain') || draggedId;
-    if (sourceId) moveToTargetIndex(sourceId, targetId);
-    draggedId = null;
   }
 
   function canonicalRows(): SearchRow[] {
@@ -376,7 +333,6 @@
   async function save(): Promise<void> {
     if (saving) return;
     saving = true;
-    draggedId = null;
     error = '';
     notice = '';
     let saved = false;
@@ -449,80 +405,87 @@
   {#if loading}
     <p class="loading-text">{t('loading.networkSearch')}</p>
   {:else}
-    <div class="table-scroll search-provider-table">
-      <table>
-        <thead><tr><th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th></tr></thead>
-        <tbody>
-          {#each rows as row, index (row.id)}
+      {#if rows.length}
+      <div class="table-scroll search-provider-table">
+          <SortableTable
+            items={rows}
+            disabled={saving}
+            onReorder={reorderRows}
+            onRemove={(item) => removeRow(item.id)}
+            allowRemoveLast={true}
+            tableClass="search-provider-table__table"
+          >
+          {#snippet header()}
+            <th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th>
+          {/snippet}
+          {#snippet children(row, _index)}
             {@const contract = rowContract(row.id)}
             {@const routing = routingEntry(row.id)}
-            <tr data-row-id={row.id} class:dragging={draggedId === row.id} class:routing-available={routing?.status === 'available'} class:routing-cooling={routing?.status === 'cooling'} class:routing-exhausted={routing?.status === 'exhausted'} ondragover={(event) => { if (!saving) event.preventDefault(); }} ondrop={(event) => dropRow(event, row.id)}>
-              <td class="search-name-cell">
-                <div class="row-order-controls">
-                  <button class="drag-handle" draggable={!saving} disabled={saving} aria-label={t('aria.dragSearchProvider')} title={t('aria.dragSearchProvider')} ondragstart={(event) => startDrag(event, row.id)} ondragend={() => draggedId = null}>⋮⋮</button>
-                  <OrderedListEditor items={orderedRows} renderId={row.id} disabled={saving} compact onmove={moveRow} moveUpLabel={()=>t('aria.moveSearchProviderUp')} moveDownLabel={()=>t('aria.moveSearchProviderDown')} />
+            {@const usage = displayUsage(row.id)}
+            <td class="search-name-cell">
+              <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
+              <Dropdown id={`search-provider-type-${row.id}`} value={row.provider} disabled={saving} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
+              {#if row.provider === 'configured_responses_provider'}
+                <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
+                <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={saving || !responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
+              {:else if row.provider === 'deepseek_native_responses'}
+                <label class="sr-only" for={`deepseek-provider-${row.id}`}>{t('label.deepseekSearchProvider')}</label>
+                <Dropdown id={`deepseek-provider-${row.id}`} ariaLabel={t('label.deepseekSearchProvider')} value={row.deepseek_provider ?? ''} disabled={saving || !deepseekProviders.length} options={deepseekProviders.length ? deepseekProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noDeepSeek') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,deepseek_provider:String(value)}))} />
+              {/if}
+              {#if routing}
+                <span class={`routing-status routing-status-${routing.status}`}>{routingLabel(routing)}</span>
+                {#if routing.current}
+                  <span class="current-provider">{t('network.routing.current')}</span>
+                {:else}
+                  <button class="btn btn-sm current-provider-selector" aria-label={t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })} disabled={saving || selectingCurrentId !== null || routing.status === 'exhausted'} onclick={() => void selectCurrent(row)}>{t('network.routing.select')}</button>
+                {/if}
+              {/if}
+            </td>
+            <td class="search-config-cell">
+              {#if row.provider === 'tavily'}
+                <label class="sr-only" for={`tavily-key-${row.id}`}>{t('label.searchApiKey')}</label>
+                <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} disabled={saving} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
+              {:else if row.provider === 'configured_responses_provider'}
+                <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
+                <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} disabled={saving} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
+              {:else if row.provider === 'deepseek_native_responses'}
+                <span class="fixed-search-model" aria-label={t('label.deepseekSearchModel')}>{t('network.provider.deepseekModel')}</span>
+              {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
+              {#if contract}
+                <div class="provider-contract" data-provider-family={contract.family}>
+                  {#if providerDescription(contract)}<span>{providerDescription(contract)}</span>{/if}
+                  {#if contract.capabilities.length}
+                    <span>{t('network.capabilities', { capabilities: contract.capabilities.map(capabilityLabel).join(', ') })}</span>
+                  {/if}
                 </div>
-                <label class="sr-only" for={`search-provider-type-${row.id}`}>{t('label.searchProviderType')}</label>
-                <Dropdown id={`search-provider-type-${row.id}`} value={row.provider} disabled={saving} options={providerTypes.map((type)=>({value:type,label:providerLabel(type)}))} fitViewport={true} onChange={(value:DropdownValue)=>changeType(row.id,String(value) as SearchProviderType)} />
-                {#if row.provider === 'configured_responses_provider'}
-                  <label class="sr-only" for={`responses-provider-${row.id}`}>{t('label.responsesSearchProvider')}</label>
-                  <Dropdown id={`responses-provider-${row.id}`} ariaLabel={t('label.responsesSearchProvider')} value={row.responses_provider ?? ''} disabled={saving || !responsesProviders.length} options={responsesProviders.length ? responsesProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noResponses') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_provider:String(value)}))} />
-                {:else if row.provider === 'deepseek_native_responses'}
-                  <label class="sr-only" for={`deepseek-provider-${row.id}`}>{t('label.deepseekSearchProvider')}</label>
-                  <Dropdown id={`deepseek-provider-${row.id}`} ariaLabel={t('label.deepseekSearchProvider')} value={row.deepseek_provider ?? ''} disabled={saving || !deepseekProviders.length} options={deepseekProviders.length ? deepseekProviders.map((name)=>({value:name,label:name})) : [{value:'',label:t('network.provider.noDeepSeek') }]} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,deepseek_provider:String(value)}))} />
-                {/if}
-                {#if routing}
-                  <span class={`routing-status routing-status-${routing.status}`}>{routingLabel(routing)}</span>
-                  {#if routing.current}
-                    <span class="current-provider">{t('network.routing.current')}</span>
-                  {:else}
-                    <button class="btn btn-sm current-provider-selector" aria-label={t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })} disabled={saving || selectingCurrentId !== null || routing.status === 'exhausted'} onclick={() => void selectCurrent(row)}>{t('network.routing.select')}</button>
-                  {/if}
-                {/if}
-                <button class="btn btn-sm btn-danger remove-row" disabled={saving} onclick={() => removeRow(row.id)}>{t('btn.remove')}</button>
-              </td>
-              <td class="search-config-cell">
-                {#if row.provider === 'tavily'}
-                  <label class="sr-only" for={`tavily-key-${row.id}`}>{t('label.searchApiKey')}</label>
-                  <input id={`tavily-key-${row.id}`} aria-label={t('label.searchApiKey')} type="password" autocomplete="new-password" value={row.tavily_api_key ?? ''} placeholder={t('label.searchApiKeyPlaceholder')} disabled={saving} oninput={(event) => replaceRow(row.id, (item) => ({ ...item, tavily_api_key: event.currentTarget.value }))} />
-                {:else if row.provider === 'configured_responses_provider'}
-                  <label class="sr-only" for={`responses-model-${row.id}`}>{t('label.responsesSearchModel')}</label>
-                  <Dropdown id={`responses-model-${row.id}`} ariaLabel={t('label.responsesSearchModel')} value={row.responses_model ?? ''} disabled={saving} options={responsesModels.map((name)=>({value:name,label:name}))} fitViewport={true} onChange={(value:DropdownValue)=>replaceRow(row.id,(item)=>({...item,responses_model:String(value)}))} />
-                {:else if row.provider === 'deepseek_native_responses'}
-                  <span class="fixed-search-model" aria-label={t('label.deepseekSearchModel')}>{t('network.provider.deepseekModel')}</span>
-                {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
-                {#if contract}
-                  <div class="provider-contract" data-provider-family={contract.family}>
-                    {#if providerDescription(contract)}<span>{providerDescription(contract)}</span>{/if}
-                    {#if contract.capabilities.length}
-                      <span>{t('network.capabilities', { capabilities: contract.capabilities.map(capabilityLabel).join(', ') })}</span>
-                    {/if}
+              {/if}
+            </td>
+            <td class="search-quota-cell search-remove-cell">
+              {#if row.provider === 'tavily'}
+                {#if usageLoading}
+                  <span>{t('network.quotaLoading')}</span>
+                {:else if usage}
+                  <div class="quota-usage">
+                    <progress max="100" value={usage.percent} aria-label={t('network.quotaProgress', { percent: Math.round(usage.percent) })}></progress>
+                    <span>{t('network.quotaUsed', { used: usage.used, limit: usage.limit })}</span>
+                    <span>{t('network.quotaReset', { date: usage.resetDate })}</span>
                   </div>
+                {:else}
+                  <span>{t('network.quotaUnavailable')}</span>
                 {/if}
-              </td>
-              <td class="search-quota-cell">
-                {#if row.provider === 'tavily'}
-                  {@const usage = displayUsage(row.id)}
-                  {#if usageLoading}
-                    <span>{t('network.quotaLoading')}</span>
-                  {:else if usage}
-                    <div class="quota-usage">
-                      <progress max="100" value={usage.percent} aria-label={t('network.quotaProgress', { percent: Math.round(usage.percent) })}></progress>
-                      <span>{t('network.quotaUsed', { used: usage.used, limit: usage.limit })}</span>
-                      <span>{t('network.quotaReset', { date: usage.resetDate })}</span>
-                    </div>
-                  {:else}
-                    <span>{t('network.quotaUnavailable')}</span>
-                  {/if}
-                {/if}
-              </td>
-            </tr>
-          {:else}
-            <tr><td colspan="3" class="empty">{t('empty.searchProviders')}</td></tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
+              {/if}
+            </td>
+          {/snippet}
+          </SortableTable>
+      </div>
+      {:else}
+      <div class="table-scroll search-provider-table">
+        <table>
+          <thead><tr><th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th></tr></thead>
+          <tbody><tr><td colspan="3" class="empty">{t('empty.searchProviders')}</td></tr></tbody>
+        </table>
+      </div>
+      {/if}
   {/if}
 </div>
 
@@ -530,8 +493,8 @@
 <div class="section"><div class="section-header"><h2>{t('section.advancedSearch')}</h2></div><div class="provider-card" style="max-width:560px"><div class="form-group"><div class="form-label">{t('label.sidecarService')}</div><span class="badge" class:badge-success={status?.service_online} class:badge-error={status && !status.service_online}>{status === null ? t('status.checking') : status.service_online ? t('status.online') : status.configured === false ? t('status.notConfigured') : t('status.offline')}</span></div><div class="form-group"><div class="form-label">{t('label.sidecarBrowser')}</div><span class="badge" class:badge-success={status?.browser_ready} class:badge-error={status?.service_online && !status.browser_ready}>{status === null ? t('status.unknown') : status.browser_ready ? t('status.ready') : status?.service_online ? t('status.notReady') : t('status.unknown')}</span></div>{#if status?.error}<div style="font-size:11px;color:var(--text-dim)">{status.error}</div>{/if}</div></div>
 
 <style>
-  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.search-provider-table tr.dragging{opacity:.45}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.drag-handle,.order-button{border:0;background:transparent;color:var(--text-dim);cursor:pointer;padding:4px;font:inherit}.drag-handle{cursor:grab}.drag-handle:active{cursor:grabbing}.order-button:disabled{cursor:default;opacity:.3}.search-quota-cell{color:var(--text-dim)}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
+  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table table{table-layout:fixed}.search-provider-table th:nth-child(1){width:38%}.search-provider-table th:nth-child(2){width:42%}.search-provider-table th:nth-child(3){width:20%}.search-provider-table td{vertical-align:middle}.row-order-controls{display:inline-flex;align-items:center;vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.drag-handle{border:0;background:transparent;color:var(--text-dim);cursor:grab;padding:4px;font:inherit}.drag-handle:active{cursor:grabbing}.search-quota-cell{color:var(--text-dim)}.search-remove-cell{text-align:right}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
   .search-name-cell{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}.search-name-cell .row-order-controls{flex:0 0 auto}.search-name-cell>:global(.provider-type){flex:1 1 260px;width:auto;min-width:220px}.search-name-cell>:global(.suu-dropdown:not(.provider-type)){flex:1 1 240px;width:auto;min-width:220px;margin:0}.search-name-cell .remove-row{margin-left:auto}.search-name-cell :global(.suu-dropdown__button){width:100%;max-width:100%}.search-name-cell :global(.suu-dropdown__button > span:first-child){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .search-provider-table tr.routing-available>td{background:color-mix(in srgb,var(--green) 10%,transparent)}.search-provider-table tr.routing-cooling>td{background:color-mix(in srgb,var(--orange) 12%,transparent)}.search-provider-table tr.routing-exhausted>td{background:color-mix(in srgb,var(--red) 12%,transparent)}.routing-status,.current-provider{font-size:11px;font-weight:600}.routing-status-available{color:var(--green)}.routing-status-cooling{color:var(--orange)}.routing-status-exhausted{color:var(--red)}.current-provider{color:var(--accent)}
+  .routing-status,.current-provider{font-size:11px;font-weight:600}.routing-status-available{color:var(--green)}.routing-status-cooling{color:var(--orange)}.routing-status-exhausted{color:var(--red)}.current-provider{color:var(--accent)}
   @media(max-width:760px){.section-header{align-items:flex-start}.search-actions{flex-wrap:wrap;justify-content:flex-end}.search-provider-table{overflow:visible}}
 </style>
