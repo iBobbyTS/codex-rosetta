@@ -86,7 +86,6 @@
   let responsesModels = $state<string[]>([]);
   let deepseekProviders = $state<string[]>([]);
   let maxProviders = $state(0);
-  let providerContracts = $state<SearchProviderContract[]>([]);
   let chainContract = $state<SearchChainContract | null>(null);
   let contractsCurrent = $state(false);
   let status = $state<Status | null>(null);
@@ -133,20 +132,6 @@
     self_hosted_bing: t('network.provider.bingRss'),
     self_hosted_bing_browser: t('network.provider.bingBrowser'),
   })[value];
-  const providerDescription = (contract: SearchProviderContract): string => {
-    const contractKey = `${contract.family}:${contract.execution_mode}`;
-    const descriptionKey: Record<string, string> = {
-      'gpt_passthrough:alpha_search_passthrough': 'network.provider.gptDescription',
-      'tavily_local:local_query_adapter': 'network.provider.tavilyDescription',
-      'self_hosted_local:local_query_adapter': 'network.provider.selfHostedDescription',
-      'deepseek_native_responses:native_responses_hosted_search': 'network.provider.deepseekDescription',
-    };
-    const key = descriptionKey[contractKey];
-    return key ? t(key) : '';
-  };
-  const capabilityLabel = (value: string): string => t(`network.capability.${value}`);
-  const rowContract = (id: string): SearchProviderContract | undefined =>
-    contractsCurrent ? providerContracts.find((contract) => contract.id === id) : undefined;
   const chainDescription = (): string => {
     if (!contractsCurrent || !chainContract) return '';
     return t(`network.chain.${chainContract.mode}`);
@@ -281,7 +266,6 @@
 
   function applyConfig(config: Config): void {
     const nextRows = (config.server?.web_search?.providers ?? []).map((row) => ({ ...row }));
-    const nextProviderContracts = config.web_search_contract?.configured_providers ?? [];
     const nextChainContract = config.web_search_contract?.chain ?? null;
     providers = config.providers ?? {};
     providerTypes = config.web_search_contract?.provider_types ?? [];
@@ -289,7 +273,6 @@
     deepseekProviders = config.web_search_contract?.deepseek_providers ?? [];
     maxProviders = config.web_search_contract?.max_providers ?? 0;
     rows = nextRows;
-    providerContracts = nextProviderContracts;
     chainContract = nextChainContract;
     contractsCurrent = true;
   }
@@ -436,7 +419,6 @@
             <th>{t('col.searchName')}</th><th>{t('col.searchConfiguration')}</th><th>{t('col.searchQuota')}</th>
           {/snippet}
           {#snippet children(row, _index)}
-            {@const contract = rowContract(row.id)}
             {@const routing = routingEntry(row.id)}
             {@const usage = displayUsage(row.id)}
             <td class="search-name-cell">
@@ -466,14 +448,6 @@
               {:else if row.provider === 'deepseek_native_responses'}
                 <span class="fixed-search-model" aria-label={t('label.deepseekSearchModel')}>{t('network.provider.deepseekModel')}</span>
               {:else}<span aria-label={t('network.noConfiguration')}>—</span>{/if}
-              {#if contract}
-                <div class="provider-contract" data-provider-family={contract.family}>
-                  {#if providerDescription(contract)}<span>{providerDescription(contract)}</span>{/if}
-                  {#if contract.capabilities.length}
-                    <span>{t('network.capabilities', { capabilities: contract.capabilities.map(capabilityLabel).join(', ') })}</span>
-                  {/if}
-                </div>
-              {/if}
             </td>
             <td class="search-quota-cell search-remove-cell">
               {#if row.provider === 'tavily'}
@@ -508,7 +482,7 @@
 <div class="section"><div class="section-header"><h2>{t('section.advancedSearch')}</h2></div><div class="provider-card" style="max-width:560px"><div class="form-group"><div class="form-label">{t('label.sidecarService')}</div><span class="badge" class:badge-success={status?.service_online} class:badge-error={status && !status.service_online}>{status === null ? t('status.checking') : status.service_online ? t('status.online') : status.configured === false ? t('status.notConfigured') : t('status.offline')}</span></div><div class="form-group"><div class="form-label">{t('label.sidecarBrowser')}</div><span class="badge" class:badge-success={status?.browser_ready} class:badge-error={status?.service_online && !status.browser_ready}>{status === null ? t('status.unknown') : status.browser_ready ? t('status.ready') : status?.service_online ? t('status.notReady') : t('status.unknown')}</span></div>{#if status?.error}<div style="font-size:11px;color:var(--text-dim)">{status.error}</div>{/if}</div></div>
 
 <style>
-  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table :global(.suu-sortable-table){table-layout:fixed}.search-provider-table :global(th:nth-child(2)){width:38%}.search-provider-table :global(th:nth-child(3)){width:42%}.search-provider-table :global(th:nth-child(4)){width:20%}.search-provider-table td{vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.search-quota-cell{color:var(--text-dim)}.search-remove-cell{text-align:right}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.provider-contract{display:grid;gap:2px;margin-top:6px;color:var(--text-dim);font-size:11px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
+  .network-search-section{width:100%}.search-actions{display:flex;align-items:center;gap:8px}.provider-limit,.chain-contract{color:var(--text-dim);font-size:12px}.chain-contract{margin:-4px 0 12px}.loading-text{color:var(--text-dim)}.search-provider-table :global(.suu-sortable-table){table-layout:fixed}.search-provider-table :global(th:nth-child(2)){width:38%}.search-provider-table :global(th:nth-child(3)){width:42%}.search-provider-table :global(th:nth-child(4)){width:20%}.search-provider-table td{vertical-align:middle}.search-config-cell>input,.search-config-cell>:global(.suu-dropdown),.search-config-cell>:global(.suu-dropdown__button){width:100%}.fixed-search-model{display:block;padding:8px 10px;border:1px solid var(--border);border-radius:var(--radius);color:var(--text-dim);font-family:var(--mono);font-size:12px}.search-quota-cell{color:var(--text-dim)}.search-remove-cell{text-align:right}.quota-usage{display:grid;gap:3px;font-size:11px}.quota-usage progress{width:100%;height:8px}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}.search-test-card{display:grid;gap:12px;justify-items:start}.search-test-query{font-family:var(--mono);font-size:13px}.search-test-response{width:100%}.search-test-placeholder{padding:12px;border:1px dashed var(--border);border-radius:var(--radius);color:var(--text-dim);font-size:12px}.search-test-error{border-color:var(--red);color:var(--red)}
   .search-name-cell{min-width:0}.search-name-content{display:flex;flex-wrap:wrap;align-items:center;gap:8px;min-width:0}.search-name-content>:global(.provider-type){flex:1 1 260px;width:auto;min-width:220px}.search-name-content>:global(.suu-dropdown:not(.provider-type)){flex:1 1 240px;width:auto;min-width:220px;margin:0}.search-name-content :global(.suu-dropdown__button){width:100%;max-width:100%}.search-name-content :global(.suu-dropdown__button > span:first-child){min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .routing-status,.current-provider{font-size:11px;font-weight:600}.routing-status-available{color:var(--green)}.routing-status-cooling{color:var(--orange)}.routing-status-exhausted{color:var(--red)}.current-provider{color:var(--accent)}
   @media(max-width:760px){.section-header{align-items:flex-start}.search-actions{flex-wrap:wrap;justify-content:flex-end}.search-provider-table{overflow:visible}}

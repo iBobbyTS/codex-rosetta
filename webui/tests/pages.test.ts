@@ -348,7 +348,7 @@ describe('NetworkSearchPage', () => {
     expect(document.body).not.toHaveTextContent('deepseek-secret');
   });
 
-  it('explains code-owned provider families and the mixed single-query projection', async () => {
+  it('shows the mixed single-query projection without per-row explanatory text', async () => {
     mockConfig(configResponse([
       { id: 'tv', provider: 'tavily', tavily_api_key: 'masked***key' },
       { id: 'rp', provider: 'configured_responses_provider', responses_provider: 'search', responses_model: 'gpt-5.6-terra' },
@@ -365,10 +365,9 @@ describe('NetworkSearchPage', () => {
 
     expect(await screen.findByText(/mixed GPT\/local chain/)).toBeInTheDocument();
     expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).toHaveTextContent('one search_query');
-    expect(document.querySelector('[data-sortable-id="rp"] [data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
-    expect(document.querySelector('[data-sortable-id="tv"] [data-provider-family="tavily_local"]')).toHaveTextContent('Tavily: local query adapter');
-    expect(document.querySelector('[data-sortable-id="sh"] [data-provider-family="self_hosted_local"]')).toHaveTextContent('Self-hosted: sidecar adapter');
-    expect(screen.getAllByText(/Capabilities:/)).toHaveLength(3);
+    expect(document.querySelector('.provider-contract')).toBeNull();
+    expect(screen.queryByText(/Tavily: local query adapter/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Capabilities:/)).not.toBeInTheDocument();
   });
 
   it.each([
@@ -418,7 +417,6 @@ describe('NetworkSearchPage', () => {
     await mutate();
 
     expect(document.querySelector('.chain-contract')).toBeNull();
-    expect(document.querySelectorAll('.provider-contract')).toHaveLength(0);
   });
 
   it('refreshes rows and contracts together after saving a local to GPT edit', async () => {
@@ -449,14 +447,12 @@ describe('NetworkSearchPage', () => {
     const type = await screen.findByLabelText('Search provider type');
     await chooseDropdown(type, 'configured_responses_provider');
     expect(document.querySelector('.chain-contract')).toBeNull();
-    expect(document.querySelector('.provider-contract')).toBeNull();
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search provider type')).toHaveAttribute('data-value', 'configured_responses_provider');
       expect(document.querySelector('[data-chain-mode="full_gpt_passthrough"]')).not.toBeNull();
-      expect(document.querySelector('[data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
     });
     expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/config')).toHaveLength(2);
   });
@@ -567,7 +563,7 @@ describe('NetworkSearchPage', () => {
     expect(await screen.findByText('Web search settings saved')).toBeInTheDocument();
     await waitFor(() => expect(statusReads).toBe(2));
     expect(document.querySelector('[data-chain-mode="mixed_single_query"]')).not.toBeNull();
-    expect(document.querySelector('[data-provider-family="gpt_passthrough"]')).toHaveTextContent('configured Responses /alpha/search passthrough');
+    expect(document.querySelector('.provider-contract')).toBeNull();
     expect(screen.getByRole('button', { name: '+ Add search provider' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Save' })).toBeEnabled();
     expect(screen.getAllByLabelText('Search provider type').every((control) => !control.hasAttribute('disabled'))).toBe(true);
