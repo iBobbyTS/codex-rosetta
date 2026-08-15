@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from .provider_profiles import resolve_request_encoding
 from .transport.provider_info import (
     ProviderInfo,
     anthropic_auth,
@@ -193,6 +194,10 @@ def build_provider_info(
     force_rosetta_compaction = cfg.get("force_rosetta_compaction", False)
     if not isinstance(force_rosetta_compaction, bool):
         raise ValueError("config: provider force_rosetta_compaction must be a boolean")
+    request_encoding = resolve_request_encoding(
+        "responses" if base_type in {"openai_responses", "open_responses"} else "other",
+        *([cfg["request_encoding"]] if "request_encoding" in cfg else []),
+    )
 
     raw_credentials = cfg.get("api_keys")
     if not isinstance(raw_credentials, list):
@@ -228,4 +233,5 @@ def build_provider_info(
         allow_redirects=allow_redirects,
         soft_interrupt=soft_interrupt,
         force_rosetta_compaction=force_rosetta_compaction,
+        request_encoding=request_encoding,
     )

@@ -17,6 +17,10 @@ from collections.abc import Awaitable, Callable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from .._ordered_failover import OrderedFailoverCoordinator
+from ..provider_profiles import (
+    RESPONSES_REQUEST_ENCODINGS,
+    ResponsesRequestEncoding,
+)
 
 # Type alias for auth-header builder callables
 AuthHeaderFn = Callable[[str], dict[str, str]]
@@ -54,6 +58,7 @@ class ProviderInfo:
         allow_redirects: bool = False,
         soft_interrupt: bool = False,
         force_rosetta_compaction: bool = False,
+        request_encoding: ResponsesRequestEncoding | None = None,
     ) -> None:
         if base_urls is None:
             if base_url is None:
@@ -112,6 +117,14 @@ class ProviderInfo:
         self.allow_redirects = allow_redirects
         self.soft_interrupt = soft_interrupt
         self.force_rosetta_compaction = force_rosetta_compaction
+        if (
+            request_encoding is not None
+            and request_encoding not in RESPONSES_REQUEST_ENCODINGS
+        ):
+            raise ValueError(
+                "request_encoding must be one of 'passthrough', 'identity', or 'zstd'"
+            )
+        self.request_encoding = request_encoding
 
     @staticmethod
     def _normalize_base_url(name: str, value: str) -> str:

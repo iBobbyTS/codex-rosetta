@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from compression import zstd
 
 from codex_rosetta._vendor import httpclient as httpclient_module
 from codex_rosetta._vendor.httpclient import (
@@ -95,13 +96,18 @@ class _FakeClient:
         return self.response
 
 
-def _provider(base_url: str = "https://upstream.example/v1") -> ProviderInfo:
+def _provider(
+    base_url: str = "https://upstream.example/v1",
+    *,
+    request_encoding: str | None = "identity",
+) -> ProviderInfo:
     return ProviderInfo(
         "test",
         api_key="provider-key",
         base_url=base_url,
         auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
         url_template="{base_url}/chat/completions",
+        request_encoding=request_encoding,
     )
 
 
@@ -380,7 +386,7 @@ def test_streaming_wire_body_preserves_bytes_and_provider_owns_auth(
 
     asyncio.run(
         transport.send_streaming(
-            _provider(),
+            _provider(request_encoding="passthrough"),
             "openai_responses",
             {"model": "test", "stream": True},
             "test",
@@ -404,6 +410,72 @@ def test_streaming_wire_body_preserves_bytes_and_provider_owns_auth(
     assert call["headers"]["x-oai-attestation"] == "signed-wire-proof"
     assert call["headers"]["X-Future-Codex-Capability"] == "preserve-me"
     assert call["headers"]["Accept-Encoding"] == "identity"
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_responses_zstd_rebuilds_final_json_without_stale_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+) -> None:
+    response = _FakeStreamingResponse(200, [b'{"ok":true}'] if not streaming else [])
+    transport, client = _transport(monkeypatch, response)
+    body = {"model": "test", "input": "hi", "stream": streaming}
+    provider = _provider(request_encoding="zstd")
+
+    if streaming:
+        asyncio.run(
+            transport.send_streaming(
+                provider,
+                "openai_responses",
+                body,
+                "test",
+                extra_headers={"x-oai-attestation": "stale-proof"},
+                wire_body=b"stale-wire",
+                wire_headers={"Content-Encoding": "gzip"},
+            )
+        )
+    else:
+        asyncio.run(
+            transport.send_request(
+                provider,
+                "openai_responses",
+                body,
+                "test",
+                extra_headers={"x-oai-attestation": "stale-proof"},
+            )
+        )
+
+    call = client.calls[0]
+    assert json.loads(zstd.decompress(call["data"])) == body
+    assert "json" not in call
+    assert call["headers"]["Content-Encoding"] == "zstd"
+    assert not any(key.lower() == "x-oai-attestation" for key in call["headers"])
+
+
+def test_responses_identity_ignores_original_wire_body_and_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _FakeStreamingResponse(200, [])
+    transport, client = _transport(monkeypatch, response)
+    body = {"model": "test", "input": "hi", "stream": True}
+
+    asyncio.run(
+        transport.send_streaming(
+            _provider(request_encoding="identity"),
+            "openai_responses",
+            body,
+            "test",
+            extra_headers={"x-oai-attestation": "stale-proof"},
+            wire_body=b"stale-wire",
+            wire_headers={"Content-Encoding": "zstd"},
+        )
+    )
+
+    call = client.calls[0]
+    assert call["json"] == body
+    assert "data" not in call
+    assert not any(key.lower() == "content-encoding" for key in call["headers"])
+    assert not any(key.lower() == "x-oai-attestation" for key in call["headers"])
 
 
 @pytest.mark.parametrize("case", ["response-headers", "response-trailers"])

@@ -716,6 +716,7 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
     config["providers"]["search-upstream"] = {
         "provider": "openai",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://search.example.com/v1"],
         "current_base_url": "https://search.example.com/v1",
         "api_keys": [{"id": "primary", "key": "search-provider-key"}],
@@ -854,6 +855,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
             "eligible": {
                 "provider": "deepseek",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
                 "api_keys": [
@@ -873,6 +875,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
             "wrong-origin": {
                 "provider": "deepseek",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
                 "base_urls": ["https://relay.example/v1"],
                 "current_base_url": "https://relay.example/v1",
                 "api_keys": [{"id": "primary", "key": "wrong-origin-secret"}],
@@ -963,6 +966,7 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
     config["providers"]["search-upstream"] = {
         "provider": "openai",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://search.example.test/v1"],
         "current_base_url": "https://search.example.test/v1",
         "api_keys": [{"id": "primary", "key": "search-provider-key"}],
@@ -1069,6 +1073,7 @@ def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
     config["providers"]["official-deepseek"] = {
         "provider": "deepseek",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "api_keys": [{"id": "primary", "key": "deepseek-secret"}],
@@ -1726,6 +1731,7 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
     request.json = lambda: {
         "provider": "deepseek",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
         "api_keys": [{"id": "primary", "key": "sk-new"}],
@@ -1743,6 +1749,7 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
     request.json = lambda: {
         "provider": "deepseek",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
         "api_keys": [{"id": "primary", "key": "sk-new"}],
@@ -1874,6 +1881,7 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
         "current_base_url": "https://search.example.test",
         "provider": "openai",
         "api_type": "responses",
+        "request_encoding": "passthrough",
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -1897,6 +1905,7 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
             "rename_from": "search",
             "provider": "openai",
             "api_type": "responses",
+            "request_encoding": "passthrough",
             "base_urls": ["https://new.example.test"],
             "current_base_url": "https://new.example.test",
         },
@@ -1918,6 +1927,7 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
         "api_type": "responses",
+        "request_encoding": "passthrough",
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -1940,6 +1950,7 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
             "rename_from": "official-deepseek",
             "provider": "deepseek",
             "api_type": "responses",
+            "request_encoding": "passthrough",
             "base_urls": ["https://api.deepseek.com"],
             "current_base_url": "https://api.deepseek.com",
         },
@@ -1964,6 +1975,7 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
         "current_base_url": "https://search.example.test",
         "provider": "openai",
         "api_type": "responses",
+        "request_encoding": "passthrough",
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -2018,6 +2030,7 @@ def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
         "api_type": "responses",
+        "request_encoding": "passthrough",
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -2084,6 +2097,7 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
     request.json = lambda: {
         "provider": "qwen",
         "api_type": "responses",
+        "request_encoding": "passthrough",
         "base_urls": ["https://qwen.example.test/v1"],
         "current_base_url": "https://qwen.example.test/v1",
         "api_keys": [{"id": "primary", "key": "sk-new"}],
@@ -2312,6 +2326,7 @@ def test_get_config_derives_responses_default_profile_from_authoritative_url(
     config["providers"]["openai"].update(
         {
             "api_type": "responses",
+            "request_encoding": "passthrough",
             "base_urls": [base_url],
             "current_base_url": base_url,
         }
@@ -2535,6 +2550,7 @@ def test_put_model_group_rejects_sampling_limits_for_other_providers(tmp_path):
 def test_put_model_group_rejects_tool_profile_for_other_protocol(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["api_type"] = "responses"
+    config["providers"]["openai"]["request_encoding"] = "passthrough"
     config_path = tmp_path / "config.jsonc"
     original = json.dumps(config)
     config_path.write_text(original, encoding="utf-8")
@@ -2567,6 +2583,7 @@ def test_put_model_group_persists_responses_passthrough_without_runtime_profile(
     config["providers"]["openai"].update(
         {
             "api_type": "responses",
+            "request_encoding": "passthrough",
             "base_urls": ["https://api.openai.com/v1"],
             "current_base_url": "https://api.openai.com/v1",
         }

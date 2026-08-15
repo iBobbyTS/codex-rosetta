@@ -14,6 +14,7 @@
       "base_url": "https://api.openai.com/v1",
       "provider": "openai",
       "api_type": "responses",
+      "request_encoding": "passthrough",
       // Responses-only. Requires SQLite and retains summary plaintext for 7 days.
       "force_rosetta_compaction": false
     },

@@ -26,6 +26,7 @@ from .provider_profiles import (
     API_TYPE_TO_PROVIDER_TYPE as PROFILE_API_TYPE_TO_PROVIDER_TYPE,
     api_type_order,
     resolve_force_rosetta_compaction,
+    resolve_request_encoding,
     resolve_provider_profile,
     resolve_soft_interrupt,
 )
@@ -1174,6 +1175,12 @@ class GatewayConfig:
             cfg["allow_redirects"] = allow_redirects
             api_type = resolve_provider_api_type(name, cfg, warn_on_default=True)
             cfg["api_type"] = api_type
+            request_encoding = resolve_request_encoding(
+                api_type,
+                *([cfg["request_encoding"]] if "request_encoding" in cfg else []),
+            )
+            if request_encoding is not None:
+                cfg["request_encoding"] = request_encoding
             cfg["force_rosetta_compaction"] = resolve_force_rosetta_compaction(
                 api_type,
                 *(

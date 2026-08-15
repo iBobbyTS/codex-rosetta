@@ -36,6 +36,7 @@ def _responses_route() -> ResolvedRoute:
 def _provider_info() -> MagicMock:
     info = MagicMock()
     info.base_url = "https://api.example.test"
+    info.request_encoding = "passthrough"
     return info
 
 
@@ -121,6 +122,7 @@ def test_unadapted_provider_protocol_uses_standard_responses_behavior():
                 "base_urls": ["https://qwen.example.test/v1"],
                 "current_base_url": "https://qwen.example.test/v1",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "model_groups": {
@@ -730,6 +732,46 @@ def test_attested_native_compact_forwards_original_wire_body() -> None:
             "Content-Encoding": "zstd",
             "x-oai-attestation": "signed-wire-proof",
         },
+    )
+
+
+def test_identity_policy_rebuilds_attested_request_without_wire_proof() -> None:
+    stream = _RawStream([b'data: {"type":"response.completed"}\n\n'])
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(return_value=stream)
+    body = {
+        "model": "gpt-test",
+        "input": "hi",
+        "stream": True,
+    }
+    wire = InboundWireRequest(
+        body=b"exact-zstd-frame",
+        headers={
+            "Content-Encoding": "zstd",
+            "x-oai-attestation": "signed-wire-proof",
+        },
+    ).with_parsed_body(body)
+    provider_info = _provider_info()
+    provider_info.request_encoding = "identity"
+
+    response, profile = asyncio.run(
+        handle_streaming(
+            _responses_route(),
+            provider_info,
+            body,
+            transport=transport,
+            inbound_wire_request=wire,
+        )
+    )
+
+    assert isinstance(response, StreamingResponse)
+    assert profile.get("wire_passthrough") is not True
+    transport.send_streaming.assert_awaited_once_with(
+        provider_info,
+        "openai_responses",
+        body,
+        "gpt-test",
+        extra_headers=None,
     )
 
 

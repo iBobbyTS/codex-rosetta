@@ -249,13 +249,16 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
         )
         sys.exit(1)
 
-    data.setdefault("providers", {})[name] = {
+    provider_entry: dict[str, Any] = {
         "api_keys": [{"id": "primary", "key": api_key}],
         "current_api_key": "primary",
         "base_urls": [base_url],
         "current_base_url": base_url,
         "api_type": args.api_type,
     }
+    if args.api_type == "responses":
+        provider_entry["request_encoding"] = "passthrough"
+    data.setdefault("providers", {})[name] = provider_entry
     _write_jsonc(path, data)
     print(f"Added provider '{name}' to {path}")
 

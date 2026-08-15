@@ -9,6 +9,7 @@ from codex_rosetta.gateway.provider_profiles import (
     provider_catalog_for_admin,
     resolve_force_rosetta_compaction,
     resolve_provider_profile,
+    resolve_request_encoding,
     resolve_soft_interrupt,
 )
 from codex_rosetta.pipeline import ConversionPipeline
@@ -56,6 +57,19 @@ def test_force_rosetta_compaction_is_responses_only_and_strict() -> None:
         resolve_force_rosetta_compaction("chat", True)
     with pytest.raises(ValueError, match="must be a boolean"):
         resolve_force_rosetta_compaction("responses", "true")
+
+
+def test_request_encoding_is_required_and_responses_only() -> None:
+    for value in ("passthrough", "identity", "zstd"):
+        assert resolve_request_encoding("responses", value) == value
+
+    with pytest.raises(ValueError, match="required.*responses"):
+        resolve_request_encoding("responses")
+    with pytest.raises(ValueError, match="must be one of"):
+        resolve_request_encoding("responses", "gzip")
+    with pytest.raises(ValueError, match="supported only.*responses"):
+        resolve_request_encoding("chat", "identity")
+    assert resolve_request_encoding("chat") is None
 
 
 def test_unadapted_combination_uses_only_selected_standard() -> None:

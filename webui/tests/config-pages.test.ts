@@ -63,6 +63,7 @@ describe('ProvidersPage', () => {
           api_keys: [{ id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
+          request_encoding: 'passthrough',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -91,6 +92,7 @@ describe('ProvidersPage', () => {
           api_keys: [{ id: 'primary', key: '${OPENAI_API_KEY}' }],
           current_api_key: 'primary',
           api_type: 'responses',
+          request_encoding: 'passthrough',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -119,6 +121,7 @@ describe('ProvidersPage', () => {
           api_keys: [{ id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
+          request_encoding: 'passthrough',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -153,6 +156,7 @@ describe('ProvidersPage', () => {
           api_keys: [{ id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
+          request_encoding: 'passthrough',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -182,7 +186,7 @@ describe('ProvidersPage', () => {
 
   it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
-      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', proxy: 'http://proxy.example:8080' } },
+      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', request_encoding: 'identity', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       provider_catalog: providerCatalog,
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
@@ -194,6 +198,7 @@ describe('ProvidersPage', () => {
     expect(screen.getByLabelText('Provider')).toHaveAttribute('data-value', 'openai');
     expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
+    expect(screen.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
     expect(await screen.findByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
     expect(apiMock.get).not.toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
@@ -210,6 +215,7 @@ describe('ProvidersPage', () => {
       proxy: 'http://proxy.example:8080',
       allow_redirects: false,
       api_type: 'responses',
+      request_encoding: 'identity',
       force_rosetta_compaction: false,
       api_keys: [{ id: 'primary', key: 'prov***cret' }],
       current_api_key: 'primary',
@@ -239,6 +245,7 @@ describe('ProvidersPage', () => {
           current_api_key: 'primary',
           credential_statuses: [{ id: 'primary', current: true, status: 'available' }],
           api_type: 'responses',
+          request_encoding: 'passthrough',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -284,6 +291,7 @@ describe('ProvidersPage', () => {
     const config = {
       providers: { relay: {
         provider: 'openai', api_type: 'responses',
+          request_encoding: 'passthrough',
         base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
         base_url_statuses: [{ base_url: 'https://one.example/v1', current: true, status: 'available' }],
         api_keys: [{ id: 'first', key: 'firs***cret' }, { id: 'second', key: 'seco***cret' }],
@@ -324,6 +332,7 @@ describe('ProvidersPage', () => {
     apiMock.get.mockResolvedValue({
       providers: { relay: {
         provider: 'openai', api_type: 'responses',
+          request_encoding: 'passthrough',
         base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
         api_keys: [{ id: 'primary', key: 'prim***cret' }], current_api_key: 'primary',
       } },
@@ -455,6 +464,7 @@ describe('ProvidersPage', () => {
           base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
           current_base_url: 'https://backup.example/v1',
           api_type: 'responses',
+          request_encoding: 'passthrough',
           proxy: 'http://proxy.example:8080',
           api_keys: [
             { id: 'primary', key: 'prim***cret' },
@@ -493,6 +503,7 @@ describe('ProvidersPage', () => {
     const expectedBody = {
       provider: 'openai',
       api_type: 'responses',
+      request_encoding: 'passthrough',
       base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
       current_base_url: 'https://backup.example/v1',
       api_keys: [
@@ -516,6 +527,7 @@ describe('ProvidersPage', () => {
           base_urls: ['https://cockpit.example/v1'],
           current_base_url: 'https://cockpit.example/v1',
           api_type: 'responses',
+          request_encoding: 'passthrough',
           force_rosetta_compaction: true,
           api_keys: [{ id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',

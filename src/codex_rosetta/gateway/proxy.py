@@ -2634,6 +2634,7 @@ async def _handle_direct_responses_streaming(
     log_original_request(body, state=body_log_state)
     wire_passthrough = (
         inbound_wire_request is not None
+        and provider_info.request_encoding == "passthrough"
         and body.get("stream") is True
         and inbound_wire_request.matches(body)
     )

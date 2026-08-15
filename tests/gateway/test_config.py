@@ -56,6 +56,34 @@ def test_legacy_single_api_key_field_is_rejected() -> None:
         GatewayConfig(raw)
 
 
+def test_responses_provider_requires_explicit_request_encoding() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"]["api_type"] = "responses"
+
+    with pytest.raises(
+        ValueError,
+        match="request_encoding is required for api_type 'responses'",
+    ):
+        GatewayConfig(raw)
+
+
+@pytest.mark.parametrize("request_encoding", ["passthrough", "identity", "zstd"])
+def test_responses_provider_propagates_request_encoding(
+    request_encoding: str,
+) -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        {
+            "api_type": "responses",
+            "request_encoding": request_encoding,
+        }
+    )
+
+    config = GatewayConfig(raw)
+
+    assert config.providers["test"].request_encoding == request_encoding
+
+
 def test_discover_config_resolves_explicit_directory() -> None:
     assert discover_config("/tmp/gateway") == "/tmp/gateway/config.jsonc"
 
@@ -104,6 +132,7 @@ def test_provider_identity_not_url_selects_profile() -> None:
             {
                 "provider": "custom",
                 "api_type": "responses",
+                "request_encoding": "passthrough",
                 "base_url": "https://api.openai.com/v1",
             }
         )
@@ -146,6 +175,7 @@ def test_unified_responses_protocol_resolves_direct_profile(
                 "current_base_url": base_url,
                 "provider": provider,
                 "api_type": "responses",
+                "request_encoding": "passthrough",
             }
         },
         "model_groups": {
@@ -390,6 +420,7 @@ def test_later_external_candidate_enables_basic_route_capability(
     )
     if later_provider == "configured_responses_provider":
         raw["providers"]["test"]["api_type"] = "responses"
+        raw["providers"]["test"]["request_encoding"] = "passthrough"
 
     route, _provider = GatewayConfig(raw).resolve("openai_responses", "gpt-test")
 
@@ -734,6 +765,7 @@ class TestWebSearchConfig:
             }
         )
         raw["providers"]["test"]["api_type"] = "responses"
+        raw["providers"]["test"]["request_encoding"] = "passthrough"
 
         config = GatewayConfig(raw)
 
@@ -776,6 +808,7 @@ class TestWebSearchConfig:
             "current_base_url": "https://api.deepseek.com",
             "provider": "deepseek",
             "api_type": "responses",
+            "request_encoding": "passthrough",
         }
 
         config = GatewayConfig(raw)
@@ -1084,6 +1117,7 @@ class TestProviderApiTypeResolution:
                     "current_base_url": "https://api.example.com",
                     "provider": "custom",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                 }
             },
             "model_groups": {
@@ -1169,6 +1203,7 @@ class TestProviderApiTypeResolution:
                     "current_base_url": "https://api.example.com",
                     "provider": "qwen",
                     "api_type": "responses",
+                    "request_encoding": "passthrough",
                 }
             },
             "model_groups": {
@@ -1424,7 +1459,11 @@ class TestModelGroups:
     def test_provider_soft_interrupt_rejects_non_chat_protocol(self):
         raw = _minimal_raw()
         raw["providers"]["test"].update(
-            {"api_type": "responses", "soft_interrupt": True}
+            {
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "soft_interrupt": True,
+            }
         )
 
         with pytest.raises(ValueError, match="supported only.*chat"):
@@ -1438,7 +1477,11 @@ class TestModelGroups:
     def test_responses_provider_force_rosetta_compaction_is_propagated(self):
         raw = _minimal_raw()
         raw["providers"]["test"].update(
-            {"api_type": "responses", "force_rosetta_compaction": True}
+            {
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "force_rosetta_compaction": True,
+            }
         )
 
         cfg = GatewayConfig(raw)
@@ -1449,7 +1492,11 @@ class TestModelGroups:
     def test_provider_force_rosetta_compaction_requires_boolean(self, value):
         raw = _minimal_raw()
         raw["providers"]["test"].update(
-            {"api_type": "responses", "force_rosetta_compaction": value}
+            {
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "force_rosetta_compaction": value,
+            }
         )
 
         with pytest.raises(
@@ -1528,6 +1575,7 @@ def test_cli_add_provider_persists_explicit_protocol(tmp_path):
         "base_urls": ["https://relay.example/v1"],
         "current_base_url": "https://relay.example/v1",
         "api_type": "responses",
+        "request_encoding": "passthrough",
     }
 
 
@@ -1544,6 +1592,7 @@ def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",
                         "api_type": "responses",
+                        "request_encoding": "passthrough",
                     }
                 },
                 "tool_profiles": {},
@@ -1581,6 +1630,7 @@ def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",
                         "api_type": "responses",
+                        "request_encoding": "passthrough",
                     }
                 },
                 "tool_profiles": {},

@@ -564,6 +564,9 @@ def _build_provider_entry(
     if api_type:
         entry["api_type"] = api_type
 
+    if "request_encoding" in body:
+        entry["request_encoding"] = body["request_encoding"]
+
     if "proxy" in body:
         proxy = body["proxy"]
         if proxy:

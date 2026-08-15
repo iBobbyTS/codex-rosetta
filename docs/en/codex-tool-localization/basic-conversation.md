@@ -36,6 +36,13 @@ Provider configuration stores the selected `provider` together with `api_type: "
 
 The only supported Responses protocol value is `responses`; the former `responses_passthrough` and `responses_rosetta` values are no longer accepted and must be replaced before loading the configuration.
 
+Every Responses Provider must also set `request_encoding` explicitly. The
+allowed values are `passthrough`, which preserves an eligible unchanged
+attested inbound body and its wire encoding; `identity`, which always rebuilds
+plain JSON; and `zstd`, which always rebuilds Zstd-compressed JSON. Rebuilding a
+request removes the original `Content-Encoding` and opaque attestation because
+they no longer prove the bytes being sent. Other protocols reject this field.
+
 A Responses Provider may additionally set `force_rosetta_compaction: true`.
 This Provider-level policy affects only valid Codex compaction triggers: every
 reason uses Rosetta's no-tools prompt summary instead of forwarding native
@@ -45,7 +52,7 @@ option is rejected on other protocols and requires Gateway SQLite persistence.
 
 ## Direct Responses Transport
 
-For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, or skips tool mapping when **Pass through** is selected, then forwards the resulting request and streams raw upstream SSE bytes back to Codex. Model-switch compaction, and every valid trigger on a Provider with forced Rosetta compaction, are deliberate semantic exceptions: Rosetta asks the current model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. The transport-level exception is an authenticated request with `Content-Encoding: zstd`: Rosetta decodes it under the configured pre/post-decompression size limits and removes the encoding header first.
+For every same-protocol Responses route, the gateway does not decode and re-encode the complete request through IR. It applies the selected Tool Profile, or skips tool mapping when **Pass through** is selected, then forwards the resulting request and streams raw upstream SSE bytes back to Codex. Model-switch compaction, and every valid trigger on a Provider with forced Rosetta compaction, are deliberate semantic exceptions: Rosetta asks the current model for a plaintext summary, stores its replacement for seven days, and rehydrates it before the next Provider request. An authenticated inbound request with `Content-Encoding: zstd` is first decoded under the configured pre/post-decompression size limits. The Provider's `request_encoding` policy then independently decides whether the final upstream body uses preserved wire bytes, rebuilt plain JSON, or rebuilt Zstd JSON.
 
 This is important because Codex relies on fields that are not part of a minimal cross-provider IR, including:
 

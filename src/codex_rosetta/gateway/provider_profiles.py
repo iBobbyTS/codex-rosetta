@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
 from types import MappingProxyType
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from codex_rosetta.auto_detect import ProviderType
 
@@ -26,6 +26,11 @@ API_TYPE_TO_PROVIDER_TYPE: Mapping[str, ProviderType] = MappingProxyType(
 )
 
 _MISSING = object()
+
+ResponsesRequestEncoding = Literal["passthrough", "identity", "zstd"]
+RESPONSES_REQUEST_ENCODINGS: frozenset[str] = frozenset(
+    {"passthrough", "identity", "zstd"}
+)
 
 
 def _freeze(value: Any) -> Any:
@@ -245,6 +250,31 @@ def resolve_force_rosetta_compaction(
             "api_type 'responses'"
         )
     return resolved if api_type == "responses" else False
+
+
+def resolve_request_encoding(
+    api_type: str,
+    value: Any = _MISSING,
+) -> ResponsesRequestEncoding | None:
+    """Resolve the required Responses upstream request encoding policy."""
+
+    if api_type != "responses":
+        if value is not _MISSING:
+            raise ValueError(
+                "config: provider request_encoding is supported only for "
+                "api_type 'responses'"
+            )
+        return None
+    if value is _MISSING:
+        raise ValueError(
+            "config: provider request_encoding is required for api_type 'responses'"
+        )
+    if not isinstance(value, str) or value not in RESPONSES_REQUEST_ENCODINGS:
+        raise ValueError(
+            "config: provider request_encoding must be one of "
+            "'passthrough', 'identity', or 'zstd'"
+        )
+    return cast(ResponsesRequestEncoding, value)
 
 
 def resolve_provider_profile(provider_id: str, api_type: str) -> ProviderProfile:

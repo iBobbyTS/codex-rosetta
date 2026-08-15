@@ -15,6 +15,8 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Any, cast
 
+from compression import zstd
+
 from codex_rosetta._vendor.httpclient import (
     DEFAULT_MAX_REDIRECTS,
     HttpClientError,
@@ -54,6 +56,7 @@ _CDN_502_MARKERS = (
     "回源请求被中断".encode(),
     b">502<",
 )
+_RESPONSES_TARGETS = frozenset({"openai_responses", "open_responses"})
 
 
 class _ClosedSyntheticResponse:
@@ -216,6 +219,55 @@ def _force_identity_encoding(headers: dict[str, str]) -> None:
         if key.lower() == "accept-encoding":
             del headers[key]
     headers["Accept-Encoding"] = "identity"
+
+
+def _remove_headers_case_insensitive(
+    headers: dict[str, str], names: set[str] | frozenset[str]
+) -> None:
+    for key in tuple(headers):
+        if key.lower() in names:
+            del headers[key]
+
+
+def _request_payload(
+    provider_info: ProviderInfo,
+    target_provider: ProviderType,
+    req_body: dict[str, Any],
+    headers: dict[str, str],
+    *,
+    wire_body: bytes | None = None,
+    wire_headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Build the final request bytes for one upstream protocol call."""
+
+    if target_provider not in _RESPONSES_TARGETS:
+        return {"json": req_body}
+
+    encoding = provider_info.request_encoding
+    if encoding is None:
+        raise ValueError("Responses Provider request_encoding is required")
+
+    if encoding == "passthrough" and wire_body is not None:
+        if wire_headers:
+            overlay_headers_case_insensitive(headers, wire_headers)
+        _force_identity_encoding(headers)
+        overlay_headers_case_insensitive(headers, provider_info.auth_headers())
+        return {"data": wire_body}
+
+    _remove_headers_case_insensitive(
+        headers,
+        frozenset({"content-encoding", "content-length", "x-oai-attestation"}),
+    )
+    if encoding == "zstd":
+        serialized = json.dumps(
+            req_body,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        headers["Content-Encoding"] = "zstd"
+        return {"data": zstd.compress(serialized)}
+    return {"json": req_body}
 
 
 async def _enforce_identity_encoding(resp: HttpStreamingResponse) -> None:
@@ -702,7 +754,12 @@ class HttpTransport:
             allow_redirects=provider_info.allow_redirects,
         )
         try:
-            resp = await client.post(url, json=req_body, headers=headers, stream=True)
+            resp = await client.post(
+                url,
+                headers=headers,
+                stream=True,
+                **_request_payload(provider_info, target_provider, req_body, headers),
+            )
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpClientError, ValueError) as exc:
@@ -859,16 +916,14 @@ class HttpTransport:
             stream=True,
             extra_headers=extra_headers,
         )
-        request_payload: dict[str, Any]
-        if wire_body is None:
-            request_payload = {"json": req_body}
-        else:
-            if wire_headers:
-                overlay_headers_case_insensitive(headers, wire_headers)
-            # Provider configuration always owns upstream authentication.
-            _force_identity_encoding(headers)
-            overlay_headers_case_insensitive(headers, provider_info.auth_headers())
-            request_payload = {"data": wire_body}
+        request_payload = _request_payload(
+            provider_info,
+            target_provider,
+            req_body,
+            headers,
+            wire_body=wire_body,
+            wire_headers=wire_headers,
+        )
         client = self._pool.get(
             provider_info.proxy_url,
             allow_redirects=provider_info.allow_redirects,
