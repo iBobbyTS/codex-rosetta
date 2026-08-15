@@ -68,6 +68,24 @@ test('renders configurable API types with user-facing protocol names', async ({ 
   await expect(page.getByRole('dialog', { name: 'Add Provider' })).not.toContainText('open_responses');
 });
 
+test('keeps the provider dialog body scrollable when its form exceeds the modal height', async ({ page }) => {
+  await page.setViewportSize({ width: 658, height: 520 });
+  await page.goto('/admin/admin.html');
+  await page.getByRole('button', { name: '+ Add Provider' }).click();
+
+  const body = page.getByRole('dialog', { name: 'Add Provider' }).locator('.modal-body');
+  const metrics = await body.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+
+  expect(metrics.overflowY).toBe('auto');
+  expect(metrics.scrollHeight).toBeGreaterThan(metrics.clientHeight);
+  await body.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+});
+
 test('loads provider logos only from bundled assets', async ({ page }) => {
   const externalLogos: string[] = [];
   page.on('request', (request) => {

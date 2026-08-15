@@ -153,8 +153,6 @@
   .provider-url-status.cooling{background:color-mix(in srgb,var(--orange) 12%,transparent)}
   .provider-url-status code{min-width:0;flex:1}
   .provider-key-actions{display:flex;gap:6px;margin-top:6px}
-  /* Dropdown menus must escape the form's scroll viewport. */
-  :global(.provider-modal), :global(.provider-modal .modal-body){overflow:visible}
 </style>
 
 <Modal open={deleteOpen} labelledby="delete-provider-title" onclose={()=>deleteOpen=false}>
