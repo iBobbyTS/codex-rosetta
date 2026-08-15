@@ -7,10 +7,12 @@
   import { t } from '../../shared/i18n.svelte';
   import { providerLogo, providerLogoNeedsDarkInversion } from '../lib/provider-logos';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
-  import { OrderedListEditor, type OrderedListItem } from '@ibobbyts/svelte-ui-utils/ordered-list';
+  import { SortableTableEnhanced } from '@ibobbyts/svelte-ui-utils/sortable-table';
 
   type BaseUrlStatus = { base_url:string; current:boolean; status:'available'|'cooling' };
   type Credential = { id:string; key:string };
+  type UrlRow = { id:string; value:string };
+  type CredentialRow = Credential & { rowId:string };
   type CredentialStatus = { id:string; current:boolean; status:'available'|'cooling' };
   type Provider = { provider?: string; base_urls?: string[]; current_base_url?: string; base_url_statuses?: BaseUrlStatus[]; api_keys?: Credential[]; current_api_key?: string; credential_statuses?: CredentialStatus[]; api_type?: string; proxy?: string; enabled?: boolean; allow_redirects?: boolean; soft_interrupt?: boolean; force_rosetta_compaction?: boolean; validation_error?: string };
   type ModelRoute = string | { provider?: string };
@@ -24,8 +26,14 @@
   let loading = $state(true); let busy = $state(false); let error = $state(''); let notice = $state('');
   let search = $state(''); let view = $state(localStorage.getItem('provider-view') === 'grid' ? 'grid' : 'list');
   let modalOpen = $state(false); let deleteOpen = $state(false); let editingName = $state('');
-  let name = $state(''); let urls = $state<string[]>(['']); let currentUrl = $state(''); let proxy = $state(''); let apiType = $state(''); let allowRedirects = $state(false); let softInterrupt = $state(false); let forceRosettaCompaction = $state(false);
-  let vendorId = $state('custom'); let variantId = $state('custom'); let credentials = $state<Credential[]>([{id:'primary',key:''}]); let currentCredential = $state('primary');
+  let rowSequence = 0;
+  function nextRowId(prefix:string):string{return `${prefix}-${++rowSequence}`;}
+  function urlRow(value:string):UrlRow{return{id:nextRowId('url'),value};}
+  function credentialRow(value:Credential):CredentialRow{return{rowId:nextRowId('credential'),...value};}
+  const initialUrlRow = urlRow('');
+  const initialCredentialRow = credentialRow({id:'primary',key:''});
+  let name = $state(''); let urlRows = $state<UrlRow[]>([initialUrlRow]); let currentUrlRowId = $state(initialUrlRow.id); let proxy = $state(''); let apiType = $state(''); let allowRedirects = $state(false); let softInterrupt = $state(false); let forceRosettaCompaction = $state(false);
+  let vendorId = $state('custom'); let variantId = $state('custom'); let credentialRows = $state<CredentialRow[]>([initialCredentialRow]); let currentCredentialRowId = $state(initialCredentialRow.rowId);
   let pendingDelete = $state(''); let deleteInput = $state('');
 
   const providerEntries = $derived(Object.entries(config.providers ?? {}));
@@ -59,37 +67,35 @@
   function applySelection(): void {
     const protocols = variant().endpoints;
     if (!allowedTypes().includes(apiType)) apiType = selectedVendor.recommended_api_type;
-    const value=variantId === 'custom' ? '' : protocols[apiType] ?? '';urls=[value];currentUrl=value;
+    const value=variantId === 'custom' ? '' : protocols[apiType] ?? '';const row=urlRow(value);urlRows=[row];currentUrlRowId=row.id;
   }
   function chooseVendor(value: string): void { const vendor=vendorById(value); vendorId=vendor.id; variantId=Object.keys(vendor.variants)[0]??'custom';apiType=vendor.recommended_api_type;softInterrupt=vendor.soft_interrupt_default===true;forceRosettaCompaction=false;applySelection(); }
   function chooseVariant(value: string): void { variantId = value; applySelection(); }
-  function chooseProtocol(value: string): void { apiType = value; const next=variantId==='custom'?'':variant().endpoints[value] ?? '';urls=[next];currentUrl=next; }
-  function deriveSelection(): void { const found=Object.entries(selectedVendor.variants).find(([,item])=>item===variantForUrl(selectedVendor,urls[0]??''));variantId=found?.[0]??'custom'; }
-  function setUrl(index:number,value:string):void{urls=urls.map((item,position)=>position===index?value:item);if(!currentUrl||!urls.includes(currentUrl))currentUrl=value;deriveSelection();}
-  function addUrl():void{urls=[...urls,''];}
-  function moveUrl(index:number,offset:-1|1):void{const target=index+offset;if(target<0||target>=urls.length)return;const next=[...urls];[next[index],next[target]]=[next[target],next[index]];urls=next;}
-  function removeUrl(index:number):void{if(urls.length===1)return;const removed=urls[index];const next=urls.filter((_,position)=>position!==index);if(currentUrl===removed)currentUrl=next[index]??next[0]??'';urls=next;deriveSelection();}
-  const urlItems = $derived(urls.map((value,index):OrderedListItem=>({id:String(index),value,current:currentUrl===value})));
-  const credentialItems = $derived(credentials.map((item,index):OrderedListItem=>({id:String(index),value:item.key,current:currentCredential===item.id})));
-  function removeUrlId(id:string):void{removeUrl(Number(id));}
-  function addCredential():void{let index=credentials.length+1;let id=`credential-${index}`;while(credentials.some((item)=>item.id===id)){index+=1;id=`credential-${index}`;}credentials=[...credentials,{id,key:''}];}
-  function updateCredential(index:number,field:'id'|'key',value:string):void{const previous=credentials[index];credentials=credentials.map((item,position)=>position===index?{...item,[field]:value}:item);if(field==='id'&&currentCredential===previous.id)currentCredential=value;}
-  function removeCredential(id:string):void{if(credentials.length===1)return;const index=Number(id);const removed=credentials[index];const next=credentials.filter((_,position)=>position!==index);if(currentCredential===removed.id)currentCredential=next[index]?.id??next[0]?.id??'';credentials=next;}
+  function chooseProtocol(value: string): void { apiType = value; const next=variantId==='custom'?'':variant().endpoints[value] ?? '';const row=urlRow(next);urlRows=[row];currentUrlRowId=row.id; }
+  function deriveSelection(): void { const found=Object.entries(selectedVendor.variants).find(([,item])=>item===variantForUrl(selectedVendor,urlRows[0]?.value??''));variantId=found?.[0]??'custom'; }
+  function setUrl(rowId:string,value:string):void{urlRows=urlRows.map((item)=>item.id===rowId?{...item,value}:item);deriveSelection();}
+  function addUrl():void{urlRows=[...urlRows,urlRow('')];}
+  function reorderUrls(next:UrlRow[]):void{urlRows=next;deriveSelection();}
+  function removeUrl(row:UrlRow):void{if(urlRows.length===1)return;const index=urlRows.findIndex((item)=>item.id===row.id);if(index<0)return;const next=urlRows.filter((item)=>item.id!==row.id);if(currentUrlRowId===row.id)currentUrlRowId=next[index]?.id??next[0]?.id??'';urlRows=next;deriveSelection();}
+  function addCredential():void{let index=credentialRows.length+1;let id=`credential-${index}`;while(credentialRows.some((item)=>item.id===id)){index+=1;id=`credential-${index}`;}credentialRows=[...credentialRows,credentialRow({id,key:''})];}
+  function updateCredential(rowId:string,field:'id'|'key',value:string):void{credentialRows=credentialRows.map((item)=>item.rowId===rowId?{...item,[field]:value}:item);}
+  function reorderCredentials(next:CredentialRow[]):void{credentialRows=next;}
+  function removeCredential(row:CredentialRow):void{if(credentialRows.length===1)return;const index=credentialRows.findIndex((item)=>item.rowId===row.rowId);if(index<0)return;const next=credentialRows.filter((item)=>item.rowId!==row.rowId);if(currentCredentialRowId===row.rowId)currentCredentialRowId=next[index]?.rowId??next[0]?.rowId??'';credentialRows=next;}
   function protocolGroups():{label:string;items:string[]}[]{const adapted=Object.keys(selectedVendor.adapted_api_types);const known=selectedVendor.known_supported_api_types.filter((item)=>!adapted.includes(item));const other=allowedTypes().filter((item)=>!adapted.includes(item)&&!known.includes(item));return[{label:'',items:adapted},{label:t('provider.rosettaUnadapted'),items:known},{label:t('provider.maybeUnsupported',{provider:t(selectedVendor.label_key)}),items:other}].filter((group)=>group.items.length);}
   function clearForm(): void {
-    editingName=''; name=''; urls=['']; currentUrl=''; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; softInterrupt=false; forceRosettaCompaction=false; vendorId='custom'; variantId='custom'; credentials=[{id:'primary',key:''}];currentCredential='primary'; error='';
+    const url=urlRow('');const credential=credentialRow({id:'primary',key:''});editingName=''; name=''; urlRows=[url]; currentUrlRowId=url.id; proxy=''; apiType=allowedTypes()[0] ?? ''; allowRedirects=false; softInterrupt=false; forceRosettaCompaction=false; vendorId='custom'; variantId='custom'; credentialRows=[credential];currentCredentialRowId=credential.rowId; error='';
   }
   function openNew(): void { clearForm(); modalOpen=true; }
   async function openEdit(providerName: string, provider: Provider, clone = false): Promise<void> {
-    editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; urls=[...(provider.base_urls??[])];if(!urls.length)urls=[''];currentUrl=firstUrl(provider); proxy=provider.proxy ?? '';
+    editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; urlRows=(provider.base_urls??[]).map(urlRow);if(!urlRows.length)urlRows=[urlRow('')];currentUrlRowId=urlRows.find((row)=>row.value===firstUrl(provider))?.id??urlRows[0].id; proxy=provider.proxy ?? '';
     apiType = allowedTypes().includes(provider.api_type ?? '') ? provider.api_type ?? '' : allowedTypes()[0] ?? '';
-    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true;credentials=(provider.api_keys??[]).map((item)=>({...item,key:clone?'':item.key}));if(!credentials.length)credentials=[{id:'primary',key:''}];currentCredential=provider.current_api_key??credentials[0].id;deriveSelection();modalOpen=true;error='';
+    vendorId=vendorById(provider.provider).id; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true;credentialRows=(provider.api_keys??[]).map((item)=>credentialRow({...item,key:clone?'':item.key}));if(!credentialRows.length)credentialRows=[credentialRow({id:'primary',key:''})];currentCredentialRowId=credentialRows.find((row)=>row.id===(provider.current_api_key??credentialRows[0].id))?.rowId??credentialRows[0].rowId;deriveSelection();modalOpen=true;error='';
   }
   async function load(signal?: AbortSignal): Promise<void> { try { config=await api.get<Config>('/admin/api/config',signal); error=''; } catch(cause){ if (!(cause instanceof DOMException && cause.name==='AbortError')) error=message(cause); } finally { loading=false; } }
   async function save(): Promise<void> {
-    const normalizedUrls=urls.map(normalizeUrl);if (!name.trim() || !apiType || !allowedTypes().includes(apiType) || normalizedUrls.some((value)=>!/^https?:\/\//i.test(value)) || new Set(normalizedUrls).size!==normalizedUrls.length || !normalizedUrls.includes(normalizeUrl(currentUrl))) { error=t('error.providerFieldsRequired'); return; }
-    const normalizedCredentials=credentials.map((item)=>({id:item.id.trim(),key:item.key.trim()}));if(normalizedCredentials.some((item)=>!item.id||!item.key)||new Set(normalizedCredentials.map((item)=>item.id)).size!==normalizedCredentials.length||!normalizedCredentials.some((item)=>item.id===currentCredential)){error=t('error.providerCredentialRequired');return;}
-    busy=true; error=''; try { const body: Record<string,unknown>={provider:vendorId,api_type:apiType,base_urls:normalizedUrls,current_base_url:normalizeUrl(currentUrl),api_keys:normalizedCredentials,current_api_key:currentCredential,proxy:proxy.trim(),allow_redirects:allowRedirects}; if(apiType==='chat')body.soft_interrupt=softInterrupt; if(apiType==='responses')body.force_rosetta_compaction=forceRosettaCompaction; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',{name:name.trim()}); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
+    const normalizedUrls=urlRows.map((row)=>normalizeUrl(row.value));const currentUrl=normalizeUrl(urlRows.find((row)=>row.id===currentUrlRowId)?.value??'');if (!name.trim() || !apiType || !allowedTypes().includes(apiType) || normalizedUrls.some((value)=>!/^https?:\/\//i.test(value)) || new Set(normalizedUrls).size!==normalizedUrls.length || !normalizedUrls.includes(currentUrl)) { error=t('error.providerFieldsRequired'); return; }
+    const normalizedCredentials=credentialRows.map((item)=>({id:item.id.trim(),key:item.key.trim()}));const currentCredential=credentialRows.find((row)=>row.rowId===currentCredentialRowId)?.id.trim()??'';if(normalizedCredentials.some((item)=>!item.id||!item.key)||new Set(normalizedCredentials.map((item)=>item.id)).size!==normalizedCredentials.length||!normalizedCredentials.some((item)=>item.id===currentCredential)){error=t('error.providerCredentialRequired');return;}
+    busy=true; error=''; try { const body: Record<string,unknown>={provider:vendorId,api_type:apiType,base_urls:normalizedUrls,current_base_url:currentUrl,api_keys:normalizedCredentials,current_api_key:currentCredential,proxy:proxy.trim(),allow_redirects:allowRedirects}; if(apiType==='chat')body.soft_interrupt=softInterrupt; if(apiType==='responses')body.force_rosetta_compaction=forceRosettaCompaction; if(editingName&&editingName!==name.trim())body.rename_from=editingName; await api.put(`/admin/api/config/providers/${encodeURIComponent(name.trim())}`,body); modalOpen=false; notice=t('toast.providerSaved',{name:name.trim()}); await load(); } catch(cause){error=message(cause);} finally{busy=false;}
   }
   async function action(operation:()=>Promise<unknown>,success:string):Promise<void>{busy=true;error='';try{await operation();await load();notice=success;}catch(cause){error=message(cause);}finally{busy=false;}}
   async function toggle(providerName:string):Promise<void>{await action(()=>api.post(`/admin/api/config/providers/${encodeURIComponent(providerName)}/toggle`),t('toast.providerToggled'));}
@@ -136,8 +142,22 @@
   <div class="form-group"><label for="provName">{t('label.providerName')}</label><input id="provName" bind:value={name} placeholder={t('placeholder.providerName')} /></div>
   <div class="form-group"><label for="provProvider">{t('label.providerVendor')}</label><div class="provider-preset-row"><div class="type-logo-wrapper">{#if logoFor(selectedVendor)}<img class="type-logo-preview" class:invert-in-dark={providerLogoNeedsDarkInversion(selectedVendor.logo_shim)} src={logoFor(selectedVendor)} alt="" />{/if}<Dropdown id="provProvider" value={vendorId} options={vendors().map((vendor)=>({value:vendor.id,label:t(vendor.label_key)}))} fitViewport={true} onChange={(value:DropdownValue)=>chooseVendor(String(value))} /></div><Dropdown ariaLabel={t('aria.providerVariant')} value={variantId} options={Object.keys(selectedVendor.variants).map((item)=>({value:item,label:t(`providerVariant.${item}`)}))} fitViewport={true} onChange={(value:DropdownValue)=>chooseVariant(String(value))} /></div></div>
   <div class="form-group"><label for="provApiType">{t('label.providerProtocol')}</label><Dropdown id="provApiType" value={apiType} options={protocolGroups().flatMap((group)=>group.items.map((item)=>({value:item,label:protocolLabel(item)})))} fitViewport={true} fitContent={true} menuAlign="left" onChange={(value:DropdownValue)=>chooseProtocol(String(value))} /></div>
-  <div class="form-group"><div class="form-label">{t('label.baseUrls')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></div><OrderedListEditor items={urlItems} onremove={removeUrlId} oncurrent={(id)=>currentUrl=urls[Number(id)]} currentLabel={(item)=>t('aria.makeBaseUrlCurrent',{url:item.value??''})} removeLabel={(item)=>t('aria.removeBaseUrl',{url:item.value??''})}>{#snippet children(item,index)}<input aria-label={t('aria.baseUrl',{index:index+1})} value={item.value??''} oninput={(event)=>setUrl(index,event.currentTarget.value)} placeholder={t('placeholder.baseUrl')} />{/snippet}</OrderedListEditor><button type="button" class="btn btn-sm" onclick={addUrl}>{t('btn.addBaseUrl')}</button></div>
-  <div class="form-group"><div class="form-label">{t('label.providerCredentials')}</div><OrderedListEditor items={credentialItems} onremove={removeCredential} oncurrent={(id)=>currentCredential=credentials[Number(id)].id} currentLabel={(item)=>t('aria.makeCredentialCurrent',{id:credentials[Number(item.id)].id})} removeLabel={(item)=>t('aria.removeOrderedItem',{id:credentials[Number(item.id)].id})}>{#snippet children(item,index)}{@const credential=credentials[index]}<input type="text" aria-label={t('aria.credentialId',{id:credential.id})} value={credential.id} oninput={(event)=>updateCredential(index,'id',event.currentTarget.value)} placeholder={t('placeholder.credentialId')} /><CredentialEditor ariaLabel={t('aria.credentialKey',{id:credential.id})} clearLabel={t('aria.clearCredentialKey',{id:credential.id})} value={credential.key} onchange={(value)=>updateCredential(index,'key',value)} placeholder={'${OPENAI_API_KEY}'} />{/snippet}</OrderedListEditor><div class="provider-key-actions"><button type="button" class="btn btn-sm" onclick={addCredential}>{t('btn.addCredential')}</button></div></div>
+  <div class="form-group">
+    <div class="form-label">{t('label.baseUrls')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></div>
+    <SortableTableEnhanced items={urlRows} currentId={currentUrlRowId} disabled={busy} onReorder={reorderUrls} onRemove={removeUrl} onCurrentChange={(row)=>{currentUrlRowId=row.id;}} getCurrentLabel={(row)=>t('aria.makeBaseUrlCurrent',{url:row.value||t('label.baseUrl')})} getDragLabel={(row)=>t('aria.dragBaseUrl',{url:row.value||t('label.baseUrl')})} getRemoveLabel={(row)=>t('aria.removeBaseUrl',{url:row.value||t('label.baseUrl')})}>
+      {#snippet header()}<th>{t('col.baseUrl')}</th>{/snippet}
+      {#snippet children(row,index)}<td><input aria-label={t('aria.baseUrl',{index:index+1})} value={row.value} oninput={(event)=>setUrl(row.id,event.currentTarget.value)} placeholder={t('placeholder.baseUrl')} /></td>{/snippet}
+    </SortableTableEnhanced>
+    <button type="button" class="btn btn-sm" onclick={addUrl}>{t('btn.addBaseUrl')}</button>
+  </div>
+  <div class="form-group">
+    <div class="form-label">{t('label.providerCredentials')}</div>
+    <SortableTableEnhanced items={credentialRows} getId={(row)=>row.rowId} currentId={currentCredentialRowId} disabled={busy} onReorder={reorderCredentials} onRemove={removeCredential} onCurrentChange={(row)=>{currentCredentialRowId=row.rowId;}} getCurrentLabel={(row)=>t('aria.makeCredentialCurrent',{id:row.id||t('placeholder.credentialId')})} getDragLabel={(row)=>t('aria.dragCredential',{id:row.id||t('placeholder.credentialId')})} getRemoveLabel={(row)=>t('aria.removeCredential',{id:row.id||t('placeholder.credentialId')})}>
+      {#snippet header()}<th>{t('col.credentialId')}</th><th>{t('col.credentialKey')}</th>{/snippet}
+      {#snippet children(row)}<td><input type="text" aria-label={t('aria.credentialId',{id:row.id})} value={row.id} oninput={(event)=>updateCredential(row.rowId,'id',event.currentTarget.value)} placeholder={t('placeholder.credentialId')} /></td><td><CredentialEditor ariaLabel={t('aria.credentialKey',{id:row.id})} clearLabel={t('aria.clearCredentialKey',{id:row.id})} value={row.key} onchange={(value)=>updateCredential(row.rowId,'key',value)} placeholder={'${OPENAI_API_KEY}'} /></td>{/snippet}
+    </SortableTableEnhanced>
+    <div class="provider-key-actions"><button type="button" class="btn btn-sm" onclick={addCredential}>{t('btn.addCredential')}</button></div>
+  </div>
   <div class="form-group"><label for="provProxy">{t('label.proxyUrl')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label><input id="provProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} /></div>
   <div class="form-group checkbox-group"><label><input type="checkbox" bind:checked={allowRedirects} /><span>{t('label.allowRedirects')}</span></label></div>
   {#if apiType==='chat'}<div class="form-group"><div class="checkbox-group"><label><input type="checkbox" bind:checked={softInterrupt} /><span>{t('label.softInterrupt')}</span></label></div><p class="provider-option-description">{t('provider.softInterruptDescription')}</p></div>{/if}

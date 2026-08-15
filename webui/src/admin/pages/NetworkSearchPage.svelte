@@ -412,6 +412,8 @@
             currentId={currentProviderId}
             getCurrentDisabled={currentDisabled}
             getCurrentLabel={(row) => t('aria.selectCurrentProvider', { provider: providerLabel(row.provider) })}
+            getDragLabel={(row) => t('aria.dragSearchProvider', { provider: providerLabel(row.provider) })}
+            getRemoveLabel={(row) => t('aria.removeSearchProvider', { provider: providerLabel(row.provider) })}
             getRowColorPreset={rowColorPreset}
             onCurrentChange={(row) => void selectCurrent(row)}
           >

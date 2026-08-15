@@ -161,6 +161,9 @@ describe('NetworkSearchPage', () => {
     render(NetworkSearchPage);
     expect(await screen.findByDisplayValue('tav***key')).toBeInTheDocument();
     expect(screen.getByText(/Requests start with the current provider/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Drag Tavily search provider to reorder' })).toHaveAttribute('title', 'Drag Tavily search provider to reorder');
+    expect(screen.getByRole('button', { name: 'Remove Tavily search provider' })).toHaveAttribute('title', 'Remove Tavily search provider');
+    expect(screen.queryByRole('button', { name: 'Drag tavily-a' })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/server', { web_search: { providers: rows } });
     const body = apiMock.put.mock.calls[0][1] as { web_search: Record<string, unknown> };

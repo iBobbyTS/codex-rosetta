@@ -14,6 +14,22 @@ async function selectDropdown(control: HTMLElement, label: string): Promise<void
   await fireEvent.click(option);
 }
 
+function transfer(): { value: string; effectAllowed: string; setData: (_type: string, value: string) => void; getData: () => string } {
+  return {
+    value: '',
+    effectAllowed: 'none',
+    setData(_type: string, value: string) { this.value = value; },
+    getData() { return this.value; },
+  };
+}
+
+function dragAt(element: Element, type: string, dataTransfer: ReturnType<typeof transfer>, clientY = 0): Promise<boolean> {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clientY', { configurable: true, value: clientY });
+  Object.defineProperty(event, 'dataTransfer', { configurable: true, value: dataTransfer });
+  return fireEvent(element, event);
+}
+
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 
@@ -201,12 +217,13 @@ describe('ProvidersPage', () => {
     expect(body).not.toHaveProperty('preset');
     expect(body).not.toHaveProperty('base');
     expect(body).not.toHaveProperty('variant');
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
     expect(screen.getByText('Cooling')).toBeInTheDocument();
     await fireEvent.click(screen.getByLabelText('Maximum Request Body'));
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['64', '128', '256', '512', '1024', 'unlimited']);
   });
 
-  it('reorders and removes URLs deterministically and manually selects a cooling URL', async () => {
+  it('reorders URLs at the midpoint, keeps current by row identity, and falls forward when current is removed', async () => {
     const config = {
       providers: {
         relay: {
@@ -234,22 +251,36 @@ describe('ProvidersPage', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
-    await fireEvent.click(dialog.getByRole('button', { name: 'Move https://three.example/v1 up' }));
-    await fireEvent.click(dialog.getByRole('button', { name: 'Remove https://two.example/v1' }));
+    const source = dialog.getByRole('button', { name: 'Drag https://three.example/v1' });
+    const target = dialog.getByRole('button', { name: 'Drag https://two.example/v1' }).closest('tr')!;
+    const dataTransfer = transfer();
+    await dragAt(source, 'dragstart', dataTransfer);
+    Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
+    await dragAt(target, 'dragover', dataTransfer, 25);
+    expect(target).toHaveClass('suu-sortable-table__row--drop-before');
+    await dragAt(target, 'drop', dataTransfer, 25);
+
+    await fireEvent.click(dialog.getByRole('radio', { name: 'Make https://three.example/v1 current' }));
+    const editedUrl = dialog.getByLabelText('Base URL 2');
+    await fireEvent.input(editedUrl, { target: { value: 'https://edited-three.example/v1' } });
+    expect(dialog.getByRole('radio', { name: 'Make https://edited-three.example/v1 current' })).toBeChecked();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Remove https://edited-three.example/v1' }));
+    expect(dialog.getByRole('radio', { name: 'Make https://two.example/v1 current' })).toBeChecked();
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      base_urls: ['https://one.example/v1', 'https://three.example/v1'],
-      current_base_url: 'https://one.example/v1',
+      base_urls: ['https://one.example/v1', 'https://two.example/v1'],
+      current_base_url: 'https://two.example/v1',
     })));
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Make https://three.example/v1 current' }));
     await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/current-base-url', {
       current_base_url: 'https://three.example/v1',
     }));
   });
 
-  it('edits ordered masked credentials and manually selects a cooling credential', async () => {
+  it('reorders masked credentials, preserves current while its ID changes, and saves the existing DTO', async () => {
     const config = {
       providers: { relay: {
         provider: 'openai', api_type: 'responses',
@@ -266,15 +297,55 @@ describe('ProvidersPage', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
-    await fireEvent.click(dialog.getByRole('button', { name: 'Move second up' }));
+    const source = dialog.getByRole('button', { name: 'Drag credential second' });
+    const target = dialog.getByRole('button', { name: 'Drag credential first' }).closest('tr')!;
+    const dataTransfer = transfer();
+    await dragAt(source, 'dragstart', dataTransfer);
+    Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
+    await dragAt(target, 'dragover', dataTransfer, 25);
+    expect(target).toHaveClass('suu-sortable-table__row--drop-before');
+    await dragAt(target, 'drop', dataTransfer, 25);
+
+    await fireEvent.input(dialog.getByRole('textbox', { name: 'Credential ID first' }), { target: { value: 'renamed-first' } });
+    expect(dialog.getByRole('radio', { name: 'Make credential renamed-first current' })).toBeChecked();
+    expect(dialog.getByRole('textbox', { name: 'Credential key renamed-first' })).toHaveValue('firs***cret');
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'second', key: 'seco***cret' }, { id: 'first', key: 'firs***cret' }],
-      current_api_key: 'first',
+      api_keys: [{ id: 'second', key: 'seco***cret' }, { id: 'renamed-first', key: 'firs***cret' }],
+      current_api_key: 'renamed-first',
     })));
 
+    await fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Make credential second current' }));
     await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/current-base-url', { credential_id: 'second' }));
+  });
+
+  it('protects the last URL and credential rows while allowing newly added rows to be removed', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { relay: {
+        provider: 'openai', api_type: 'responses',
+        base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
+        api_keys: [{ id: 'primary', key: 'prim***cret' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+      registered_shims: [], credential_visible: false,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('button', { name: 'Remove https://one.example/v1' })).toBeDisabled();
+    expect(dialog.getByRole('button', { name: 'Remove credential primary' })).toBeDisabled();
+
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add Base URL' }));
+    expect(dialog.getByRole('button', { name: 'Remove Base URL' })).not.toBeDisabled();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Remove Base URL' }));
+    expect(dialog.getByRole('button', { name: 'Remove https://one.example/v1' })).toBeDisabled();
+
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add credential' }));
+    expect(dialog.getByRole('button', { name: 'Remove credential credential-2' })).not.toBeDisabled();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Remove credential credential-2' }));
+    expect(dialog.getByRole('button', { name: 'Remove credential primary' })).toBeDisabled();
   });
 
   it('derives a child option from persisted provider and URL without using api_type', async () => {
