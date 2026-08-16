@@ -1122,12 +1122,98 @@ def test_entry_waiter_makes_one_request_after_retry_leader(
             f"{origin}/responses",
             *_literal_502s(1),
             _FakeStreamingResponse(200, success_body, content_type=content_type),
-            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            *_literal_502s(1),
         )
         retry_started = asyncio.Event()
         release_retry = asyncio.Event()
+        sleeps: list[float] = []
 
-        async def blocking_sleep(_delay: float) -> None:
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        leader = asyncio.create_task(send())
+        await retry_started.wait()
+        follower = asyncio.create_task(send())
+        await asyncio.sleep(0)
+        release_retry.set()
+        leader_result, follower_result = await asyncio.gather(leader, follower)
+
+        assert leader_result.status_code == 200
+        assert follower_result.status_code == 502
+        assert client.calls == [f"{origin}/responses"] * 3
+        assert sleeps == [1.0]
+        assert provider.base_url == origin
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("post_wait_result", ["503", "cdn"])
+def test_entry_waiter_preserves_existing_non502_failover_state_machine(
+    monkeypatch,
+    streaming: bool,
+    post_wait_result: str,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, url_writes = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        success_type = "text/event-stream" if streaming else "application/json"
+
+        def success() -> _FakeStreamingResponse:
+            return _FakeStreamingResponse(
+                200,
+                success_body,
+                content_type=success_type,
+            )
+
+        client = _RoutingClient()
+        post_wait_response = (
+            _json_response(503, {"error": "busy"})
+            if post_wait_result == "503"
+            else _FakeStreamingResponse(200, _CDN_502_HTML, content_type="text/html")
+        )
+        client.add(
+            f"{first}/responses",
+            *_literal_502s(1),
+            success(),
+            post_wait_response,
+            *([success()] if post_wait_result == "503" else []),
+        )
+        if post_wait_result == "cdn":
+            client.add(f"{second}/responses", success())
+
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
             retry_started.set()
             await release_retry.wait()
 
@@ -1150,7 +1236,19 @@ def test_entry_waiter_makes_one_request_after_retry_leader(
         leader_result, follower_result = await asyncio.gather(leader, follower)
 
         assert leader_result.status_code == follower_result.status_code == 200
-        assert client.calls == [f"{origin}/responses"] * 3
+        assert sleeps == [1.0]
+        if post_wait_result == "503":
+            assert client.calls == [f"{first}/responses"] * 4
+            assert provider.base_url == first
+            assert provider.current_credential_id == "second"
+            assert url_writes == []
+            assert credential_writes == [("row-a", "second")]
+        else:
+            assert client.calls == [f"{first}/responses"] * 3 + [f"{second}/responses"]
+            assert provider.base_url == second
+            assert provider.current_credential_id == "first"
+            assert url_writes == [("row-a", second)]
+            assert credential_writes == []
 
     asyncio.run(scenario())
 

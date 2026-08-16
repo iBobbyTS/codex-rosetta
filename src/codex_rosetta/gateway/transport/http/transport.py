@@ -682,7 +682,7 @@ class HttpTransport:
                 model,
                 extra_headers=extra_headers,
             )
-            if single_attempt:
+            if single_attempt and response.status_code == 502:
                 return response
             if response.status_code == 503:
                 exhausted = await self._advance_credential(
@@ -855,7 +855,7 @@ class HttpTransport:
                 wire_headers=wire_headers,
                 preserve_failover_error_body=not allow_failover,
             )
-            if not allow_failover or single_attempt:
+            if not allow_failover or (single_attempt and result.status_code == 502):
                 return result
             if result.status_code == 503:
                 exhausted = await self._advance_credential(
