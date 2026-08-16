@@ -168,7 +168,7 @@ def test_nonstream_503_rotates_only_credential(monkeypatch) -> None:
 
         provider.bind_current_credential_recorder(record_credential)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(503, {"error": "busy"}))
+        client.add(f"{first}/responses", *_literal_503s())
         client.add(f"{first}/responses", _json_response(200, {"ok": True}))
 
         result = await _transport(monkeypatch, client).send_request(
@@ -206,7 +206,7 @@ def test_nonstream_alternating_502_then_503_rotates_independent_rings(
         client.add(
             f"{first}/responses",
             _json_response(502, {"error": "url"}),
-            _json_response(503, {"error": "key"}),
+            *_literal_503s(),
             _json_response(200, {"ok": True}),
         )
 
@@ -219,11 +219,9 @@ def test_nonstream_alternating_502_then_503_rotates_independent_rings(
         assert provider.current_credential_id == "second"
         assert writes == []
         assert credential_writes == [("row-a", "second")]
-        assert [item["Authorization"] for item in client.headers] == [
-            "Bearer key-first",
-            "Bearer key-first",
-            "Bearer key-second",
-        ]
+        assert [item["Authorization"] for item in client.headers] == (
+            ["Bearer key-first"] * 7 + ["Bearer key-second"]
+        )
 
     asyncio.run(scenario())
 
@@ -247,7 +245,7 @@ def test_nonstream_alternating_503_then_502_rotates_independent_rings(
 
         provider.bind_current_credential_recorder(record_credential)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(503, {"error": "key"}))
+        client.add(f"{first}/responses", *_literal_503s())
         client.add(f"{first}/responses", *_literal_502s())
         client.add(f"{second}/responses", _json_response(200, {"ok": True}))
 
@@ -308,27 +306,20 @@ def test_three_url_alternating_failures_preserve_independent_rings(
             client.add(first_url, *url_failures)
             client.add(
                 second_url,
-                _json_response(503, {"error": "credential"}),
+                *_literal_503s(),
                 success,
             )
-            expected_calls = [first_url] * len(url_failures) + [
-                second_url,
-                second_url,
-            ]
-            expected_headers = ["Bearer key-first"] * (len(url_failures) + 1) + [
-                "Bearer key-second"
-            ]
+            expected_calls = [first_url] * len(url_failures) + [second_url] * 7
+            expected_headers = ["Bearer key-first"] * 12 + ["Bearer key-second"]
         else:
             client.add(
                 first_url,
-                _json_response(503, {"error": "credential"}),
+                *_literal_503s(),
                 *url_failures,
             )
             client.add(second_url, success)
-            expected_calls = [first_url] * (len(url_failures) + 1) + [second_url]
-            expected_headers = ["Bearer key-first"] + ["Bearer key-second"] * (
-                len(url_failures) + 1
-            )
+            expected_calls = [first_url] * 12 + [second_url]
+            expected_headers = ["Bearer key-first"] * 6 + ["Bearer key-second"] * 7
 
         transport = _transport(monkeypatch, client)
         if path_kind == "request":
@@ -389,14 +380,17 @@ def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None
         client = _RoutingClient()
         client.add(
             f"{first}/responses",
-            _json_response(503, {"error": "first"}),
-            _json_response(503, {"error": "second"}),
+            *_literal_503s(12),
         )
-        result = await _transport(monkeypatch, client).send_request(
-            provider, "openai_responses", {}, "model"
-        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        result = await transport.send_request(provider, "openai_responses", {}, "model")
         calls_after_exhaustion = list(client.calls)
-        cooling_result = await _transport(monkeypatch, client).send_request(
+        cooling_result = await transport.send_request(
             provider, "openai_responses", {}, "model"
         )
         assert result.status_code == 503
@@ -407,7 +401,8 @@ def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None
         )
         assert b"secret" not in result.raw_content
         assert client.calls == calls_after_exhaustion
-        assert len(client.calls) == 2
+        assert len(client.calls) == 12
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
 
     asyncio.run(scenario())
 
@@ -430,6 +425,7 @@ def test_503_with_cdn_marker_does_not_rotate_url(monkeypatch) -> None:
                 _CDN_502_HTML,
                 content_type="text/html",
             ),
+            *_literal_503s(5),
             _json_response(200, {"ok": True}),
         )
         result = await _transport(monkeypatch, client).send_request(
@@ -438,7 +434,7 @@ def test_503_with_cdn_marker_does_not_rotate_url(monkeypatch) -> None:
         assert result.status_code == 200
         assert provider.base_url == first
         assert provider.current_credential_id == "second"
-        assert client.calls == [f"{first}/responses", f"{first}/responses"]
+        assert client.calls == [f"{first}/responses"] * 7
 
     asyncio.run(scenario())
 
@@ -454,7 +450,7 @@ def test_streaming_503_rotates_credential_before_output(monkeypatch) -> None:
         client = _RoutingClient()
         client.add(
             f"{first}/responses",
-            _json_response(503, {"error": "busy"}),
+            *_literal_503s(),
             _FakeStreamingResponse(
                 200,
                 b'data: {"ok":true}\n\n',
@@ -468,7 +464,7 @@ def test_streaming_503_rotates_credential_before_output(monkeypatch) -> None:
         assert provider.base_url == first
         assert provider.current_credential_id == "second"
         assert [item["Authorization"] for item in client.headers] == [
-            "Bearer key-first",
+            *(["Bearer key-first"] * 6),
             "Bearer key-second",
         ]
 
@@ -486,7 +482,7 @@ def test_passthrough_503_rotates_credential_on_same_url(monkeypatch) -> None:
         client = _RoutingClient()
         client.add(
             f"{first}/models",
-            _json_response(503, {"error": "busy"}),
+            *_literal_503s(),
             _json_response(200, {"data": []}),
         )
         result = await _transport(monkeypatch, client).send_passthrough(
@@ -512,7 +508,7 @@ def test_search_passthrough_exhausts_credential_ring_before_provider_failure(
         client = _RoutingClient()
         client.add(
             f"{origin}/alpha/search",
-            _json_response(503, {"error": "first"}),
+            *_literal_503s(),
             _json_response(200, {"output": "ok", "results": []}),
         )
         budget = SearchProviderRequestBudget(max_external_calls=1)
@@ -531,10 +527,7 @@ def test_search_passthrough_exhausts_credential_ring_before_provider_failure(
         assert result == {"output": "ok", "results": []}
         assert budget.external_calls == 1
         assert provider.current_credential_id == "second"
-        assert client.calls == [
-            f"{origin}/alpha/search",
-            f"{origin}/alpha/search",
-        ]
+        assert client.calls == [f"{origin}/alpha/search"] * 7
 
     asyncio.run(scenario())
 
@@ -561,6 +554,7 @@ def test_nonstream_status_503_rotates_before_oversized_content_length(
                     )
                 },
             ),
+            *_literal_503s(5),
             _json_response(200, {"ok": True}),
         )
 
@@ -570,7 +564,7 @@ def test_nonstream_status_503_rotates_before_oversized_content_length(
 
         assert result.status_code == 200
         assert provider.current_credential_id == "second"
-        assert len(client.calls) == 2
+        assert len(client.calls) == 7
 
     asyncio.run(scenario())
 
@@ -593,6 +587,7 @@ def test_streaming_status_503_rotates_before_content_encoding_validation(
                 b"unread",
                 headers={"content-encoding": "gzip"},
             ),
+            *_literal_503s(5),
             _FakeStreamingResponse(
                 200,
                 b'data: {"ok":true}\n\n',
@@ -606,7 +601,7 @@ def test_streaming_status_503_rotates_before_content_encoding_validation(
 
         assert result.status_code == 200
         assert provider.current_credential_id == "second"
-        assert len(client.calls) == 2
+        assert len(client.calls) == 7
 
     asyncio.run(scenario())
 
@@ -643,6 +638,10 @@ def _literal_502s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
     return tuple(_json_response(502, {"error": "bad"}) for _ in range(count))
 
 
+def _literal_503s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
+    return tuple(_json_response(503, {"error": "busy"}) for _ in range(count))
+
+
 def test_retry_policy_is_status_neutral_and_stops_on_caller_result() -> None:
     async def scenario() -> None:
         results = deque(["retry", "done"])
@@ -664,6 +663,60 @@ def test_retry_policy_is_status_neutral_and_stops_on_caller_result() -> None:
         assert result == "done"
         assert sleeps == [1.0, 2.0]
         assert not results
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_literal_503_recovers_on_same_credential_with_exact_delays(
+    monkeypatch,
+    path_kind: str,
+    failures_before_success: int,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        success = (
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            )
+            if path_kind == "streaming"
+            else _json_response(200, {"ok": True})
+        )
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(target, *_literal_503s(failures_before_success), success)
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, target, {})
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        assert result.status_code == 200
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+        assert provider.current_credential_id == "first"
+        assert [headers["Authorization"] for headers in client.headers] == [
+            "Bearer key-first"
+        ] * (failures_before_success + 1)
 
     asyncio.run(scenario())
 
@@ -1021,7 +1074,7 @@ def test_http_503_is_not_a_rotation_trigger(monkeypatch, streaming: bool) -> Non
         second = "https://second.example/v1"
         provider, writes = _provider("row-a", first, second)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(503, {"error": "busy"}))
+        client.add(f"{first}/responses", *_literal_503s())
         transport = _transport(monkeypatch, client)
 
         result = (
@@ -1031,7 +1084,7 @@ def test_http_503_is_not_a_rotation_trigger(monkeypatch, streaming: bool) -> Non
         )
 
         assert result.status_code == 503
-        assert client.calls == [f"{first}/responses"]
+        assert client.calls == [f"{first}/responses"] * 6
         assert provider.base_url == first
         assert writes == []
 
@@ -1283,231 +1336,6 @@ def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
-def test_502_retry_503_uses_attempt_credential_without_duplicate_request(
-    monkeypatch, streaming: bool
-) -> None:
-    async def scenario() -> None:
-        origin = "https://first.example/v1"
-        provider, url_writes = _provider(
-            "row-a",
-            origin,
-            credentials=(("first", "key-first"), ("second", "key-second")),
-        )
-        credential_writes: list[tuple[str, str]] = []
-
-        async def record_credential(configured_id: str, credential_id: str) -> None:
-            credential_writes.append((configured_id, credential_id))
-
-        provider.bind_current_credential_recorder(record_credential)
-        client = _RoutingClient()
-        first_started = asyncio.Event()
-        second_started = asyncio.Event()
-        release_second_response = asyncio.Event()
-        initial_attempt = 0
-
-        async def keep_second_credential_response_in_flight() -> None:
-            nonlocal initial_attempt
-            initial_attempt += 1
-            if initial_attempt == 1:
-                first_started.set()
-                await second_started.wait()
-            elif initial_attempt == 2:
-                second_started.set()
-                await release_second_response.wait()
-
-        client.before_response[f"{origin}/responses"] = (
-            keep_second_credential_response_in_flight
-        )
-        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
-        content_type = "text/event-stream" if streaming else "application/json"
-        client.add(
-            f"{origin}/responses",
-            *_literal_502s(1),
-            _json_response(503, {"error": "first busy"}),
-            _json_response(503, {"error": "second busy"}),
-            _FakeStreamingResponse(200, success_body, content_type=content_type),
-            _FakeStreamingResponse(200, success_body, content_type=content_type),
-        )
-        retry_started = asyncio.Event()
-        credential_rotated = asyncio.Event()
-        release_rotator = asyncio.Event()
-        sleeps: list[float] = []
-
-        async def wait_for_credential_rotation(delay: float) -> None:
-            sleeps.append(delay)
-            retry_started.set()
-            release_second_response.set()
-            await credential_rotated.wait()
-
-        transport = _transport(
-            monkeypatch,
-            client,
-            retry_sleep=wait_for_credential_rotation,
-        )
-        advance_credential = transport._advance_credential
-
-        async def pause_initial_credential_rotator(
-            provider_info: ProviderInfo, observed: str
-        ):
-            exhausted = await advance_credential(provider_info, observed)
-            if observed == "first" and exhausted is None:
-                credential_rotated.set()
-                await release_rotator.wait()
-            return exhausted
-
-        monkeypatch.setattr(
-            transport,
-            "_advance_credential",
-            pause_initial_credential_rotator,
-        )
-
-        async def send():
-            if streaming:
-                return await transport.send_streaming(
-                    provider, "openai_responses", {}, "model"
-                )
-            return await transport.send_request(
-                provider, "openai_responses", {}, "model"
-            )
-
-        retrying = asyncio.create_task(send())
-        await first_started.wait()
-        rotating = asyncio.create_task(send())
-        await retry_started.wait()
-
-        retrying_result = await retrying
-        release_rotator.set()
-        rotating_result = await rotating
-
-        assert retrying_result.status_code == rotating_result.status_code == 503
-        assert client.calls == [f"{origin}/responses"] * 3
-        assert [headers["Authorization"] for headers in client.headers] == [
-            "Bearer key-first",
-            "Bearer key-first",
-            "Bearer key-second",
-        ]
-        assert sleeps == [1.0]
-        assert credential_writes == [("row-a", "second")]
-        assert provider.credential_statuses() == (
-            ("first", "cooling"),
-            ("second", "cooling"),
-        )
-        assert url_writes == []
-
-    asyncio.run(scenario())
-
-
-def test_raw_streaming_wire_auth_uses_observed_credential_during_rotation(
-    monkeypatch,
-) -> None:
-    async def scenario() -> None:
-        origin = "https://first.example/v1"
-        provider, url_writes = _provider(
-            "row-a",
-            origin,
-            credentials=(("first", "key-first"), ("second", "key-second")),
-        )
-        credential_writes: list[tuple[str, str]] = []
-
-        async def record_credential(configured_id: str, credential_id: str) -> None:
-            credential_writes.append((configured_id, credential_id))
-
-        provider.bind_current_credential_recorder(record_credential)
-        client = _RoutingClient()
-        client.add(
-            f"{origin}/responses",
-            _json_response(503, {"error": "rotator busy"}),
-            _json_response(503, {"error": "raw request busy"}),
-            _FakeStreamingResponse(
-                200,
-                b'data: {"ok":true}\n\n',
-                content_type="text/event-stream",
-            ),
-        )
-        transport = _transport(monkeypatch, client)
-        raw_snapshot_captured = asyncio.Event()
-        credential_rotated = asyncio.Event()
-        hold_rotator = asyncio.Event()
-        pause_raw_once = True
-        send_streaming_once = transport._send_streaming_once
-
-        async def pause_raw_after_credential_snapshot(*args: Any, **kwargs: Any):
-            nonlocal pause_raw_once
-            if pause_raw_once and kwargs.get("wire_body") is not None:
-                pause_raw_once = False
-                raw_snapshot_captured.set()
-                await credential_rotated.wait()
-            return await send_streaming_once(*args, **kwargs)
-
-        monkeypatch.setattr(
-            transport,
-            "_send_streaming_once",
-            pause_raw_after_credential_snapshot,
-        )
-        advance_credential = transport._advance_credential
-        rotating: asyncio.Task[Any] | None = None
-
-        async def pause_rotator_after_publish(
-            provider_info: ProviderInfo, observed: str
-        ):
-            exhausted = await advance_credential(provider_info, observed)
-            if asyncio.current_task() is rotating:
-                credential_rotated.set()
-                await hold_rotator.wait()
-            return exhausted
-
-        monkeypatch.setattr(
-            transport,
-            "_advance_credential",
-            pause_rotator_after_publish,
-        )
-
-        raw_request = asyncio.create_task(
-            transport.send_streaming(
-                provider,
-                "openai_responses",
-                {},
-                "model",
-                wire_body=b'{"model":"wire"}',
-                wire_headers={
-                    "Authorization": "Bearer wire-stale",
-                    "Content-Encoding": "zstd",
-                },
-            )
-        )
-        await raw_snapshot_captured.wait()
-        rotating = asyncio.create_task(
-            transport.send_streaming(
-                provider,
-                "openai_responses",
-                {},
-                "model",
-            )
-        )
-
-        raw_result = await raw_request
-        rotating.cancel()
-        await asyncio.gather(rotating, return_exceptions=True)
-
-        assert raw_result.status_code == 200
-        assert rotating.cancelled()
-        assert client.calls == [f"{origin}/responses"] * 3
-        assert [headers["Authorization"] for headers in client.headers] == [
-            "Bearer key-first",
-            "Bearer key-first",
-            "Bearer key-second",
-        ]
-        assert credential_writes == [("row-a", "second")]
-        assert provider.credential_statuses() == (
-            ("first", "cooling"),
-            ("second", "available"),
-        )
-        assert url_writes == []
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_makes_one_request_after_retry_leader(
     monkeypatch, streaming: bool
 ) -> None:
@@ -1695,13 +1523,13 @@ def test_entry_waiter_preserves_existing_non502_failover_state_machine(
         leader_result, follower_result = await asyncio.gather(leader, follower)
 
         assert leader_result.status_code == follower_result.status_code == 200
-        assert sleeps == [1.0]
+        assert sleeps == ([1.0, 1.0] if post_wait_result == "503" else [1.0])
         if post_wait_result == "503":
             assert client.calls == [f"{first}/responses"] * 4
             assert provider.base_url == first
-            assert provider.current_credential_id == "second"
+            assert provider.current_credential_id == "first"
             assert url_writes == []
-            assert credential_writes == [("row-a", "second")]
+            assert credential_writes == []
         else:
             assert client.calls == [f"{first}/responses"] * 3 + [f"{second}/responses"]
             assert provider.base_url == second
@@ -1745,6 +1573,47 @@ def test_cancellation_during_retry_releases_url_gate(monkeypatch) -> None:
 
         assert result.status_code == 200
         assert client.calls == [f"{origin}/responses"] * 2
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_503_retry_releases_credential_gate(monkeypatch) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            *_literal_503s(1),
+            _json_response(200, {"ok": True}),
+        )
+        retry_started = asyncio.Event()
+        never_release = asyncio.Event()
+
+        async def blocking_sleep(_delay: float) -> None:
+            retry_started.set()
+            await never_release.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        leader = asyncio.create_task(
+            transport.send_request(provider, "openai_responses", {}, "model")
+        )
+        await retry_started.wait()
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+
+        result = await transport.send_request(provider, "openai_responses", {}, "model")
+        assert result.status_code == 200
+        assert provider.current_credential_id == "first"
+        assert provider.credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
 
     asyncio.run(scenario())
 
@@ -1839,8 +1708,7 @@ def test_same_provider_concurrent_503s_publish_one_credential_change(
         client.before_response[f"{origin}/responses"] = synchronize_failures
         client.add(
             f"{origin}/responses",
-            _json_response(503, {"error": "busy"}),
-            _json_response(503, {"error": "busy"}),
+            *_literal_503s(7),
             _json_response(200, {"ok": 1}),
             _json_response(200, {"ok": 2}),
         )
@@ -1856,7 +1724,7 @@ def test_same_provider_concurrent_503s_publish_one_credential_change(
         assert credential_writes == [("row-a", "second")]
         assert [item["Authorization"] for item in client.headers].count(
             "Bearer key-first"
-        ) == 2
+        ) == 7
         assert [item["Authorization"] for item in client.headers].count(
             "Bearer key-second"
         ) == 2

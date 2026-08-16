@@ -9,6 +9,8 @@ from typing import TypeVar
 
 _ResultT = TypeVar("_ResultT")
 
+_FAILOVER_RETRY_DELAYS = (1.0, 2.0, 4.0, 8.0, 16.0)
+
 
 @dataclass(frozen=True)
 class _RetryPolicy:
@@ -31,3 +33,6 @@ class _RetryPolicy:
             await sleep(delay)
             result = await operation()
         return result
+
+
+_FAILOVER_RETRY_POLICY = _RetryPolicy(_FAILOVER_RETRY_DELAYS)

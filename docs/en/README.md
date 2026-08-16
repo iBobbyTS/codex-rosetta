@@ -52,19 +52,24 @@ Before any client-visible output, a literal upstream HTTP 502 is retried on the
 same URL after 1, 2, 4, 8, and 16 seconds. Only six consecutive 502 responses
 cool that URL and silently try the next non-cooling URL, which receives the same
 retry budget. A narrowly recognized CDN 502 page still rotates immediately and
-is not retried. Other responses retain their existing behavior, including HTTP
-503 credential rotation. Failed URLs cool for one hour in process memory, while
-the current URL is persisted. Streaming requests with failover disabled are not
+is not retried. Failed URLs cool for one hour in process memory, while the
+current URL is persisted. Streaming requests with failover disabled are not
 retried. Search Provider passthrough requests use the same retry-before-rotation
 behavior and retain one logical Search Provider request-budget charge.
 
 Each Provider also stores an ordered, non-empty `api_keys` list of stable IDs
-and masked credentials, plus a member `current_api_key`. Only HTTP 503 rotates
-the credential ring; 502 rotates only the URL ring. Either ring can advance in
-one request without resetting the other. A failed credential cools for one
-hour, and exhausting the finite ring reports only its size. Manual selection
-may restore a cooling entry and clears only that entry's cooldown. Successful
-request counts never rotate credentials.
+and masked credentials, plus a member `current_api_key`. A literal upstream HTTP
+503 is retried on the current credential after 1, 2, 4, 8, and 16 seconds. Only
+six consecutive 503 responses cool that credential and rotate to the next
+non-cooling credential, which receives a fresh retry budget. This applies to
+normal, streaming, passthrough, and Search Provider requests; internal Search
+retries retain one logical request-budget charge. Streaming requests with
+failover disabled remain single-attempt. Only 503 rotates the credential ring;
+502 rotates only the URL ring, and either ring can advance without resetting
+the other. A failed credential cools for one hour, and exhausting the finite
+ring reports only its size. Manual selection may restore a cooling entry and
+clears only that entry's cooldown. Successful request counts never rotate
+credentials.
 
 ## Codex tool localization
 

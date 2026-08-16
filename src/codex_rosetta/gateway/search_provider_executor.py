@@ -6,9 +6,10 @@ the same request against another candidate after a request-local failure.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, Never, Protocol
@@ -53,6 +54,7 @@ from .transport._base import (
     UpstreamSafetyError,
     UpstreamTransport,
 )
+from .transport._retry import _FAILOVER_RETRY_POLICY
 from .transport.credential_redaction import CredentialRedactingTransport
 from .web_search import (
     TavilyHTTPClient,
@@ -180,6 +182,7 @@ class SearchProviderExecutor:
         responses_transport: UpstreamTransport | None = None,
         responses_extra_headers: Mapping[str, str] | None = None,
         deepseek_client_factory: _DeepSeekSearchClientFactory | None = None,
+        _retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._tavily_client = tavily_client
         self._self_hosted_client = self_hosted_client
@@ -194,6 +197,7 @@ class SearchProviderExecutor:
         self._deepseek_client_factory = (
             deepseek_client_factory or _default_deepseek_client_factory
         )
+        self._retry_sleep = _retry_sleep
 
     async def execute(
         self,
@@ -295,47 +299,88 @@ class SearchProviderExecutor:
         provider_info = candidate.provider_info
         query = request.queries[0][0]
 
+        async def attempt(
+            credential: str,
+        ) -> DeepSeekSearchResult | DeepSeekSearchError:
+            client = self._deepseek_client_factory(
+                credential,
+                DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
+                provider_info.proxy_url,
+            )
+            try:
+                return await client.execute(
+                    query,
+                    model=DEEPSEEK_RESPONSES_SEARCH_MODEL,
+                    max_output_tokens=(
+                        DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS
+                    ),
+                    citation_limit=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
+                )
+            except DeepSeekSearchError as exc:
+                return exc
+
         async def operation() -> DeepSeekSearchResult:
-            await provider_info.wait_for_credential_rotation()
+            single_attempt = await provider_info.wait_for_credential_rotation()
             while True:
                 if not provider_info.has_available_credential():
                     raise DeepSeekSearchError(
                         DeepSeekSearchErrorCategory.HTTP_ERROR,
                         status_code=503,
                     )
-                observed = provider_info.current_credential_id
+                observation = provider_info.observe_credential_rotation()
+                observed = observation[0]
                 credential = dict(
                     zip(provider_info.credential_ids, provider_info.credential_values)
                 )[observed]
-                client = self._deepseek_client_factory(
-                    credential,
-                    DEEPSEEK_RESPONSES_OFFICIAL_ORIGIN,
-                    provider_info.proxy_url,
+                result = await attempt(credential)
+                if not isinstance(result, DeepSeekSearchError):
+                    return result
+                if result.status_code != 503 or single_attempt:
+                    raise result
+                (
+                    leader,
+                    waited,
+                ) = await provider_info.claim_credential_rotation_observation(
+                    observation
                 )
+                if not leader:
+                    single_attempt = True
+                    continue
                 try:
-                    return await client.execute(
-                        query,
-                        model=DEEPSEEK_RESPONSES_SEARCH_MODEL,
-                        max_output_tokens=(
-                            DEFAULT_DEEPSEEK_RESPONSES_SEARCH_MAX_OUTPUT_TOKENS
-                        ),
-                        citation_limit=DEFAULT_DEEPSEEK_RESPONSES_SEARCH_CITATION_LIMIT,
-                    )
-                except DeepSeekSearchError as exc:
-                    if exc.status_code != 503:
-                        raise
-                    if not await provider_info.claim_credential_rotation(observed):
+                    if waited:
+                        single_attempt = True
                         continue
-                    try:
+                    while True:
+                        result = await _FAILOVER_RETRY_POLICY.run(
+                            result,
+                            lambda: attempt(credential),
+                            lambda item: (
+                                isinstance(item, DeepSeekSearchError)
+                                and item.status_code == 503
+                            ),
+                            sleep=self._retry_sleep,
+                        )
+                        if not isinstance(result, DeepSeekSearchError):
+                            return result
+                        if result.status_code != 503:
+                            raise result
                         provider_info.mark_credential_failed(observed)
                         next_credential = provider_info.next_available_credential(
                             observed
                         )
                         if next_credential is None:
-                            raise
+                            raise result
                         await provider_info.select_credential(next_credential)
-                    finally:
-                        await provider_info.publish_credential_rotation()
+                        observed = next_credential
+                        credential = dict(
+                            zip(
+                                provider_info.credential_ids,
+                                provider_info.credential_values,
+                            )
+                        )[observed]
+                        result = await attempt(credential)
+                finally:
+                    await provider_info.publish_credential_rotation()
 
         try:
             result = await (

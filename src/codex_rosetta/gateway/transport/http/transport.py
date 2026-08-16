@@ -13,7 +13,7 @@ import logging
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 
 from compression import zstd
 
@@ -38,7 +38,7 @@ from .._base import (
     UpstreamStream,
     UpstreamStreamLimitError,
 )
-from .._retry import _RetryPolicy
+from .._retry import _FAILOVER_RETRY_POLICY
 from ..provider_info import ProviderInfo
 from .client_pool import DEFAULT_HTTP_TIMEOUT_SECONDS, HttpClientPool
 
@@ -58,7 +58,7 @@ _CDN_502_MARKERS = (
     b">502<",
 )
 _RESPONSES_TARGETS = frozenset({"openai_responses", "open_responses"})
-_HTTP_502_RETRY = _RetryPolicy((1.0, 2.0, 4.0, 8.0, 16.0))
+_CredentialResultT = TypeVar("_CredentialResultT")
 
 
 class _ClosedSyntheticResponse:
@@ -640,25 +640,54 @@ class HttpTransport:
         self._close_timeout = close_timeout
         self._retry_sleep = retry_sleep
 
-    async def _advance_credential(
+    async def _retry_before_credential_rotation(
         self,
         provider_info: ProviderInfo,
-        observed: str,
-    ) -> UpstreamResponse | None:
-        """Advance one provider credential after a literal upstream 503."""
-        if not await provider_info.claim_credential_rotation(observed):
-            return None
+        initial_result: _CredentialResultT,
+        observation: tuple[str, int],
+        operation: Callable[[], Awaitable[_CredentialResultT]],
+        is_503: Callable[[_CredentialResultT], bool],
+        credential_observation_of: Callable[[_CredentialResultT], tuple[str, int]],
+        *,
+        single_attempt: bool,
+    ) -> tuple[_CredentialResultT, UpstreamResponse | None]:
+        """Resolve literal 503s under one credential gate at a time."""
+        result = initial_result
+        if single_attempt:
+            return result, None
+        leader, waited = await provider_info.claim_credential_rotation_observation(
+            observation
+        )
+        if not leader or waited:
+            if leader:
+                await provider_info.publish_credential_rotation()
+            return await operation(), None
         try:
-            provider_info.mark_credential_failed(observed)
-            next_credential = provider_info.next_available_credential(observed)
-            if next_credential is None:
-                return UpstreamResponse(
-                    status_code=503,
-                    body=None,
-                    raw_content=_all_credentials_503(len(provider_info.credential_ids)),
+            while is_503(result):
+                result = await _FAILOVER_RETRY_POLICY.run(
+                    result,
+                    operation,
+                    is_503,
+                    sleep=self._retry_sleep,
                 )
-            await provider_info.select_credential(next_credential)
-            return None
+                if not is_503(result):
+                    return result, None
+                failed_credential = credential_observation_of(result)[0]
+                provider_info.mark_credential_failed(failed_credential)
+                next_credential = provider_info.next_available_credential(
+                    failed_credential
+                )
+                if next_credential is None:
+                    return result, UpstreamResponse(
+                        status_code=503,
+                        body=None,
+                        raw_content=_all_credentials_503(
+                            len(provider_info.credential_ids)
+                        ),
+                    )
+                await provider_info.select_credential(next_credential)
+                result = await operation()
+            return result, None
         finally:
             await provider_info.publish_credential_rotation()
 
@@ -670,9 +699,11 @@ class HttpTransport:
         model: str,
         *,
         extra_headers: dict[str, str] | None,
-    ) -> tuple[UpstreamResponse, tuple[str, int], str]:
-        observation = provider_info.observe_url_rotation()
-        credential_id, credential_headers = provider_info._credential_snapshot()
+    ) -> tuple[UpstreamResponse, tuple[str, int], tuple[str, int]]:
+        url_observation = provider_info.observe_url_rotation()
+        credential_observation, credential_headers = (
+            provider_info._credential_observed_snapshot()
+        )
         response = await self._send_request_once(
             provider_info,
             target_provider,
@@ -681,7 +712,7 @@ class HttpTransport:
             extra_headers=extra_headers,
             credential_headers=credential_headers,
         )
-        return response, observation, credential_id
+        return response, url_observation, credential_observation
 
     async def _send_streaming_observed(
         self,
@@ -694,9 +725,11 @@ class HttpTransport:
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
         preserve_failover_error_body: bool,
-    ) -> tuple[HttpUpstreamStream, bool, tuple[str, int], str]:
-        observation = provider_info.observe_url_rotation()
-        credential_id, credential_headers = provider_info._credential_snapshot()
+    ) -> tuple[HttpUpstreamStream, bool, tuple[str, int], tuple[str, int]]:
+        url_observation = provider_info.observe_url_rotation()
+        credential_observation, credential_headers = (
+            provider_info._credential_observed_snapshot()
+        )
         result, trigger = await self._send_streaming_once(
             provider_info,
             target_provider,
@@ -708,7 +741,7 @@ class HttpTransport:
             preserve_failover_error_body=preserve_failover_error_body,
             credential_headers=credential_headers,
         )
-        return result, trigger, observation, credential_id
+        return result, trigger, url_observation, credential_observation
 
     async def send_request(
         self,
@@ -721,7 +754,7 @@ class HttpTransport:
     ) -> UpstreamResponse:
         """Send a non-streaming request and return the full response."""
         single_attempt = await provider_info.wait_for_url_rotation()
-        await provider_info.wait_for_credential_rotation()
+        credential_single_attempt = await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
                 return UpstreamResponse(
@@ -738,7 +771,7 @@ class HttpTransport:
             (
                 response,
                 url_observation,
-                observed_credential,
+                credential_observation,
             ) = await self._send_request_observed(
                 provider_info,
                 target_provider,
@@ -750,12 +783,31 @@ class HttpTransport:
             if single_attempt and response.status_code == 502:
                 return response
             if response.status_code == 503:
-                exhausted = await self._advance_credential(
-                    provider_info, observed_credential
+                (
+                    (
+                        response,
+                        url_observation,
+                        credential_observation,
+                    ),
+                    exhausted,
+                ) = await self._retry_before_credential_rotation(
+                    provider_info,
+                    (response, url_observation, credential_observation),
+                    credential_observation,
+                    lambda: self._send_request_observed(
+                        provider_info,
+                        target_provider,
+                        body,
+                        model,
+                        extra_headers=extra_headers,
+                    ),
+                    lambda item: item[0].status_code == 503,
+                    lambda item: item[2],
+                    single_attempt=credential_single_attempt,
                 )
                 if exhausted is not None:
                     return exhausted
-                continue
+                observed = url_observation[0]
             if not _is_base_url_rotation_trigger(
                 response.status_code, response.raw_content
             ):
@@ -770,9 +822,9 @@ class HttpTransport:
                     (
                         response,
                         url_observation,
-                        observed_credential,
-                    ) = await _HTTP_502_RETRY.run(
-                        (response, url_observation, observed_credential),
+                        credential_observation,
+                    ) = await _FAILOVER_RETRY_POLICY.run(
+                        (response, url_observation, credential_observation),
                         lambda: self._send_request_observed(
                             provider_info,
                             target_provider,
@@ -787,24 +839,31 @@ class HttpTransport:
                     if single_attempt and response.status_code == 502:
                         return response
                     if response.status_code == 503:
-                        exhausted = await self._advance_credential(
-                            provider_info, observed_credential
+                        (
+                            (
+                                response,
+                                url_observation,
+                                credential_observation,
+                            ),
+                            exhausted,
+                        ) = await self._retry_before_credential_rotation(
+                            provider_info,
+                            (response, url_observation, credential_observation),
+                            credential_observation,
+                            lambda: self._send_request_observed(
+                                provider_info,
+                                target_provider,
+                                body,
+                                model,
+                                extra_headers=extra_headers,
+                            ),
+                            lambda item: item[0].status_code == 503,
+                            lambda item: item[2],
+                            single_attempt=credential_single_attempt,
                         )
                         if exhausted is not None:
                             return exhausted
-                        (
-                            response,
-                            url_observation,
-                            observed_credential,
-                        ) = await self._send_request_observed(
-                            provider_info,
-                            target_provider,
-                            body,
-                            model,
-                            extra_headers=extra_headers,
-                        )
                         observed = url_observation[0]
-                        continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
                     ):
@@ -821,7 +880,7 @@ class HttpTransport:
                     (
                         response,
                         url_observation,
-                        observed_credential,
+                        credential_observation,
                     ) = await self._send_request_observed(
                         provider_info,
                         target_provider,
@@ -905,7 +964,7 @@ class HttpTransport:
     ) -> HttpUpstreamStream:
         """Send a streaming request and return an async chunk iterator."""
         single_attempt = await provider_info.wait_for_url_rotation()
-        await provider_info.wait_for_credential_rotation()
+        credential_single_attempt = await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
                 message = _all_domains_502(len(provider_info.base_urls))
@@ -929,7 +988,7 @@ class HttpTransport:
                 result,
                 trigger,
                 url_observation,
-                observed_credential,
+                credential_observation,
             ) = await self._send_streaming_observed(
                 provider_info,
                 target_provider,
@@ -944,8 +1003,31 @@ class HttpTransport:
             if not allow_failover or (single_attempt and result.status_code == 502):
                 return result
             if result.status_code == 503:
-                exhausted = await self._advance_credential(
-                    provider_info, observed_credential
+                (
+                    (
+                        result,
+                        trigger,
+                        url_observation,
+                        credential_observation,
+                    ),
+                    exhausted,
+                ) = await self._retry_before_credential_rotation(
+                    provider_info,
+                    (result, trigger, url_observation, credential_observation),
+                    credential_observation,
+                    lambda: self._send_streaming_observed(
+                        provider_info,
+                        target_provider,
+                        body,
+                        model,
+                        extra_headers=extra_headers,
+                        wire_body=wire_body,
+                        wire_headers=wire_headers,
+                        preserve_failover_error_body=False,
+                    ),
+                    lambda item: item[0].status_code == 503,
+                    lambda item: item[3],
+                    single_attempt=credential_single_attempt,
                 )
                 if exhausted is not None:
                     return HttpUpstreamStream(
@@ -955,7 +1037,7 @@ class HttpTransport:
                         idle_timeout=self._stream_idle_timeout,
                         close_timeout=self._close_timeout,
                     )
-                continue
+                observed = url_observation[0]
             if not trigger:
                 return result
             if not await _claim_url_rotation_immediately(
@@ -969,9 +1051,9 @@ class HttpTransport:
                         result,
                         trigger,
                         url_observation,
-                        observed_credential,
-                    ) = await _HTTP_502_RETRY.run(
-                        (result, trigger, url_observation, observed_credential),
+                        credential_observation,
+                    ) = await _FAILOVER_RETRY_POLICY.run(
+                        (result, trigger, url_observation, credential_observation),
                         lambda: self._send_streaming_observed(
                             provider_info,
                             target_provider,
@@ -989,8 +1071,31 @@ class HttpTransport:
                     if single_attempt and result.status_code == 502:
                         return result
                     if result.status_code == 503:
-                        exhausted = await self._advance_credential(
-                            provider_info, observed_credential
+                        (
+                            (
+                                result,
+                                trigger,
+                                url_observation,
+                                credential_observation,
+                            ),
+                            exhausted,
+                        ) = await self._retry_before_credential_rotation(
+                            provider_info,
+                            (result, trigger, url_observation, credential_observation),
+                            credential_observation,
+                            lambda: self._send_streaming_observed(
+                                provider_info,
+                                target_provider,
+                                body,
+                                model,
+                                extra_headers=extra_headers,
+                                wire_body=wire_body,
+                                wire_headers=wire_headers,
+                                preserve_failover_error_body=False,
+                            ),
+                            lambda item: item[0].status_code == 503,
+                            lambda item: item[3],
+                            single_attempt=credential_single_attempt,
                         )
                         if exhausted is not None:
                             return HttpUpstreamStream(
@@ -1000,23 +1105,7 @@ class HttpTransport:
                                 idle_timeout=self._stream_idle_timeout,
                                 close_timeout=self._close_timeout,
                             )
-                        (
-                            result,
-                            trigger,
-                            url_observation,
-                            observed_credential,
-                        ) = await self._send_streaming_observed(
-                            provider_info,
-                            target_provider,
-                            body,
-                            model,
-                            extra_headers=extra_headers,
-                            wire_body=wire_body,
-                            wire_headers=wire_headers,
-                            preserve_failover_error_body=False,
-                        )
                         observed = url_observation[0]
-                        continue
                     if not trigger:
                         return result
                     provider_info.mark_base_url_failed(observed)
@@ -1035,7 +1124,7 @@ class HttpTransport:
                         result,
                         trigger,
                         url_observation,
-                        observed_credential,
+                        credential_observation,
                     ) = await self._send_streaming_observed(
                         provider_info,
                         target_provider,
@@ -1187,7 +1276,7 @@ class HttpTransport:
         Used for non-conversion endpoints (model listing, reranking, etc.).
         """
         single_attempt = await provider_info.wait_for_url_rotation()
-        await provider_info.wait_for_credential_rotation()
+        credential_single_attempt = await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
                 return UpstreamResponse(
@@ -1204,7 +1293,7 @@ class HttpTransport:
             (
                 response,
                 url_observation,
-                observed_credential,
+                credential_observation,
             ) = await self._send_passthrough_observed(
                 provider_info,
                 url,
@@ -1216,12 +1305,31 @@ class HttpTransport:
             if single_attempt and response.status_code == 502:
                 return response
             if response.status_code == 503:
-                exhausted = await self._advance_credential(
-                    provider_info, observed_credential
+                (
+                    (
+                        response,
+                        url_observation,
+                        credential_observation,
+                    ),
+                    exhausted,
+                ) = await self._retry_before_credential_rotation(
+                    provider_info,
+                    (response, url_observation, credential_observation),
+                    credential_observation,
+                    lambda: self._send_passthrough_observed(
+                        provider_info,
+                        url,
+                        body,
+                        extra_headers=extra_headers,
+                        method=method,
+                    ),
+                    lambda item: item[0].status_code == 503,
+                    lambda item: item[2],
+                    single_attempt=credential_single_attempt,
                 )
                 if exhausted is not None:
                     return exhausted
-                continue
+                observed = url_observation[0]
             if not _is_base_url_rotation_trigger(
                 response.status_code, response.raw_content
             ):
@@ -1236,9 +1344,9 @@ class HttpTransport:
                     (
                         response,
                         url_observation,
-                        observed_credential,
-                    ) = await _HTTP_502_RETRY.run(
-                        (response, url_observation, observed_credential),
+                        credential_observation,
+                    ) = await _FAILOVER_RETRY_POLICY.run(
+                        (response, url_observation, credential_observation),
                         lambda: self._send_passthrough_observed(
                             provider_info,
                             url,
@@ -1253,24 +1361,31 @@ class HttpTransport:
                     if single_attempt and response.status_code == 502:
                         return response
                     if response.status_code == 503:
-                        exhausted = await self._advance_credential(
-                            provider_info, observed_credential
+                        (
+                            (
+                                response,
+                                url_observation,
+                                credential_observation,
+                            ),
+                            exhausted,
+                        ) = await self._retry_before_credential_rotation(
+                            provider_info,
+                            (response, url_observation, credential_observation),
+                            credential_observation,
+                            lambda: self._send_passthrough_observed(
+                                provider_info,
+                                url,
+                                body,
+                                extra_headers=extra_headers,
+                                method=method,
+                            ),
+                            lambda item: item[0].status_code == 503,
+                            lambda item: item[2],
+                            single_attempt=credential_single_attempt,
                         )
                         if exhausted is not None:
                             return exhausted
-                        (
-                            response,
-                            url_observation,
-                            observed_credential,
-                        ) = await self._send_passthrough_observed(
-                            provider_info,
-                            url,
-                            body,
-                            extra_headers=extra_headers,
-                            method=method,
-                        )
                         observed = url_observation[0]
-                        continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
                     ):
@@ -1287,7 +1402,7 @@ class HttpTransport:
                     (
                         response,
                         url_observation,
-                        observed_credential,
+                        credential_observation,
                     ) = await self._send_passthrough_observed(
                         provider_info,
                         url,
@@ -1307,18 +1422,21 @@ class HttpTransport:
         *,
         extra_headers: dict[str, str] | None,
         method: str,
-    ) -> tuple[UpstreamResponse, tuple[str, int], str]:
+    ) -> tuple[UpstreamResponse, tuple[str, int], tuple[str, int]]:
         """Send one passthrough attempt with its URL and credential observations."""
-        observation = provider_info.observe_url_rotation()
-        credential_id = provider_info.current_credential_id
+        url_observation = provider_info.observe_url_rotation()
+        credential_observation, credential_headers = (
+            provider_info._credential_observed_snapshot()
+        )
         response = await self._send_passthrough_once(
             provider_info,
             url,
             body,
             extra_headers=extra_headers,
             method=method,
+            credential_headers=credential_headers,
         )
-        return response, observation, credential_id
+        return response, url_observation, credential_observation
 
     async def _send_passthrough_once(
         self,
@@ -1328,12 +1446,13 @@ class HttpTransport:
         *,
         extra_headers: dict[str, str] | None,
         method: str,
+        credential_headers: dict[str, str],
     ) -> UpstreamResponse:
         headers = {"Content-Type": "application/json"}
         if extra_headers:
             overlay_headers_case_insensitive(headers, extra_headers)
         _force_identity_encoding(headers)
-        overlay_headers_case_insensitive(headers, provider_info.auth_headers())
+        overlay_headers_case_insensitive(headers, credential_headers)
 
         client = self._pool.get(
             provider_info.proxy_url,

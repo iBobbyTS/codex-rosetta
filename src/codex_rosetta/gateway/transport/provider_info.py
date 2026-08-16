@@ -218,8 +218,11 @@ class ProviderInfo:
         """Bind the app-owned persistence callback for credential selection."""
         self._record_current_credential = recorder
 
-    async def wait_for_credential_rotation(self) -> None:
-        await self._credential_ring.wait()
+    async def wait_for_credential_rotation(self) -> bool:
+        return await self._credential_ring.wait()
+
+    def observe_credential_rotation(self) -> tuple[str, int]:
+        return self._credential_ring.observe()
 
     def available_credentials(self) -> tuple[str, ...]:
         return self._credential_ring.available()
@@ -229,6 +232,11 @@ class ProviderInfo:
 
     async def claim_credential_rotation(self, observed: str) -> bool:
         return await self._credential_ring.claim(observed)
+
+    async def claim_credential_rotation_observation(
+        self, observation: tuple[str, int]
+    ) -> tuple[bool, bool]:
+        return await self._credential_ring.claim_observation_with_waited(observation)
 
     def mark_credential_failed(self, credential_id: str) -> None:
         self._credential_ring.mark_failed(credential_id)
@@ -272,6 +280,14 @@ class ProviderInfo:
     def _credential_snapshot(self) -> tuple[str, dict[str, str]]:
         credential_id = self.current_credential_id
         return credential_id, self._auth_header_fn(self._credentials[credential_id])
+
+    def _credential_observed_snapshot(
+        self,
+    ) -> tuple[tuple[str, int], dict[str, str]]:
+        """Snapshot one wire credential together with its failover generation."""
+        observation = self.observe_credential_rotation()
+        credential_id = observation[0]
+        return observation, self._auth_header_fn(self._credentials[credential_id])
 
     def auth_headers(self) -> dict[str, str]:
         """Return auth headers using the configured credential."""

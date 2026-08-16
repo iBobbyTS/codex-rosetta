@@ -313,9 +313,17 @@ def test_deepseek_executor_rotates_only_literal_503_and_persists_current():
 
     candidate.provider_info.bind_current_credential_recorder(record)
     budget = SearchProviderRequestBudget(max_external_calls=1)
+    sleeps = []
 
+    async def retry_sleep(delay):
+        sleeps.append(delay)
+
+    executor = SearchProviderExecutor(
+        deepseek_client_factory=factory,
+        _retry_sleep=retry_sleep,
+    )
     result = run(
-        SearchProviderExecutor(deepseek_client_factory=factory).execute(
+        executor.execute(
             candidate,
             SearchRequest.from_body({}, [("q", WebSearchSettings())]),
             request_budget=budget,
@@ -323,10 +331,11 @@ def test_deepseek_executor_rotates_only_literal_503_and_persists_current():
     )
 
     assert result == {"output": "answer", "results": []}
-    assert [item[0] for item in factories] == ["key-first", "key-second"]
+    assert [item[0] for item in factories] == ["key-first"] * 6 + ["key-second"]
     assert candidate.provider_info.current_credential_id == "second"
     assert writes == [("official", "second")]
     assert budget.external_calls == 1
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
 
 
 def test_deepseek_executor_non503_does_not_rotate_credential():
