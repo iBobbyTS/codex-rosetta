@@ -743,7 +743,7 @@ class HttpTransport:
         )
         return result, trigger, url_observation, credential_observation
 
-    async def send_request(
+    async def send_request(  # noqa: C901
         self,
         provider_info: ProviderInfo,
         target_provider: ProviderType,
@@ -836,8 +836,6 @@ class HttpTransport:
                         sleep=self._retry_sleep,
                     )
                     observed = url_observation[0]
-                    if single_attempt and response.status_code == 502:
-                        return response
                     if response.status_code == 503:
                         (
                             (
@@ -864,6 +862,10 @@ class HttpTransport:
                         if exhausted is not None:
                             return exhausted
                         observed = url_observation[0]
+                        if response.status_code == 502 and not single_attempt:
+                            continue
+                    if single_attempt and response.status_code == 502:
+                        return response
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
                     ):
@@ -950,7 +952,7 @@ class HttpTransport:
             raw_content=raw_content,
         )
 
-    async def send_streaming(
+    async def send_streaming(  # noqa: C901
         self,
         provider_info: ProviderInfo,
         target_provider: ProviderType,
@@ -1068,8 +1070,6 @@ class HttpTransport:
                         sleep=self._retry_sleep,
                     )
                     observed = url_observation[0]
-                    if single_attempt and result.status_code == 502:
-                        return result
                     if result.status_code == 503:
                         (
                             (
@@ -1106,6 +1106,10 @@ class HttpTransport:
                                 close_timeout=self._close_timeout,
                             )
                         observed = url_observation[0]
+                        if result.status_code == 502 and not single_attempt:
+                            continue
+                    if single_attempt and result.status_code == 502:
+                        return result
                     if not trigger:
                         return result
                     provider_info.mark_base_url_failed(observed)
@@ -1262,7 +1266,7 @@ class HttpTransport:
             False,
         )
 
-    async def send_passthrough(
+    async def send_passthrough(  # noqa: C901
         self,
         provider_info: ProviderInfo,
         url: str,
@@ -1358,8 +1362,6 @@ class HttpTransport:
                         sleep=self._retry_sleep,
                     )
                     observed = url_observation[0]
-                    if single_attempt and response.status_code == 502:
-                        return response
                     if response.status_code == 503:
                         (
                             (
@@ -1386,6 +1388,10 @@ class HttpTransport:
                         if exhausted is not None:
                             return exhausted
                         observed = url_observation[0]
+                        if response.status_code == 502 and not single_attempt:
+                            continue
+                    if single_attempt and response.status_code == 502:
+                        return response
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
                     ):

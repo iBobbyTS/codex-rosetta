@@ -256,13 +256,23 @@ class ProviderInfo:
         """Persist a manual credential selection and clear only its cooldown."""
         if credential_id not in self.credential_ids:
             raise ValueError("current_api_key must be a member of api_keys")
-        if (
-            credential_id != self.current_credential_id
-            and self._record_current_credential is not None
-        ):
-            await self._record_current_credential(self.configured_id, credential_id)
-        self._credential_ring.clear_cooldown(credential_id)
-        self._credential_ring.set_current(credential_id)
+        while True:
+            observation = self.observe_credential_rotation()
+            leader, _waited = await self.claim_credential_rotation_observation(
+                observation
+            )
+            if leader:
+                break
+        try:
+            if (
+                credential_id != self.current_credential_id
+                and self._record_current_credential is not None
+            ):
+                await self._record_current_credential(self.configured_id, credential_id)
+            self._credential_ring.clear_cooldown(credential_id)
+            self._credential_ring.set_current(credential_id)
+        finally:
+            await self.publish_credential_rotation()
 
     def next_available_credential(self, failed: str) -> str | None:
         return self._credential_ring.next_available_after(failed)

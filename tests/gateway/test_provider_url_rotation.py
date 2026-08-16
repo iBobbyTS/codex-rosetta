@@ -151,6 +151,67 @@ def test_provider_manual_credential_selection_uses_selected_secret() -> None:
     asyncio.run(scenario())
 
 
+def test_manual_credential_selection_waits_for_active_retry_leader(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            *_literal_503s(1),
+            _json_response(200, {"ok": True}),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+
+        async def blocking_sleep(_delay: float) -> None:
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        request = asyncio.create_task(
+            transport.send_request(provider, "openai_responses", {}, "model")
+        )
+        await retry_started.wait()
+        manual_selection = asyncio.create_task(
+            provider.manually_select_credential("second")
+        )
+        await asyncio.sleep(0)
+
+        assert not manual_selection.done()
+        assert provider.current_credential_id == "first"
+
+        release_retry.set()
+        result = await request
+        await manual_selection
+
+        assert result.status_code == 200
+        assert provider.current_credential_id == "second"
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+        ]
+        assert provider.credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
+        assert writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
 def test_nonstream_503_rotates_only_credential(monkeypatch) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
@@ -343,6 +404,82 @@ def test_three_url_alternating_failures_preserve_independent_rings(
         assert provider.base_url == second
         assert provider.current_credential_id == "second"
         assert url_writes == [("row-a", second)]
+        assert credential_writes == [("row-a", "second")]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_502_after_credential_rotation_gets_fresh_url_retry_budget(
+    monkeypatch,
+    path_kind: str,
+    failures_before_success: int,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, url_writes = _provider(
+            "row-a",
+            first,
+            second,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{first}/{suffix}"
+        success = (
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            )
+            if path_kind == "streaming"
+            else _json_response(200, {"ok": True})
+        )
+        client.add(
+            target,
+            *_literal_502s(1),
+            *_literal_503s(),
+            *_literal_502s(failures_before_success),
+            success,
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, target, {})
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        assert result.status_code == 200
+        assert client.calls == [target] * (failures_before_success + 8)
+        assert [item["Authorization"] for item in client.headers] == (
+            ["Bearer key-first"] * 7
+            + ["Bearer key-second"] * (failures_before_success + 1)
+        )
+        assert sleeps == (
+            [1.0, 1.0, 2.0, 4.0, 8.0, 16.0]
+            + [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+        )
+        assert provider.base_url == first
+        assert provider.current_credential_id == "second"
+        assert url_writes == []
         assert credential_writes == [("row-a", "second")]
 
     asyncio.run(scenario())
@@ -861,6 +998,45 @@ def test_streaming_allow_failover_false_does_not_retry_literal_502(
         assert result.status_code == 502
         assert client.calls == [f"{origin}/responses"]
         assert sleeps == []
+
+    asyncio.run(scenario())
+
+
+def test_streaming_allow_failover_false_does_not_retry_literal_503(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(f"{origin}/responses", *_literal_503s(1))
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        result = await _transport(
+            monkeypatch, client, retry_sleep=fake_sleep
+        ).send_streaming(
+            provider,
+            "openai_responses",
+            {},
+            "model",
+            allow_failover=False,
+        )
+
+        assert result.status_code == 503
+        assert client.calls == [f"{origin}/responses"]
+        assert sleeps == []
+        assert provider.current_credential_id == "first"
+        assert provider.credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
 
     asyncio.run(scenario())
 
@@ -1728,6 +1904,78 @@ def test_same_provider_concurrent_503s_publish_one_credential_change(
         assert [item["Authorization"] for item in client.headers].count(
             "Bearer key-second"
         ) == 2
+
+    asyncio.run(scenario())
+
+
+def test_raw_stream_uses_its_observed_wire_credential_during_rotation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            *_literal_503s(),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"rotated":true}\n\n',
+                content_type="text/event-stream",
+            ),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"raw":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+        transport = _transport(monkeypatch, client)
+        raw_snapshot_captured = asyncio.Event()
+        release_raw = asyncio.Event()
+        original_send_once = transport._send_streaming_once
+
+        async def pause_raw_after_snapshot(*args: Any, **kwargs: Any):
+            if kwargs.get("wire_body") is not None:
+                raw_snapshot_captured.set()
+                await release_raw.wait()
+            return await original_send_once(*args, **kwargs)
+
+        monkeypatch.setattr(
+            transport,
+            "_send_streaming_once",
+            pause_raw_after_snapshot,
+        )
+        raw_request = asyncio.create_task(
+            transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                wire_body=b'{"model":"wire"}',
+                wire_headers={
+                    "Authorization": "Bearer caller-value",
+                    "Content-Encoding": "zstd",
+                },
+            )
+        )
+        await raw_snapshot_captured.wait()
+
+        rotating_result = await transport.send_streaming(
+            provider, "openai_responses", {}, "model"
+        )
+        release_raw.set()
+        raw_result = await raw_request
+
+        assert rotating_result.status_code == raw_result.status_code == 200
+        assert provider.current_credential_id == "second"
+        assert client.calls == [f"{origin}/responses"] * 8
+        assert [headers["Authorization"] for headers in client.headers] == (
+            ["Bearer key-first"] * 6 + ["Bearer key-second", "Bearer key-first"]
+        )
 
     asyncio.run(scenario())
 

@@ -338,6 +338,238 @@ def test_deepseek_executor_rotates_only_literal_503_and_persists_current():
     assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
 
 
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_deepseek_transient_503_uses_exact_delay_prefix(failures_before_success):
+    failure = DeepSeekSearchError(
+        DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=503
+    )
+    values = [failure] * failures_before_success + [
+        DeepSeekSearchResult("answer", (), {})
+    ]
+    factories = []
+    sleeps = []
+
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
+        return FakeDeepSeekClient(values.pop(0))
+
+    async def retry_sleep(delay):
+        sleeps.append(delay)
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+    )
+    result = run(
+        SearchProviderExecutor(
+            deepseek_client_factory=factory,
+            _retry_sleep=retry_sleep,
+        ).execute(
+            candidate,
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        )
+    )
+
+    assert result == {"output": "answer", "results": []}
+    assert [item[0] for item in factories] == ["key-first"] * (
+        failures_before_success + 1
+    )
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+    assert candidate.provider_info.current_credential_id == "primary"
+
+
+def test_deepseek_next_credential_receives_a_fresh_retry_budget():
+    failure = DeepSeekSearchError(
+        DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=503
+    )
+    values = [failure] * 11 + [DeepSeekSearchResult("answer", (), {})]
+    factories = []
+    sleeps = []
+
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
+        return FakeDeepSeekClient(values.pop(0))
+
+    async def retry_sleep(delay):
+        sleeps.append(delay)
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+    )
+    result = run(
+        SearchProviderExecutor(
+            deepseek_client_factory=factory,
+            _retry_sleep=retry_sleep,
+        ).execute(
+            candidate,
+            SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+        )
+    )
+
+    assert result == {"output": "answer", "results": []}
+    assert [item[0] for item in factories] == ["key-first"] * 6 + ["key-second"] * 6
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
+    assert candidate.provider_info.current_credential_id == "second"
+
+
+def test_deepseek_full_credential_ring_exhaustion_is_bounded():
+    failure = DeepSeekSearchError(
+        DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=503
+    )
+    factories = []
+    sleeps = []
+
+    def factory(credential, origin, proxy_url):
+        factories.append((credential, origin, proxy_url))
+        return FakeDeepSeekClient(failure)
+
+    async def retry_sleep(delay):
+        sleeps.append(delay)
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+    )
+    budget = SearchProviderRequestBudget(max_external_calls=1)
+    with pytest.raises(SearchProviderAttemptError):
+        run(
+            SearchProviderExecutor(
+                deepseek_client_factory=factory,
+                _retry_sleep=retry_sleep,
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+                request_budget=budget,
+            )
+        )
+
+    assert [item[0] for item in factories] == ["key-first"] * 6 + ["key-second"] * 6
+    assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
+    assert budget.external_calls == 1
+    assert candidate.provider_info.credential_statuses() == (
+        ("primary", "cooling"),
+        ("second", "cooling"),
+    )
+
+
+def test_deepseek_delayed_stale_503_waiter_makes_one_fresh_attempt():
+    async def scenario():
+        candidate = deepseek_candidate(
+            credential="key-first",
+            additional_credentials=(("second", "key-second"),),
+        )
+        both_started = asyncio.Event()
+        calls = 0
+        factories = []
+        sleeps = []
+
+        class CoordinatedClient:
+            async def execute(self, query, **kwargs):
+                del query, kwargs
+                nonlocal calls
+                calls += 1
+                if calls <= 2:
+                    if calls == 2:
+                        both_started.set()
+                    await both_started.wait()
+                    raise DeepSeekSearchError(
+                        DeepSeekSearchErrorCategory.HTTP_ERROR,
+                        status_code=503,
+                    )
+                return DeepSeekSearchResult("answer", (), {})
+
+        def factory(credential, origin, proxy_url):
+            factories.append((credential, origin, proxy_url))
+            return CoordinatedClient()
+
+        async def retry_sleep(delay):
+            sleeps.append(delay)
+
+        executor = SearchProviderExecutor(
+            deepseek_client_factory=factory,
+            _retry_sleep=retry_sleep,
+        )
+        first, second = await asyncio.gather(
+            executor.execute(
+                candidate,
+                SearchRequest.from_body({}, [("one", WebSearchSettings())]),
+            ),
+            executor.execute(
+                candidate,
+                SearchRequest.from_body({}, [("two", WebSearchSettings())]),
+            ),
+        )
+
+        assert first == second == {"output": "answer", "results": []}
+        assert calls == 4
+        assert [item[0] for item in factories] == ["key-first"] * 4
+        assert sleeps == [1.0]
+        assert candidate.provider_info.current_credential_id == "primary"
+
+    run(scenario())
+
+
+def test_deepseek_cancellation_releases_credential_gate():
+    async def scenario():
+        candidate = deepseek_candidate(
+            credential="key-first",
+            additional_credentials=(("second", "key-second"),),
+        )
+        retry_started = asyncio.Event()
+        never_release = asyncio.Event()
+        calls = 0
+
+        class CancelThenSuccessClient:
+            async def execute(self, query, **kwargs):
+                del query, kwargs
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    raise DeepSeekSearchError(
+                        DeepSeekSearchErrorCategory.HTTP_ERROR,
+                        status_code=503,
+                    )
+                return DeepSeekSearchResult("answer", (), {})
+
+        def factory(credential, origin, proxy_url):
+            del credential, origin, proxy_url
+            return CancelThenSuccessClient()
+
+        async def retry_sleep(_delay):
+            retry_started.set()
+            await never_release.wait()
+
+        executor = SearchProviderExecutor(
+            deepseek_client_factory=factory,
+            _retry_sleep=retry_sleep,
+        )
+        leader = asyncio.create_task(
+            executor.execute(
+                candidate,
+                SearchRequest.from_body({}, [("one", WebSearchSettings())]),
+            )
+        )
+        await retry_started.wait()
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+
+        result = await executor.execute(
+            candidate,
+            SearchRequest.from_body({}, [("two", WebSearchSettings())]),
+        )
+
+        assert result == {"output": "answer", "results": []}
+        assert calls == 2
+        assert candidate.provider_info.credential_statuses() == (
+            ("primary", "available"),
+            ("second", "available"),
+        )
+
+    run(scenario())
+
+
 def test_deepseek_executor_non503_does_not_rotate_credential():
     error = DeepSeekSearchError(DeepSeekSearchErrorCategory.HTTP_ERROR, status_code=502)
     factories = []
