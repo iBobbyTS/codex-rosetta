@@ -798,6 +798,7 @@ class HttpTransport:
         extra_headers: dict[str, str] | None = None,
         wire_body: bytes | None = None,
         wire_headers: dict[str, str] | None = None,
+        allow_failover: bool = True,
     ) -> HttpUpstreamStream:
         """Send a streaming request and return an async chunk iterator."""
         await provider_info.wait_for_url_rotation()
@@ -831,7 +832,10 @@ class HttpTransport:
                 extra_headers=extra_headers,
                 wire_body=wire_body,
                 wire_headers=wire_headers,
+                preserve_failover_error_body=not allow_failover,
             )
+            if not allow_failover:
+                return result
             if result.status_code == 503:
                 exhausted = await self._advance_credential(
                     provider_info, observed_credential
@@ -876,6 +880,7 @@ class HttpTransport:
                         extra_headers=extra_headers,
                         wire_body=wire_body,
                         wire_headers=wire_headers,
+                        preserve_failover_error_body=False,
                     )
                     if result.status_code == 503:
                         exhausted = await self._advance_credential(
@@ -907,6 +912,7 @@ class HttpTransport:
         extra_headers: dict[str, str] | None,
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
+        preserve_failover_error_body: bool,
     ) -> tuple[HttpUpstreamStream, bool]:
         url, headers, req_body = _prepare_upstream(
             target_provider,
@@ -949,29 +955,25 @@ class HttpTransport:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code == 502:
-            await resp.aclose()
+        if resp.status_code in (502, 503):
+            error_text = ""
+            if preserve_failover_error_body:
+                raw_error = await _read_bounded_body(
+                    resp,
+                    MAX_UPSTREAM_ERROR_BODY_BYTES,
+                )
+                error_text = raw_error.decode("utf-8", errors="replace")
+            else:
+                await resp.aclose()
             return (
                 HttpUpstreamStream(
                     resp,
-                    error_text="",
+                    error_text=error_text,
                     response_closed=True,
                     idle_timeout=self._stream_idle_timeout,
                     close_timeout=self._close_timeout,
                 ),
-                True,
-            )
-        if resp.status_code == 503:
-            await resp.aclose()
-            return (
-                HttpUpstreamStream(
-                    resp,
-                    error_text="",
-                    response_closed=True,
-                    idle_timeout=self._stream_idle_timeout,
-                    close_timeout=self._close_timeout,
-                ),
-                False,
+                resp.status_code == 502,
             )
         await _enforce_identity_encoding(resp)
         if resp.status_code >= 400:

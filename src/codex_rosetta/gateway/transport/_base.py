@@ -188,6 +188,7 @@ class UpstreamTransport(Protocol):
         extra_headers: dict[str, str] | None = None,
         wire_body: bytes | None = None,
         wire_headers: dict[str, str] | None = None,
+        allow_failover: bool = True,
     ) -> UpstreamStream:
         """Send a streaming request, optionally preserving its attested wire body."""
         ...

@@ -86,12 +86,15 @@ class _FakeClient:
     def __init__(self, response: _FakeStreamingResponse) -> None:
         self.response = response
         self.calls: list[dict[str, Any]] = []
+        self.urls: list[str] = []
 
-    async def post(self, _url: str, **kwargs: Any) -> _FakeStreamingResponse:
+    async def post(self, url: str, **kwargs: Any) -> _FakeStreamingResponse:
+        self.urls.append(url)
         self.calls.append(kwargs)
         return self.response
 
-    async def get(self, _url: str, **kwargs: Any) -> _FakeStreamingResponse:
+    async def get(self, url: str, **kwargs: Any) -> _FakeStreamingResponse:
+        self.urls.append(url)
         self.calls.append(kwargs)
         return self.response
 
@@ -974,6 +977,96 @@ def test_stream_http_error_body_and_outer_cleanup_close_once(
         return error_text
 
     assert asyncio.run(_read()) == '{"error":"limited"}'
+    assert response.close_calls == 1
+
+
+@pytest.mark.parametrize("status_code", [502, 503])
+def test_stream_no_failover_preserves_actual_error_without_rotating(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    response = _FakeStreamingResponse(
+        status_code,
+        [f'{{"error":"actual {status_code}"}}'.encode()],
+    )
+    transport, client = _transport(monkeypatch, response)
+    provider = ProviderInfo(
+        "test",
+        api_keys=(("first", "key-first"), ("second", "key-second")),
+        base_urls=(
+            "https://first.example/v1",
+            "https://second.example/v1",
+        ),
+        auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
+        url_template="{base_url}/chat/completions",
+        request_encoding="identity",
+    )
+
+    async def _read() -> str:
+        stream = await transport.send_streaming(
+            provider,
+            "openai_chat",
+            {"model": "test"},
+            "test",
+            allow_failover=False,
+        )
+        async with stream:
+            return await stream.read_error()
+
+    assert asyncio.run(_read()) == f'{{"error":"actual {status_code}"}}'
+    assert client.urls == ["https://first.example/v1/chat/completions"]
+    assert len(client.calls) == 1
+    assert client.calls[0]["headers"]["Authorization"] == "Bearer key-first"
+    assert provider.base_url == "https://first.example/v1"
+    assert provider.current_credential_id == "first"
+    assert provider.base_url_statuses() == (
+        ("https://first.example/v1", "available"),
+        ("https://second.example/v1", "available"),
+    )
+    assert provider.credential_statuses() == (
+        ("first", "available"),
+        ("second", "available"),
+    )
+    assert response.iterated is True
+    assert response.close_calls == 1
+
+
+@pytest.mark.parametrize("status_code", [502, 503])
+def test_stream_no_failover_bounds_actual_error_body(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+) -> None:
+    monkeypatch.setattr(transport_module, "MAX_UPSTREAM_ERROR_BODY_BYTES", 5)
+    response = _FakeStreamingResponse(status_code, [b"123", b"456"])
+    transport, client = _transport(monkeypatch, response)
+    provider = ProviderInfo(
+        "test",
+        api_keys=(("first", "key-first"), ("second", "key-second")),
+        base_urls=(
+            "https://first.example/v1",
+            "https://second.example/v1",
+        ),
+        auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
+        url_template="{base_url}/chat/completions",
+        request_encoding="identity",
+    )
+
+    with pytest.raises(UpstreamResponseTooLargeError, match="exceeds 5"):
+        asyncio.run(
+            transport.send_streaming(
+                provider,
+                "openai_chat",
+                {"model": "test"},
+                "test",
+                allow_failover=False,
+            )
+        )
+
+    assert len(client.calls) == 1
+    assert provider.base_url == "https://first.example/v1"
+    assert provider.current_credential_id == "first"
+    assert provider.base_url_statuses()[0][1] == "available"
+    assert provider.credential_statuses()[0][1] == "available"
     assert response.close_calls == 1
 
 

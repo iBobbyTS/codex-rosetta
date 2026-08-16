@@ -57,9 +57,13 @@ class _ProbeTransport:
     def __init__(self, outcomes: dict[str, _ProbeStream | Exception]) -> None:
         self.outcomes = outcomes
         self.calls: list[tuple[Any, str, dict[str, Any], str]] = []
+        self.call_kwargs: list[dict[str, Any]] = []
 
-    async def send_streaming(self, provider_info, target_provider, body, model, **_):
+    async def send_streaming(
+        self, provider_info, target_provider, body, model, **kwargs
+    ):
         self.calls.append((provider_info, target_provider, body, model))
+        self.call_kwargs.append(kwargs)
         outcome = self.outcomes[provider_info.request_encoding]
         if isinstance(outcome, Exception):
             raise outcome
@@ -128,6 +132,10 @@ def test_detection_maps_two_probe_completion_matrix(
         )
         for call in transport.calls
     )
+    assert transport.call_kwargs == [
+        {"allow_failover": False},
+        {"allow_failover": False},
+    ]
 
 
 def test_detection_preserves_bounded_http_and_transport_errors() -> None:

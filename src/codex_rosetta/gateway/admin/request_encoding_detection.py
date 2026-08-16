@@ -48,6 +48,7 @@ async def _probe_responses_completion(
             "openai_responses",
             {"model": model, "input": "hi", "stream": True},
             model,
+            allow_failover=False,
         )
         async with stream:
             if stream.is_error:

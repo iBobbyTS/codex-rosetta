@@ -218,9 +218,42 @@ class _Stream(UpstreamStream):
 class _StreamingTransport(_ReflectingTransport):
     def __init__(self, stream: UpstreamStream) -> None:
         self.stream = stream
+        self.call_kwargs: list[dict[str, Any]] = []
 
     async def send_streaming(self, *args: Any, **kwargs: Any) -> UpstreamStream:
+        self.call_kwargs.append(kwargs)
         return self.stream
+
+
+@pytest.mark.parametrize(
+    ("wrapper_kwargs", "expected_allow_failover"),
+    [({}, True), ({"allow_failover": False}, False)],
+    ids=["default", "disabled"],
+)
+def test_streaming_forwards_failover_policy(
+    wrapper_kwargs: dict[str, Any],
+    expected_allow_failover: bool,
+) -> None:
+    underlying = _StreamingTransport(_Stream(events=[]))
+
+    async def run() -> None:
+        stream = await CredentialRedactingTransport.wrap(underlying).send_streaming(
+            _provider(),
+            "openai_responses",
+            {},
+            "test",
+            **wrapper_kwargs,
+        )
+        await stream.close()
+
+    asyncio.run(run())
+
+    assert underlying.call_kwargs == [
+        {
+            "extra_headers": None,
+            "allow_failover": expected_allow_failover,
+        }
+    ]
 
 
 def test_stream_blocks_parsed_events_and_http_errors_without_leaking():

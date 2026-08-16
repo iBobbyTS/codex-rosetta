@@ -350,8 +350,12 @@ class CredentialRedactingTransport:
         extra_headers: dict[str, str] | None = None,
         wire_body: bytes | None = None,
         wire_headers: dict[str, str] | None = None,
+        allow_failover: bool = True,
     ) -> UpstreamStream:
-        kwargs: dict[str, Any] = {"extra_headers": extra_headers}
+        kwargs: dict[str, Any] = {
+            "extra_headers": extra_headers,
+            "allow_failover": allow_failover,
+        }
         if wire_body is not None:
             kwargs.update(wire_body=wire_body, wire_headers=wire_headers)
         error: UpstreamConnectionError | None = None

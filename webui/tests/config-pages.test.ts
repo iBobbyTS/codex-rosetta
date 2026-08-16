@@ -1,5 +1,6 @@
 // @vitest-environment-options { "customExportConditions": ["browser"] }
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import KeysPage from '../src/admin/pages/KeysPage.svelte';
 import ModelsPage from '../src/admin/pages/ModelsPage.svelte';
@@ -28,6 +29,12 @@ function dragAt(element: Element, type: string, dataTransfer: ReturnType<typeof 
   Object.defineProperty(event, 'clientY', { configurable: true, value: clientY });
   Object.defineProperty(event, 'dataTransfer', { configurable: true, value: dataTransfer });
   return fireEvent(element, event);
+}
+
+function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
 }
 
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
@@ -641,6 +648,54 @@ describe('ProvidersPage', () => {
     expect(failure).toHaveTextContent('HTTP 502: zstd full error');
     expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
     expect(apiMock.put).not.toHaveBeenCalled();
+  });
+
+  it('ignores a late detection result after closing one provider and detecting another', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        alpha: {
+          provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+          base_urls: ['https://same.example/v1'], current_base_url: 'https://same.example/v1',
+          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+        },
+        beta: {
+          provider: 'openai', api_type: 'responses', request_encoding: 'identity',
+          base_urls: ['https://same.example/v1'], current_base_url: 'https://same.example/v1',
+          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    const alphaDetection = deferred<{ selected: 'zstd'; identity: { ok: true }; zstd: { ok: true } }>();
+    const betaDetection = deferred<{ selected: 'identity'; identity: { ok: true }; zstd: { ok: false } }>();
+    apiMock.post.mockImplementationOnce(() => alphaDetection.promise).mockImplementationOnce(() => betaDetection.promise);
+    render(ProvidersPage);
+
+    const editButtons = await screen.findAllByRole('button', { name: 'Edit' });
+    await fireEvent.click(editButtons[0]);
+    let dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.input(dialog.getByLabelText('Detection model'), { target: { value: 'manual-model' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Auto-detect' }));
+    expect(dialog.getByRole('button', { name: 'Detecting...' })).toBeDisabled();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+
+    await fireEvent.click(editButtons[1]);
+    dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
+    await fireEvent.input(dialog.getByLabelText('Detection model'), { target: { value: 'manual-model' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Auto-detect' }));
+    expect(dialog.getByRole('button', { name: 'Detecting...' })).toBeDisabled();
+
+    alphaDetection.resolve({ selected: 'zstd', identity: { ok: true }, zstd: { ok: true } });
+    await alphaDetection.promise;
+    await tick();
+    expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
+    expect(dialog.queryByRole('alert')).not.toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: 'Detecting...' })).toBeDisabled();
+
+    betaDetection.resolve({ selected: 'identity', identity: { ok: true }, zstd: { ok: false } });
+    await waitFor(() => expect(dialog.getByRole('button', { name: 'Auto-detect' })).toBeEnabled());
+    expect(dialog.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
   });
 
   it('hides request encoding detection for non-Responses protocols', async () => {
