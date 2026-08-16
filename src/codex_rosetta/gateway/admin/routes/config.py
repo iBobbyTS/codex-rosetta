@@ -58,6 +58,7 @@ from ...tool_profiles import (
 from ...transport import UpstreamProtocolError
 from ...transport.provider_info import ProviderInfo
 from ._shared import (
+    _ENV_VAR_RE,
     _build_provider_entry,
     _commit_gateway_config,
     _get_config_path,
@@ -893,6 +894,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 def _resolve_draft_provider_api_keys(
     api_keys: Any,
     existing_provider: Mapping[str, Any],
+    resolved_provider: ProviderInfo | None = None,
+    *,
+    resolve_saved_credentials: bool = False,
 ) -> list[dict[str, str]]:
     """Resolve canonical draft credentials, including matching saved masks."""
     existing_keys = {
@@ -900,6 +904,17 @@ def _resolve_draft_provider_api_keys(
         for entry in existing_provider.get("api_keys", [])
         if isinstance(entry, dict)
     }
+    resolved_keys = (
+        dict(
+            zip(
+                resolved_provider.credential_ids,
+                resolved_provider.credential_values,
+                strict=True,
+            )
+        )
+        if resolved_provider is not None
+        else {}
+    )
     if not isinstance(api_keys, list):
         raise ValueError("'api_keys' must be a list")
     merged_keys: list[dict[str, str]] = []
@@ -915,13 +930,32 @@ def _resolve_draft_provider_api_keys(
             raise ValueError(f"'api_keys[{index}]' must contain string 'id' and 'key'")
         credential_id = credential_id_value.strip()
         key = key_value.strip()
+        saved_key = existing_keys.get(credential_id)
+        uses_saved_credential = False
         if "***" in key:
-            saved_key = existing_keys.get(credential_id)
             if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:
                 raise ValueError(
                     f"'api_keys[{index}].key' mask does not match saved credential"
                 )
-            key = saved_key
+            uses_saved_credential = True
+        elif resolve_saved_credentials and _ENV_VAR_RE.fullmatch(key):
+            if not isinstance(saved_key, str) or saved_key != key:
+                raise ValueError(
+                    f"'api_keys[{index}].key' environment placeholder does not "
+                    "match saved credential"
+                )
+            uses_saved_credential = True
+        if uses_saved_credential:
+            if resolve_saved_credentials:
+                resolved_key = resolved_keys.get(credential_id)
+                if not isinstance(resolved_key, str) or not resolved_key:
+                    raise ValueError(
+                        f"'api_keys[{index}].key' saved credential is not available "
+                        "in the resolved Gateway config"
+                    )
+                key = resolved_key
+            else:
+                key = saved_key
         merged_keys.append({"id": credential_id, "key": key})
     return merged_keys
 
@@ -979,8 +1013,19 @@ async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Respo
     resolve_name = body.get("rename_from", name) or name
     existing_provider = existing_providers.get(resolve_name, {})
     try:
+        resolved_provider = GatewayConfig.from_raw_with_env(data).providers.get(
+            resolve_name
+        )
+    except ValueError as exc:
+        return JSONResponse(
+            {"error": f"Failed to resolve saved config: {exc}"}, status_code=400
+        )
+    try:
         resolved_keys = _resolve_draft_provider_api_keys(
-            body.get("api_keys"), existing_provider
+            body.get("api_keys"),
+            existing_provider,
+            resolved_provider,
+            resolve_saved_credentials=True,
         )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)

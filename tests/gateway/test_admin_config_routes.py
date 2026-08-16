@@ -1644,10 +1644,17 @@ def test_put_provider_preserves_matching_masks(tmp_path):
 
 
 class _DetectionStream:
-    def __init__(self, request_encoding: str, *, fail_with: str | None = None) -> None:
+    def __init__(
+        self,
+        request_encoding: str,
+        *,
+        fail_with: str | None = None,
+        failed_event: dict[str, Any] | None = None,
+    ) -> None:
         self.request_encoding = request_encoding
         self.status_code = 400 if fail_with is not None else 200
         self.fail_with = fail_with
+        self.failed_event = failed_event
 
     @property
     def is_error(self) -> bool:
@@ -1658,7 +1665,7 @@ class _DetectionStream:
 
     def __aiter__(self):
         async def events():
-            yield {"type": "response.completed"}
+            yield self.failed_event or {"type": "response.completed"}
 
         return events()
 
@@ -1670,8 +1677,14 @@ class _DetectionStream:
 
 
 class _DetectionTransport:
-    def __init__(self, *, fail_with: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        fail_with: str | None = None,
+        failed_event: dict[str, Any] | None = None,
+    ) -> None:
         self.fail_with = fail_with
+        self.failed_event = failed_event
         self.calls: list[tuple[Any, str, dict[str, Any], str]] = []
 
     async def send_streaming(self, provider_info, target_provider, body, model, **_):
@@ -1679,6 +1692,7 @@ class _DetectionTransport:
         return _DetectionStream(
             provider_info.request_encoding,
             fail_with=self.fail_with,
+            failed_event=self.failed_event,
         )
 
 
@@ -1735,6 +1749,52 @@ def test_detect_request_encoding_uses_only_current_masked_draft_target(tmp_path)
         assert model == "manual-model"
 
 
+@pytest.mark.parametrize(
+    ("credential_id", "expected_status"),
+    [("selected", 200), ("primary", 400)],
+)
+def test_detect_request_encoding_resolves_only_saved_environment_credential_owner(
+    tmp_path, monkeypatch, credential_id, expected_status
+):
+    data = _responses_detection_data()
+    data["providers"]["openai"]["api_keys"][1]["key"] = "${RESPONSES_API_KEY}"
+    monkeypatch.setenv("RESPONSES_API_KEY", "resolved-environment-secret")
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    transport = _DetectionTransport()
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=GatewayConfig.from_raw_with_env(data),
+            transport=transport,
+        ),
+        path_params={"name": "openai"},
+        json=lambda: {
+            "provider": "openai",
+            "api_type": "responses",
+            "model": "manual-model",
+            "current_base_url": "https://api.example.com",
+            "api_keys": [{"id": credential_id, "key": "${RESPONSES_API_KEY}"}],
+            "current_api_key": credential_id,
+            "proxy": "",
+            "allow_redirects": False,
+        },
+    )
+
+    response = _run(detect_provider_request_encoding(request))
+
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert len(transport.calls) == 2
+        assert all(
+            call[0].credential_values == ("resolved-environment-secret",)
+            for call in transport.calls
+        )
+    else:
+        assert "does not match saved credential" in response.body.decode()
+        assert transport.calls == []
+
+
 def test_detect_request_encoding_accepts_unsaved_raw_draft_without_writing(tmp_path):
     data = _responses_detection_data()
     config_path = tmp_path / "config.jsonc"
@@ -1772,7 +1832,17 @@ def test_detect_request_encoding_redacts_complete_failures(tmp_path):
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     transport = _DetectionTransport(
-        fail_with='{"error":"selected-secret invalid JSON request body"}'
+        failed_event={
+            "type": "response.failed",
+            "sequence_number": 7,
+            "response": {
+                "status": "failed",
+                "error": {
+                    "code": "invalid_request_error",
+                    "message": "selected-secret rejected by upstream",
+                },
+            },
+        }
     )
     request = SimpleNamespace(
         app=SimpleNamespace(
@@ -1797,10 +1867,12 @@ def test_detect_request_encoding_redacts_complete_failures(tmp_path):
 
     payload = json.loads(response.body)
     assert payload["selected"] is None
-    assert payload["identity"]["error"] == (
-        'HTTP 400: {"error":"[REDACTED] invalid JSON request body"}'
-    )
-    assert payload["zstd"]["error"] == payload["identity"]["error"]
+    for probe_name in ("identity", "zstd"):
+        error = payload[probe_name]["error"]
+        assert "response.failed" in error
+        assert "sequence_number" in error
+        assert "invalid_request_error" in error
+        assert "[REDACTED] rejected by upstream" in error
     assert "selected-secret" not in response.body.decode()
 
 

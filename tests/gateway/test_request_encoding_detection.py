@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Any
 
 import pytest
@@ -20,9 +21,10 @@ class _ProbeStream:
         completed: bool = False,
         status_code: int = 200,
         error: str = "",
+        events: list[dict[str, Any]] | None = None,
     ) -> None:
         self.status_code = status_code
-        self._events = (
+        self._events = events or (
             [{"type": "response.created"}, {"type": "response.completed"}]
             if completed
             else [{"type": "response.created"}]
@@ -148,3 +150,43 @@ def test_detection_preserves_bounded_http_and_transport_errors() -> None:
     assert result.selected is None
     assert result.identity.error == 'HTTP 400: {"error":"invalid JSON"}'
     assert result.zstd.error == "TLS handshake failed with details"
+
+
+def test_detection_preserves_complete_response_failed_payload() -> None:
+    failed_event = {
+        "type": "response.failed",
+        "sequence_number": 4,
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "error": {
+                "code": "invalid_request_error",
+                "message": "complete upstream failure detail",
+            },
+        },
+    }
+    transport = _ProbeTransport(
+        {
+            "identity": _ProbeStream(
+                events=[failed_event, {"type": "response.completed"}]
+            ),
+            "zstd": _ProbeStream(completed=True),
+        }
+    )
+
+    result = asyncio.run(
+        detect_responses_request_encoding(
+            transport,
+            identity_provider=_provider("identity"),
+            zstd_provider=_provider("zstd"),
+            model="manual-model",
+        )
+    )
+
+    assert result.selected == "zstd"
+    assert result.identity.ok is False
+    assert result.identity.status_code == 200
+    assert result.identity.error == (
+        "response.failed: "
+        + json.dumps(failed_event, ensure_ascii=False, separators=(",", ":"))
+    )

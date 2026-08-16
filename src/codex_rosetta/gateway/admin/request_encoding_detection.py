@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import asdict, dataclass
 from typing import Any
 
@@ -57,10 +58,22 @@ async def _probe_responses_completion(
                     error=f"HTTP {stream.status_code}: {error}",
                 )
             async for event in stream:
-                if event.get("type") == "response.completed":
+                event_type = event.get("type")
+                if event_type == "response.completed":
                     return EncodingProbeResult(
                         ok=True,
                         status_code=stream.status_code,
+                    )
+                if event_type == "response.failed":
+                    payload = json.dumps(
+                        event,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    return EncodingProbeResult(
+                        ok=False,
+                        status_code=stream.status_code,
+                        error=f"response.failed: {payload}",
                     )
             return EncodingProbeResult(
                 ok=False,
