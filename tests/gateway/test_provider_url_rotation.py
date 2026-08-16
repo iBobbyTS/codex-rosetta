@@ -1172,6 +1172,71 @@ def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        release_second = asyncio.Event()
+        attempt = 0
+
+        async def delay_second_initial_response() -> None:
+            nonlocal attempt
+            attempt += 1
+            if attempt == 1:
+                first_started.set()
+                await second_started.wait()
+            elif attempt == 2:
+                second_started.set()
+                await release_second.wait()
+
+        client.before_response[f"{origin}/responses"] = delay_second_initial_response
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        content_type = "text/event-stream" if streaming else "application/json"
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(2),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        leader = asyncio.create_task(send())
+        await first_started.wait()
+        delayed = asyncio.create_task(send())
+        await second_started.wait()
+
+        leader_result = await leader
+        release_second.set()
+        delayed_result = await delayed
+
+        assert leader_result.status_code == delayed_result.status_code == 200
+        assert client.calls == [f"{origin}/responses"] * 4
+        assert sleeps == [1.0]
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_makes_one_request_after_retry_leader(
     monkeypatch, streaming: bool
 ) -> None:

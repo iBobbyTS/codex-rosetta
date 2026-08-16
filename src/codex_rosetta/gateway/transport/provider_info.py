@@ -153,6 +153,9 @@ class ProviderInfo:
     async def wait_for_url_rotation(self) -> bool:
         return await self._url_ring.wait()
 
+    def observe_url_rotation(self) -> tuple[str, int]:
+        return self._url_ring.observe()
+
     def available_base_urls(self) -> tuple[str, ...]:
         return self._url_ring.available()
 
@@ -164,6 +167,11 @@ class ProviderInfo:
 
     async def claim_url_rotation_with_waited(self, observed: str) -> tuple[bool, bool]:
         return await self._url_ring.claim_with_waited(observed)
+
+    async def claim_url_rotation_observation(
+        self, observation: tuple[str, int]
+    ) -> tuple[bool, bool]:
+        return await self._url_ring.claim_observation_with_waited(observation)
 
     def mark_base_url_failed(self, base_url: str) -> None:
         self._url_ring.mark_failed(base_url)

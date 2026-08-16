@@ -133,13 +133,25 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         ) = await self._gate.await_active()
         return waited
 
+    def observe(self) -> tuple[_CandidateT, int]:
+        """Snapshot the current candidate and failover generation."""
+        return self._current, self._gate.generation
+
     async def claim(self, observed: _CandidateT) -> bool:
         leader, _waited = await self.claim_with_waited(observed)
         return leader
 
     async def claim_with_waited(self, observed: _CandidateT) -> tuple[bool, bool]:
         """Claim failover leadership and report a claim-time gate wait."""
-        generation = self._gate.generation
+        return await self.claim_observation_with_waited(
+            (observed, self._gate.generation)
+        )
+
+    async def claim_observation_with_waited(
+        self, observation: tuple[_CandidateT, int]
+    ) -> tuple[bool, bool]:
+        """Conditionally claim using an attempt's pre-operation observation."""
+        observed, generation = observation
         (
             leader,
             _generation,

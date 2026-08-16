@@ -362,10 +362,10 @@ def _all_credentials_503(count: int) -> bytes:
 
 
 async def _claim_url_rotation_immediately(
-    provider_info: ProviderInfo, observed: str
+    provider_info: ProviderInfo, observation: tuple[str, int]
 ) -> bool:
     """Keep URL leadership only when the claim did not wait on another leader."""
-    claimed, waited = await provider_info.claim_url_rotation_with_waited(observed)
+    claimed, waited = await provider_info.claim_url_rotation_observation(observation)
     if claimed and waited:
         await provider_info.publish_url_rotation()
     return claimed and not waited
@@ -658,6 +658,50 @@ class HttpTransport:
         finally:
             await provider_info.publish_credential_rotation()
 
+    async def _send_request_observed(
+        self,
+        provider_info: ProviderInfo,
+        target_provider: ProviderType,
+        body: dict[str, Any],
+        model: str,
+        *,
+        extra_headers: dict[str, str] | None,
+    ) -> tuple[UpstreamResponse, tuple[str, int]]:
+        observation = provider_info.observe_url_rotation()
+        response = await self._send_request_once(
+            provider_info,
+            target_provider,
+            body,
+            model,
+            extra_headers=extra_headers,
+        )
+        return response, observation
+
+    async def _send_streaming_observed(
+        self,
+        provider_info: ProviderInfo,
+        target_provider: ProviderType,
+        body: dict[str, Any],
+        model: str,
+        *,
+        extra_headers: dict[str, str] | None,
+        wire_body: bytes | None,
+        wire_headers: dict[str, str] | None,
+        preserve_failover_error_body: bool,
+    ) -> tuple[HttpUpstreamStream, bool, tuple[str, int]]:
+        observation = provider_info.observe_url_rotation()
+        result, trigger = await self._send_streaming_once(
+            provider_info,
+            target_provider,
+            body,
+            model,
+            extra_headers=extra_headers,
+            wire_body=wire_body,
+            wire_headers=wire_headers,
+            preserve_failover_error_body=preserve_failover_error_body,
+        )
+        return result, trigger, observation
+
     async def send_request(
         self,
         provider_info: ProviderInfo,
@@ -683,15 +727,15 @@ class HttpTransport:
                     body=None,
                     raw_content=_all_credentials_503(len(provider_info.credential_ids)),
                 )
-            observed = provider_info.base_url
             observed_credential = provider_info.current_credential_id
-            response = await self._send_request_once(
+            response, url_observation = await self._send_request_observed(
                 provider_info,
                 target_provider,
                 body,
                 model,
                 extra_headers=extra_headers,
             )
+            observed = url_observation[0]
             if single_attempt and response.status_code == 502:
                 return response
             if response.status_code == 503:
@@ -705,23 +749,26 @@ class HttpTransport:
                 response.status_code, response.raw_content
             ):
                 return response
-            if not await _claim_url_rotation_immediately(provider_info, observed):
+            if not await _claim_url_rotation_immediately(
+                provider_info, url_observation
+            ):
                 single_attempt = True
                 continue
             try:
                 while True:
-                    response = await _HTTP_502_RETRY.run(
-                        response,
-                        lambda: self._send_request_once(
+                    response, url_observation = await _HTTP_502_RETRY.run(
+                        (response, url_observation),
+                        lambda: self._send_request_observed(
                             provider_info,
                             target_provider,
                             body,
                             model,
                             extra_headers=extra_headers,
                         ),
-                        lambda item: not single_attempt and item.status_code == 502,
+                        lambda item: not single_attempt and item[0].status_code == 502,
                         sleep=self._retry_sleep,
                     )
+                    observed = url_observation[0]
                     if single_attempt and response.status_code == 502:
                         return response
                     if response.status_code == 503:
@@ -731,13 +778,14 @@ class HttpTransport:
                         if exhausted is not None:
                             return exhausted
                         observed_credential = provider_info.current_credential_id
-                        response = await self._send_request_once(
+                        response, url_observation = await self._send_request_observed(
                             provider_info,
                             target_provider,
                             body,
                             model,
                             extra_headers=extra_headers,
                         )
+                        observed = url_observation[0]
                         continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
@@ -752,15 +800,15 @@ class HttpTransport:
                             raw_content=_all_domains_502(len(provider_info.base_urls)),
                         )
                     await provider_info.select_base_url(next_url)
-                    observed = next_url
                     observed_credential = provider_info.current_credential_id
-                    response = await self._send_request_once(
+                    response, url_observation = await self._send_request_observed(
                         provider_info,
                         target_provider,
                         body,
                         model,
                         extra_headers=extra_headers,
                     )
+                    observed = url_observation[0]
             finally:
                 await provider_info.publish_url_rotation()
 
@@ -854,9 +902,8 @@ class HttpTransport:
                     idle_timeout=self._stream_idle_timeout,
                     close_timeout=self._close_timeout,
                 )
-            observed = provider_info.base_url
             observed_credential = provider_info.current_credential_id
-            result, trigger = await self._send_streaming_once(
+            result, trigger, url_observation = await self._send_streaming_observed(
                 provider_info,
                 target_provider,
                 body,
@@ -866,6 +913,7 @@ class HttpTransport:
                 wire_headers=wire_headers,
                 preserve_failover_error_body=not allow_failover,
             )
+            observed = url_observation[0]
             if not allow_failover or (single_attempt and result.status_code == 502):
                 return result
             if result.status_code == 503:
@@ -883,14 +931,16 @@ class HttpTransport:
                 continue
             if not trigger:
                 return result
-            if not await _claim_url_rotation_immediately(provider_info, observed):
+            if not await _claim_url_rotation_immediately(
+                provider_info, url_observation
+            ):
                 single_attempt = True
                 continue
             try:
                 while True:
-                    result, trigger = await _HTTP_502_RETRY.run(
-                        (result, trigger),
-                        lambda: self._send_streaming_once(
+                    result, trigger, url_observation = await _HTTP_502_RETRY.run(
+                        (result, trigger, url_observation),
+                        lambda: self._send_streaming_observed(
                             provider_info,
                             target_provider,
                             body,
@@ -903,6 +953,7 @@ class HttpTransport:
                         lambda item: not single_attempt and item[0].status_code == 502,
                         sleep=self._retry_sleep,
                     )
+                    observed = url_observation[0]
                     if single_attempt and result.status_code == 502:
                         return result
                     if result.status_code == 503:
@@ -918,7 +969,11 @@ class HttpTransport:
                                 close_timeout=self._close_timeout,
                             )
                         observed_credential = provider_info.current_credential_id
-                        result, trigger = await self._send_streaming_once(
+                        (
+                            result,
+                            trigger,
+                            url_observation,
+                        ) = await self._send_streaming_observed(
                             provider_info,
                             target_provider,
                             body,
@@ -928,6 +983,7 @@ class HttpTransport:
                             wire_headers=wire_headers,
                             preserve_failover_error_body=False,
                         )
+                        observed = url_observation[0]
                         continue
                     if not trigger:
                         return result
@@ -943,9 +999,12 @@ class HttpTransport:
                             close_timeout=self._close_timeout,
                         )
                     await provider_info.select_base_url(next_url)
-                    observed = next_url
                     observed_credential = provider_info.current_credential_id
-                    result, trigger = await self._send_streaming_once(
+                    (
+                        result,
+                        trigger,
+                        url_observation,
+                    ) = await self._send_streaming_observed(
                         provider_info,
                         target_provider,
                         body,
@@ -955,6 +1014,7 @@ class HttpTransport:
                         wire_headers=wire_headers,
                         preserve_failover_error_body=False,
                     )
+                    observed = url_observation[0]
             finally:
                 await provider_info.publish_url_rotation()
 
