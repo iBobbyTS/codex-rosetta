@@ -48,10 +48,14 @@ A Provider stores an ordered, non-empty `base_urls` list and one member as
 each URL as available, cooling, or current. Selecting a cooling URL makes it
 current immediately and clears only that URL's cooldown.
 
-Before any client-visible output, an upstream HTTP 502 (or the narrowly
-recognized CDN 502 page) silently tries the next non-cooling URL. Other
-responses retain their existing behavior. Failed URLs cool for one hour in
-process memory, while the current URL is persisted.
+Before any client-visible output, a literal upstream HTTP 502 is retried on the
+same URL after 1, 2, 4, 8, and 16 seconds. Only six consecutive 502 responses
+cool that URL and silently try the next non-cooling URL, which receives the same
+retry budget. A narrowly recognized CDN 502 page still rotates immediately and
+is not retried. Other responses retain their existing behavior, including HTTP
+503 credential rotation. Failed URLs cool for one hour in process memory, while
+the current URL is persisted. Streaming requests with failover disabled are not
+retried.
 
 Each Provider also stores an ordered, non-empty `api_keys` list of stable IDs
 and masked credentials, plus a member `current_api_key`. Only HTTP 503 rotates

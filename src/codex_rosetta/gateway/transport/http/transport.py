@@ -11,7 +11,7 @@ import asyncio
 import json
 import logging
 import math
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -38,6 +38,7 @@ from .._base import (
     UpstreamStream,
     UpstreamStreamLimitError,
 )
+from .._retry import _RetryPolicy
 from ..provider_info import ProviderInfo
 from .client_pool import DEFAULT_HTTP_TIMEOUT_SECONDS, HttpClientPool
 
@@ -57,6 +58,7 @@ _CDN_502_MARKERS = (
     b">502<",
 )
 _RESPONSES_TARGETS = frozenset({"openai_responses", "open_responses"})
+_HTTP_502_RETRY = _RetryPolicy((1.0, 2.0, 4.0, 8.0, 16.0))
 
 
 class _ClosedSyntheticResponse:
@@ -616,11 +618,13 @@ class HttpTransport:
         stream_open_timeout: float = DEFAULT_UPSTREAM_STREAM_OPEN_TIMEOUT_SECONDS,
         stream_idle_timeout: float = DEFAULT_UPSTREAM_STREAM_IDLE_TIMEOUT_SECONDS,
         close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,
+        retry_sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._pool = HttpClientPool(timeout=timeout)
         self._stream_open_timeout = stream_open_timeout
         self._stream_idle_timeout = stream_idle_timeout
         self._close_timeout = close_timeout
+        self._retry_sleep = retry_sleep
 
     async def _advance_credential(
         self,
@@ -654,7 +658,7 @@ class HttpTransport:
         extra_headers: dict[str, str] | None = None,
     ) -> UpstreamResponse:
         """Send a non-streaming request and return the full response."""
-        await provider_info.wait_for_url_rotation()
+        single_attempt = await provider_info.wait_for_url_rotation()
         await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
@@ -678,6 +682,8 @@ class HttpTransport:
                 model,
                 extra_headers=extra_headers,
             )
+            if single_attempt:
+                return response
             if response.status_code == 503:
                 exhausted = await self._advance_credential(
                     provider_info, observed_credential
@@ -690,24 +696,52 @@ class HttpTransport:
             ):
                 return response
             if not await provider_info.claim_url_rotation(observed):
+                single_attempt = True
                 continue
             try:
-                provider_info.mark_base_url_failed(observed)
-                advance_url = True
                 while True:
-                    if advance_url:
-                        next_url = provider_info.next_available_base_url(observed)
-                        if next_url is None:
-                            return UpstreamResponse(
-                                status_code=502,
-                                body=None,
-                                raw_content=_all_domains_502(
-                                    len(provider_info.base_urls)
-                                ),
-                            )
-                        await provider_info.select_base_url(next_url)
-                        observed = next_url
-                    advance_url = True
+                    if response.status_code == 502:
+                        response = await _HTTP_502_RETRY.run(
+                            response,
+                            lambda: self._send_request_once(
+                                provider_info,
+                                target_provider,
+                                body,
+                                model,
+                                extra_headers=extra_headers,
+                            ),
+                            lambda item: item.status_code == 502,
+                            sleep=self._retry_sleep,
+                        )
+                    if response.status_code == 503:
+                        exhausted = await self._advance_credential(
+                            provider_info, observed_credential
+                        )
+                        if exhausted is not None:
+                            return exhausted
+                        observed_credential = provider_info.current_credential_id
+                        response = await self._send_request_once(
+                            provider_info,
+                            target_provider,
+                            body,
+                            model,
+                            extra_headers=extra_headers,
+                        )
+                        continue
+                    if not _is_base_url_rotation_trigger(
+                        response.status_code, response.raw_content
+                    ):
+                        return response
+                    provider_info.mark_base_url_failed(observed)
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        return UpstreamResponse(
+                            status_code=502,
+                            body=None,
+                            raw_content=_all_domains_502(len(provider_info.base_urls)),
+                        )
+                    await provider_info.select_base_url(next_url)
+                    observed = next_url
                     observed_credential = provider_info.current_credential_id
                     response = await self._send_request_once(
                         provider_info,
@@ -716,19 +750,6 @@ class HttpTransport:
                         model,
                         extra_headers=extra_headers,
                     )
-                    if response.status_code == 503:
-                        exhausted = await self._advance_credential(
-                            provider_info, observed_credential
-                        )
-                        if exhausted is not None:
-                            return exhausted
-                        advance_url = False
-                        continue
-                    if not _is_base_url_rotation_trigger(
-                        response.status_code, response.raw_content
-                    ):
-                        return response
-                    provider_info.mark_base_url_failed(observed)
             finally:
                 await provider_info.publish_url_rotation()
 
@@ -801,7 +822,7 @@ class HttpTransport:
         allow_failover: bool = True,
     ) -> HttpUpstreamStream:
         """Send a streaming request and return an async chunk iterator."""
-        await provider_info.wait_for_url_rotation()
+        single_attempt = await provider_info.wait_for_url_rotation()
         await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
@@ -834,7 +855,7 @@ class HttpTransport:
                 wire_headers=wire_headers,
                 preserve_failover_error_body=not allow_failover,
             )
-            if not allow_failover:
+            if not allow_failover or single_attempt:
                 return result
             if result.status_code == 503:
                 exhausted = await self._advance_credential(
@@ -852,36 +873,26 @@ class HttpTransport:
             if not trigger:
                 return result
             if not await provider_info.claim_url_rotation(observed):
+                single_attempt = True
                 continue
             try:
-                provider_info.mark_base_url_failed(observed)
-                advance_url = True
                 while True:
-                    if advance_url:
-                        next_url = provider_info.next_available_base_url(observed)
-                        if next_url is None:
-                            message = _all_domains_502(len(provider_info.base_urls))
-                            return HttpUpstreamStream(
-                                cast(Any, _ClosedSyntheticResponse(502)),
-                                error_text=message.decode(),
-                                response_closed=True,
-                                idle_timeout=self._stream_idle_timeout,
-                                close_timeout=self._close_timeout,
-                            )
-                        await provider_info.select_base_url(next_url)
-                        observed = next_url
-                    advance_url = True
-                    observed_credential = provider_info.current_credential_id
-                    result, trigger = await self._send_streaming_once(
-                        provider_info,
-                        target_provider,
-                        body,
-                        model,
-                        extra_headers=extra_headers,
-                        wire_body=wire_body,
-                        wire_headers=wire_headers,
-                        preserve_failover_error_body=False,
-                    )
+                    if result.status_code == 502:
+                        result, trigger = await _HTTP_502_RETRY.run(
+                            (result, trigger),
+                            lambda: self._send_streaming_once(
+                                provider_info,
+                                target_provider,
+                                body,
+                                model,
+                                extra_headers=extra_headers,
+                                wire_body=wire_body,
+                                wire_headers=wire_headers,
+                                preserve_failover_error_body=False,
+                            ),
+                            lambda item: item[0].status_code == 502,
+                            sleep=self._retry_sleep,
+                        )
                     if result.status_code == 503:
                         exhausted = await self._advance_credential(
                             provider_info, observed_credential
@@ -894,11 +905,44 @@ class HttpTransport:
                                 idle_timeout=self._stream_idle_timeout,
                                 close_timeout=self._close_timeout,
                             )
-                        advance_url = False
+                        observed_credential = provider_info.current_credential_id
+                        result, trigger = await self._send_streaming_once(
+                            provider_info,
+                            target_provider,
+                            body,
+                            model,
+                            extra_headers=extra_headers,
+                            wire_body=wire_body,
+                            wire_headers=wire_headers,
+                            preserve_failover_error_body=False,
+                        )
                         continue
                     if not trigger:
                         return result
                     provider_info.mark_base_url_failed(observed)
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        message = _all_domains_502(len(provider_info.base_urls))
+                        return HttpUpstreamStream(
+                            cast(Any, _ClosedSyntheticResponse(502)),
+                            error_text=message.decode(),
+                            response_closed=True,
+                            idle_timeout=self._stream_idle_timeout,
+                            close_timeout=self._close_timeout,
+                        )
+                    await provider_info.select_base_url(next_url)
+                    observed = next_url
+                    observed_credential = provider_info.current_credential_id
+                    result, trigger = await self._send_streaming_once(
+                        provider_info,
+                        target_provider,
+                        body,
+                        model,
+                        extra_headers=extra_headers,
+                        wire_body=wire_body,
+                        wire_headers=wire_headers,
+                        preserve_failover_error_body=False,
+                    )
             finally:
                 await provider_info.publish_url_rotation()
 

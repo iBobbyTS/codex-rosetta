@@ -150,8 +150,8 @@ class ProviderInfo:
         """Bind the app-owned persistence callback for automatic selection."""
         self._record_current_base_url = recorder
 
-    async def wait_for_url_rotation(self) -> None:
-        await self._url_ring.wait()
+    async def wait_for_url_rotation(self) -> bool:
+        return await self._url_ring.wait()
 
     def available_base_urls(self) -> tuple[str, ...]:
         return self._url_ring.available()

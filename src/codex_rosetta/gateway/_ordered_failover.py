@@ -112,8 +112,15 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
     def candidates(self) -> tuple[_CandidateT, ...]:
         return self._candidates
 
-    async def wait(self) -> None:
-        await self._gate.await_active()
+    async def wait(self) -> bool:
+        (
+            _generation,
+            _outcome,
+            waited,
+            _leader,
+            _pending,
+        ) = await self._gate.await_active()
+        return waited
 
     async def claim(self, observed: _CandidateT) -> bool:
         generation = self._gate.generation

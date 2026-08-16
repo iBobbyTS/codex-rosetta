@@ -25,6 +25,7 @@ from codex_rosetta.gateway.search_provider_executor import (
     SearchRequest,
 )
 from codex_rosetta.gateway.transport import ProviderInfo, UpstreamProtocolError
+from codex_rosetta.gateway.transport._retry import _RetryPolicy
 from codex_rosetta.gateway.transport.http import transport as transport_module
 from codex_rosetta.gateway.transport.http.transport import HttpTransport
 
@@ -202,18 +203,21 @@ def test_nonstream_alternating_502_then_503_rotates_independent_rings(
 
         provider.bind_current_credential_recorder(record_credential)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(502, {"error": "url"}))
-        client.add(f"{second}/responses", _json_response(503, {"error": "key"}))
-        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+        client.add(
+            f"{first}/responses",
+            _json_response(502, {"error": "url"}),
+            _json_response(503, {"error": "key"}),
+            _json_response(200, {"ok": True}),
+        )
 
         result = await _transport(monkeypatch, client).send_request(
             provider, "openai_responses", {}, "model"
         )
 
         assert result.status_code == 200
-        assert provider.base_url == second
+        assert provider.base_url == first
         assert provider.current_credential_id == "second"
-        assert writes == [("row-a", second)]
+        assert writes == []
         assert credential_writes == [("row-a", "second")]
         assert [item["Authorization"] for item in client.headers] == [
             "Bearer key-first",
@@ -244,7 +248,7 @@ def test_nonstream_alternating_503_then_502_rotates_independent_rings(
         provider.bind_current_credential_recorder(record_credential)
         client = _RoutingClient()
         client.add(f"{first}/responses", _json_response(503, {"error": "key"}))
-        client.add(f"{first}/responses", _json_response(502, {"error": "url"}))
+        client.add(f"{first}/responses", *_literal_502s())
         client.add(f"{second}/responses", _json_response(200, {"ok": True}))
 
         result = await _transport(monkeypatch, client).send_request(
@@ -299,32 +303,36 @@ def test_three_url_alternating_failures_preserve_independent_rings(
             if path_kind == "streaming"
             else _json_response(200, {"ok": True})
         )
+        url_failures = (
+            (_json_response(502, {"error": "url"}),)
+            if path_kind == "passthrough"
+            else _literal_502s()
+        )
         if failure_order == "url-then-credential":
-            client.add(first_url, _json_response(502, {"error": "url"}))
+            client.add(first_url, *url_failures)
             client.add(
                 second_url,
                 _json_response(503, {"error": "credential"}),
                 success,
             )
-            expected_calls = [first_url, second_url, second_url]
-            expected_headers = [
-                "Bearer key-first",
-                "Bearer key-first",
-                "Bearer key-second",
+            expected_calls = [first_url] * len(url_failures) + [
+                second_url,
+                second_url,
+            ]
+            expected_headers = ["Bearer key-first"] * (len(url_failures) + 1) + [
+                "Bearer key-second"
             ]
         else:
             client.add(
                 first_url,
                 _json_response(503, {"error": "credential"}),
-                _json_response(502, {"error": "url"}),
+                *url_failures,
             )
             client.add(second_url, success)
-            expected_calls = [first_url, first_url, second_url]
-            expected_headers = [
-                "Bearer key-first",
-                "Bearer key-second",
-                "Bearer key-second",
-            ]
+            expected_calls = [first_url] * (len(url_failures) + 1) + [second_url]
+            expected_headers = ["Bearer key-first"] + ["Bearer key-second"] * (
+                len(url_failures) + 1
+            )
 
         transport = _transport(monkeypatch, client)
         if path_kind == "request":
@@ -610,13 +618,20 @@ def test_streaming_status_503_rotates_before_content_encoding_validation(
 def _transport(
     monkeypatch: pytest.MonkeyPatch,
     client: _RoutingClient,
+    *,
+    retry_sleep: Any = None,
 ) -> HttpTransport:
     monkeypatch.setattr(
         transport_module,
         "HttpStreamingResponse",
         _FakeStreamingResponse,
     )
-    transport = HttpTransport()
+    if retry_sleep is None:
+
+        async def retry_sleep(_delay: float) -> None:
+            return None
+
+    transport = HttpTransport(retry_sleep=retry_sleep)
     transport._pool = cast(
         Any,
         SimpleNamespace(get=lambda _proxy=None, allow_redirects=False: client),
@@ -628,13 +643,153 @@ def _json_response(status: int, payload: dict[str, Any]) -> _FakeStreamingRespon
     return _FakeStreamingResponse(status, json.dumps(payload).encode())
 
 
+def _literal_502s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
+    return tuple(_json_response(502, {"error": "bad"}) for _ in range(count))
+
+
+def test_retry_policy_is_status_neutral_and_stops_on_caller_result() -> None:
+    async def scenario() -> None:
+        results = deque(["retry", "done"])
+        sleeps: list[float] = []
+
+        async def operation() -> str:
+            return results.popleft()
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        result = await _RetryPolicy((1.0, 2.0, 4.0)).run(
+            "retry",
+            operation,
+            lambda item: item == "retry",
+            sleep=fake_sleep,
+        )
+
+        assert result == "done"
+        assert sleeps == [1.0, 2.0]
+        assert not results
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_literal_502_succeeds_at_each_retry_position_with_exact_delays(
+    monkeypatch,
+    streaming: bool,
+    failures_before_success: int,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        success = _FakeStreamingResponse(
+            200,
+            b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}',
+            content_type=("text/event-stream" if streaming else "application/json"),
+        )
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(failures_before_success),
+            success,
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        result = (
+            await transport.send_streaming(provider, "openai_responses", {}, "model")
+            if streaming
+            else await transport.send_request(provider, "openai_responses", {}, "model")
+        )
+
+        assert result.status_code == 200
+        assert client.calls == [f"{origin}/responses"] * (failures_before_success + 1)
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_each_url_receives_a_fresh_six_attempt_budget(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(f"{first}/responses", *_literal_502s())
+        client.add(
+            f"{second}/responses",
+            *_literal_502s(5),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}',
+                content_type=("text/event-stream" if streaming else "application/json"),
+            ),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        result = (
+            await transport.send_streaming(provider, "openai_responses", {}, "model")
+            if streaming
+            else await transport.send_request(provider, "openai_responses", {}, "model")
+        )
+
+        assert result.status_code == 200
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"] * 6
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
+        assert provider.base_url == second
+        assert writes == [("row-a", second)]
+
+    asyncio.run(scenario())
+
+
+def test_streaming_allow_failover_false_does_not_retry_literal_502(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        client.add(f"{origin}/responses", *_literal_502s(1))
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        result = await _transport(
+            monkeypatch, client, retry_sleep=fake_sleep
+        ).send_streaming(
+            provider,
+            "openai_responses",
+            {},
+            "model",
+            allow_failover=False,
+        )
+
+        assert result.status_code == 502
+        assert client.calls == [f"{origin}/responses"]
+        assert sleeps == []
+
+    asyncio.run(scenario())
+
+
 def test_nonstream_rotates_real_502_and_persists_new_current(monkeypatch) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         second = "https://second.example/v1"
         provider, writes = _provider("row-a", first, second)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(502, {"error": "bad"}))
+        client.add(f"{first}/responses", *_literal_502s())
         client.add(f"{second}/responses", _json_response(200, {"ok": True}))
 
         result = await _transport(monkeypatch, client).send_request(
@@ -643,7 +798,7 @@ def test_nonstream_rotates_real_502_and_persists_new_current(monkeypatch) -> Non
 
         assert result.status_code == 200
         assert result.body == {"ok": True}
-        assert client.calls == [f"{first}/responses", f"{second}/responses"]
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"]
         assert provider.base_url == second
         assert writes == [("row-a", second)]
 
@@ -669,6 +824,7 @@ def test_nonstream_status_502_rotates_before_oversized_content_length(
                     )
                 },
             ),
+            *_literal_502s(5),
         )
         client.add(f"{second}/responses", _json_response(200, {"ok": True}))
 
@@ -677,7 +833,7 @@ def test_nonstream_status_502_rotates_before_oversized_content_length(
         )
 
         assert result.status_code == 200
-        assert client.calls == [f"{first}/responses", f"{second}/responses"]
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"]
         assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
@@ -698,6 +854,7 @@ def test_streaming_status_502_rotates_before_content_encoding_validation(
                 b"unread",
                 headers={"content-encoding": "gzip"},
             ),
+            *_literal_502s(5),
         )
         client.add(
             f"{second}/responses",
@@ -713,7 +870,7 @@ def test_streaming_status_502_rotates_before_content_encoding_validation(
         )
 
         assert result.status_code == 200
-        assert client.calls == [f"{first}/responses", f"{second}/responses"]
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"]
         assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
@@ -888,8 +1045,8 @@ def test_full_ring_returns_static_502_and_all_cooling_skips_upstream(
         second = "https://second.example/v1"
         provider, writes = _provider("row-a", first, second)
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(502, {"secret": first}))
-        client.add(f"{second}/responses", _json_response(502, {"secret": second}))
+        client.add(f"{first}/responses", *_literal_502s())
+        client.add(f"{second}/responses", *_literal_502s())
         transport = _transport(monkeypatch, client)
 
         result = await transport.send_request(provider, "openai_responses", {}, "model")
@@ -927,7 +1084,7 @@ def test_different_provider_request_is_not_blocked_or_persisted_by_rotation(
             await release_a.wait()
 
         client.before_response[f"{a1}/responses"] = block_a
-        client.add(f"{a1}/responses", _json_response(502, {"error": "bad"}))
+        client.add(f"{a1}/responses", *_literal_502s())
         client.add(f"{a2}/responses", _json_response(200, {"provider": "a"}))
         client.add(f"{b1}/responses", _json_response(200, {"provider": "b"}))
         transport = _transport(monkeypatch, client)
@@ -951,8 +1108,93 @@ def test_different_provider_request_is_not_blocked_or_persisted_by_rotation(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_entry_waiter_makes_one_request_after_retry_leader(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        content_type = "text/event-stream" if streaming else "application/json"
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(1),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+
+        async def blocking_sleep(_delay: float) -> None:
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        leader = asyncio.create_task(send())
+        await retry_started.wait()
+        follower = asyncio.create_task(send())
+        await asyncio.sleep(0)
+        release_retry.set()
+        leader_result, follower_result = await asyncio.gather(leader, follower)
+
+        assert leader_result.status_code == follower_result.status_code == 200
+        assert client.calls == [f"{origin}/responses"] * 3
+
+    asyncio.run(scenario())
+
+
+def test_cancellation_during_retry_releases_url_gate(monkeypatch) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(1),
+            _json_response(200, {"ok": True}),
+        )
+        retry_started = asyncio.Event()
+        never_release = asyncio.Event()
+
+        async def blocking_sleep(_delay: float) -> None:
+            retry_started.set()
+            await never_release.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        leader = asyncio.create_task(
+            transport.send_request(provider, "openai_responses", {}, "model")
+        )
+        await retry_started.wait()
+        follower = asyncio.create_task(
+            transport.send_request(provider, "openai_responses", {}, "model")
+        )
+        await asyncio.sleep(0)
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+        result = await asyncio.wait_for(follower, timeout=0.2)
+
+        assert result.status_code == 200
+        assert client.calls == [f"{origin}/responses"] * 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_same_provider_concurrent_failures_publish_one_current_change(
-    monkeypatch,
+    monkeypatch, streaming: bool
 ) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
@@ -972,24 +1214,34 @@ def test_same_provider_concurrent_failures_publish_one_current_change(
         client.before_response[f"{first}/responses"] = synchronize_failures
         client.add(
             f"{first}/responses",
-            _json_response(502, {"error": "bad"}),
-            _json_response(502, {"error": "bad"}),
+            *_literal_502s(7),
         )
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        content_type = "text/event-stream" if streaming else "application/json"
         client.add(
             f"{second}/responses",
-            _json_response(200, {"ok": 1}),
-            _json_response(200, {"ok": 2}),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
         )
         transport = _transport(monkeypatch, client)
 
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
         first_result, second_result = await asyncio.gather(
-            transport.send_request(provider, "openai_responses", {}, "model"),
-            transport.send_request(provider, "openai_responses", {}, "model"),
+            send(),
+            send(),
         )
 
         assert first_result.status_code == second_result.status_code == 200
         assert writes == [("row-a", second)]
-        assert client.calls.count(f"{first}/responses") == 2
+        assert client.calls.count(f"{first}/responses") == 7
         assert client.calls.count(f"{second}/responses") == 2
 
     asyncio.run(scenario())
