@@ -361,6 +361,16 @@ def _all_credentials_503(count: int) -> bytes:
     ).encode()
 
 
+async def _claim_url_rotation_immediately(
+    provider_info: ProviderInfo, observed: str
+) -> bool:
+    """Keep URL leadership only when the claim did not wait on another leader."""
+    claimed, waited = await provider_info.claim_url_rotation_with_waited(observed)
+    if claimed and waited:
+        await provider_info.publish_url_rotation()
+    return claimed and not waited
+
+
 async def request_bounded_response(
     client: Any,
     method: str,
@@ -695,24 +705,25 @@ class HttpTransport:
                 response.status_code, response.raw_content
             ):
                 return response
-            if not await provider_info.claim_url_rotation(observed):
+            if not await _claim_url_rotation_immediately(provider_info, observed):
                 single_attempt = True
                 continue
             try:
                 while True:
-                    if response.status_code == 502:
-                        response = await _HTTP_502_RETRY.run(
-                            response,
-                            lambda: self._send_request_once(
-                                provider_info,
-                                target_provider,
-                                body,
-                                model,
-                                extra_headers=extra_headers,
-                            ),
-                            lambda item: item.status_code == 502,
-                            sleep=self._retry_sleep,
-                        )
+                    response = await _HTTP_502_RETRY.run(
+                        response,
+                        lambda: self._send_request_once(
+                            provider_info,
+                            target_provider,
+                            body,
+                            model,
+                            extra_headers=extra_headers,
+                        ),
+                        lambda item: not single_attempt and item.status_code == 502,
+                        sleep=self._retry_sleep,
+                    )
+                    if single_attempt and response.status_code == 502:
+                        return response
                     if response.status_code == 503:
                         exhausted = await self._advance_credential(
                             provider_info, observed_credential
@@ -872,27 +883,28 @@ class HttpTransport:
                 continue
             if not trigger:
                 return result
-            if not await provider_info.claim_url_rotation(observed):
+            if not await _claim_url_rotation_immediately(provider_info, observed):
                 single_attempt = True
                 continue
             try:
                 while True:
-                    if result.status_code == 502:
-                        result, trigger = await _HTTP_502_RETRY.run(
-                            (result, trigger),
-                            lambda: self._send_streaming_once(
-                                provider_info,
-                                target_provider,
-                                body,
-                                model,
-                                extra_headers=extra_headers,
-                                wire_body=wire_body,
-                                wire_headers=wire_headers,
-                                preserve_failover_error_body=False,
-                            ),
-                            lambda item: item[0].status_code == 502,
-                            sleep=self._retry_sleep,
-                        )
+                    result, trigger = await _HTTP_502_RETRY.run(
+                        (result, trigger),
+                        lambda: self._send_streaming_once(
+                            provider_info,
+                            target_provider,
+                            body,
+                            model,
+                            extra_headers=extra_headers,
+                            wire_body=wire_body,
+                            wire_headers=wire_headers,
+                            preserve_failover_error_body=False,
+                        ),
+                        lambda item: not single_attempt and item[0].status_code == 502,
+                        sleep=self._retry_sleep,
+                    )
+                    if single_attempt and result.status_code == 502:
+                        return result
                     if result.status_code == 503:
                         exhausted = await self._advance_credential(
                             provider_info, observed_credential

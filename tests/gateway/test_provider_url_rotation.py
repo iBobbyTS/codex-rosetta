@@ -1109,6 +1109,69 @@ def test_different_provider_request_is_not_blocked_or_persisted_by_rotation(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        both_started = asyncio.Event()
+        started = 0
+
+        async def synchronize_initial_failures() -> None:
+            nonlocal started
+            started += 1
+            if started == 2:
+                both_started.set()
+            await both_started.wait()
+
+        client.before_response[f"{origin}/responses"] = synchronize_initial_failures
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        content_type = "text/event-stream" if streaming else "application/json"
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(2),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        first_task = asyncio.create_task(send())
+        second_task = asyncio.create_task(send())
+        await retry_started.wait()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        release_retry.set()
+        first_result, second_result = await asyncio.gather(first_task, second_task)
+
+        assert first_result.status_code == second_result.status_code == 200
+        assert client.calls == [f"{origin}/responses"] * 4
+        assert sleeps == [1.0]
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_makes_one_request_after_retry_leader(
     monkeypatch, streaming: bool
 ) -> None:
@@ -1156,6 +1219,66 @@ def test_entry_waiter_makes_one_request_after_retry_leader(
         assert client.calls == [f"{origin}/responses"] * 3
         assert sleeps == [1.0]
         assert provider.base_url == origin
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_entry_waiter_cdn_rotation_does_not_retry_next_url_literal_502(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        success_type = "text/event-stream" if streaming else "application/json"
+        client.add(
+            f"{first}/responses",
+            *_literal_502s(1),
+            _FakeStreamingResponse(200, success_body, content_type=success_type),
+            _FakeStreamingResponse(200, _CDN_502_HTML, content_type="text/html"),
+        )
+        client.add(f"{second}/responses", *_literal_502s(1))
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        leader = asyncio.create_task(send())
+        await retry_started.wait()
+        follower = asyncio.create_task(send())
+        for _ in range(3):
+            await asyncio.sleep(0)
+        release_retry.set()
+        leader_result, follower_result = await asyncio.gather(leader, follower)
+
+        assert leader_result.status_code == 200
+        assert follower_result.status_code == 502
+        assert client.calls == [f"{first}/responses"] * 3 + [f"{second}/responses"]
+        assert sleeps == [1.0]
+        assert provider.base_url == second
+        assert provider.base_url_statuses() == (
+            (first, "cooling"),
+            (second, "available"),
+        )
+        assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
 

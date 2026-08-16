@@ -162,6 +162,9 @@ class ProviderInfo:
     async def claim_url_rotation(self, observed: str) -> bool:
         return await self._url_ring.claim(observed)
 
+    async def claim_url_rotation_with_waited(self, observed: str) -> tuple[bool, bool]:
+        return await self._url_ring.claim_with_waited(observed)
+
     def mark_base_url_failed(self, base_url: str) -> None:
         self._url_ring.mark_failed(base_url)
 

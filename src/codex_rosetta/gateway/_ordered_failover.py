@@ -46,22 +46,33 @@ class FailoverGate(Generic[_OutcomeT, _PendingT]):
     async def claim(
         self, observed_generation: int
     ) -> tuple[bool, int, _OutcomeT | None, _PendingT | None]:
+        leader, generation, outcome, pending, _waited = await self.claim_with_waited(
+            observed_generation
+        )
+        return leader, generation, outcome, pending
+
+    async def claim_with_waited(
+        self, observed_generation: int
+    ) -> tuple[bool, int, _OutcomeT | None, _PendingT | None, bool]:
+        """Claim the gate and report whether this call waited for a leader."""
+        waited = False
         async with self._condition:
             while self._active:
+                waited = True
                 if self._orphaned:
                     self._orphaned = False
                     pending = self._pending
                     self._pending = None
-                    return True, self._generation, None, pending
+                    return True, self._generation, None, pending, waited
                 await self._condition.wait()
             if self._generation != observed_generation:
-                return False, self._generation, self._outcome, None
+                return False, self._generation, self._outcome, None, waited
             self._generation += 1
             self._active = True
             self._orphaned = False
             self._pending = None
             self._outcome = None
-            return True, self._generation, None, None
+            return True, self._generation, None, None, waited
 
     async def publish(self, outcome: _OutcomeT | None) -> None:
         async with self._condition:
@@ -123,12 +134,23 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         return waited
 
     async def claim(self, observed: _CandidateT) -> bool:
+        leader, _waited = await self.claim_with_waited(observed)
+        return leader
+
+    async def claim_with_waited(self, observed: _CandidateT) -> tuple[bool, bool]:
+        """Claim failover leadership and report a claim-time gate wait."""
         generation = self._gate.generation
-        leader, _generation, _outcome, _pending = await self._gate.claim(generation)
+        (
+            leader,
+            _generation,
+            _outcome,
+            _pending,
+            waited,
+        ) = await self._gate.claim_with_waited(generation)
         if leader and self._current != observed:
             await self._gate.publish(None)
-            return False
-        return leader
+            return False, waited
+        return leader, waited
 
     def mark_failed(self, candidate: _CandidateT) -> None:
         self._cooldown_until[candidate] = self._clock() + self._cooldown_seconds
