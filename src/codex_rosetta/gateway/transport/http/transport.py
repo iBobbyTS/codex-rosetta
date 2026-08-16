@@ -237,6 +237,7 @@ def _request_payload(
     req_body: dict[str, Any],
     headers: dict[str, str],
     *,
+    credential_headers: dict[str, str] | None = None,
     wire_body: bytes | None = None,
     wire_headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -250,10 +251,12 @@ def _request_payload(
         raise ValueError("Responses Provider request_encoding is required")
 
     if encoding == "passthrough" and wire_body is not None:
+        if credential_headers is None:
+            raise ValueError("credential headers are required for wire passthrough")
         if wire_headers:
             overlay_headers_case_insensitive(headers, wire_headers)
         _force_identity_encoding(headers)
-        overlay_headers_case_insensitive(headers, provider_info.auth_headers())
+        overlay_headers_case_insensitive(headers, credential_headers)
         return {"data": wire_body}
 
     _remove_headers_case_insensitive(
@@ -1074,6 +1077,7 @@ class HttpTransport:
             target_provider,
             req_body,
             headers,
+            credential_headers=credential_headers,
             wire_body=wire_body,
             wire_headers=wire_headers,
         )

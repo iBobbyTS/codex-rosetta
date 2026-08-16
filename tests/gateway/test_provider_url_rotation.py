@@ -1351,6 +1351,116 @@ def test_502_retry_503_uses_attempt_credential_without_duplicate_request(
     asyncio.run(scenario())
 
 
+def test_raw_streaming_wire_auth_uses_observed_credential_during_rotation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, url_writes = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            _json_response(503, {"error": "rotator busy"}),
+            _json_response(503, {"error": "raw request busy"}),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+        transport = _transport(monkeypatch, client)
+        raw_snapshot_captured = asyncio.Event()
+        credential_rotated = asyncio.Event()
+        hold_rotator = asyncio.Event()
+        pause_raw_once = True
+        send_streaming_once = transport._send_streaming_once
+
+        async def pause_raw_after_credential_snapshot(*args: Any, **kwargs: Any):
+            nonlocal pause_raw_once
+            if pause_raw_once and kwargs.get("wire_body") is not None:
+                pause_raw_once = False
+                raw_snapshot_captured.set()
+                await credential_rotated.wait()
+            return await send_streaming_once(*args, **kwargs)
+
+        monkeypatch.setattr(
+            transport,
+            "_send_streaming_once",
+            pause_raw_after_credential_snapshot,
+        )
+        advance_credential = transport._advance_credential
+        rotating: asyncio.Task[Any] | None = None
+
+        async def pause_rotator_after_publish(
+            provider_info: ProviderInfo, observed: str
+        ):
+            exhausted = await advance_credential(provider_info, observed)
+            if asyncio.current_task() is rotating:
+                credential_rotated.set()
+                await hold_rotator.wait()
+            return exhausted
+
+        monkeypatch.setattr(
+            transport,
+            "_advance_credential",
+            pause_rotator_after_publish,
+        )
+
+        raw_request = asyncio.create_task(
+            transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                wire_body=b'{"model":"wire"}',
+                wire_headers={
+                    "Authorization": "Bearer wire-stale",
+                    "Content-Encoding": "zstd",
+                },
+            )
+        )
+        await raw_snapshot_captured.wait()
+        rotating = asyncio.create_task(
+            transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+            )
+        )
+
+        raw_result = await raw_request
+        rotating.cancel()
+        await asyncio.gather(rotating, return_exceptions=True)
+
+        assert raw_result.status_code == 200
+        assert rotating.cancelled()
+        assert client.calls == [f"{origin}/responses"] * 3
+        assert [headers["Authorization"] for headers in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+        assert credential_writes == [("row-a", "second")]
+        assert provider.credential_statuses() == (
+            ("first", "cooling"),
+            ("second", "available"),
+        )
+        assert url_writes == []
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_makes_one_request_after_retry_leader(
     monkeypatch, streaming: bool
