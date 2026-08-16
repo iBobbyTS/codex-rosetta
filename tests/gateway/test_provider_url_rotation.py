@@ -1237,6 +1237,121 @@ def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+def test_502_retry_503_uses_attempt_credential_without_duplicate_request(
+    monkeypatch, streaming: bool
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, url_writes = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+        client = _RoutingClient()
+        first_started = asyncio.Event()
+        second_started = asyncio.Event()
+        release_second_response = asyncio.Event()
+        initial_attempt = 0
+
+        async def keep_second_credential_response_in_flight() -> None:
+            nonlocal initial_attempt
+            initial_attempt += 1
+            if initial_attempt == 1:
+                first_started.set()
+                await second_started.wait()
+            elif initial_attempt == 2:
+                second_started.set()
+                await release_second_response.wait()
+
+        client.before_response[f"{origin}/responses"] = (
+            keep_second_credential_response_in_flight
+        )
+        success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
+        content_type = "text/event-stream" if streaming else "application/json"
+        client.add(
+            f"{origin}/responses",
+            *_literal_502s(1),
+            _json_response(503, {"error": "first busy"}),
+            _json_response(503, {"error": "second busy"}),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+            _FakeStreamingResponse(200, success_body, content_type=content_type),
+        )
+        retry_started = asyncio.Event()
+        credential_rotated = asyncio.Event()
+        release_rotator = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def wait_for_credential_rotation(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            release_second_response.set()
+            await credential_rotated.wait()
+
+        transport = _transport(
+            monkeypatch,
+            client,
+            retry_sleep=wait_for_credential_rotation,
+        )
+        advance_credential = transport._advance_credential
+
+        async def pause_initial_credential_rotator(
+            provider_info: ProviderInfo, observed: str
+        ):
+            exhausted = await advance_credential(provider_info, observed)
+            if observed == "first" and exhausted is None:
+                credential_rotated.set()
+                await release_rotator.wait()
+            return exhausted
+
+        monkeypatch.setattr(
+            transport,
+            "_advance_credential",
+            pause_initial_credential_rotator,
+        )
+
+        async def send():
+            if streaming:
+                return await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            return await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        retrying = asyncio.create_task(send())
+        await first_started.wait()
+        rotating = asyncio.create_task(send())
+        await retry_started.wait()
+
+        retrying_result = await retrying
+        release_rotator.set()
+        rotating_result = await rotating
+
+        assert retrying_result.status_code == rotating_result.status_code == 503
+        assert client.calls == [f"{origin}/responses"] * 3
+        assert [headers["Authorization"] for headers in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+        assert sleeps == [1.0]
+        assert credential_writes == [("row-a", "second")]
+        assert provider.credential_statuses() == (
+            ("first", "cooling"),
+            ("second", "cooling"),
+        )
+        assert url_writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_makes_one_request_after_retry_leader(
     monkeypatch, streaming: bool
 ) -> None:

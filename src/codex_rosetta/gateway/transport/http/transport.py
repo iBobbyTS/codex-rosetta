@@ -433,6 +433,7 @@ def _prepare_upstream(
     model: str,
     *,
     stream: bool,
+    credential_headers: dict[str, str],
     extra_headers: dict[str, str] | None = None,
 ) -> tuple[str, dict[str, str], dict[str, Any]]:
     """Return ``(url, headers, body)`` ready for the upstream HTTP call."""
@@ -441,7 +442,7 @@ def _prepare_upstream(
     if extra_headers:
         overlay_headers_case_insensitive(headers, extra_headers)
     _force_identity_encoding(headers)
-    overlay_headers_case_insensitive(headers, provider_info.auth_headers())
+    overlay_headers_case_insensitive(headers, credential_headers)
 
     body = dict(provider_request)
 
@@ -666,16 +667,18 @@ class HttpTransport:
         model: str,
         *,
         extra_headers: dict[str, str] | None,
-    ) -> tuple[UpstreamResponse, tuple[str, int]]:
+    ) -> tuple[UpstreamResponse, tuple[str, int], str]:
         observation = provider_info.observe_url_rotation()
+        credential_id, credential_headers = provider_info._credential_snapshot()
         response = await self._send_request_once(
             provider_info,
             target_provider,
             body,
             model,
             extra_headers=extra_headers,
+            credential_headers=credential_headers,
         )
-        return response, observation
+        return response, observation, credential_id
 
     async def _send_streaming_observed(
         self,
@@ -688,8 +691,9 @@ class HttpTransport:
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
         preserve_failover_error_body: bool,
-    ) -> tuple[HttpUpstreamStream, bool, tuple[str, int]]:
+    ) -> tuple[HttpUpstreamStream, bool, tuple[str, int], str]:
         observation = provider_info.observe_url_rotation()
+        credential_id, credential_headers = provider_info._credential_snapshot()
         result, trigger = await self._send_streaming_once(
             provider_info,
             target_provider,
@@ -699,8 +703,9 @@ class HttpTransport:
             wire_body=wire_body,
             wire_headers=wire_headers,
             preserve_failover_error_body=preserve_failover_error_body,
+            credential_headers=credential_headers,
         )
-        return result, trigger, observation
+        return result, trigger, observation, credential_id
 
     async def send_request(
         self,
@@ -727,8 +732,11 @@ class HttpTransport:
                     body=None,
                     raw_content=_all_credentials_503(len(provider_info.credential_ids)),
                 )
-            observed_credential = provider_info.current_credential_id
-            response, url_observation = await self._send_request_observed(
+            (
+                response,
+                url_observation,
+                observed_credential,
+            ) = await self._send_request_observed(
                 provider_info,
                 target_provider,
                 body,
@@ -756,8 +764,12 @@ class HttpTransport:
                 continue
             try:
                 while True:
-                    response, url_observation = await _HTTP_502_RETRY.run(
-                        (response, url_observation),
+                    (
+                        response,
+                        url_observation,
+                        observed_credential,
+                    ) = await _HTTP_502_RETRY.run(
+                        (response, url_observation, observed_credential),
                         lambda: self._send_request_observed(
                             provider_info,
                             target_provider,
@@ -777,8 +789,11 @@ class HttpTransport:
                         )
                         if exhausted is not None:
                             return exhausted
-                        observed_credential = provider_info.current_credential_id
-                        response, url_observation = await self._send_request_observed(
+                        (
+                            response,
+                            url_observation,
+                            observed_credential,
+                        ) = await self._send_request_observed(
                             provider_info,
                             target_provider,
                             body,
@@ -800,8 +815,11 @@ class HttpTransport:
                             raw_content=_all_domains_502(len(provider_info.base_urls)),
                         )
                     await provider_info.select_base_url(next_url)
-                    observed_credential = provider_info.current_credential_id
-                    response, url_observation = await self._send_request_observed(
+                    (
+                        response,
+                        url_observation,
+                        observed_credential,
+                    ) = await self._send_request_observed(
                         provider_info,
                         target_provider,
                         body,
@@ -820,6 +838,7 @@ class HttpTransport:
         model: str,
         *,
         extra_headers: dict[str, str] | None,
+        credential_headers: dict[str, str],
     ) -> UpstreamResponse:
         url, headers, req_body = _prepare_upstream(
             target_provider,
@@ -827,6 +846,7 @@ class HttpTransport:
             body,
             model,
             stream=False,
+            credential_headers=credential_headers,
             extra_headers=extra_headers,
         )
         client = self._pool.get(
@@ -902,8 +922,12 @@ class HttpTransport:
                     idle_timeout=self._stream_idle_timeout,
                     close_timeout=self._close_timeout,
                 )
-            observed_credential = provider_info.current_credential_id
-            result, trigger, url_observation = await self._send_streaming_observed(
+            (
+                result,
+                trigger,
+                url_observation,
+                observed_credential,
+            ) = await self._send_streaming_observed(
                 provider_info,
                 target_provider,
                 body,
@@ -938,8 +962,13 @@ class HttpTransport:
                 continue
             try:
                 while True:
-                    result, trigger, url_observation = await _HTTP_502_RETRY.run(
-                        (result, trigger, url_observation),
+                    (
+                        result,
+                        trigger,
+                        url_observation,
+                        observed_credential,
+                    ) = await _HTTP_502_RETRY.run(
+                        (result, trigger, url_observation, observed_credential),
                         lambda: self._send_streaming_observed(
                             provider_info,
                             target_provider,
@@ -968,11 +997,11 @@ class HttpTransport:
                                 idle_timeout=self._stream_idle_timeout,
                                 close_timeout=self._close_timeout,
                             )
-                        observed_credential = provider_info.current_credential_id
                         (
                             result,
                             trigger,
                             url_observation,
+                            observed_credential,
                         ) = await self._send_streaming_observed(
                             provider_info,
                             target_provider,
@@ -999,11 +1028,11 @@ class HttpTransport:
                             close_timeout=self._close_timeout,
                         )
                     await provider_info.select_base_url(next_url)
-                    observed_credential = provider_info.current_credential_id
                     (
                         result,
                         trigger,
                         url_observation,
+                        observed_credential,
                     ) = await self._send_streaming_observed(
                         provider_info,
                         target_provider,
@@ -1029,6 +1058,7 @@ class HttpTransport:
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
         preserve_failover_error_body: bool,
+        credential_headers: dict[str, str],
     ) -> tuple[HttpUpstreamStream, bool]:
         url, headers, req_body = _prepare_upstream(
             target_provider,
@@ -1036,6 +1066,7 @@ class HttpTransport:
             body,
             model,
             stream=True,
+            credential_headers=credential_headers,
             extra_headers=extra_headers,
         )
         request_payload = _request_payload(

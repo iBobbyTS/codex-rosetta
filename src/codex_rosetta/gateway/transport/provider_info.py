@@ -269,9 +269,14 @@ class ProviderInfo:
 
     # -- public helpers used by the proxy -----------------------------------
 
+    def _credential_snapshot(self) -> tuple[str, dict[str, str]]:
+        credential_id = self.current_credential_id
+        return credential_id, self._auth_header_fn(self._credentials[credential_id])
+
     def auth_headers(self) -> dict[str, str]:
         """Return auth headers using the configured credential."""
-        return self._auth_header_fn(self._credentials[self.current_credential_id])
+        _credential_id, headers = self._credential_snapshot()
+        return headers
 
     def upstream_url(self, model: str, *, stream: bool = False) -> str:
         """Build the upstream URL for the given model."""
