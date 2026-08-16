@@ -1709,8 +1709,12 @@ def _responses_detection_data() -> dict[str, Any]:
     return data
 
 
-def test_detect_request_encoding_uses_only_current_masked_draft_target(tmp_path):
+@pytest.mark.parametrize("enabled", [True, False])
+def test_detect_request_encoding_uses_only_current_masked_draft_target(
+    tmp_path, enabled
+):
     data = _responses_detection_data()
+    data["providers"]["openai"]["enabled"] = enabled
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     transport = _DetectionTransport()
@@ -1750,13 +1754,14 @@ def test_detect_request_encoding_uses_only_current_masked_draft_target(tmp_path)
 
 
 @pytest.mark.parametrize(
-    ("credential_id", "expected_status"),
-    [("selected", 200), ("primary", 400)],
+    ("credential_id", "enabled", "expected_status"),
+    [("selected", True, 200), ("selected", False, 200), ("primary", False, 400)],
 )
 def test_detect_request_encoding_resolves_only_saved_environment_credential_owner(
-    tmp_path, monkeypatch, credential_id, expected_status
+    tmp_path, monkeypatch, credential_id, enabled, expected_status
 ):
     data = _responses_detection_data()
+    data["providers"]["openai"]["enabled"] = enabled
     data["providers"]["openai"]["api_keys"][1]["key"] = "${RESPONSES_API_KEY}"
     monkeypatch.setenv("RESPONSES_API_KEY", "resolved-environment-secret")
     config_path = tmp_path / "config.jsonc"

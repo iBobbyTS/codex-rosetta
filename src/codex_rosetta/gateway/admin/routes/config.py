@@ -17,6 +17,7 @@ from ...config import (
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
+    _substitute_env_vars,
     active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
@@ -894,7 +895,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
 def _resolve_draft_provider_api_keys(
     api_keys: Any,
     existing_provider: Mapping[str, Any],
-    resolved_provider: ProviderInfo | None = None,
+    resolved_provider: Mapping[str, Any] | None = None,
     *,
     resolve_saved_credentials: bool = False,
 ) -> list[dict[str, str]]:
@@ -904,17 +905,11 @@ def _resolve_draft_provider_api_keys(
         for entry in existing_provider.get("api_keys", [])
         if isinstance(entry, dict)
     }
-    resolved_keys = (
-        dict(
-            zip(
-                resolved_provider.credential_ids,
-                resolved_provider.credential_values,
-                strict=True,
-            )
-        )
-        if resolved_provider is not None
-        else {}
-    )
+    resolved_keys = {
+        entry.get("id"): entry.get("key")
+        for entry in (resolved_provider or {}).get("api_keys", [])
+        if isinstance(entry, dict)
+    }
     if not isinstance(api_keys, list):
         raise ValueError("'api_keys' must be a list")
     merged_keys: list[dict[str, str]] = []
@@ -1012,14 +1007,7 @@ async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Respo
     existing_providers = data.get("providers", {})
     resolve_name = body.get("rename_from", name) or name
     existing_provider = existing_providers.get(resolve_name, {})
-    try:
-        resolved_provider = GatewayConfig.from_raw_with_env(data).providers.get(
-            resolve_name
-        )
-    except ValueError as exc:
-        return JSONResponse(
-            {"error": f"Failed to resolve saved config: {exc}"}, status_code=400
-        )
+    resolved_provider = _substitute_env_vars(existing_provider)
     try:
         resolved_keys = _resolve_draft_provider_api_keys(
             body.get("api_keys"),
