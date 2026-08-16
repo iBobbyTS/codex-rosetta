@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, cast
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 from codex_rosetta.observability.redaction import SecretRedactor
@@ -950,7 +950,7 @@ def _resolve_draft_provider_api_keys(
                     )
                 key = resolved_key
             else:
-                key = saved_key
+                key = cast(str, saved_key)
         merged_keys.append({"id": credential_id, "key": key})
     return merged_keys
 

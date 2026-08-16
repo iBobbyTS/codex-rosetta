@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -12,6 +12,7 @@ from codex_rosetta.gateway.admin.request_encoding_detection import (
     detect_responses_request_encoding,
 )
 from codex_rosetta.gateway.providers import build_provider_info
+from codex_rosetta.gateway.transport import UpstreamTransport
 
 
 class _ProbeStream:
@@ -108,7 +109,7 @@ def test_detection_maps_two_probe_completion_matrix(
 
     result = asyncio.run(
         detect_responses_request_encoding(
-            transport,
+            cast(UpstreamTransport, transport),
             identity_provider=_provider("identity"),
             zstd_provider=_provider("zstd"),
             model="manual-model",
@@ -148,7 +149,7 @@ def test_detection_preserves_bounded_http_and_transport_errors() -> None:
 
     result = asyncio.run(
         detect_responses_request_encoding(
-            transport,
+            cast(UpstreamTransport, transport),
             identity_provider=_provider("identity"),
             zstd_provider=_provider("zstd"),
             model="manual-model",
@@ -184,7 +185,7 @@ def test_detection_preserves_complete_response_failed_payload() -> None:
 
     result = asyncio.run(
         detect_responses_request_encoding(
-            transport,
+            cast(UpstreamTransport, transport),
             identity_provider=_provider("identity"),
             zstd_provider=_provider("zstd"),
             model="manual-model",

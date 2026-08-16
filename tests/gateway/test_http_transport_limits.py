@@ -40,6 +40,7 @@ from codex_rosetta.gateway.transport.http.transport import (
     request_bounded_response,
 )
 from codex_rosetta.gateway.transport.http.client_pool import HttpClientPool
+from codex_rosetta.gateway.provider_profiles import ResponsesRequestEncoding
 from codex_rosetta.gateway.web_search import TavilyHTTPClient, WebSearchSettings
 import codex_rosetta.gateway.web_search as web_search_module
 
@@ -102,7 +103,7 @@ class _FakeClient:
 def _provider(
     base_url: str = "https://upstream.example/v1",
     *,
-    request_encoding: str | None = "identity",
+    request_encoding: ResponsesRequestEncoding | None = "identity",
 ) -> ProviderInfo:
     return ProviderInfo(
         "test",
