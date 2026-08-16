@@ -1186,7 +1186,7 @@ class HttpTransport:
 
         Used for non-conversion endpoints (model listing, reranking, etc.).
         """
-        await provider_info.wait_for_url_rotation()
+        single_attempt = await provider_info.wait_for_url_rotation()
         await provider_info.wait_for_credential_rotation()
         while True:
             if not provider_info.has_available_base_url():
@@ -1201,15 +1201,20 @@ class HttpTransport:
                     body=None,
                     raw_content=_all_credentials_503(len(provider_info.credential_ids)),
                 )
-            observed = provider_info.base_url
-            observed_credential = provider_info.current_credential_id
-            response = await self._send_passthrough_once(
+            (
+                response,
+                url_observation,
+                observed_credential,
+            ) = await self._send_passthrough_observed(
                 provider_info,
                 url,
                 body,
                 extra_headers=extra_headers,
                 method=method,
             )
+            observed = url_observation[0]
+            if single_attempt and response.status_code == 502:
+                return response
             if response.status_code == 503:
                 exhausted = await self._advance_credential(
                     provider_info, observed_credential
@@ -1221,48 +1226,99 @@ class HttpTransport:
                 response.status_code, response.raw_content
             ):
                 return response
-            if not await provider_info.claim_url_rotation(observed):
+            if not await _claim_url_rotation_immediately(
+                provider_info, url_observation
+            ):
+                single_attempt = True
                 continue
             try:
-                provider_info.mark_base_url_failed(observed)
-                advance_url = True
                 while True:
-                    if advance_url:
-                        next_url = provider_info.next_available_base_url(observed)
-                        if next_url is None:
-                            return UpstreamResponse(
-                                status_code=502,
-                                body=None,
-                                raw_content=_all_domains_502(
-                                    len(provider_info.base_urls)
-                                ),
-                            )
-                        await provider_info.select_base_url(next_url)
-                        observed = next_url
-                    advance_url = True
-                    observed_credential = provider_info.current_credential_id
-                    response = await self._send_passthrough_once(
-                        provider_info,
-                        url,
-                        body,
-                        extra_headers=extra_headers,
-                        method=method,
+                    (
+                        response,
+                        url_observation,
+                        observed_credential,
+                    ) = await _HTTP_502_RETRY.run(
+                        (response, url_observation, observed_credential),
+                        lambda: self._send_passthrough_observed(
+                            provider_info,
+                            url,
+                            body,
+                            extra_headers=extra_headers,
+                            method=method,
+                        ),
+                        lambda item: not single_attempt and item[0].status_code == 502,
+                        sleep=self._retry_sleep,
                     )
+                    observed = url_observation[0]
+                    if single_attempt and response.status_code == 502:
+                        return response
                     if response.status_code == 503:
                         exhausted = await self._advance_credential(
                             provider_info, observed_credential
                         )
                         if exhausted is not None:
                             return exhausted
-                        advance_url = False
+                        (
+                            response,
+                            url_observation,
+                            observed_credential,
+                        ) = await self._send_passthrough_observed(
+                            provider_info,
+                            url,
+                            body,
+                            extra_headers=extra_headers,
+                            method=method,
+                        )
+                        observed = url_observation[0]
                         continue
                     if not _is_base_url_rotation_trigger(
                         response.status_code, response.raw_content
                     ):
                         return response
                     provider_info.mark_base_url_failed(observed)
+                    next_url = provider_info.next_available_base_url(observed)
+                    if next_url is None:
+                        return UpstreamResponse(
+                            status_code=502,
+                            body=None,
+                            raw_content=_all_domains_502(len(provider_info.base_urls)),
+                        )
+                    await provider_info.select_base_url(next_url)
+                    (
+                        response,
+                        url_observation,
+                        observed_credential,
+                    ) = await self._send_passthrough_observed(
+                        provider_info,
+                        url,
+                        body,
+                        extra_headers=extra_headers,
+                        method=method,
+                    )
+                    observed = url_observation[0]
             finally:
                 await provider_info.publish_url_rotation()
+
+    async def _send_passthrough_observed(
+        self,
+        provider_info: ProviderInfo,
+        url: str,
+        body: dict[str, Any],
+        *,
+        extra_headers: dict[str, str] | None,
+        method: str,
+    ) -> tuple[UpstreamResponse, tuple[str, int], str]:
+        """Send one passthrough attempt with its URL and credential observations."""
+        observation = provider_info.observe_url_rotation()
+        credential_id = provider_info.current_credential_id
+        response = await self._send_passthrough_once(
+            provider_info,
+            url,
+            body,
+            extra_headers=extra_headers,
+            method=method,
+        )
+        return response, observation, credential_id
 
     async def _send_passthrough_once(
         self,

@@ -303,11 +303,7 @@ def test_three_url_alternating_failures_preserve_independent_rings(
             if path_kind == "streaming"
             else _json_response(200, {"ok": True})
         )
-        url_failures = (
-            (_json_response(502, {"error": "url"}),)
-            if path_kind == "passthrough"
-            else _literal_502s()
-        )
+        url_failures = _literal_502s()
         if failure_order == "url-then-credential":
             client.add(first_url, *url_failures)
             client.add(
@@ -713,6 +709,39 @@ def test_literal_502_succeeds_at_each_retry_position_with_exact_delays(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_passthrough_literal_502_retries_with_exact_delays(
+    monkeypatch,
+    failures_before_success: int,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/alpha/search",
+            *_literal_502s(failures_before_success),
+            _json_response(200, {"output": "ok", "results": []}),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        result = await _transport(
+            monkeypatch, client, retry_sleep=fake_sleep
+        ).send_passthrough(provider, f"{origin}/alpha/search", {})
+
+        assert result.status_code == 200
+        assert client.calls == [f"{origin}/alpha/search"] * (
+            failures_before_success + 1
+        )
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_each_url_receives_a_fresh_six_attempt_budget(
     monkeypatch, streaming: bool
@@ -937,15 +966,16 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_sanitized_cdn_html_rotates_with_misleading_success_status(
-    monkeypatch, streaming: bool
+    monkeypatch, path_kind: str
 ) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         second = "https://second.example/v1"
         provider, writes = _provider("row-a", first, second)
         client = _RoutingClient()
+        streaming = path_kind == "streaming"
         client.add(
             f"{first}/responses",
             _FakeStreamingResponse(200, _CDN_502_HTML, content_type="text/html"),
@@ -960,11 +990,17 @@ def test_sanitized_cdn_html_rotates_with_misleading_success_status(
         )
         transport = _transport(monkeypatch, client)
 
-        if streaming:
+        if path_kind == "streaming":
             result = await transport.send_streaming(
                 provider, "openai_responses", {}, "model"
             )
             assert result.status_code == 200
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(
+                provider, f"{first}/responses", {}
+            )
+            assert result.status_code == 200
+            assert result.body == {"ok": True}
         else:
             result = await transport.send_request(
                 provider, "openai_responses", {}, "model"
@@ -1108,9 +1144,9 @@ def test_different_provider_request_is_not_blocked_or_persisted_by_rotation(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
-    monkeypatch, streaming: bool
+    monkeypatch, path_kind: str
 ) -> None:
     async def scenario() -> None:
         origin = "https://first.example/v1"
@@ -1127,6 +1163,7 @@ def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
             await both_started.wait()
 
         client.before_response[f"{origin}/responses"] = synchronize_initial_failures
+        streaming = path_kind == "streaming"
         success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
         content_type = "text/event-stream" if streaming else "application/json"
         client.add(
@@ -1147,9 +1184,13 @@ def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
         transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
 
         async def send():
-            if streaming:
+            if path_kind == "streaming":
                 return await transport.send_streaming(
                     provider, "openai_responses", {}, "model"
+                )
+            if path_kind == "passthrough":
+                return await transport.send_passthrough(
+                    provider, f"{origin}/responses", {}
                 )
             return await transport.send_request(
                 provider, "openai_responses", {}, "model"
@@ -1171,9 +1212,9 @@ def test_claim_waiter_discards_stale_502_before_fresh_same_url_attempt(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
-    monkeypatch, streaming: bool
+    monkeypatch, path_kind: str
 ) -> None:
     async def scenario() -> None:
         origin = "https://first.example/v1"
@@ -1195,6 +1236,7 @@ def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
                 await release_second.wait()
 
         client.before_response[f"{origin}/responses"] = delay_second_initial_response
+        streaming = path_kind == "streaming"
         success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
         content_type = "text/event-stream" if streaming else "application/json"
         client.add(
@@ -1211,9 +1253,13 @@ def test_delayed_initial_502_after_publish_uses_one_fresh_attempt(
         transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
 
         async def send():
-            if streaming:
+            if path_kind == "streaming":
                 return await transport.send_streaming(
                     provider, "openai_responses", {}, "model"
+                )
+            if path_kind == "passthrough":
+                return await transport.send_passthrough(
+                    provider, f"{origin}/responses", {}
                 )
             return await transport.send_request(
                 provider, "openai_responses", {}, "model"
@@ -1703,9 +1749,9 @@ def test_cancellation_during_retry_releases_url_gate(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_same_provider_concurrent_failures_publish_one_current_change(
-    monkeypatch, streaming: bool
+    monkeypatch, path_kind: str
 ) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
@@ -1727,6 +1773,7 @@ def test_same_provider_concurrent_failures_publish_one_current_change(
             f"{first}/responses",
             *_literal_502s(7),
         )
+        streaming = path_kind == "streaming"
         success_body = b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}'
         content_type = "text/event-stream" if streaming else "application/json"
         client.add(
@@ -1737,9 +1784,13 @@ def test_same_provider_concurrent_failures_publish_one_current_change(
         transport = _transport(monkeypatch, client)
 
         async def send():
-            if streaming:
+            if path_kind == "streaming":
                 return await transport.send_streaming(
                     provider, "openai_responses", {}, "model"
+                )
+            if path_kind == "passthrough":
+                return await transport.send_passthrough(
+                    provider, f"{first}/responses", {}
                 )
             return await transport.send_request(
                 provider, "openai_responses", {}, "model"
@@ -1823,7 +1874,7 @@ def test_passthrough_rotates_the_same_path_and_preserves_one_request_budget_char
         client = _RoutingClient()
         client.add(
             f"{first}/alpha/search",
-            _json_response(502, {"error": "bad"}),
+            *_literal_502s(),
         )
         client.add(
             f"{second}/alpha/search",
@@ -1845,7 +1896,7 @@ def test_passthrough_rotates_the_same_path_and_preserves_one_request_budget_char
         assert result == {"output": "ok", "results": []}
         assert budget.external_calls == 1
         assert client.calls == [
-            f"{first}/alpha/search",
+            *([f"{first}/alpha/search"] * 6),
             f"{second}/alpha/search",
         ]
         assert writes == [("row-a", second)]
@@ -1863,11 +1914,11 @@ def test_search_chain_advances_provider_only_after_url_ring_exhaustion(
         client = _RoutingClient()
         client.add(
             f"{first}/alpha/search",
-            _json_response(502, {"error": "bad"}),
+            *_literal_502s(),
         )
         client.add(
             f"{second}/alpha/search",
-            _json_response(502, {"error": "bad"}),
+            *_literal_502s(),
         )
         responses = ConfiguredResponsesSearchProviderCandidate(
             row_id="responses",
@@ -1899,8 +1950,8 @@ def test_search_chain_advances_provider_only_after_url_ring_exhaustion(
         assert result == {"output": "fallback", "results": []}
         assert attempted == ["responses", "fallback"]
         assert client.calls == [
-            f"{first}/alpha/search",
-            f"{second}/alpha/search",
+            *([f"{first}/alpha/search"] * 6),
+            *([f"{second}/alpha/search"] * 6),
         ]
         assert writes == [("row-a", second)]
 

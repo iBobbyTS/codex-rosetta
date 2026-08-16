@@ -55,8 +55,8 @@ retry budget. A narrowly recognized CDN 502 page still rotates immediately and
 is not retried. Other responses retain their existing behavior, including HTTP
 503 credential rotation. Failed URLs cool for one hour in process memory, while
 the current URL is persisted. Streaming requests with failover disabled are not
-retried. This retry-before-rotation behavior does not apply to Search Provider
-passthrough, which continues to rotate URLs immediately on its first 502.
+retried. Search Provider passthrough requests use the same retry-before-rotation
+behavior and retain one logical Search Provider request-budget charge.
 
 Each Provider also stores an ordered, non-empty `api_keys` list of stable IDs
 and masked credentials, plus a member `current_api_key`. Only HTTP 503 rotates
