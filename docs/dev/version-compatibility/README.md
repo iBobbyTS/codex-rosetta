@@ -23,24 +23,30 @@ Compatibility cannot be declared just because the version numbers are the same.
 
 Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form. Manual GitHub Release tags retain the repository's historical `v` prefix, so source `0.144.0.r0` maps to tag `v0.144.0.r0`.
 
-## Current 0.147.0 analysis baseline
+## Current 0.147.0 adaptation baseline
 
 Inspection date: 2026-08-17
 
 | Project | Current Value | Description |
 | --- | --- | --- |
-| Point-in-time installed Codex CLI | `codex-cli 0.145.0` | Client present during the 0.147 source analysis; it is not the target source identity or an adoption claim |
+| Point-in-time installed Codex CLI | `codex-cli 0.145.0` | Client present during source analysis only; it was not used for the counted S04 cells |
+| Counted S04 Codex distribution | official npm `@openai/codex@0.147.0` darwin-arm64 | Exact signed CLI and companion host; short SHA-256 identities `19c4f144…` and `a059beb0…` |
 | Target Codex source | `rust-v0.147.0` | Exact annotated release tag in `../openai-codex-src` |
 | Peeled source commit | `be6e8eac029b183056b7e4402879f15d2c85f61b` | Source identity used by the reviewed contract snapshot |
 | Codex-Rosetta feature base | `345887ad933f8d302ebe75c63ec8bf0daae635bf` | Base of the bounded 0.147 adaptation; distinct from both the target source and the evidence head |
-| Pre-wave-2 reviewed evidence head | `880a0d78c353f331a1d523d19dce6d28bc502704` | Exact head examined by the first final-bounded review; the repair and final release heads are bound by subsequent review/S04 evidence rather than self-referenced here |
+| Deterministic/live product-test head | `c43d31a5c782bbf1c43051edf513bca0c109f38c` | Exact product and test tree used by the S04 deterministic and live gates; later evidence-only documentation commits are excluded |
 | Review mode | Full inventory | Explicit developer decision; CP-01 through CP-26 are classified in the upgrade report |
 | Codex-Rosetta package version | `0.144.0.r0` | Intentionally unchanged until every deterministic and live gate passes |
+| S04 decision | **NOT APPROVED** | 110 live cells: 4 PASS, 7 FAIL, 98 BLOCKED, 1 UNSUPPORTED; failed or blocked originals cannot be replaced by fallbacks |
 
-The source extractor and baseline now understand the 0.147 ToolRegistry
-assembly path. This records reviewed source facts only. It does not synchronize
-the packaged model/tool catalogs, approve runtime compatibility, or replace the
-mandatory complete live-agent inventory.
+The source extractor, packaged catalogs, Responses metadata, and managed
+local-mode Provider behavior have been adapted and deterministically reviewed
+at the product/test head above. The complete S04 inventory did not close its
+mandatory live gates, the full repository checks are not all green, and the
+target release-version check fails as expected. The package therefore remains
+`0.144.0.r0`; see the [upgrade report](reports/upgrade-review.md) for the
+credential-free gate summary. Ignored local execution evidence is not a
+tracked release artifact.
 
 ## Previous 0.145.0 adaptation baseline
 

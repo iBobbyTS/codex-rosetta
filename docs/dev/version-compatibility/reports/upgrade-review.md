@@ -9,14 +9,14 @@ Date: 2026-08-17
 - Target: annotated tag `rust-v0.147.0`, peeled commit
   `be6e8eac029b183056b7e4402879f15d2c85f61b`. The previous reviewed source is
   `rust-v0.145.0` at `25af12f7e61572b0bc18ddb1008be543b91519b0`.
-- Point-in-time client: installed `codex-cli 0.145.0`. This records the client
-  present during analysis; it is not the target source identity or proof that
-  Codex 0.147.0 has been adopted.
+- Point-in-time analysis client: installed `codex-cli 0.145.0`. The counted S04
+  runs instead used the signed official npm `@openai/codex@0.147.0`
+  darwin-arm64 distribution, with `codex` SHA-256 `19c4f144…` and
+  `codex-code-mode-host` SHA-256 `a059beb0…`.
 - Codex-Rosetta evidence identities: feature base
-  `345887ad933f8d302ebe75c63ec8bf0daae635bf`; pre-wave-2 final-reviewed head
-  `880a0d78c353f331a1d523d19dce6d28bc502704`. The exact repair/final release
-  head is intentionally left to subsequent bounded review and S04 evidence,
-  avoiding an impossible self-reference inside its own commit.
+  `345887ad933f8d302ebe75c63ec8bf0daae635bf`; deterministic and live product/test
+  head `c43d31a5c782bbf1c43051edf513bca0c109f38c`. The documentation-only evidence
+  commit is intentionally not part of that product/test identity.
 - The bounded source range contains 565 commits and 2,025 changed paths.
 - The source-contract extractor now follows the current ToolRegistry owners:
   core sources, MCP exposure, extension contributors, dynamic runtimes,
@@ -25,10 +25,50 @@ Date: 2026-08-17
   `add_tool_sources`, or `prepend_code_mode_executors` functions.
 - The checked-in source snapshot is refreshed only to make later source drift
   detectable. It is **not** a compatibility or release approval.
-- No live-agent test was run in this section. The package remains
-  `0.144.0.r0`; the complete live inventory is mandatory and no failed or
-  unverified mandatory cell may be waived. This analysis is neither release
-  approval nor publication evidence.
+- S04 exercised the frozen complete inventory and recorded 110 cells. Its
+  result is **4 PASS, 7 FAIL, 98 BLOCKED, 1 UNSUPPORTED**. The package remains
+  `0.144.0.r0`; Codex 0.147.0 is **NOT APPROVED**, and this report is not
+  publication evidence.
+
+## S04 release-gate result
+
+The counted client is the exact signed official npm `@openai/codex@0.147.0`
+darwin-arm64 CLI plus companion Code Mode host. The source-built preflight was
+not counted because its exact companion host could not be built; no 0.145
+binary was substituted. Full hashes, signatures, per-cell evaluations, and
+credential-free trace pointers are retained in the ignored local execution
+artifacts under `.agent-work/sections/S04-live-evidence/`. Those local paths
+are not tracked release artifacts and this report does not reproduce secrets,
+full logs, or the 110-row ledger.
+
+| Gate | Result at product/test head `c43d31a5…` |
+| --- | --- |
+| Complete live inventory | **BLOCKED**: 110 cells = 4 PASS / 7 FAIL / 98 BLOCKED / 1 UNSUPPORTED |
+| GPT command execution 01–04 | PASS; all four core process/session contracts completed |
+| DeepSeek primary command 01 | FAIL; the original model did not complete the required tool-adapted scenario |
+| Kimi and remaining dual-auth inventory | BLOCKED before completion because the only authorized OAuth source returned `refresh_token_reused`; no different auth source was substituted |
+| GPT relay C0–C5 | FAIL; every cell reached TURNING and identified the actual upstream, but none produced a completed stream |
+| Browser 01 | BLOCKED by the frozen fresh-GUI-main-task plus new user-created-judge contract; CLI, Chrome, or subagent evidence was not substituted |
+| `request_user_input` | `codex exec` is the sole UNSUPPORTED cell; its separate mandatory app-server answer-injection cell is BLOCKED |
+| Cleanup | All temporary Gateways and relay capture proxies stopped; the user's Gateway on port 8765 was untouched |
+
+Blocked and failed original cells remain blocked or failed. A fallback result
+cannot replace either status.
+
+### Deterministic and release checks
+
+| Check | Result |
+| --- | --- |
+| Full non-integration suite | `4456 passed, 1 failed, 4 skipped`; the sole failure is the pre-existing provider-logo count gate |
+| `make lint` | Not green because of the pre-existing `model_profiles` formatting gate; no S04 documentation claim treats it as passing |
+| `make build` | PASS |
+| `make check-codex-compat` | PASS against the reviewed 0.147 source contract |
+| Existing release tag check | PASS for the unchanged `v0.144.0.r0` package identity |
+| Target release tag check | FAIL for `v0.147.0.r0`, as expected while source/package version remains `0.144.0.r0` |
+
+The source/package version therefore remains `0.144.0.r0`. The mandatory
+all-green condition is false, Codex 0.147.0 is **NOT APPROVED**, and no release
+or publication is permitted from this evidence set.
 
 ## Full CP classification
 
@@ -79,13 +119,12 @@ source inventory and CP-26's already-existing conversion behavior.
   high-confidence compatibility closure; its selected anchors cannot replace
   the required S04 live delivery/confidentiality gates.
 
-## Deferred mandatory evidence
+## Unclosed mandatory evidence
 
-S01 performs no live testing. Before approval, later sections must run the
-complete live-agent inventory, including native and converted Multi-Agent V2,
-standalone `web.run`, Apps/Plugins, Images, streaming usage, tool discovery,
-interrupt/fork, compaction, model switching, and original-model cells. A
-fallback pass never replaces an original-model failure.
+S04 attempted the frozen complete inventory. The DeepSeek primary failure,
+authorized OAuth blocker, six incomplete GPT relay streams, fresh Browser GUI
+executor/judge requirement, and all other blocked cells above remain mandatory.
+They cannot be waived or replaced by fallback outcomes.
 
 ---
 
