@@ -65,7 +65,7 @@ source inventory and CP-26's already-existing conversion behavior.
 | `CP-23 — Static tool catalog` | Changed | Tool registrations now flow through ToolRegistry and extension contributors; S02 must synchronize the exact static/source inventory rather than copy old registration names. |
 | `CP-24 — Late instruction message cache compatibility` | Possibly unchanged | No new late-message role transform was found; exact interrupt/steer/fork cache evidence remains mandatory. |
 | `CP-25 — Window-scoped Chat tool surface stability` | Changed | New exposure states, namespaces, and Code Mode registration alter potential ordered tool surfaces; S02/S04 must prove stable window projection. |
-| `CP-26 — Collaboration argument confidentiality and delivery mode` | Changed | Direct Responses preserves the opaque marker. Converted Chat drops missing/null/empty/non-empty variants before request serialization and replay identity, never synthesizes it on return, and deliberately retains encrypted Multi-Agent V2 delivery. |
+| `CP-26 — Collaboration argument confidentiality and delivery mode` | Changed | Direct Responses preserves the opaque marker. Converted Chat drops missing/null/empty/non-empty variants before request serialization and replay identity, never synthesizes it on return, and deliberately retains encrypted Multi-Agent V2 delivery. The source-contract group retains selected field/router/protocol/linkage anchors as partial evidence only; it does not prove transitive delivery coverage, so S04 real Codex/API gates remain mandatory. |
 
 ## CP-26 deterministic evidence
 
@@ -75,6 +75,9 @@ source inventory and CP-26's already-existing conversion behavior.
 - Direct Responses retains `encrypted_function_args: []` without entering IR.
 - No production converter or persistence mechanism was added: the existing
   field selection already implements the approved stable-discard policy.
+- The extracted CP-26 source group is intentionally partial evidence, not a
+  high-confidence compatibility closure; its selected anchors cannot replace
+  the required S04 live delivery/confidentiality gates.
 
 ## Deferred mandatory evidence
 

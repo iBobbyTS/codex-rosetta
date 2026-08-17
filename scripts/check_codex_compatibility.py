@@ -31,7 +31,6 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "codex_header_constants",
     "code_mode_exec_shape",
     "endpoints",
-    "function_call_encrypted_args",
     "model_messages_fields",
     "model_info_fields",
     "permission_messages_fields",
@@ -63,10 +62,6 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
         "description, and command schema match"
     ),
     "endpoints": "extracted endpoint constants match",
-    "function_call_encrypted_args": (
-        "complete protocol.rs and frozen production-linkage modules plus localized "
-        "FunctionCall/inter-agent delivery and redaction owners match"
-    ),
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
     "permission_messages_fields": (
@@ -420,7 +415,7 @@ def _function_call_encrypted_args_contract(
     inter_agent_message: str,
     linkage_modules: dict[str, str],
 ) -> dict[str, Any]:
-    """Extract the bounded CP-26 wire, delivery, and confidentiality owners."""
+    """Extract selected CP-26 wire, delivery, and confidentiality anchors."""
     return {
         "agent_communication_log_sha256": _function_body_sha256(
             agent_communication, "emit_agent_communication_send"

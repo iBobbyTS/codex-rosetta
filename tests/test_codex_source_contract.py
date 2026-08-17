@@ -134,8 +134,8 @@ def _cp26_source_texts(source_root: Path) -> dict[str, Any]:
     return sources
 
 
-def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
-    """Every CP-26 field/dispatch/log/filter owner must affect its snapshot group."""
+def test_cp26_snapshot_changes_for_selected_field_and_semantic_owners():
+    """Selected CP-26 field/dispatch/log/filter owners affect the snapshot group."""
     source_root = REPO_ROOT.parent / "openai-codex-src"
     sources = _cp26_source_texts(source_root)
     baseline = _function_call_encrypted_args_contract(**sources)
@@ -347,6 +347,29 @@ def test_new_tool_registration_owners_each_change_the_snapshot_group():
         mutated = _tool_registration_sites(source_root, spec_plan, mutated_mcp)
         assert mutated != baseline
         assert mutated["append_mcp_tools"] != baseline["append_mcp_tools"]
+
+
+def test_cp26_contract_is_partial_evidence_not_high_confidence():
+    """CP-26 source anchors remain review evidence and cannot imply closure."""
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    classification = classify_snapshots(baseline, baseline)
+
+    high_confidence = [
+        item
+        for item in classification["high_confidence_unchanged"]
+        if "contract.function_call_encrypted_args" in item
+    ]
+    possibly_unchanged = [
+        item
+        for item in classification["possibly_unchanged"]
+        if "contract.function_call_encrypted_args" in item
+    ]
+    assert high_confidence == []
+    assert possibly_unchanged == [
+        "contract.function_call_encrypted_args: extracted name/member set matches; "
+        "types, defaults, or serde semantics are not yet fully covered"
+    ]
+    assert classification["changed"] == []
 
 
 def test_compatibility_ledger_has_one_registry_overview_and_matrix_row_per_point():
