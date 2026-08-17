@@ -30,7 +30,7 @@
     "vitest": "4.1.10"
   },
   "dependencies": {
-    "@ibobbyts/svelte-ui-utils": "0.2.13",
+    "@ibobbyts/svelte-ui-utils": "0.3.0",
     "@tauri-apps/api": "2.11.1"
   }
 }
