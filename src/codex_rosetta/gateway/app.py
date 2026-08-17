@@ -1196,9 +1196,35 @@ def _bind_provider_current_recorders(
                     "Provider credential state could not be persisted"
                 ) from None
 
+    async def record_model_group(group_name: str, provider_name: str) -> None:
+        if config_path is None:
+            raise RuntimeError("Model group provider state cannot be persisted")
+        async with write_lock:
+            try:
+                document = load_config_raw(config_path)
+                groups = document.get("model_groups")
+                if not isinstance(groups, dict):
+                    raise ValueError
+                group = groups.get(group_name)
+                if not isinstance(group, dict):
+                    raise ValueError
+                names = group.get("provider")
+                if not isinstance(names, list) or provider_name not in names:
+                    raise ValueError
+                group["provider"] = [provider_name, *[item for item in names if item != provider_name]]
+                write_config(config_path, document)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                raise RuntimeError(
+                    "Model group provider state could not be persisted"
+                ) from None
+
     for provider_info in config.providers.values():
         provider_info.bind_current_base_url_recorder(record)
         provider_info.bind_current_credential_recorder(record_credential)
+    for ring in config.model_group_rings.values():
+        ring.bind_recorder(record_model_group)
 
 
 # ---------------------------------------------------------------------------

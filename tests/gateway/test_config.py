@@ -1416,6 +1416,43 @@ class TestModelGroups:
         route, _provider = config.resolve("openai_responses", "gpt-test")
         assert route.provider_name == "test"
 
+    def test_provider_list_builds_isolated_runtime_ring(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        cfg = GatewayConfig(raw)
+
+        assert cfg.model_group_provider_names["test-llm"] == ("test", "secondary")
+        assert cfg.model_group_provider_statuses("test-llm") == (
+            ("test", "available"),
+            ("secondary", "available"),
+        )
+        ring = cfg.model_group_rings["test-llm"]
+        ring.mark_failed("test")
+        assert cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
+        assert ring.next_available("test") == "secondary"
+
+    def test_provider_list_rejects_duplicate_or_mixed_api_types(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "test"]
+        with pytest.raises(ValueError, match="provider names must be unique"):
+            GatewayConfig(raw)
+
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        raw["providers"]["secondary"]["api_type"] = "responses"
+        raw["providers"]["secondary"]["request_encoding"] = "identity"
+        with pytest.raises(ValueError, match="same api_type"):
+            GatewayConfig(raw)
+
     @pytest.mark.parametrize(
         ("provider", "message"),
         [

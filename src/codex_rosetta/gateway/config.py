@@ -50,6 +50,61 @@ from .tool_profiles import (
 from .model_profiles import ResolvedModelProfile, resolve_model_profile
 from .web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from .transport import ProviderInfo
+from ._ordered_failover import OrderedFailoverCoordinator
+
+
+ModelGroupProviderRecorder = Callable[[str, str], Any]
+
+
+class ModelGroupProviderRing:
+    """Process-local ordered provider selection for one model group."""
+
+    def __init__(self, group_name: str, providers: list[str], current: str) -> None:
+        self.group_name = group_name
+        self._ring = OrderedFailoverCoordinator(providers, current)
+        self._record_current: ModelGroupProviderRecorder | None = None
+
+    @property
+    def current(self) -> str:
+        return self._ring.current
+
+    @property
+    def candidates(self) -> tuple[str, ...]:
+        return self._ring.candidates
+
+    def observe(self) -> tuple[str, int]:
+        return self._ring.observe()
+
+    def available(self) -> tuple[str, ...]:
+        return self._ring.available()
+
+    def status_snapshot(self) -> tuple[tuple[str, str], ...]:
+        return self._ring.status_snapshot()
+
+    def mark_failed(self, provider: str) -> None:
+        self._ring.mark_failed(provider)
+
+    def next_available(self, failed: str) -> str | None:
+        return self._ring.next_available_after(failed)
+
+    async def claim(self, observed: str) -> tuple[bool, bool]:
+        return await self._ring.claim_with_waited(observed)
+
+    async def publish(self) -> None:
+        await self._ring.publish()
+
+    def bind_recorder(self, recorder: ModelGroupProviderRecorder | None) -> None:
+        self._record_current = recorder
+
+    async def select(self, provider: str) -> None:
+        if provider not in self.candidates:
+            raise ValueError("provider must be a member of the model group")
+        if self._record_current is not None and provider != self.current:
+            result = self._record_current(self.group_name, provider)
+            if hasattr(result, "__await__"):
+                await result
+        self._ring.clear_cooldown(provider)
+        self._ring.set_current(provider)
 
 
 def _validate_provider_credential_uuid(value: Any, *, field: str) -> str:
@@ -903,6 +958,10 @@ class GatewayConfig:
         self._expanded_raw_models = self._expand_model_groups(
             raw.get("model_groups", {})
         )
+        self.model_group_provider_names: dict[str, tuple[str, ...]] = {}
+        self.model_group_names_by_model: dict[str, str] = {}
+        self.model_group_rings: dict[str, ModelGroupProviderRing] = {}
+        self._initialize_model_group_rings(raw.get("model_groups", {}))
         (
             self.models,
             self.model_profiles,
@@ -1317,6 +1376,39 @@ class GatewayConfig:
                 )
         return expanded
 
+    def _initialize_model_group_rings(self, raw_model_groups: Any) -> None:
+        """Build isolated provider rings and select each group's first eligible provider."""
+        if not isinstance(raw_model_groups, dict):
+            return
+        for group_name, group_value in raw_model_groups.items():
+            if not isinstance(group_value, dict) or group_value.get("type") != "llm":
+                continue
+            names = model_group_provider_names(
+                group_value.get("provider"),
+                field=f"model_groups.{group_name}.provider",
+            )
+            if len(set(names)) != len(names):
+                raise ValueError(
+                    f"config: model group '{group_name}' provider names must be unique"
+                )
+            enabled = [name for name in names if name in self._raw_providers]
+            if enabled:
+                api_types = {self._raw_providers[name]["api_type"] for name in enabled}
+                if len(api_types) != 1:
+                    raise ValueError(
+                        f"config: model group '{group_name}' providers must use the same api_type"
+                    )
+                ring = ModelGroupProviderRing(group_name, enabled, enabled[0])
+                self.model_group_rings[group_name] = ring
+                self.model_group_provider_names[group_name] = tuple(names)
+                group_models = group_value.get("models", {})
+                if isinstance(group_models, dict):
+                    for model_name in group_models:
+                        self.model_group_names_by_model[model_name] = group_name
+                        self._expanded_raw_models[model_name]["provider"] = enabled[0]
+            else:
+                self.model_group_provider_names[group_name] = tuple(names)
+
     @classmethod
     def _parse_models(
         cls,
@@ -1370,6 +1462,22 @@ class GatewayConfig:
         """First configured key (for backward-compat middleware init)."""
         return self.api_keys[0]["key"] if self.api_keys else None
 
+    def model_group_provider_statuses(
+        self, group_name: str
+    ) -> tuple[tuple[str, str], ...]:
+        """Return configured provider status for one model group."""
+        ring = self.model_group_rings.get(group_name)
+        if ring is None:
+            return tuple(
+                (name, "disabled" if name not in self.providers else "available")
+                for name in self.model_group_provider_names.get(group_name, ())
+            )
+        statuses = dict(ring.status_snapshot())
+        return tuple(
+            (name, statuses.get(name, "disabled"))
+            for name in self.model_group_provider_names.get(group_name, ())
+        )
+
     def resolve(
         self,
         source_provider: ProviderType,
@@ -1396,6 +1504,16 @@ class GatewayConfig:
         from typing import cast
 
         provider_name = self.models[model]
+        group_name = self.model_group_names_by_model.get(model)
+        ring = self.model_group_rings.get(group_name) if group_name else None
+        if ring is not None:
+            provider_name = ring.current
+            # A disabled/cooling candidate must never become a fresh route.
+            if provider_name not in self.providers or provider_name not in ring.available():
+                provider_name = next(
+                    (candidate for candidate in ring.available() if candidate in self.providers),
+                    provider_name,
+                )
         provider_type = self.provider_types[provider_name]
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
