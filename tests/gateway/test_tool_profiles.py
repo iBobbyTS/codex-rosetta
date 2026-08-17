@@ -471,7 +471,13 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "9c02235b-cba1-57c9-8ecf-e3e46e5c1f42",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -573,7 +579,13 @@ def test_gateway_config_rejects_unknown_group_profile():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "361ad135-ce78-5ebc-9ba9-71076ebdf9af",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -605,7 +617,13 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "d4292c54-bc5f-5940-9a63-9f89210199b0",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -640,7 +658,13 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "c3da91b1-c817-55b5-9a55-1a69044e760c",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -673,7 +697,13 @@ def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type)
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "0a1999c7-9b36-5e40-82b7-10efc5c2fef4",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -712,7 +742,13 @@ def test_gateway_config_uses_no_default_profile_for_anthropic_and_google(api_typ
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "1c2f7a4c-a5a5-5b36-a097-cda9e66b64ad",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -743,7 +779,13 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "e2433cde-463f-5eb1-b9e8-bb34b673575e",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -793,7 +835,13 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "4f073262-addc-5623-b862-ad6f1425ff74",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -1238,7 +1286,13 @@ def test_later_external_candidate_projects_search_on_all_shared_surfaces(
         "providers": {
             "test": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "72692315-dd0c-5097-8df0-7ffe0f6a9bb6",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",

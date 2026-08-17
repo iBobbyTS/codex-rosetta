@@ -415,7 +415,13 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
     raw = {
         "providers": {
             "test": {
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "9595c07e-974a-5ae5-a717-64f0b4f9f7ee",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",

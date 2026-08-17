@@ -51,6 +51,10 @@ from codex_rosetta.observability.metrics import MetricsCollector
 from codex_rosetta.observability.request_log import RequestLogEntry
 
 
+_PRIMARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000001"
+_SECONDARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000002"
+
+
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
@@ -63,7 +67,13 @@ def _config_data() -> dict[str, Any]:
                 "api_type": "chat",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": _PRIMARY_CREDENTIAL_UUID,
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
             }
         },
@@ -311,7 +321,12 @@ def test_startup_registers_every_provider_key_in_all_runtime_redactors(
     data = _config_data()
     raw_keys = ("first-startup", "startup-prefix", "startup-prefix-long")
     data["providers"]["openai"]["api_keys"] = [
-        {"id": f"key-{index}", "key": key} for index, key in enumerate(raw_keys)
+        {
+            "uuid": f"00000000-0000-4000-8000-{index + 1:012d}",
+            "id": f"key-{index}",
+            "key": key,
+        }
+        for index, key in enumerate(raw_keys)
     ]
     data["providers"]["openai"]["current_api_key"] = "key-0"
     config_path = tmp_path / "config.jsonc"
@@ -337,7 +352,12 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
     new_tokens = ("new-first", "new-prefix", "new-prefix-long")
     initial_data = _config_data()
     initial_data["providers"]["openai"]["api_keys"] = [
-        {"id": f"key-{index}", "key": key} for index, key in enumerate(old_tokens)
+        {
+            "uuid": f"00000000-0000-4000-8000-{index + 1:012d}",
+            "id": f"key-{index}",
+            "key": key,
+        }
+        for index, key in enumerate(old_tokens)
     ]
     initial_data["providers"]["openai"]["current_api_key"] = "key-0"
     config_path = tmp_path / "config.jsonc"
@@ -347,7 +367,12 @@ def test_hot_reload_and_rollback_atomically_swap_all_provider_credentials(
 
     candidate = _config_data()
     candidate["providers"]["openai"]["api_keys"] = [
-        {"id": f"key-{index}", "key": key} for index, key in enumerate(new_tokens)
+        {
+            "uuid": f"00000000-0000-4000-8000-{index + 1:012d}",
+            "id": f"key-{index}",
+            "key": key,
+        }
+        for index, key in enumerate(new_tokens)
     ]
     candidate["providers"]["openai"]["current_api_key"] = "key-0"
     new_config = GatewayConfig(candidate)
@@ -720,7 +745,13 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
         "request_encoding": "passthrough",
         "base_urls": ["https://search.example.com/v1"],
         "current_base_url": "https://search.example.com/v1",
-        "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+        "api_keys": [
+            {
+                "uuid": "70cdb847-92a7-5335-a55a-facd4a208d6f",
+                "id": "primary",
+                "key": "search-provider-key",
+            }
+        ],
         "current_api_key": "primary",
     }
     config["server"]["web_search"] = {
@@ -860,8 +891,16 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
                 "api_keys": [
-                    {"id": "primary", "key": "eligible-secret"},
-                    {"id": "fallback", "key": "eligible-fallback-secret"},
+                    {
+                        "uuid": "ecd0c123-4513-53dd-a83c-9f82cb62dad4",
+                        "id": "primary",
+                        "key": "eligible-secret",
+                    },
+                    {
+                        "uuid": "67b6c9f2-67df-5c33-acc9-f5b7400e2cef",
+                        "id": "fallback",
+                        "key": "eligible-fallback-secret",
+                    },
                 ],
                 "current_api_key": "primary",
             },
@@ -870,7 +909,13 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                 "api_type": "chat",
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
-                "api_keys": [{"id": "primary", "key": "wrong-api-secret"}],
+                "api_keys": [
+                    {
+                        "uuid": "e271ce0b-7788-5dc2-8f4e-39534753b912",
+                        "id": "primary",
+                        "key": "wrong-api-secret",
+                    }
+                ],
                 "current_api_key": "primary",
             },
             "wrong-origin": {
@@ -879,7 +924,13 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                 "request_encoding": "passthrough",
                 "base_urls": ["https://relay.example/v1"],
                 "current_base_url": "https://relay.example/v1",
-                "api_keys": [{"id": "primary", "key": "wrong-origin-secret"}],
+                "api_keys": [
+                    {
+                        "uuid": "14f2f768-045e-5000-9ffe-47a076638229",
+                        "id": "primary",
+                        "key": "wrong-origin-secret",
+                    }
+                ],
                 "current_api_key": "primary",
             },
         }
@@ -970,7 +1021,13 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
         "request_encoding": "passthrough",
         "base_urls": ["https://search.example.test/v1"],
         "current_base_url": "https://search.example.test/v1",
-        "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+        "api_keys": [
+            {
+                "uuid": "717510ff-bb7b-542f-ad55-851da1128d72",
+                "id": "primary",
+                "key": "search-provider-key",
+            }
+        ],
         "current_api_key": "primary",
     }
     config["server"]["web_search"] = {"providers": rows}
@@ -1077,7 +1134,13 @@ def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
         "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_keys": [{"id": "primary", "key": "deepseek-secret"}],
+        "api_keys": [
+            {
+                "uuid": "58bdd7b2-e4ae-576a-9f1c-2eb873008097",
+                "id": "primary",
+                "key": "deepseek-secret",
+            }
+        ],
         "current_api_key": "primary",
     }
     config_path = tmp_path / "config.jsonc"
@@ -1366,7 +1429,13 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
             "https://api.deepseek.example/v1",
         ],
         "current_base_url": "https://api.deepseek.example/v1",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "55730d50-48df-5797-8b5f-9c6829813c2d",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "allow_redirects": True,
         "soft_interrupt": False,
@@ -1377,7 +1446,13 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["DeepSeek"] == {
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "55730d50-48df-5797-8b5f-9c6829813c2d",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": [
             "https://api.deepseek.com",
@@ -1504,8 +1579,16 @@ def test_manual_credential_selection_uses_runtime_owner_and_preserves_url_state(
 ) -> None:
     data = _config_data()
     data["providers"]["openai"]["api_keys"] = [
-        {"id": "first", "key": "first-secret"},
-        {"id": "second", "key": "second-secret"},
+        {
+            "uuid": "45872c3b-f8e8-5575-8ac8-66e01066030e",
+            "id": "first",
+            "key": "first-secret",
+        },
+        {
+            "uuid": "594307fb-c002-5caf-9602-7e01f9ebfe6e",
+            "id": "second",
+            "key": "second-secret",
+        },
     ]
     data["providers"]["openai"]["current_api_key"] = "first"
     config_path = tmp_path / "config.jsonc"
@@ -1573,8 +1656,16 @@ def test_provider_current_selector_requires_exactly_one_string_field(
 def test_get_config_masks_canonical_provider_credentials_without_writing(tmp_path):
     data = _config_data()
     data["providers"]["openai"]["api_keys"] = [
-        {"id": "first", "key": "first-provider-secret"},
-        {"id": "second", "key": "discarded-provider-secret"},
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "first",
+            "key": "first-provider-secret",
+        },
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "second",
+            "key": "discarded-provider-secret",
+        },
     ]
     data["providers"]["openai"]["current_api_key"] = "second"
     config_path = tmp_path / "config.jsonc"
@@ -1594,8 +1685,16 @@ def test_get_config_masks_canonical_provider_credentials_without_writing(tmp_pat
     assert response.status_code == 200
     body = json.loads(response.body)
     assert body["providers"]["openai"]["api_keys"] == [
-        {"id": "first", "key": "firs***cret"},
-        {"id": "second", "key": "disc***cret"},
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "first",
+            "key": "firs***cret",
+        },
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "second",
+            "key": "disc***cret",
+        },
     ]
     assert body["providers"]["openai"]["current_api_key"] == "second"
     assert "discarded-provider-secret" in config.token_values
@@ -1605,8 +1704,16 @@ def test_get_config_masks_canonical_provider_credentials_without_writing(tmp_pat
 def test_put_provider_preserves_matching_masks(tmp_path):
     data = _config_data()
     data["providers"]["openai"]["api_keys"] = [
-        {"id": "first", "key": "first-secret-value"},
-        {"id": "second", "key": "second-secret-value"},
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "first",
+            "key": "first-secret-value",
+        },
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "second",
+            "key": "second-secret-value",
+        },
     ]
     data["providers"]["openai"]["current_api_key"] = "second"
     config_path = tmp_path / "config.jsonc"
@@ -1618,8 +1725,16 @@ def test_put_provider_preserves_matching_masks(tmp_path):
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
         "api_keys": [
-            {"id": "second", "key": "seco***alue"},
-            {"id": "first", "key": "firs***alue"},
+            {
+                "uuid": _SECONDARY_CREDENTIAL_UUID,
+                "id": "second",
+                "key": "seco***alue",
+            },
+            {
+                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                "id": "renamed-first",
+                "key": "firs***alue",
+            },
         ],
         "current_api_key": "second",
     }
@@ -1638,8 +1753,16 @@ def test_put_provider_preserves_matching_masks(tmp_path):
 
     assert response.status_code == 200
     assert json.loads(config_path.read_text())["providers"]["openai"]["api_keys"] == [
-        {"id": "second", "key": "second-secret-value"},
-        {"id": "first", "key": "first-secret-value"},
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "second",
+            "key": "second-secret-value",
+        },
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "renamed-first",
+            "key": "first-secret-value",
+        },
     ]
 
 
@@ -1702,8 +1825,16 @@ def _responses_detection_data() -> dict[str, Any]:
     provider["api_type"] = "responses"
     provider["request_encoding"] = "passthrough"
     provider["api_keys"] = [
-        {"id": "primary", "key": "primary-secret"},
-        {"id": "selected", "key": "selected-secret"},
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "primary",
+            "key": "primary-secret",
+        },
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "selected",
+            "key": "selected-secret",
+        },
     ]
     provider["current_api_key"] = "selected"
     return data
@@ -1731,7 +1862,13 @@ def test_detect_request_encoding_uses_only_current_masked_draft_target(
             "api_type": "responses",
             "model": "manual-model",
             "current_base_url": "https://selected.example/v1",
-            "api_keys": [{"id": "selected", "key": "sele***cret"}],
+            "api_keys": [
+                {
+                    "uuid": _SECONDARY_CREDENTIAL_UUID,
+                    "id": "selected",
+                    "key": "sele***cret",
+                }
+            ],
             "current_api_key": "selected",
             "proxy": "http://draft-proxy.example:8080",
             "allow_redirects": True,
@@ -1779,7 +1916,17 @@ def test_detect_request_encoding_resolves_only_saved_environment_credential_owne
             "api_type": "responses",
             "model": "manual-model",
             "current_base_url": "https://api.example.com",
-            "api_keys": [{"id": credential_id, "key": "${RESPONSES_API_KEY}"}],
+            "api_keys": [
+                {
+                    "uuid": (
+                        _SECONDARY_CREDENTIAL_UUID
+                        if credential_id == "selected"
+                        else _PRIMARY_CREDENTIAL_UUID
+                    ),
+                    "id": credential_id,
+                    "key": "${RESPONSES_API_KEY}",
+                }
+            ],
             "current_api_key": credential_id,
             "proxy": "",
             "allow_redirects": False,
@@ -1818,7 +1965,13 @@ def test_detect_request_encoding_accepts_unsaved_raw_draft_without_writing(tmp_p
             "api_type": "responses",
             "model": "manual-model",
             "current_base_url": "https://unsaved.example/v1",
-            "api_keys": [{"id": "fresh", "key": "fresh-secret"}],
+            "api_keys": [
+                {
+                    "uuid": "4636ddf4-536c-533f-a859-69965f66b006",
+                    "id": "fresh",
+                    "key": "fresh-secret",
+                }
+            ],
             "current_api_key": "fresh",
             "proxy": "",
             "allow_redirects": False,
@@ -1861,7 +2014,13 @@ def test_detect_request_encoding_redacts_complete_failures(tmp_path):
             "api_type": "responses",
             "model": "manual-model",
             "current_base_url": "https://api.example.com",
-            "api_keys": [{"id": "selected", "key": "sele***cret"}],
+            "api_keys": [
+                {
+                    "uuid": _SECONDARY_CREDENTIAL_UUID,
+                    "id": "selected",
+                    "key": "sele***cret",
+                }
+            ],
             "current_api_key": "selected",
             "proxy": "",
             "allow_redirects": False,
@@ -1921,7 +2080,13 @@ def test_put_provider_rejects_empty_credential_without_write(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
-        "api_keys": [{"id": "new", "key": "first-new"}],
+        "api_keys": [
+            {
+                "uuid": "5c44823c-4a6f-5a3a-b465-549d474d1981",
+                "id": "new",
+                "key": "first-new",
+            }
+        ],
         "current_api_key": "new",
     }
 
@@ -1929,7 +2094,11 @@ def test_put_provider_rejects_empty_credential_without_write(tmp_path):
 
     assert response.status_code == 200
     assert json.loads(config_path.read_text())["providers"]["openai"]["api_keys"] == [
-        {"id": "new", "key": "first-new"}
+        {
+            "uuid": "5c44823c-4a6f-5a3a-b465-549d474d1981",
+            "id": "new",
+            "key": "first-new",
+        }
     ]
 
     persisted = config_path.read_bytes()
@@ -1938,7 +2107,9 @@ def test_put_provider_rejects_empty_credential_without_write(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.example.com"],
         "current_base_url": "https://api.example.com",
-        "api_keys": [{"id": "new", "key": ""}],
+        "api_keys": [
+            {"uuid": "5fb4abbb-9e26-5386-a28b-ff319896f053", "id": "new", "key": ""}
+        ],
         "current_api_key": "new",
     }
     response = _run(put_provider(request))
@@ -1964,7 +2135,13 @@ def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):
         "api_type": "anthropic",
         "base_urls": ["https://api.deepseek.com/anthropic"],
         "current_base_url": "https://api.deepseek.com/anthropic",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "929913c1-01de-5433-a95d-b87071a1f424",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "soft_interrupt": True,
     }
@@ -1994,7 +2171,13 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
         "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "b4d2a24a-797d-5469-8c84-da8320a9d139",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "force_rosetta_compaction": True,
     }
@@ -2012,7 +2195,13 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
         "request_encoding": "passthrough",
         "base_urls": ["https://api.deepseek.com/v1"],
         "current_base_url": "https://api.deepseek.com/v1",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "c866dfe1-727b-5395-aff9-7c9c1a02ccf9",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "force_rosetta_compaction": False,
     }
@@ -2041,7 +2230,13 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "b9b2c552-465d-574d-9b3d-a7c32040cc94",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
         "force_rosetta_compaction": True,
     }
@@ -2056,7 +2251,13 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
 def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
     config = _config_data()
     config["providers"]["zulu"] = {
-        "api_keys": [{"id": "primary", "key": "sk-zulu"}],
+        "api_keys": [
+            {
+                "uuid": "9e5abb2d-adc0-55ca-be6a-3a279a841e3a",
+                "id": "primary",
+                "key": "sk-zulu",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
@@ -2079,7 +2280,13 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
             "api_type": "chat",
             "base_urls": ["https://alpha.example.test"],
             "current_base_url": "https://alpha.example.test",
-            "api_keys": [{"id": "primary", "key": "sk-alpha"}],
+            "api_keys": [
+                {
+                    "uuid": "1a4aafcf-0cd0-591b-a52f-6ed121b380d0",
+                    "id": "primary",
+                    "key": "sk-alpha",
+                }
+            ],
             "current_api_key": "primary",
         },
     )
@@ -2095,7 +2302,13 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
 def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
     config = _config_data()
     config["providers"]["Zulu"] = {
-        "api_keys": [{"id": "primary", "key": "sk-zulu"}],
+        "api_keys": [
+            {
+                "uuid": "5d400e76-aa2a-5a80-aef8-db76cbdb1e0b",
+                "id": "primary",
+                "key": "sk-zulu",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
@@ -2135,7 +2348,13 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
 def test_put_provider_rename_updates_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["search"] = {
-        "api_keys": [{"id": "primary", "key": "search-key"}],
+        "api_keys": [
+            {
+                "uuid": "44ef13b4-8ec3-5aca-bf5b-7227c77db165",
+                "id": "primary",
+                "key": "search-key",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
@@ -2181,7 +2400,13 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
 def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["official-deepseek"] = {
-        "api_keys": [{"id": "primary", "key": "deepseek-key"}],
+        "api_keys": [
+            {
+                "uuid": "fc709bdf-952a-50b8-a25d-24eb3ffa161a",
+                "id": "primary",
+                "key": "deepseek-key",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
@@ -2229,7 +2454,13 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
 def test_delete_provider_rejects_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["search"] = {
-        "api_keys": [{"id": "primary", "key": "search-key"}],
+        "api_keys": [
+            {
+                "uuid": "b185ff5a-d5d1-53d8-b2f6-3615b987ec96",
+                "id": "primary",
+                "key": "search-key",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
@@ -2284,7 +2515,13 @@ def test_delete_provider_rejects_non_active_model_group_dependency(tmp_path):
 def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
     config = _config_data()
     config["providers"]["official-deepseek"] = {
-        "api_keys": [{"id": "primary", "key": "deepseek-key"}],
+        "api_keys": [
+            {
+                "uuid": "f5d4d5ed-b6c6-54f5-b816-15cb5d02d5b2",
+                "id": "primary",
+                "key": "deepseek-key",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
@@ -2329,7 +2566,13 @@ def test_put_provider_rejects_missing_persisted_provider(tmp_path):
             "api_type": "chat",
             "base_urls": ["https://api.example.test"],
             "current_base_url": "https://api.example.test",
-            "api_keys": [{"id": "primary", "key": "sk-new"}],
+            "api_keys": [
+                {
+                    "uuid": "04953711-1af3-5b74-ae41-3b6a1fc92129",
+                    "id": "primary",
+                    "key": "sk-new",
+                }
+            ],
             "current_api_key": "primary",
         },
     )
@@ -2360,7 +2603,13 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
         "request_encoding": "passthrough",
         "base_urls": ["https://qwen.example.test/v1"],
         "current_base_url": "https://qwen.example.test/v1",
-        "api_keys": [{"id": "primary", "key": "sk-new"}],
+        "api_keys": [
+            {
+                "uuid": "8f8789ac-124e-553d-8bfe-d03941d7457d",
+                "id": "primary",
+                "key": "sk-new",
+            }
+        ],
         "current_api_key": "primary",
     }
 
@@ -2377,7 +2626,13 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     """Editing a new-style provider with a masked key keeps the old secret."""
     config = _config_data()
     config["providers"]["DeepSeek"] = {
-        "api_keys": [{"id": "primary", "key": "sk-1234567890"}],
+        "api_keys": [
+            {
+                "uuid": "1f1ab76a-9390-5c71-a47d-22e9af6bd72e",
+                "id": "primary",
+                "key": "sk-1234567890",
+            }
+        ],
         "current_api_key": "primary",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
@@ -2405,8 +2660,14 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
-        "api_keys": [{"id": "primary", "key": "sk-1***7890"}],
-        "current_api_key": "primary",
+        "api_keys": [
+            {
+                "uuid": "1f1ab76a-9390-5c71-a47d-22e9af6bd72e",
+                "id": "renamed-primary",
+                "key": "sk-1***7890",
+            }
+        ],
+        "current_api_key": "renamed-primary",
     }
 
     response = _run(put_provider(request))
@@ -2414,8 +2675,13 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["DeepSeek"]["api_keys"] == [
-        {"id": "primary", "key": "sk-1234567890"}
+        {
+            "uuid": "1f1ab76a-9390-5c71-a47d-22e9af6bd72e",
+            "id": "renamed-primary",
+            "key": "sk-1234567890",
+        }
     ]
+    assert saved["providers"]["DeepSeek"]["current_api_key"] == "renamed-primary"
     assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
     assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
     assert "type" not in saved["providers"]["DeepSeek"]
@@ -2742,7 +3008,13 @@ def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
         "api_type": "chat",
         "base_urls": ["https://opencode.ai/zen/go/v1"],
         "current_base_url": "https://opencode.ai/zen/go/v1",
-        "api_keys": [{"id": "primary", "key": "test-opencode-key"}],
+        "api_keys": [
+            {
+                "uuid": "fb9cee3b-fc24-539f-b462-519897254365",
+                "id": "primary",
+                "key": "test-opencode-key",
+            }
+        ],
         "current_api_key": "primary",
     }
     config_path = tmp_path / "config.jsonc"

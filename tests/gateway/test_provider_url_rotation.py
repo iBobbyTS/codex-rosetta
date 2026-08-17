@@ -1148,8 +1148,16 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                     "api_type": "responses",
                     "request_encoding": "passthrough",
                     "api_keys": [
-                        {"id": "primary", "key": "row-a-key"},
-                        {"id": "secondary", "key": "row-a-key-2"},
+                        {
+                            "uuid": "7d059822-8269-5705-94e2-b6c84e491889",
+                            "id": "primary",
+                            "key": "row-a-key",
+                        },
+                        {
+                            "uuid": "9804263e-398a-50ab-9fc4-dd8340c8d745",
+                            "id": "secondary",
+                            "key": "row-a-key-2",
+                        },
                     ],
                     "current_api_key": "primary",
                     "base_urls": [first, second],
@@ -1159,7 +1167,13 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                     "provider": "openai",
                     "api_type": "responses",
                     "request_encoding": "passthrough",
-                    "api_keys": [{"id": "primary", "key": "row-b-key"}],
+                    "api_keys": [
+                        {
+                            "uuid": "018d28a9-829c-5cd2-b6b3-0712dcf5c6de",
+                            "id": "primary",
+                            "key": "row-b-key",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": [other],
                     "current_base_url": other,

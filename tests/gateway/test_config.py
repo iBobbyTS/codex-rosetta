@@ -6,6 +6,7 @@ import json
 import os
 import sys
 from argparse import Namespace
+from uuid import UUID
 
 import pytest
 
@@ -39,6 +40,9 @@ from codex_rosetta.gateway.web_run_capabilities import (
 from codex_rosetta.routing import is_responses_passthrough
 
 
+_PRIMARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000001"
+
+
 def test_default_config_search_only_uses_xdg_directory() -> None:
     expected = os.path.expanduser("~/.config/codex-rosetta-gateway")
 
@@ -53,6 +57,37 @@ def test_legacy_single_api_key_field_is_rejected() -> None:
     raw["server"]["api_key"] = "legacy-key"
 
     with pytest.raises(ValueError, match="server.api_key is unsupported"):
+        GatewayConfig(raw)
+
+
+@pytest.mark.parametrize(
+    "credential_uuid",
+    [None, "", "not-a-uuid", "00000000000040008000000000000001"],
+)
+def test_provider_credential_uuid_must_be_present_and_canonical(
+    credential_uuid: str | None,
+) -> None:
+    raw = _minimal_raw()
+    if credential_uuid is None:
+        raw["providers"]["test"]["api_keys"][0].pop("uuid")
+    else:
+        raw["providers"]["test"]["api_keys"][0]["uuid"] = credential_uuid
+
+    with pytest.raises(ValueError, match=r"api_keys\[0\]\.uuid.*canonical UUID"):
+        GatewayConfig(raw)
+
+
+def test_provider_credential_uuids_must_be_unique_within_provider() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"]["api_keys"].append(
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+
+    with pytest.raises(ValueError, match="api_keys UUIDs must be unique"):
         GatewayConfig(raw)
 
 
@@ -169,7 +204,13 @@ def test_unified_responses_protocol_resolves_direct_profile(
     raw = {
         "providers": {
             "upstream": {
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": _PRIMARY_CREDENTIAL_UUID,
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": [base_url],
                 "current_base_url": base_url,
@@ -275,7 +316,13 @@ def _minimal_raw(**server_overrides) -> dict:
     raw = {
         "providers": {
             "test": {
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": _PRIMARY_CREDENTIAL_UUID,
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
@@ -566,7 +613,11 @@ class TestEnvironmentSubstitution:
             credential_visible=False,
         )
         raw["providers"]["test"]["api_keys"] = [
-            {"id": "primary", "key": "prefix-${SPECIAL_ADMIN_PASSWORD}-suffix"}
+            {
+                "uuid": "d98eafb7-2306-5c8b-98cb-3c3d3f780453",
+                "id": "primary",
+                "key": "prefix-${SPECIAL_ADMIN_PASSWORD}-suffix",
+            }
         ]
         raw["providers"]["test"].pop("current_api_key", None)
         path = tmp_path / "config.jsonc"
@@ -802,7 +853,13 @@ class TestWebSearchConfig:
             }
         )
         raw["providers"]["official-deepseek"] = {
-            "api_keys": [{"id": "primary", "key": "deepseek-secret"}],
+            "api_keys": [
+                {
+                    "uuid": "f45d720f-7d38-5874-8ab2-7594194e2729",
+                    "id": "primary",
+                    "key": "deepseek-secret",
+                }
+            ],
             "current_api_key": "primary",
             "base_urls": ["https://api.deepseek.com"],
             "current_base_url": "https://api.deepseek.com",
@@ -1055,7 +1112,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "DeepSeek": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.deepseek.com"],
                     "current_base_url": "https://api.deepseek.com",
@@ -1081,7 +1144,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "MiniMax": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.minimaxi.com/anthropic"],
                     "current_base_url": "https://api.minimaxi.com/anthropic",
@@ -1111,7 +1180,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Pixel": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
@@ -1145,7 +1220,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "DeepSeek": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.deepseek.com/"],
                     "current_base_url": "https://api.deepseek.com/",
@@ -1171,7 +1252,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Relay": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://relay.example/v1"],
                     "current_base_url": "https://relay.example/v1",
@@ -1197,7 +1284,13 @@ class TestProviderApiTypeResolution:
         raw = {
             "providers": {
                 "Qwen": {
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": _PRIMARY_CREDENTIAL_UUID,
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
@@ -1257,7 +1350,9 @@ class TestProviderApiTypeResolution:
     def test_custom_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["test"] = {
-            "api_keys": [{"id": "primary", "key": "sk-test"}],
+            "api_keys": [
+                {"uuid": _PRIMARY_CREDENTIAL_UUID, "id": "primary", "key": "sk-test"}
+            ],
             "current_api_key": "primary",
             "base_urls": ["https://provider.example"],
             "current_base_url": "https://provider.example",
@@ -1269,7 +1364,9 @@ class TestProviderApiTypeResolution:
     def test_preset_url_without_explicit_protocol_fails_closed(self, caplog):
         raw = _minimal_raw()
         raw["providers"]["openai"] = {
-            "api_keys": [{"id": "primary", "key": "sk-test"}],
+            "api_keys": [
+                {"uuid": _PRIMARY_CREDENTIAL_UUID, "id": "primary", "key": "sk-test"}
+            ],
             "current_api_key": "primary",
             "base_urls": ["https://api.openai.com/v1"],
             "current_base_url": "https://api.openai.com/v1",
@@ -1519,7 +1616,13 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
             {
                 "providers": {
                     "test": {
-                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "api_keys": [
+                            {
+                                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                                "id": "primary",
+                                "key": "sk-test",
+                            }
+                        ],
                         "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
@@ -1569,6 +1672,8 @@ def test_cli_add_provider_persists_explicit_protocol(tmp_path):
     )
 
     saved = json.loads((tmp_path / "config.jsonc").read_text(encoding="utf-8"))
+    credential_uuid = saved["providers"]["relay"]["api_keys"][0].pop("uuid")
+    assert UUID(credential_uuid).version == 4
     assert saved["providers"]["relay"] == {
         "api_keys": [{"id": "primary", "key": "sk-test"}],
         "current_api_key": "primary",
@@ -1586,7 +1691,13 @@ def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path
             {
                 "providers": {
                     "test": {
-                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "api_keys": [
+                            {
+                                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                                "id": "primary",
+                                "key": "sk-test",
+                            }
+                        ],
                         "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
@@ -1624,7 +1735,13 @@ def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
             {
                 "providers": {
                     "test": {
-                        "api_keys": [{"id": "primary", "key": "sk-test"}],
+                        "api_keys": [
+                            {
+                                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                                "id": "primary",
+                                "key": "sk-test",
+                            }
+                        ],
                         "current_api_key": "primary",
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",

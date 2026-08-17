@@ -36,7 +36,13 @@ def _gateway_config() -> dict[str, Any]:
         "providers": {
             "test-provider": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "32878349-f734-5413-933b-583e9d37d6f3",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",

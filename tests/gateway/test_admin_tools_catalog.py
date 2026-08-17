@@ -194,7 +194,13 @@ def _make_app():
             "providers": {
                 "test-provider": {
                     "provider": "custom",
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": "95867a40-e028-5212-ab4f-4ff6d46a8a0b",
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
@@ -745,7 +751,13 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     raw = {
         "providers": {
             "test-provider": {
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "6c72f121-e1c0-56df-817f-76b4ab7cead4",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",

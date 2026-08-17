@@ -25,7 +25,13 @@ def _config() -> GatewayConfig:
             "providers": {
                 "test-provider": {
                     "provider": "custom",
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": "db414f6b-34a4-5ae7-b3f2-f9aa3145e7c0",
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",

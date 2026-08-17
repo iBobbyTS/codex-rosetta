@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 
@@ -127,6 +128,11 @@ def test_main_initializes_missing_config_and_continues_startup(
     config_path = config_dir / "config.jsonc"
     assert config_path.is_file()
     generated = json.loads(config_path.read_text(encoding="utf-8"))
+    provider_uuids = [
+        entry["api_keys"][0]["uuid"] for entry in generated["providers"].values()
+    ]
+    assert len(set(provider_uuids)) == 3
+    assert all(UUID(value).version == 4 for value in provider_uuids)
     assert generated["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
     assert "tool_profile" not in generated["model_groups"]["Anthropic"]
     assert "tool_profile" not in generated["model_groups"]["Google"]

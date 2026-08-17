@@ -54,8 +54,9 @@ Chromium 就绪，并在退出时清理托管 service。
 Search Provider 透传请求同样使用此“轮换前重试”行为，并且仍只占用一次逻辑上的
 Search Provider 请求预算。
 
-每个 Provider 还保存一个带稳定 ID 和掩码凭据的有序、非空 `api_keys` 列表，并将其中
-一个成员保存为 `current_api_key`。字面意义的上游 HTTP 503 会在当前凭据上分别等待
+每个 Provider 还保存一个有序、非空的 `api_keys` 列表。每个条目包含稳定 UUID、可编辑
+ID 和掩码凭据；`current_api_key` 通过可编辑 ID 选中一个条目。Admin UI 使用 UUID，因而
+修改 ID 时仍能保留原有凭据。字面意义的上游 HTTP 503 会在当前凭据上分别等待
 1、2、4、8、16 秒后重试。只有连续六次 503 才会让该凭据进入冷却并轮换到下一个未冷却
 凭据；每个后续凭据都有完整的新重试预算。普通、流式、透传及 Search Provider 请求均
 遵循此行为，Search 内部重试仍只占用一次逻辑请求预算。禁用故障转移的流式请求仍只尝试

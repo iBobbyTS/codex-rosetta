@@ -22,7 +22,13 @@ def _config_data() -> dict[str, Any]:
         "providers": {
             "test-provider": {
                 "provider": "custom",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "57aab7b4-02d1-5990-8e0b-377dddcaf654",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",

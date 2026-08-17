@@ -356,7 +356,13 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
             "providers": {
                 "private-provider": {
                     "provider": "custom",
-                    "api_keys": [{"id": "primary", "key": "sk-provider-secret"}],
+                    "api_keys": [
+                        {
+                            "uuid": "c50c46c2-309d-5d22-aa9c-c6061b28a361",
+                            "id": "primary",
+                            "key": "sk-provider-secret",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",

@@ -86,8 +86,16 @@ def test_gateway_canonical_credentials_preserve_inventory_and_redaction():
             "provider": "custom",
             "api_type": "chat",
             "api_keys": [
-                {"id": "first", "key": "prefix"},
-                {"id": "second", "key": "final"},
+                {
+                    "uuid": "3e32528e-b812-5116-85d8-1c294c69565d",
+                    "id": "first",
+                    "key": "prefix",
+                },
+                {
+                    "uuid": "4f476003-ce08-52a8-8eba-f79c3f857a0d",
+                    "id": "second",
+                    "key": "final",
+                },
             ],
             "current_api_key": "first",
             "base_urls": ["https://upstream.example/v1"],
@@ -168,7 +176,13 @@ def test_gateway_requires_unique_credential_ids_and_member_current():
         _gateway_config(
             {
                 **common,
-                "api_keys": [{"id": "first", "key": "one"}],
+                "api_keys": [
+                    {
+                        "uuid": "968e8830-820e-5805-9c43-af08993cd504",
+                        "id": "first",
+                        "key": "one",
+                    }
+                ],
                 "current_api_key": "missing",
             }
         )
@@ -180,7 +194,13 @@ def test_gateway_rejects_legacy_scalar_provider_base_url():
             {
                 "provider": "custom",
                 "api_type": "chat",
-                "api_keys": [{"id": "primary", "key": "test"}],
+                "api_keys": [
+                    {
+                        "uuid": "5b207124-9439-5129-a6a4-011465dd9c3f",
+                        "id": "primary",
+                        "key": "test",
+                    }
+                ],
                 "base_url": "https://upstream.example/v1",
             }
         )
@@ -192,7 +212,13 @@ def test_gateway_requires_current_base_url_to_belong_to_ring():
             {
                 "provider": "custom",
                 "api_type": "chat",
-                "api_keys": [{"id": "primary", "key": "test"}],
+                "api_keys": [
+                    {
+                        "uuid": "8eaf92e0-90c8-5663-8797-487f46e89403",
+                        "id": "primary",
+                        "key": "test",
+                    }
+                ],
                 "base_urls": ["https://upstream.example/v1"],
                 "current_base_url": "https://other.example/v1",
             }

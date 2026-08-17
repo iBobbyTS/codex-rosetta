@@ -58,7 +58,13 @@ def _config() -> GatewayConfig:
                     "request_encoding": "passthrough",
                     "base_urls": ["https://model.example/v1"],
                     "current_base_url": "https://model.example/v1",
-                    "api_keys": [{"id": "primary", "key": "model-key"}],
+                    "api_keys": [
+                        {
+                            "uuid": "8bdfa772-306c-5c1b-bf3b-0e6234013055",
+                            "id": "primary",
+                            "key": "model-key",
+                        }
+                    ],
                     "current_api_key": "primary",
                 },
                 "search-provider": {
@@ -67,7 +73,13 @@ def _config() -> GatewayConfig:
                     "request_encoding": "passthrough",
                     "base_urls": ["https://search.example/v1"],
                     "current_base_url": "https://search.example/v1",
-                    "api_keys": [{"id": "primary", "key": "search-key"}],
+                    "api_keys": [
+                        {
+                            "uuid": "e0ff12fb-5178-5d66-a161-c5780afa8fb3",
+                            "id": "primary",
+                            "key": "search-key",
+                        }
+                    ],
                     "current_api_key": "primary",
                 },
             },

@@ -57,8 +57,10 @@ current URL is persisted. Streaming requests with failover disabled are not
 retried. Search Provider passthrough requests use the same retry-before-rotation
 behavior and retain one logical Search Provider request-budget charge.
 
-Each Provider also stores an ordered, non-empty `api_keys` list of stable IDs
-and masked credentials, plus a member `current_api_key`. A literal upstream HTTP
+Each Provider also stores an ordered, non-empty `api_keys` list. Every entry has
+a stable UUID, an editable ID, and a masked credential; `current_api_key` selects
+an entry by its editable ID. The Admin UI uses the UUID to preserve the saved
+credential when its ID changes. A literal upstream HTTP
 503 is retried on the current credential after 1, 2, 4, 8, and 16 seconds. Only
 six consecutive 503 responses cool that credential and rotate to the next
 non-cooling credential, which receives a fresh retry budget. This applies to

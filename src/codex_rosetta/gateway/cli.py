@@ -7,6 +7,7 @@ import os
 import secrets
 import subprocess
 import sys
+import uuid
 from typing import Any
 
 import asyncio
@@ -147,7 +148,13 @@ def _create_initial_config(config_path: str) -> None:
         "providers": {
             "openai_chat": {
                 "provider": "openai",
-                "api_keys": [{"id": "primary", "key": "${OPENAI_API_KEY}"}],
+                "api_keys": [
+                    {
+                        "uuid": str(uuid.uuid4()),
+                        "id": "primary",
+                        "key": "${OPENAI_API_KEY}",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.openai.com/v1"],
                 "current_base_url": "https://api.openai.com/v1",
@@ -155,7 +162,13 @@ def _create_initial_config(config_path: str) -> None:
             },
             "anthropic": {
                 "provider": "anthropic",
-                "api_keys": [{"id": "primary", "key": "${ANTHROPIC_API_KEY}"}],
+                "api_keys": [
+                    {
+                        "uuid": str(uuid.uuid4()),
+                        "id": "primary",
+                        "key": "${ANTHROPIC_API_KEY}",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://api.anthropic.com"],
                 "current_base_url": "https://api.anthropic.com",
@@ -163,7 +176,13 @@ def _create_initial_config(config_path: str) -> None:
             },
             "google": {
                 "provider": "google",
-                "api_keys": [{"id": "primary", "key": "${GOOGLE_API_KEY}"}],
+                "api_keys": [
+                    {
+                        "uuid": str(uuid.uuid4()),
+                        "id": "primary",
+                        "key": "${GOOGLE_API_KEY}",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://generativelanguage.googleapis.com"],
                 "current_base_url": "https://generativelanguage.googleapis.com",
@@ -250,7 +269,7 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     provider_entry: dict[str, Any] = {
-        "api_keys": [{"id": "primary", "key": api_key}],
+        "api_keys": [{"uuid": str(uuid.uuid4()), "id": "primary", "key": api_key}],
         "current_api_key": "primary",
         "base_urls": [base_url],
         "current_base_url": base_url,

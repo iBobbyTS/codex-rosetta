@@ -27,7 +27,13 @@ def _config(
             "providers": {
                 f"provider-{label}": {
                     "provider": "custom",
-                    "api_keys": [{"id": "primary", "key": f"sk-{label}"}],
+                    "api_keys": [
+                        {
+                            "uuid": "9bcd59ff-3a47-5532-a831-d5b6466a7329",
+                            "id": "primary",
+                            "key": f"sk-{label}",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": [f"https://{label}.example.test/v1"],
                     "current_base_url": f"https://{label}.example.test/v1",

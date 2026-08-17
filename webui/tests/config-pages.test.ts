@@ -40,6 +40,12 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 const apiMock = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), del: vi.fn() }));
 vi.mock('../src/admin/lib/api', () => ({ api: apiMock }));
 
+const PRIMARY_UUID = '00000000-0000-4000-8000-000000000001';
+const FIRST_UUID = '00000000-0000-4000-8000-000000000002';
+const SECOND_UUID = '00000000-0000-4000-8000-000000000003';
+const CURRENT_UUID = '00000000-0000-4000-8000-000000000004';
+const FALLBACK_UUID = '00000000-0000-4000-8000-000000000005';
+
 const providerCatalog = {
   api_types: ['responses', 'chat', 'anthropic', 'google'],
   providers: {
@@ -67,7 +73,7 @@ describe('ProvidersPage', () => {
           provider: 'openai',
           base_urls: ['https://relay.example/v1'],
           current_base_url: 'https://relay.example/v1',
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
           request_encoding: 'passthrough',
@@ -84,7 +90,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'primary', key: 'prov***cret' }],
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
       current_api_key: 'primary',
     })));
   });
@@ -96,7 +102,7 @@ describe('ProvidersPage', () => {
           provider: 'openai',
           base_urls: ['https://relay.example/v1'],
           current_base_url: 'https://relay.example/v1',
-          api_keys: [{ id: 'primary', key: '${OPENAI_API_KEY}' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: '${OPENAI_API_KEY}' }],
           current_api_key: 'primary',
           api_type: 'responses',
           request_encoding: 'passthrough',
@@ -113,7 +119,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'primary', key: '${OPENAI_API_KEY}' }],
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: '${OPENAI_API_KEY}' }],
       current_api_key: 'primary',
     })));
   });
@@ -125,7 +131,7 @@ describe('ProvidersPage', () => {
           provider: 'openai',
           base_urls: ['https://relay.example/v1'],
           current_base_url: 'https://relay.example/v1',
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
           request_encoding: 'passthrough',
@@ -148,7 +154,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'production', key: 'prov***cret' }],
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'production', key: 'prov***cret' }],
       current_api_key: 'production',
     })));
   });
@@ -160,7 +166,7 @@ describe('ProvidersPage', () => {
           provider: 'openai',
           base_urls: ['https://relay.example/v1'],
           current_base_url: 'https://relay.example/v1',
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           api_type: 'responses',
           request_encoding: 'passthrough',
@@ -186,14 +192,14 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'primary', key: 'replacement-secret' }],
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'replacement-secret' }],
       current_api_key: 'primary',
     })));
   });
 
   it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
-      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', request_encoding: 'identity', proxy: 'http://proxy.example:8080' } },
+      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', request_encoding: 'identity', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       provider_catalog: providerCatalog,
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
@@ -224,7 +230,7 @@ describe('ProvidersPage', () => {
       api_type: 'responses',
       request_encoding: 'identity',
       force_rosetta_compaction: false,
-      api_keys: [{ id: 'primary', key: 'prov***cret' }],
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
       current_api_key: 'primary',
     });
     expect(body).not.toHaveProperty('preset');
@@ -248,7 +254,7 @@ describe('ProvidersPage', () => {
             { base_url: 'https://two.example/v1', current: true, status: 'available' },
             { base_url: 'https://three.example/v1', current: false, status: 'cooling' },
           ],
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
           credential_statuses: [{ id: 'primary', current: true, status: 'available' }],
           api_type: 'responses',
@@ -301,7 +307,7 @@ describe('ProvidersPage', () => {
           request_encoding: 'passthrough',
         base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
         base_url_statuses: [{ base_url: 'https://one.example/v1', current: true, status: 'available' }],
-        api_keys: [{ id: 'first', key: 'firs***cret' }, { id: 'second', key: 'seco***cret' }],
+        api_keys: [{ uuid: FIRST_UUID, id: 'first', key: 'firs***cret' }, { uuid: SECOND_UUID, id: 'second', key: 'seco***cret' }],
         current_api_key: 'first',
         credential_statuses: [{ id: 'first', current: true, status: 'available' }, { id: 'second', current: false, status: 'cooling' }],
       } },
@@ -326,7 +332,7 @@ describe('ProvidersPage', () => {
     expect(dialog.getByRole('textbox', { name: 'Credential key renamed-first' })).toHaveValue('firs***cret');
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
-      api_keys: [{ id: 'second', key: 'seco***cret' }, { id: 'renamed-first', key: 'firs***cret' }],
+      api_keys: [{ uuid: SECOND_UUID, id: 'second', key: 'seco***cret' }, { uuid: FIRST_UUID, id: 'renamed-first', key: 'firs***cret' }],
       current_api_key: 'renamed-first',
     })));
 
@@ -341,7 +347,7 @@ describe('ProvidersPage', () => {
         provider: 'openai', api_type: 'responses',
           request_encoding: 'passthrough',
         base_urls: ['https://one.example/v1'], current_base_url: 'https://one.example/v1',
-        api_keys: [{ id: 'primary', key: 'prim***cret' }], current_api_key: 'primary',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prim***cret' }], current_api_key: 'primary',
       } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
       registered_shims: [], credential_visible: false,
@@ -446,7 +452,7 @@ describe('ProvidersPage', () => {
           current_base_url: 'https://api.deepseek.com',
           api_type: 'chat',
           soft_interrupt: false,
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
         },
       },
@@ -474,8 +480,8 @@ describe('ProvidersPage', () => {
           request_encoding: 'passthrough',
           proxy: 'http://proxy.example:8080',
           api_keys: [
-            { id: 'primary', key: 'prim***cret' },
-            { id: 'fallback', key: 'fall***cret' },
+            { uuid: PRIMARY_UUID, id: 'primary', key: 'prim***cret' },
+            { uuid: FALLBACK_UUID, id: 'fallback', key: 'fall***cret' },
           ],
           current_api_key: 'fallback',
         },
@@ -514,8 +520,8 @@ describe('ProvidersPage', () => {
       base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
       current_base_url: 'https://backup.example/v1',
       api_keys: [
-        { id: 'primary', key: 'fresh-primary-secret' },
-        { id: 'fallback', key: 'fresh-fallback-secret' },
+        { uuid: expect.any(String), id: 'primary', key: 'fresh-primary-secret' },
+        { uuid: expect.any(String), id: 'fallback', key: 'fresh-fallback-secret' },
       ],
       current_api_key: 'fallback',
       proxy: 'http://proxy.example:8080',
@@ -523,6 +529,10 @@ describe('ProvidersPage', () => {
       force_rosetta_compaction: false,
     };
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay-copy', expectedBody));
+    const clonedKeys = (apiMock.put.mock.calls[0][1] as { api_keys: Array<{ uuid: string }> }).api_keys;
+    expect(clonedKeys.map((item) => item.uuid)).not.toContain(PRIMARY_UUID);
+    expect(clonedKeys.map((item) => item.uuid)).not.toContain(FALLBACK_UUID);
+    expect(new Set(clonedKeys.map((item) => item.uuid)).size).toBe(2);
     expect(JSON.stringify(apiMock.put.mock.calls[0][1])).not.toContain('***');
   });
 
@@ -536,7 +546,7 @@ describe('ProvidersPage', () => {
           api_type: 'responses',
           request_encoding: 'passthrough',
           force_rosetta_compaction: true,
-          api_keys: [{ id: 'primary', key: 'prov***cret' }],
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
         },
       },
@@ -584,7 +594,7 @@ describe('ProvidersPage', () => {
           provider: 'openai', api_type: 'responses', request_encoding: 'identity',
           base_urls: ['https://one.example/v1', 'https://current.example/v1'],
           current_base_url: 'https://current.example/v1',
-          api_keys: [{ id: 'first', key: 'firs***cret' }, { id: 'current', key: 'curr***cret' }],
+          api_keys: [{ uuid: FIRST_UUID, id: 'first', key: 'firs***cret' }, { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }],
           current_api_key: 'current', proxy: 'http://proxy.example:8080', allow_redirects: true,
         },
       },
@@ -607,7 +617,7 @@ describe('ProvidersPage', () => {
       {
         provider: 'openai', api_type: 'responses', model: 'manual-model',
         current_base_url: 'https://current.example/v1',
-        api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+        api_keys: [{ uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }], current_api_key: 'current',
         proxy: 'http://proxy.example:8080', allow_redirects: true,
       },
     ));
@@ -626,7 +636,7 @@ describe('ProvidersPage', () => {
         relay: {
           provider: 'openai', api_type: 'responses', request_encoding: 'identity',
           base_urls: ['https://current.example/v1'], current_base_url: 'https://current.example/v1',
-          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+          api_keys: [{ uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }], current_api_key: 'current',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
@@ -656,12 +666,12 @@ describe('ProvidersPage', () => {
         alpha: {
           provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
           base_urls: ['https://same.example/v1'], current_base_url: 'https://same.example/v1',
-          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+          api_keys: [{ uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }], current_api_key: 'current',
         },
         beta: {
           provider: 'openai', api_type: 'responses', request_encoding: 'identity',
           base_urls: ['https://same.example/v1'], current_base_url: 'https://same.example/v1',
-          api_keys: [{ id: 'current', key: 'curr***cret' }], current_api_key: 'current',
+          api_keys: [{ uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }], current_api_key: 'current',
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,

@@ -80,7 +80,13 @@ def _provider(request_encoding: str):
             "request_encoding": request_encoding,
             "base_urls": ["https://current.example/v1"],
             "current_base_url": "https://current.example/v1",
-            "api_keys": [{"id": "current", "key": "secret"}],
+            "api_keys": [
+                {
+                    "uuid": "538c3b90-44be-54e6-905a-2f50417c41c8",
+                    "id": "current",
+                    "key": "secret",
+                }
+            ],
             "current_api_key": "current",
         },
     )

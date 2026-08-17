@@ -28,9 +28,17 @@ def _request(
                 "test-provider": {
                     "provider": "custom",
                     "api_keys": [
-                        {"id": "primary", "key": api_key},
+                        {
+                            "uuid": "dbb39bde-4b7b-585e-9a17-21c5413a7998",
+                            "id": "primary",
+                            "key": api_key,
+                        },
                         *(
-                            {"id": f"additional-{index}", "key": key}
+                            {
+                                "uuid": f"00000000-0000-4000-8000-{index + 1:012d}",
+                                "id": f"additional-{index}",
+                                "key": key,
+                            }
                             for index, key in enumerate(additional_api_keys, start=1)
                         ),
                     ],

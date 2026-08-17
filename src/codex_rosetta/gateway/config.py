@@ -9,6 +9,7 @@ import os
 import re
 import sys
 import tempfile
+import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit
@@ -49,6 +50,20 @@ from .tool_profiles import (
 from .model_profiles import ResolvedModelProfile, resolve_model_profile
 from .web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
 from .transport import ProviderInfo
+
+
+def _validate_provider_credential_uuid(value: Any, *, field: str) -> str:
+    """Return a canonical Provider credential UUID or raise ``ValueError``."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a canonical UUID string")
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a canonical UUID string") from exc
+    if str(parsed) != value:
+        raise ValueError(f"{field} must be a canonical UUID string")
+    return value
+
 
 logger = logging.getLogger("codex-rosetta-gateway")
 
@@ -1114,6 +1129,15 @@ class GatewayConfig:
             )
         if len({item["id"] for item in raw_api_keys}) != len(raw_api_keys):
             raise ValueError(f"config: provider '{name}' api_keys IDs must be unique")
+        credential_uuids = [
+            _validate_provider_credential_uuid(
+                cast(dict[str, Any], item).get("uuid"),
+                field=f"config: provider '{name}' api_keys[{index}].uuid",
+            )
+            for index, item in enumerate(raw_api_keys)
+        ]
+        if len(set(credential_uuids)) != len(credential_uuids):
+            raise ValueError(f"config: provider '{name}' api_keys UUIDs must be unique")
         current_api_key = cfg.get("current_api_key", raw_api_keys[0]["id"])
         if not isinstance(current_api_key, str) or current_api_key not in {
             item["id"] for item in raw_api_keys

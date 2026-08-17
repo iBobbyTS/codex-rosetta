@@ -20,7 +20,13 @@ def _make_app():
             "providers": {
                 "test-provider": {
                     "provider": "custom",
-                    "api_keys": [{"id": "primary", "key": "sk-test"}],
+                    "api_keys": [
+                        {
+                            "uuid": "0e1640a8-6acb-5f92-b9a7-56d7f2093d3b",
+                            "id": "primary",
+                            "key": "sk-test",
+                        }
+                    ],
                     "current_api_key": "primary",
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",

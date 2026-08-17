@@ -18,6 +18,7 @@ from ...config import (
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     _substitute_env_vars,
+    _validate_provider_credential_uuid,
     active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
@@ -651,7 +652,11 @@ async def get_config(request: Any) -> Response:
         masked = dict(cfg)
         if "api_keys" in masked:
             masked["api_keys"] = [
-                {"id": entry["id"], "key": _mask_api_key(entry["key"])}
+                {
+                    "uuid": entry["uuid"],
+                    "id": entry["id"],
+                    "key": _mask_api_key(entry["key"]),
+                }
                 for entry in masked["api_keys"]
             ]
         masked.pop("shim", None)
@@ -901,14 +906,14 @@ def _resolve_draft_provider_api_keys(
     *,
     resolve_saved_credentials: bool = False,
 ) -> list[dict[str, str]]:
-    """Resolve canonical draft credentials, including matching saved masks."""
+    """Resolve canonical draft credentials, matching saved masks by UUID."""
     existing_keys = {
-        entry.get("id"): entry.get("key")
+        entry.get("uuid"): entry.get("key")
         for entry in existing_provider.get("api_keys", [])
         if isinstance(entry, dict)
     }
     resolved_keys = {
-        entry.get("id"): entry.get("key")
+        entry.get("uuid"): entry.get("key")
         for entry in (resolved_provider or {}).get("api_keys", [])
         if isinstance(entry, dict)
     }
@@ -917,6 +922,7 @@ def _resolve_draft_provider_api_keys(
     merged_keys: list[dict[str, str]] = []
     for index, entry in enumerate(api_keys):
         credential_id_value = entry.get("id") if isinstance(entry, dict) else None
+        credential_uuid_value = entry.get("uuid") if isinstance(entry, dict) else None
         key_value = entry.get("key") if isinstance(entry, dict) else None
         if (
             not isinstance(entry, dict)
@@ -924,10 +930,16 @@ def _resolve_draft_provider_api_keys(
             or not credential_id_value.strip()
             or not isinstance(key_value, str)
         ):
-            raise ValueError(f"'api_keys[{index}]' must contain string 'id' and 'key'")
+            raise ValueError(
+                f"'api_keys[{index}]' must contain string 'uuid', 'id', and 'key'"
+            )
+        credential_uuid = _validate_provider_credential_uuid(
+            credential_uuid_value,
+            field=f"'api_keys[{index}].uuid'",
+        )
         credential_id = credential_id_value.strip()
         key = key_value.strip()
-        saved_key = existing_keys.get(credential_id)
+        saved_key = existing_keys.get(credential_uuid)
         uses_saved_credential = False
         if "***" in key:
             if not isinstance(saved_key, str) or _mask_api_key(saved_key) != key:
@@ -944,7 +956,7 @@ def _resolve_draft_provider_api_keys(
             uses_saved_credential = True
         if uses_saved_credential:
             if resolve_saved_credentials:
-                resolved_key = resolved_keys.get(credential_id)
+                resolved_key = resolved_keys.get(credential_uuid)
                 if not isinstance(resolved_key, str) or not resolved_key:
                     raise ValueError(
                         f"'api_keys[{index}].key' saved credential is not available "
@@ -953,7 +965,9 @@ def _resolve_draft_provider_api_keys(
                 key = resolved_key
             else:
                 key = cast(str, saved_key)
-        merged_keys.append({"id": credential_id, "key": key})
+        merged_keys.append({"uuid": credential_uuid, "id": credential_id, "key": key})
+    if len({entry["uuid"] for entry in merged_keys}) != len(merged_keys):
+        raise ValueError("'api_keys[].uuid' values must be unique")
     return merged_keys
 
 

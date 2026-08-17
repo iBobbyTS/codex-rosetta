@@ -126,7 +126,13 @@ def test_unadapted_provider_protocol_uses_standard_responses_behavior():
         "providers": {
             "Qwen": {
                 "provider": "qwen",
-                "api_keys": [{"id": "primary", "key": "sk-test"}],
+                "api_keys": [
+                    {
+                        "uuid": "572f345a-c6f0-5359-852c-d432d9cb5163",
+                        "id": "primary",
+                        "key": "sk-test",
+                    }
+                ],
                 "current_api_key": "primary",
                 "base_urls": ["https://qwen.example.test/v1"],
                 "current_base_url": "https://qwen.example.test/v1",

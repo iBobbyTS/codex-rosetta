@@ -153,7 +153,13 @@ def _make_config(
         "upstream": {
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
-            "api_keys": [{"id": "primary", "key": "upstream-key"}],
+            "api_keys": [
+                {
+                    "uuid": "49d1d5f3-b472-50e5-9a3e-7e63dd5399c8",
+                    "id": "primary",
+                    "key": "upstream-key",
+                }
+            ],
             "current_api_key": "primary",
             "base_urls": [upstream_base_url],
             "current_base_url": upstream_base_url,
@@ -166,7 +172,13 @@ def _make_config(
             "provider": "openai",
             "api_type": "responses",
             "request_encoding": "passthrough",
-            "api_keys": [{"id": "primary", "key": "search-provider-key"}],
+            "api_keys": [
+                {
+                    "uuid": "a51fcad3-0537-5d75-9b60-a7ab5a0387ec",
+                    "id": "primary",
+                    "key": "search-provider-key",
+                }
+            ],
             "current_api_key": "primary",
             "base_urls": ["https://search-provider.example/v1"],
             "current_base_url": "https://search-provider.example/v1",
@@ -201,7 +213,13 @@ def _make_config(
         providers["secondary"] = {
             "provider": provider_by_api_type[api_type],
             "api_type": api_type,
-            "api_keys": [{"id": "primary", "key": "secondary-upstream-key"}],
+            "api_keys": [
+                {
+                    "uuid": "6668b1ec-0964-52fd-bb88-16fbeaeee895",
+                    "id": "primary",
+                    "key": "secondary-upstream-key",
+                }
+            ],
             "current_api_key": "primary",
             "base_urls": ["https://secondary-upstream.example/v1"],
             "current_base_url": "https://secondary-upstream.example/v1",
