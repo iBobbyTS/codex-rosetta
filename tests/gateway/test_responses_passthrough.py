@@ -86,7 +86,16 @@ def test_openai_responses_non_streaming_direct_passthrough():
     transport.send_request = AsyncMock(side_effect=send_request)
     body = {
         "model": "gpt-test",
-        "input": [{"type": "message", "role": "user", "content": "hello"}],
+        "input": [
+            {"type": "message", "role": "user", "content": "hello"},
+            {
+                "type": "function_call",
+                "call_id": "call_collab",
+                "name": "send_message",
+                "arguments": '{"target":"worker","message":"hello"}',
+                "encrypted_function_args": [],
+            },
+        ],
         "tool_choice": {"mode": "auto", "tool_name": ""},
         "parallel_tool_calls": False,
         "phase": "not-a-real-top-level-field-but-preserved",

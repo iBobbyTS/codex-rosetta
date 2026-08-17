@@ -693,16 +693,21 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
                     "sha256": _function_body_sha256(spec_plan, name),
                 }
                 for name in (
+                    "apply_mcp_tool_exposure_policy",
                     "add_collaboration_tools",
+                    "add_core_tool_sources",
                     "add_core_utility_tools",
-                    "add_dynamic_tools",
-                    "add_extension_tools",
                     "add_mcp_resource_tools",
                     "add_shell_tools",
-                    "add_tool_sources",
+                    "append_dynamic_tool_runtimes",
+                    "append_extension_tool_executors",
                     "append_tool_search_executor",
+                    "build_model_visible_specs",
+                    "build_tool_router",
+                    "extension_tool_executors",
+                    "finalize_tool_router",
                     "hosted_model_tool_specs",
-                    "prepend_code_mode_executors",
+                    "register_code_mode_executors",
                 )
             },
             **{
@@ -714,17 +719,21 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
                 }
                 for name, relative_path in extension_sources.items()
             },
-            "CoreToolPlanContext::tool_runtimes": {
+            "CoreToolPlanContext::core_sources": {
                 "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(spec_plan, "add_tool_sources"),
+                "sha256": _function_body_sha256(spec_plan, "add_core_tool_sources"),
             },
-            "add_dynamic_tools::Function": {
+            "append_dynamic_tool_runtimes::Function": {
                 "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(spec_plan, "add_dynamic_tools"),
+                "sha256": _function_body_sha256(
+                    spec_plan, "append_dynamic_tool_runtimes"
+                ),
             },
-            "add_dynamic_tools::Namespace": {
+            "append_dynamic_tool_runtimes::Namespace": {
                 "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(spec_plan, "add_dynamic_tools"),
+                "sha256": _function_body_sha256(
+                    spec_plan, "append_dynamic_tool_runtimes"
+                ),
             },
         },
         "transport_constants": _string_constants(

@@ -1,4 +1,83 @@
-# Codex 0.145.0 Upgrade Review
+# Codex 0.147.0 Upgrade Review
+
+Date: 2026-08-17
+
+## Analysis status
+
+- Review mode: **full inventory, source-first**, explicitly selected by the
+  developer.
+- Target: annotated tag `rust-v0.147.0`, peeled commit
+  `be6e8eac029b183056b7e4402879f15d2c85f61b`. The previous reviewed source is
+  `rust-v0.145.0` at `25af12f7e61572b0bc18ddb1008be543b91519b0`.
+- The bounded source range contains 565 commits and 2,025 changed paths.
+- The source-contract extractor now follows the current ToolRegistry owners:
+  core sources, MCP exposure, extension contributors, dynamic runtimes,
+  deferred search, Code Mode registration, and final model-visible assembly.
+  It no longer anchors the removed `add_dynamic_tools`, `add_extension_tools`,
+  `add_tool_sources`, or `prepend_code_mode_executors` functions.
+- The checked-in source snapshot is refreshed only to make later source drift
+  detectable. It is **not** a compatibility or release approval.
+- No live-agent test was run in this section. The package remains
+  `0.144.0.r0`; the complete live inventory is mandatory and no failed or
+  unverified mandatory cell may be waived.
+
+## Full CP classification
+
+Every current point is classified below. “Possibly unchanged” means the
+source inventory found no implemented Rosetta delta but still requires the
+listed real-client gate. Later implementation sections own catalog, Provider,
+Images, compaction, and release changes; this section owns only the exact
+source inventory and CP-26's already-existing conversion behavior.
+
+| ID and compatibility point | Classification | 0.147 source finding and current disposition |
+| --- | --- | --- |
+| `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint and core header constants remain stable; new image-turn identity and Provider capabilities are owned by CP-03/21. Live ingress/auth/error capture remains mandatory. |
+| `CP-02 — Responses transparent handling` | Changed | Direct Responses must transparently retain new request metadata, usage fields, and `encrypted_function_args`; focused direct passthrough coverage includes the marker. |
+| `CP-03 — Codex Search and Images endpoints` | Changed | Images adds turn identity and transparent-background result metadata; standalone Search eligibility changes. S03 owns runtime/Provider work and the live route matrix. |
+| `CP-04 — Request and window identity` | Changed | `parent_turn_id` and Code Mode tool-name metadata join the turn metadata contract; converted ownership must remain explicit. |
+| `CP-05 — Responses→Chat bridge` | Changed | The new collaboration marker is intentionally discarded on Chat conversion; new Responses-only metadata must not leak or be fabricated. |
+| `CP-06 — Responses Lite / additional_tools` | Changed | Function/freeform/Namespace assembly moved under the centralized registry and Lite projection must be requalified. |
+| `CP-07 — Codex model catalog` | Changed | `base_instructions` is removed; Apps/Plugin instruction flags, `model_specialty`, collaboration messages, and token-budget messages are added. S02 owns asset synchronization. |
+| `CP-08 — custom/freeform tool` | Changed | Deferred custom/freeform assembly and Code Mode registration moved to ToolRegistry owners. |
+| `CP-09 — Code tool localization` | Changed | Code Mode tool-name mappings are emitted in request metadata and registration/exposure semantics changed. |
+| `CP-10 — Tool history consistency` | Changed | CP-26 requires marker variants to have one Chat object identity; focused canonical-template tests prove current behavior without changing persistence. |
+| `CP-11 — Deferred tool discovery` | Changed | `CodeModeOnly` and `DeferredModelOnly`, default Function namespaces, collisions, and deferred runtime selection change the discovery surface. |
+| `CP-12 — Codex tool usage tips` | Possibly unchanged | Static text hashes and runtime injection semantics require later catalog synchronization and full live tool use; no S01 runtime change is claimed. |
+| `CP-13 — Skill delivery surfaces` | Changed | Apps/Plugins instruction gating and extension contributor assembly changed; filesystem and orchestrator Skill paths require complete live requalification. |
+| `CP-14 — Live-agent runtime authentication` | Possibly unchanged | No new authentication owner was found; the exact 0.147 client and complete dual-auth inventory remain mandatory. |
+| `CP-15 — Web search bridge` | Changed | Custom Providers may opt into standalone `/alpha/search`; S03 enables this only for the managed Rosetta local Provider. |
+| `CP-16 — Self-hosted Bing search` | High-confidence unchanged | No source change alters Rosetta's self-hosted executor contract, but the standing real sidecar gates remain required. |
+| `CP-17 — Stream lifecycle` | Changed | Completed usage gains `codex_rollout_budget_units`; direct transport preserves it and converted paths must never fabricate it. |
+| `CP-18 — Message phase` | Possibly unchanged | Phase enum and current bridge ownership show no mapped semantic delta; full UI/tool lifecycle evidence remains required. |
+| `CP-19 — Reasoning` | Possibly unchanged | Reasoning field names remain stable; model-catalog and compaction changes still require the full reasoning/continuation matrix. |
+| `CP-20 — Context compaction resilience` | Changed | Provider compaction capability becomes unsupported/V1/V2 and the fallback implementation changed; S03/S04 own deterministic and live requalification. |
+| `CP-21 — GPT relay provider identity` | Changed | Provider capabilities add standalone search/external web access and remote compaction selection; identity must not infer unsupported endpoints. |
+| `CP-22 — Model-group tool profiles` | Changed | New catalog capability fields and ToolExposure variants affect the model-visible surface; Tool Profile/catalog data remain the sole declaration owner. |
+| `CP-23 — Static tool catalog` | Changed | Tool registrations now flow through ToolRegistry and extension contributors; S02 must synchronize the exact static/source inventory rather than copy old registration names. |
+| `CP-24 — Late instruction message cache compatibility` | Possibly unchanged | No new late-message role transform was found; exact interrupt/steer/fork cache evidence remains mandatory. |
+| `CP-25 — Window-scoped Chat tool surface stability` | Changed | New exposure states, namespaces, and Code Mode registration alter potential ordered tool surfaces; S02/S04 must prove stable window projection. |
+| `CP-26 — Collaboration argument confidentiality and delivery mode` | Changed | Direct Responses preserves the opaque marker. Converted Chat drops missing/null/empty/non-empty variants before request serialization and replay identity, never synthesizes it on return, and deliberately retains encrypted Multi-Agent V2 delivery. |
+
+## CP-26 deterministic evidence
+
+- Four marker variants produce byte-identical Chat request bodies.
+- The same variants produce one canonical tool-history source template.
+- A Chat tool call reconstructed as Responses does not gain the marker.
+- Direct Responses retains `encrypted_function_args: []` without entering IR.
+- No production converter or persistence mechanism was added: the existing
+  field selection already implements the approved stable-discard policy.
+
+## Deferred mandatory evidence
+
+S01 performs no live testing. Before approval, later sections must run the
+complete live-agent inventory, including native and converted Multi-Agent V2,
+standalone `web.run`, Apps/Plugins, Images, streaming usage, tool discovery,
+interrupt/fork, compaction, model switching, and original-model cells. A
+fallback pass never replaces an original-model failure.
+
+---
+
+# Codex 0.145.0 Upgrade Review (historical)
 
 > Daily-development addendum (2026-08-01): catalog schema v7 inventories exact
 > Codex source registrations and dynamic families. CP-11 now uses exact

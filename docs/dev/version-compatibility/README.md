@@ -23,7 +23,23 @@ Compatibility cannot be declared just because the version numbers are the same.
 
 Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form. Manual GitHub Release tags retain the repository's historical `v` prefix, so source `0.144.0.r0` maps to tag `v0.144.0.r0`.
 
-## Current 0.145.0 adaptation baseline
+## Current 0.147.0 analysis baseline
+
+Inspection date: 2026-08-17
+
+| Project | Current Value | Description |
+| --- | --- | --- |
+| Target Codex source | `rust-v0.147.0` | Exact annotated release tag in `../openai-codex-src` |
+| Peeled source commit | `be6e8eac029b183056b7e4402879f15d2c85f61b` | Source identity used by the reviewed contract snapshot |
+| Review mode | Full inventory | Explicit developer decision; CP-01 through CP-26 are classified in the upgrade report |
+| Codex-Rosetta package version | `0.144.0.r0` | Intentionally unchanged until every deterministic and live gate passes |
+
+The source extractor and baseline now understand the 0.147 ToolRegistry
+assembly path. This records reviewed source facts only. It does not synchronize
+the packaged model/tool catalogs, approve runtime compatibility, or replace the
+mandatory complete live-agent inventory.
+
+## Previous 0.145.0 adaptation baseline
 
 Inspection date: 2026-07-23
 
@@ -55,11 +71,11 @@ the current formal source and status are recorded separately above.
 
 | Check | Results |
 | --- | --- |
-| Codex source contract check | Baseline refreshed to exact formal commit `25af12f7…`; the extractor passes after review. Formal semantic changes are recorded in the upgrade report rather than hidden by the refreshed baseline |
-| Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 25 points, including late-instruction cache compatibility and window-scoped Chat tool stability |
+| Codex source contract check | Baseline refreshed to exact 0.147.0 peeled commit `be6e8eac…`; the extractor passes after review. This is a source binding, not release approval |
+| Code-to-document reverse map | Rebuilt from current Rosetta code and deterministic tests in [`rosetta-source-map.md`](rosetta-source-map.md); the stable ledger now contains 26 points, including collaboration argument confidentiality/delivery |
 | CP-15 daily-development sync | The existing Web search bridge point now owns the canonical Provider rows, a persisted sticky current row, circular one-pass failover after Provider search failure, process-local one-hour cooldown, persisted exact-zero quota exclusion with hourly on-demand recheck, manual Admin selection/status, the fixed Responses search-model allowlist, single-Provider/single-Key routing, and the DeepSeek official Responses `web_search` row (`https://api.deepseek.com`, fixed `deepseek-v4-flash`, q-only/single-query). Unsupported sub-tools do not switch Providers. Per-window projection remains locked and stale invocations fail as currently unavailable. This documentation update does not advance the Codex or Rosetta version and does not replace live search evidence |
-| Ledger integrity | Compatibility overview and test matrix contain the same 25 names exactly once |
-| `0.142.0` … `0.145.0` source coverage | CP-01…CP-23 remain classified in the formal report; CP-24 and CP-25 are later daily-development additions |
+| Ledger integrity | Compatibility overview and test matrix contain the same 26 names exactly once |
+| `0.145.0` … `0.147.0` source coverage | CP-01…CP-26 are classified in the current upgrade report; CP-26 is the new confidentiality/cache boundary |
 | Runtime adaptation and real Codex/API | Catalog schema v7, its complete source-registration inventory, and the encrypted window-scoped Chat tool-surface coordinator are implemented. This does not approve Codex 0.145.0 or advance the package version |
 
 ## Files

@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 
 from codex_rosetta.gateway.tool_history_translation import (
+    canonical_tool_history_template,
     ToolHistoryObjectKind,
     ToolHistorySnapshot,
 )
+from codex_rosetta.pipeline import ConversionPipeline
 
 
 def _history_body(call_id: str) -> dict:
@@ -99,3 +101,33 @@ def test_snapshot_collects_only_missed_calls_changed_by_existing_translation():
     ]
     assert candidates[0].target_template["function"]["name"] == "Bash"
     assert candidates[1].source_template == candidates[1].target_template
+
+
+def test_encrypted_function_args_variants_have_identical_chat_cache_identity():
+    """Discarding the Responses-only marker is neutral to Chat replay identity."""
+    templates: list[bytes] = []
+    bodies: list[bytes] = []
+    for marker in ("missing", None, [], ["message"]):
+        call = {
+            "type": "function_call",
+            "id": "fc_collab",
+            "call_id": "call_collab",
+            "namespace": "collaboration",
+            "name": "send_message",
+            "arguments": '{"target":"worker","message":"hello"}',
+        }
+        if marker != "missing":
+            call["encrypted_function_args"] = marker
+        body = ConversionPipeline("openai_responses", "openai_chat").convert_request(
+            {"model": "deepseek-v4-flash", "input": [call]}
+        )
+        snapshot = ToolHistorySnapshot.capture(body)
+        templates.append(
+            canonical_tool_history_template(snapshot.objects[0].source_template)
+        )
+        bodies.append(
+            json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+
+    assert len(set(templates)) == 1
+    assert len(set(bodies)) == 1

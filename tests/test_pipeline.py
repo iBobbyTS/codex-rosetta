@@ -562,6 +562,101 @@ class TestConversionPipeline:
             },
         ]
 
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            pytest.param(None, id="null"),
+            [],
+            ["message"],
+            pytest.param("missing", id="missing"),
+        ],
+    )
+    def test_responses_chat_discards_encrypted_function_args(self, marker):
+        """OpenAI-only collaboration metadata never changes converted Chat."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        function_call = {
+            "type": "function_call",
+            "id": "fc_collab",
+            "call_id": "call_collab",
+            "namespace": "collaboration",
+            "name": "send_message",
+            "arguments": '{"target":"worker","message":"hello"}',
+        }
+        if marker != "missing":
+            function_call["encrypted_function_args"] = marker
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        target = pipeline.convert_request(
+            {
+                "model": "deepseek-v4-flash",
+                "input": [function_call],
+            }
+        )
+
+        assert target == {
+            "model": "deepseek-v4-flash",
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_collab",
+                            "type": "function",
+                            "function": {
+                                "name": "send_message",
+                                "arguments": '{"target": "worker", "message": "hello"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_collab",
+                    "content": "[No output available yet]",
+                },
+            ],
+        }
+
+    def test_chat_tool_call_response_does_not_synthesize_encrypted_function_args(self):
+        """Converted Responses output retains the pre-0.147 encrypted path."""
+        from codex_rosetta.pipeline import ConversionPipeline
+
+        pipeline = ConversionPipeline("openai_responses", "openai_chat")
+        pipeline.convert_request({"model": "deepseek-v4-flash", "input": "delegate"})
+        response = pipeline.convert_response(
+            {
+                "id": "chatcmpl_1",
+                "model": "deepseek-v4-flash",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "tool_calls",
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_collab",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "send_message",
+                                        "arguments": '{"target":"worker","message":"hello"}',
+                                    },
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+
+        call = next(
+            item for item in response["output"] if item["type"] == "function_call"
+        )
+        assert "encrypted_function_args" not in call
+
     def test_responses_reasoning_context_is_omitted_for_chat_target(self):
         """Responses-only reasoning context does not leak into Chat requests."""
         from codex_rosetta.pipeline import ConversionPipeline

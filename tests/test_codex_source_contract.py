@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import runpy
 from pathlib import Path
 
@@ -14,6 +15,9 @@ BASELINE_PATH = (
     REPO_ROOT / "docs" / "dev" / "version-compatibility" / "codex-source-contract.json"
 )
 SCRIPT_PATH = REPO_ROOT / "scripts" / "check_codex_compatibility.py"
+COMPATIBILITY_POINTS_PATH = (
+    REPO_ROOT / "docs" / "dev" / "version-compatibility" / "compatibility-points.md"
+)
 SCRIPT = runpy.run_path(str(SCRIPT_PATH))
 
 _enum_variants = SCRIPT["_enum_variants"]
@@ -26,6 +30,52 @@ compare_snapshots = SCRIPT["compare_snapshots"]
 classify_snapshots = SCRIPT["classify_snapshots"]
 render_classification = SCRIPT["render_classification"]
 snapshot_json = SCRIPT["snapshot_json"]
+
+
+def test_tool_registration_inventory_uses_current_registry_owners():
+    """The reviewed snapshot must follow the 0.147 ToolRegistry assembly path."""
+    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+    registrations = baseline["contract"]["tool_registration_sites"]
+
+    assert {
+        "build_tool_router",
+        "add_core_tool_sources",
+        "append_dynamic_tool_runtimes",
+        "append_extension_tool_executors",
+        "register_code_mode_executors",
+        "finalize_tool_router",
+    }.issubset(registrations)
+    assert {
+        "add_dynamic_tools",
+        "add_extension_tools",
+        "add_tool_sources",
+        "prepend_code_mode_executors",
+    }.isdisjoint(registrations)
+
+
+def test_compatibility_ledger_has_one_registry_overview_and_matrix_row_per_point():
+    """CP-01 through CP-26 must share one canonical name in all three tables."""
+    text = COMPATIBILITY_POINTS_PATH.read_text(encoding="utf-8")
+    registry_text, remainder = text.split("## Current upgrade status", 1)
+    overview_text, remainder = remainder.split("## Compatibility point test matrix", 1)
+    matrix_text = remainder.split("## 1. Request, header and session identity", 1)[0]
+
+    registry = re.findall(
+        r"^\| `(?P<id>CP-\d{2})` \| (?P<name>[^|]+?) \|$", registry_text, re.MULTILINE
+    )
+    overview_names = re.findall(
+        r"^\| (?P<name>[^|]+?) \|", overview_text, re.MULTILINE
+    )[2:]
+    matrix_names = re.findall(r"^\| (?P<name>[^|]+?) \|", matrix_text, re.MULTILINE)[2:]
+
+    assert [point_id for point_id, _ in registry] == [
+        f"CP-{index:02d}" for index in range(1, 27)
+    ]
+    canonical_names = [name for _, name in registry]
+    assert len(overview_names) == len(canonical_names)
+    assert len(matrix_names) == len(canonical_names)
+    assert sorted(overview_names) == sorted(canonical_names)
+    assert sorted(matrix_names) == sorted(canonical_names)
 
 
 def test_configured_responses_search_models_match_reviewed_codex_contract():
