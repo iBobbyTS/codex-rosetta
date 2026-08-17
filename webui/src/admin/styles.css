@@ -248,6 +248,12 @@ code.copyable:hover { background: var(--bg-hover); }
 .provider-key-input .key-btn { flex-shrink:0; }
 .modal-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 8px; padding: 20px 24px 24px; }
 .model-group-modal-shell { display:flex;align-items:flex-start;gap:12px;max-width:calc(100vw - 32px); }
+.model-group-provider-field { position:relative; }
+.model-group-provider-field .suu-dropdown { position:static; }
+.model-group-provider-field .suu-dropdown__menu { width:max-content;min-width:0;max-width:100%; }
+.model-group-provider-field .suu-dropdown__option { white-space:normal;overflow-wrap:anywhere; }
+.model-group-modal:has(.model-group-provider-field .suu-dropdown__menu),
+.model-group-modal:has(.model-group-provider-field .suu-dropdown__menu) .modal-body { overflow:visible; }
 .model-info-modal { display:none;width:min(820px,calc(100vw - 560px)); }
 .model-info-modal.open { display:flex; }
 .model-info-field-modified { border-color:var(--orange)!important;box-shadow:0 0 0 1px var(--orange); }

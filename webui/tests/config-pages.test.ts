@@ -806,7 +806,10 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    await fireEvent.click(screen.getByLabelText('Provider'));
+    const providerSelect = screen.getByLabelText('Provider');
+    expect(providerSelect.closest('.model-group-modal')).toBeInTheDocument();
+    expect(providerSelect.closest('.model-group-provider-field')).toBeInTheDocument();
+    await fireEvent.click(providerSelect);
     expect(document.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
   });
 
