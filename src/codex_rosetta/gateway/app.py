@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -31,7 +32,13 @@ from .auth import (
     api_key_principal_var,
     create_auth_hook,
 )
-from .config import GatewayConfig, load_config_raw, resolve_codex_home, write_config
+from .config import (
+    GatewayConfig,
+    ModelGroupConfigurationUnavailable,
+    load_config_raw,
+    resolve_codex_home,
+    write_config,
+)
 from .codex_auxiliary import handle_codex_auxiliary as _handle_codex_auxiliary
 from .codex_search_references import CodexSearchReferenceStore
 from .cors import apply_cors_headers, is_admin_origin_allowed, is_admin_path
@@ -97,38 +104,6 @@ _INBOUND_REQUEST_LINE_TIMEOUT_SECONDS = 15.0
 _INBOUND_HEADER_TIMEOUT_SECONDS = 30.0
 _INBOUND_BODY_TIMEOUT_SECONDS = 120.0
 _INBOUND_MAX_CONCURRENT_REQUEST_PARSES = 64
-
-
-async def _rotate_model_group_after_upstream_failure(
-    request: Any,
-    config: GatewayConfig,
-    model: str,
-    provider_name: str,
-) -> bool:
-    """Rotate one group ring after a final upstream failure.
-
-    The existing coordinator supplies generation checks, one leader, waiter
-    wake-up, and cancellation-safe gate ownership.
-    """
-    group_name = config.model_group_names_by_model.get(model)
-    ring = config.model_group_rings.get(group_name) if group_name else None
-    if ring is None or provider_name != ring.current:
-        return False
-    observed, _generation = ring.observe()
-    leader, _waited = await ring.claim(observed)
-    if not leader:
-        return ring.current != provider_name
-    try:
-        ring.mark_failed(provider_name)
-        next_provider = next(
-            (item for item in ring.available() if item != provider_name), None
-        )
-        if next_provider is None:
-            return False
-        await ring.select(next_provider)
-        return True
-    finally:
-        await ring.publish()
 
 
 class GatewayApp(App):
@@ -714,28 +689,23 @@ async def _proxy_handler(  # noqa: C901
     source_provider: ProviderType,
     model_override: str | None = None,
     force_stream: bool = False,
-    _provider_failover_attempts: int = 0,
 ) -> Response | StreamingResponse:
-    """Shared handler for all proxy endpoints."""
+    """Handle one ingress and bounded model-group provider attempt lifecycle."""
     config: GatewayConfig = request.app.gateway_config
 
-    # Reject untrusted correlation metadata before it can reach logs, traces,
-    # persistence, state, response headers, or the upstream transport.
     request_id = _proxy_request_id_or_error(request, source_provider)
     if isinstance(request_id, Response):
         return request_id
-
     parsed_body = _proxy_body_or_error(request, source_provider, request_id)
     if isinstance(parsed_body, Response):
         return parsed_body
-    inbound_wire_request, body = parsed_body
+    inbound_wire_request, parsed_request_body = parsed_body
 
-    # Determine model
     try:
         model = (
             validate_model_id(model_override)
             if model_override
-            else extract_model(source_provider, body)
+            else extract_model(source_provider, parsed_request_body)
         )
         codex_window_id = normalize_codex_window_id(
             request.headers.get("x-codex-window-id")
@@ -750,198 +720,254 @@ async def _proxy_handler(  # noqa: C901
         )
         resp.headers["x-request-id"] = request_id
         return resp
+    if model_override and "model" not in parsed_request_body:
+        parsed_request_body["model"] = model_override
+    request_body = copy.deepcopy(parsed_request_body)
 
-    # If model came from URL (Google), inject it into body for the converter
-    if model_override and "model" not in body:
-        body["model"] = model_override
-
-    # Resolve target provider via unified routing
-    try:
-        route, provider_info = config.resolve(source_provider, model)
-    except KeyError:
-        configured = ", ".join(sorted(config.models.keys()))
-        resp = error_response_for_source(
-            source_provider,
-            404,
-            f"Unknown model: '{model}'. Configured models: {configured}",
-        )
-        resp.headers["x-request-id"] = request_id
-        return resp
-
-    route = await _resolve_request_tool_runtime_capabilities(
-        request.app,
-        config,
-        route,
-        body,
-    )
-
-    body, late_developer_rewritten_items = rewrite_late_codex_developer_messages(
-        body,
-        enabled=provider_info.soft_interrupt,
-        source_provider=source_provider,
-        target_provider=route.target_provider,
-    )
-
-    # Model aliases are applied before converter/upstream use while logging
-    # preserves both public and upstream identities.
-    model_label, stats_model = _apply_route_model_alias(
-        body, model, route.upstream_model
-    )
-
-    # Determine streaming
-    is_stream = force_stream or detect_stream_request(source_provider, body)
     principal_id = api_key_principal_var.get()
-    if principal_id is None:
-        resp = error_response_for_source(
-            source_provider, 401, "Authenticated principal is unavailable"
-        )
-        resp.headers["x-request-id"] = request_id
-        return resp
-    state_scope = GatewayStateScope.for_request(
-        principal_id=principal_id,
-        provider_name=route.provider_name,
-        model=model,
-        window_id=codex_window_id,
+    group_name = getattr(config, "model_group_names_by_model", {}).get(model)
+    ring = (
+        getattr(config, "model_group_rings", {}).get(group_name) if group_name else None
     )
-
-    record_request_stat(stats_model)
-    logger.info(
-        "[%s] %s -> %s | model=%s stream=%s",
-        request_id,
-        source_provider,
-        route.target_provider,
-        model_label,
-        is_stream,
-    )
-
+    is_stream = force_stream or detect_stream_request(source_provider, request_body)
     store: ProviderMetadataStore = request.app.metadata_store
     codex_tool_store: CodexToolLocalizationStore = request.app.codex_tool_store
+    request_log = getattr(request.app, "request_log", None)
+    persistence = getattr(request.app, "persistence", None)
 
-    # Direct Responses uses a denylist so future end-to-end Codex capability
-    # headers survive independently of body/tool adaptation. Conversion paths
-    # retain their explicit, minimal header set.
-    extra_headers = (
-        build_direct_responses_headers(
-            request.headers,
-            request_id,
-            preserve_wire=False,
-        )
-        if is_responses_passthrough(route)
-        else build_upstream_extra_headers(request, request_id)
-    )
-
-    # --- Metrics instrumentation ---
     _mark_stream_active(request, is_stream=is_stream)
-
     t0 = time.monotonic()
     status_code = 500
     error_detail: str | None = None
     profile: dict[str, Any] | None = None
-    request_log = getattr(request.app, "request_log", None)
-
-    persistence = getattr(request.app, "persistence", None)
     deep_profiler = _try_start_profiler(request.app)
-    pre_entry_id: str | None = None
+    pre_entry_id = uuid.uuid4().hex if is_stream else None
     stream_telemetry_deferred = False
     request_state_cleanup_deferred = False
+    state_scope: GatewayStateScope | None = None
+    route: ResolvedRoute | None = None
+    failover_leader = False
+    request_stat_recorded = False
+    body = copy.deepcopy(request_body)
 
     try:
-        if is_stream:
-            # For streaming, we pre-generate the entry_id so the stream
-            # generator can write back stream-phase profile after completion.
-            pre_entry_id = uuid.uuid4().hex
+        while True:
+            observation: tuple[str, int] | None = None
+            if ring is not None:
+                if failover_leader:
+                    observation = ring.observe()
+                else:
+                    observation, _waited, inherited_leader = await ring.await_attempt()
+                    failover_leader = inherited_leader
 
-            response, profile = await handle_streaming(
-                route,
-                provider_info,
-                body,
-                transport=request.app.transport,
-                metadata_store=store,
-                codex_tool_store=codex_tool_store,
-                chat_tool_surface_coordinator=getattr(
-                    request.app, "chat_tool_surface_coordinator", None
-                ),
-                extra_headers=extra_headers,
-                entry_id=pre_entry_id,
-                request_log=request_log,
-                persistence=persistence,
-                state_scope=state_scope,
-                codex_window_id=codex_window_id,
-                stream_trace_state=getattr(request.app, "stream_trace_state", None),
-                upstream_error_log_state=getattr(
-                    request.app, "upstream_error_log_state", None
-                ),
-                body_log_state=getattr(request.app, "body_log_state", None),
-                image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
-                inbound_wire_request=inbound_wire_request,
-            )
-        else:
-            pre_entry_id = None
-            response, profile = await handle_non_streaming(
-                route,
-                provider_info,
-                body,
-                transport=request.app.transport,
-                metadata_store=store,
-                codex_tool_store=codex_tool_store,
-                chat_tool_surface_coordinator=getattr(
-                    request.app, "chat_tool_surface_coordinator", None
-                ),
-                extra_headers=extra_headers,
-                persistence=persistence,
-                state_scope=state_scope,
-                codex_window_id=codex_window_id,
-                upstream_error_log_state=getattr(
-                    request.app, "upstream_error_log_state", None
-                ),
-                body_log_state=getattr(request.app, "body_log_state", None),
-                image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
-            )
-        if (
-            profile.get("upstream_provider_failure")
-            and not isinstance(response, StreamingResponse)
-            and _provider_failover_attempts < 32
-        ):
-            if await _rotate_model_group_after_upstream_failure(
-                request, config, model, route.provider_name
-            ):
-                return await _proxy_handler(
-                    request,
-                    source_provider=source_provider,
-                    model_override=model_override,
-                    force_stream=force_stream,
-                    _provider_failover_attempts=_provider_failover_attempts + 1,
+            try:
+                route, provider_info = config.resolve(source_provider, model)
+            except ModelGroupConfigurationUnavailable as exc:
+                status_code = 503
+                error_detail = str(exc)
+                response = error_response_for_source(
+                    source_provider,
+                    503,
+                    str(exc),
+                    origin=DownstreamErrorOrigin.BLOCKED,
                 )
-        if late_developer_rewritten_items:
-            profile["late_developer_rewritten_items"] = late_developer_rewritten_items
-        status_code = response.status_code
-        error_detail = _response_error_detail(response)
-        if isinstance(response, StreamingResponse):
-            assert is_stream
-            assert pre_entry_id is not None
-            _instrument_stream_response(
-                request,
-                response,
-                entry_id=pre_entry_id,
-                request_id=request_id,
-                model=model,
-                source_provider=source_provider,
-                target_provider=route.target_provider,
+                response.headers["x-request-id"] = request_id
+                return response
+            except KeyError:
+                configured = ", ".join(sorted(config.models.keys()))
+                response = error_response_for_source(
+                    source_provider,
+                    404,
+                    f"Unknown model: '{model}'. Configured models: {configured}",
+                )
+                response.headers["x-request-id"] = request_id
+                return response
+
+            if principal_id is None:
+                response = error_response_for_source(
+                    source_provider, 401, "Authenticated principal is unavailable"
+                )
+                response.headers["x-request-id"] = request_id
+                return response
+
+            body = copy.deepcopy(request_body)
+            route = await _resolve_request_tool_runtime_capabilities(
+                request.app,
+                config,
+                route,
+                body,
+            )
+            body, late_developer_rewritten_items = (
+                rewrite_late_codex_developer_messages(
+                    body,
+                    enabled=provider_info.soft_interrupt,
+                    source_provider=source_provider,
+                    target_provider=route.target_provider,
+                )
+            )
+            model_label, stats_model = _apply_route_model_alias(
+                body, model, route.upstream_model
+            )
+            state_scope = GatewayStateScope.for_request(
+                principal_id=principal_id,
                 provider_name=route.provider_name,
-                profile=profile,
-                profiler=deep_profiler,
-                started_at=t0,
-                on_finish=lambda: _clear_request_local_state(
-                    state_scope,
+                model=model,
+                window_id=codex_window_id,
+            )
+            if not request_stat_recorded:
+                record_request_stat(stats_model)
+                logger.info(
+                    "[%s] %s -> %s | model=%s stream=%s",
+                    request_id,
+                    source_provider,
+                    route.target_provider,
+                    model_label,
+                    is_stream,
+                )
+                request_stat_recorded = True
+
+            extra_headers = (
+                build_direct_responses_headers(
+                    request.headers,
+                    request_id,
+                    preserve_wire=False,
+                )
+                if is_responses_passthrough(route)
+                else build_upstream_extra_headers(request, request_id)
+            )
+            if is_stream:
+                response, profile = await handle_streaming(
+                    route,
+                    provider_info,
+                    body,
+                    transport=request.app.transport,
                     metadata_store=store,
                     codex_tool_store=codex_tool_store,
-                ),
+                    chat_tool_surface_coordinator=getattr(
+                        request.app, "chat_tool_surface_coordinator", None
+                    ),
+                    extra_headers=extra_headers,
+                    entry_id=pre_entry_id,
+                    request_log=request_log,
+                    persistence=persistence,
+                    state_scope=state_scope,
+                    codex_window_id=codex_window_id,
+                    stream_trace_state=getattr(request.app, "stream_trace_state", None),
+                    upstream_error_log_state=getattr(
+                        request.app, "upstream_error_log_state", None
+                    ),
+                    body_log_state=getattr(request.app, "body_log_state", None),
+                    image_fetch_workers=getattr(
+                        request.app, "image_fetch_workers", None
+                    ),
+                    inbound_wire_request=inbound_wire_request,
+                    model_group_failover=ring is not None,
+                )
+            else:
+                response, profile = await handle_non_streaming(
+                    route,
+                    provider_info,
+                    body,
+                    transport=request.app.transport,
+                    metadata_store=store,
+                    codex_tool_store=codex_tool_store,
+                    chat_tool_surface_coordinator=getattr(
+                        request.app, "chat_tool_surface_coordinator", None
+                    ),
+                    extra_headers=extra_headers,
+                    persistence=persistence,
+                    state_scope=state_scope,
+                    codex_window_id=codex_window_id,
+                    upstream_error_log_state=getattr(
+                        request.app, "upstream_error_log_state", None
+                    ),
+                    body_log_state=getattr(request.app, "body_log_state", None),
+                    image_fetch_workers=getattr(
+                        request.app, "image_fetch_workers", None
+                    ),
+                    model_group_failover=ring is not None,
+                )
+
+            provider_failed = bool(
+                ring is not None
+                and profile.get("upstream_provider_failure")
+                and not isinstance(response, StreamingResponse)
             )
-            stream_telemetry_deferred = True
-            request_state_cleanup_deferred = True
-        response.headers["x-request-id"] = request_id
-        logger.info("[%s] response status=%s", request_id, status_code)
-        return response
+            if provider_failed:
+                assert ring is not None
+                assert observation is not None
+                if not failover_leader:
+                    failover_leader, _waited = await ring.claim_observation(observation)
+                    if not failover_leader:
+                        _clear_request_local_state(
+                            state_scope,
+                            metadata_store=store,
+                            codex_tool_store=codex_tool_store,
+                        )
+                        state_scope = None
+                        continue
+
+                failed_provider = route.provider_name
+                next_provider = next(
+                    (
+                        candidate
+                        for candidate in ring.available()
+                        if candidate != failed_provider
+                    ),
+                    None,
+                )
+                if next_provider is not None:
+                    # Persistence succeeds before either runtime current or
+                    # cooldown state changes, so recorder failure cannot split
+                    # the two authoritative views.
+                    await ring.select(next_provider)
+                    ring.mark_failed(failed_provider)
+                    _clear_request_local_state(
+                        state_scope,
+                        metadata_store=store,
+                        codex_tool_store=codex_tool_store,
+                    )
+                    state_scope = None
+                    continue
+                ring.mark_failed(failed_provider)
+                await ring.publish()
+                failover_leader = False
+            elif failover_leader:
+                assert ring is not None
+                await ring.publish()
+                failover_leader = False
+
+            if late_developer_rewritten_items:
+                profile["late_developer_rewritten_items"] = (
+                    late_developer_rewritten_items
+                )
+            status_code = response.status_code
+            error_detail = _response_error_detail(response)
+            if isinstance(response, StreamingResponse):
+                assert pre_entry_id is not None
+                _instrument_stream_response(
+                    request,
+                    response,
+                    entry_id=pre_entry_id,
+                    request_id=request_id,
+                    model=model,
+                    source_provider=source_provider,
+                    target_provider=route.target_provider,
+                    provider_name=route.provider_name,
+                    profile=profile,
+                    profiler=deep_profiler,
+                    started_at=t0,
+                    on_finish=lambda: _clear_request_local_state(
+                        state_scope,
+                        metadata_store=store,
+                        codex_tool_store=codex_tool_store,
+                    ),
+                )
+                stream_telemetry_deferred = True
+                request_state_cleanup_deferred = True
+            response.headers["x-request-id"] = request_id
+            logger.info("[%s] response status=%s", request_id, status_code)
+            return response
     except ProviderMetadataCapacityError as exc:
         error_detail = str(exc)
         status_code = 413
@@ -966,8 +992,10 @@ async def _proxy_handler(  # noqa: C901
             response_text=error_detail,
             model=model,
             source_provider=source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
+            target_provider=route.target_provider
+            if route is not None
+            else source_provider,
+            provider_name=route.provider_name if route is not None else "",
             status_code=500,
             error_phase="conversion",
             response_redaction="protocol_fields",
@@ -978,31 +1006,36 @@ async def _proxy_handler(  # noqa: C901
         resp.headers["x-request-id"] = request_id
         return resp
     finally:
+        if failover_leader and ring is not None:
+            await ring.handoff()
         duration_ms = (time.monotonic() - t0) * 1000
-        if not request_state_cleanup_deferred:
+        if not request_state_cleanup_deferred and state_scope is not None:
             _clear_request_local_state(
                 state_scope,
                 metadata_store=store,
                 codex_tool_store=codex_tool_store,
             )
         if not stream_telemetry_deferred:
+            target_provider = (
+                route.target_provider if route is not None else source_provider
+            )
+            provider_name = route.provider_name if route is not None else ""
             _try_stop_profiler(
                 deep_profiler,
                 request.app,
                 request_id=request_id,
                 model=model,
                 source=source_provider,
-                target=route.target_provider,
+                target=target_provider,
                 is_stream=is_stream,
                 duration_ms=duration_ms,
             )
-
             _record_telemetry(
                 request,
                 model=model,
                 source_provider=source_provider,
-                target_provider=route.target_provider,
-                provider_name=route.provider_name,
+                target_provider=target_provider,
+                provider_name=provider_name,
                 is_stream=is_stream,
                 status_code=status_code,
                 duration_ms=duration_ms,

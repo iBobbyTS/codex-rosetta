@@ -179,6 +179,7 @@ class _Stream(UpstreamStream):
         failure: Exception | None = None,
     ) -> None:
         self.status_code = status_code
+        self.synthetic = False
         self.chunks = chunks
         self.events = events or []
         self.error = error
@@ -226,13 +227,27 @@ class _StreamingTransport(_ReflectingTransport):
 
 
 @pytest.mark.parametrize(
-    ("wrapper_kwargs", "expected_allow_failover"),
-    [({}, True), ({"allow_failover": False}, False)],
-    ids=["default", "disabled"],
+    ("wrapper_kwargs", "expected_kwargs"),
+    [
+        ({}, {"extra_headers": None, "allow_failover": True}),
+        (
+            {"allow_failover": False},
+            {"extra_headers": None, "allow_failover": False},
+        ),
+        (
+            {"retry_nonstandard_statuses": True},
+            {
+                "extra_headers": None,
+                "allow_failover": True,
+                "retry_nonstandard_statuses": True,
+            },
+        ),
+    ],
+    ids=["default", "disabled", "model-group-nonstandard"],
 )
 def test_streaming_forwards_failover_policy(
     wrapper_kwargs: dict[str, Any],
-    expected_allow_failover: bool,
+    expected_kwargs: dict[str, Any],
 ) -> None:
     underlying = _StreamingTransport(_Stream(events=[]))
 
@@ -248,12 +263,48 @@ def test_streaming_forwards_failover_policy(
 
     asyncio.run(run())
 
-    assert underlying.call_kwargs == [
-        {
-            "extra_headers": None,
-            "allow_failover": expected_allow_failover,
-        }
-    ]
+    assert underlying.call_kwargs == [expected_kwargs]
+
+
+def test_wrapper_preserves_trusted_synthetic_transport_origin() -> None:
+    class _SyntheticTransport(_ReflectingTransport):
+        async def send_request(self, *args: Any, **kwargs: Any) -> UpstreamResponse:
+            del args, kwargs
+            return UpstreamResponse(
+                status_code=502,
+                body=None,
+                raw_content=b'{"error":"transport exhausted"}',
+                synthetic=True,
+            )
+
+    stream = _Stream(error="transport exhausted", status_code=502)
+    stream.synthetic = True
+
+    async def run() -> tuple[UpstreamResponse, UpstreamStream]:
+        response = await CredentialRedactingTransport.wrap(
+            _SyntheticTransport()
+        ).send_request(
+            _provider(),
+            "openai_responses",
+            {},
+            "test",
+            retry_nonstandard_statuses=True,
+        )
+        wrapped_stream = await CredentialRedactingTransport.wrap(
+            _StreamingTransport(stream)
+        ).send_streaming(
+            _provider(),
+            "openai_responses",
+            {},
+            "test",
+            retry_nonstandard_statuses=True,
+        )
+        return response, wrapped_stream
+
+    response, wrapped_stream = asyncio.run(run())
+
+    assert response.synthetic is True
+    assert getattr(wrapped_stream, "synthetic", False) is True
 
 
 def test_stream_blocks_parsed_events_and_http_errors_without_leaking():

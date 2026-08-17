@@ -196,6 +196,11 @@ class CredentialRedactingStream(UpstreamStream):
     def status_code(self) -> int:
         return self._stream.status_code
 
+    @property
+    def synthetic(self) -> bool:
+        """Preserve trusted transport-exhaustion origin through the wrapper."""
+        return bool(getattr(self._stream, "synthetic", False))
+
     async def __aenter__(self) -> CredentialRedactingStream:
         error: UpstreamConnectionError | None = None
         try:
@@ -323,15 +328,19 @@ class CredentialRedactingTransport:
         model: str,
         *,
         extra_headers: dict[str, str] | None = None,
+        retry_nonstandard_statuses: bool = False,
     ) -> UpstreamResponse:
         error: UpstreamConnectionError | None = None
         try:
+            kwargs: dict[str, Any] = {"extra_headers": extra_headers}
+            if retry_nonstandard_statuses:
+                kwargs["retry_nonstandard_statuses"] = True
             response = await self._transport.send_request(
                 provider_info,
                 target_provider,
                 body,
                 model,
-                extra_headers=extra_headers,
+                **kwargs,
             )
         except Exception as exc:
             error = _sanitized_transport_error(provider_info, exc)
@@ -351,6 +360,7 @@ class CredentialRedactingTransport:
         wire_body: bytes | None = None,
         wire_headers: dict[str, str] | None = None,
         allow_failover: bool = True,
+        retry_nonstandard_statuses: bool = False,
     ) -> UpstreamStream:
         kwargs: dict[str, Any] = {
             "extra_headers": extra_headers,
@@ -358,6 +368,8 @@ class CredentialRedactingTransport:
         }
         if wire_body is not None:
             kwargs.update(wire_body=wire_body, wire_headers=wire_headers)
+        if retry_nonstandard_statuses:
+            kwargs["retry_nonstandard_statuses"] = True
         error: UpstreamConnectionError | None = None
         try:
             stream = await self._transport.send_streaming(
@@ -383,10 +395,13 @@ class CredentialRedactingTransport:
         *,
         extra_headers: dict[str, str] | None = None,
         method: str = "POST",
+        retry_nonstandard_statuses: bool = False,
     ) -> UpstreamResponse:
         kwargs: dict[str, Any] = {"extra_headers": extra_headers}
         if method != "POST":
             kwargs["method"] = method
+        if retry_nonstandard_statuses:
+            kwargs["retry_nonstandard_statuses"] = True
         error: UpstreamConnectionError | None = None
         try:
             response = await self._transport.send_passthrough(
@@ -437,6 +452,7 @@ class CredentialRedactingTransport:
             status_code=response.status_code,
             body=response.body,
             raw_content=response.raw_content,
+            synthetic=response.synthetic,
         )
 
 

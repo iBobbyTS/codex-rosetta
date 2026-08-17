@@ -728,6 +728,9 @@ class HttpTransport:
         credential_failure: Callable[[], _FailoverOutputT],
         *,
         allow_failover: bool = True,
+        retry_nonstandard_statuses: bool = False,
+        release_before_nonstandard_retry: Callable[[_FailoverAttemptT], Awaitable[None]]
+        | None = None,
     ) -> _FailoverOutputT:
         """Run one HTTP representation through the shared failover state machine."""
         single_attempt = await provider_info.wait_for_url_rotation()
@@ -740,13 +743,25 @@ class HttpTransport:
             attempt = await operation()
             if not allow_failover or (single_attempt and status_of(attempt) == 502):
                 return output_of(attempt)
-            # Any upstream status other than success/handled failover statuses
-            # gets the standard five retry attempts before provider-level
-            # rotation is considered by the proxy layer.
-            if status_of(attempt) not in (200, 502, 503):
+            # Model-group routing explicitly opts in to the provider-level
+            # contract for statuses outside the existing URL/key triggers.
+            if retry_nonstandard_statuses and status_of(attempt) not in (
+                200,
+                502,
+                503,
+            ):
+                retry_attempt = [attempt]
+
+                async def retry_operation() -> _FailoverAttemptT:
+                    if release_before_nonstandard_retry is not None:
+                        await release_before_nonstandard_retry(retry_attempt[0])
+                    next_attempt = await operation()
+                    retry_attempt[0] = next_attempt
+                    return next_attempt
+
                 attempt = await _FAILOVER_RETRY_POLICY.run(
                     attempt,
-                    operation,
+                    retry_operation,
                     lambda item: status_of(item) not in (200, 502, 503),
                     sleep=self._retry_sleep,
                 )
@@ -899,6 +914,7 @@ class HttpTransport:
         model: str,
         *,
         extra_headers: dict[str, str] | None = None,
+        retry_nonstandard_statuses: bool = False,
     ) -> UpstreamResponse:
         """Send a non-streaming request and return the full response."""
 
@@ -935,6 +951,7 @@ class HttpTransport:
                 raw_content=_all_credentials_503(len(provider_info.credential_ids)),
                 synthetic=True,
             ),
+            retry_nonstandard_statuses=retry_nonstandard_statuses,
         )
 
     async def _send_request_once(
@@ -1010,6 +1027,7 @@ class HttpTransport:
         wire_body: bytes | None = None,
         wire_headers: dict[str, str] | None = None,
         allow_failover: bool = True,
+        retry_nonstandard_statuses: bool = False,
     ) -> HttpUpstreamStream:
         """Send a streaming request and return an async chunk iterator."""
 
@@ -1043,6 +1061,8 @@ class HttpTransport:
                 _all_credentials_503(len(provider_info.credential_ids)),
             ),
             allow_failover=allow_failover,
+            retry_nonstandard_statuses=retry_nonstandard_statuses,
+            release_before_nonstandard_retry=lambda item: item[0].close(),
         )
 
     def _synthetic_stream(self, status_code: int, message: bytes) -> HttpUpstreamStream:
@@ -1185,6 +1205,7 @@ class HttpTransport:
         *,
         extra_headers: dict[str, str] | None = None,
         method: str = "POST",
+        retry_nonstandard_statuses: bool = False,
     ) -> UpstreamResponse:
         """Send a raw passthrough request — no URL template or stream flags.
 
@@ -1224,6 +1245,7 @@ class HttpTransport:
                 raw_content=_all_credentials_503(len(provider_info.credential_ids)),
                 synthetic=True,
             ),
+            retry_nonstandard_statuses=retry_nonstandard_statuses,
         )
 
     async def _send_passthrough_observed(

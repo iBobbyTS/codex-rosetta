@@ -9,6 +9,8 @@ from dataclasses import replace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from codex_rosetta._vendor.httpserver import StreamingResponse
 from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
@@ -118,6 +120,42 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert captured_body == body
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile
+
+
+@pytest.mark.parametrize("status_code", [201, 302])
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_direct_nonstream_non200_records_exact_provider_failure_origin(
+    status_code: int,
+    synthetic: bool,
+) -> None:
+    upstream = UpstreamResponse(
+        status_code=status_code,
+        body=None,
+        raw_content=b'{"error":{"message":"not 200"}}',
+        synthetic=synthetic,
+    )
+    transport = MagicMock()
+    transport.send_request = AsyncMock(return_value=upstream)
+
+    async def run():
+        return await handle_non_streaming(
+            _responses_route(),
+            _provider_info(),
+            {"model": "gpt-test", "input": []},
+            transport=transport,
+            model_group_failover=True,
+        )
+
+    response, profile = asyncio.run(run())
+
+    assert response.status_code == status_code
+    assert profile["upstream_provider_failure"] is True
+    assert profile["provider_failure_origin"] == (
+        "transport_exhaustion" if synthetic else "upstream_response"
+    )
+    call = transport.send_request.await_args
+    assert call is not None
+    assert call.kwargs["retry_nonstandard_statuses"] is True
 
 
 def test_unadapted_provider_protocol_uses_standard_responses_behavior():
@@ -591,6 +629,7 @@ def test_direct_passthrough_preserves_responses_lite_tools():
 class _RawStream(UpstreamStream):
     def __init__(self, chunks: list[bytes], *, status_code: int = 200) -> None:
         self.status_code = status_code
+        self.synthetic = False
         self._chunks = chunks
         self.closed = False
 
@@ -613,6 +652,42 @@ class _RawStream(UpstreamStream):
 
     async def close(self) -> None:
         self.closed = True
+
+
+@pytest.mark.parametrize("status_code", [201, 302])
+@pytest.mark.parametrize("synthetic", [False, True])
+def test_direct_stream_non200_records_exact_provider_failure_origin(
+    status_code: int,
+    synthetic: bool,
+) -> None:
+    stream = _RawStream(
+        [b'{"error":{"message":"not 200"}}'],
+        status_code=status_code,
+    )
+    stream.synthetic = synthetic
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(return_value=stream)
+
+    async def run():
+        return await handle_streaming(
+            _responses_route(),
+            _provider_info(),
+            {"model": "gpt-test", "input": [], "stream": True},
+            transport=transport,
+            model_group_failover=True,
+        )
+
+    response, profile = asyncio.run(run())
+
+    assert response.status_code == status_code
+    assert profile["upstream_provider_failure"] is True
+    assert profile["provider_failure_origin"] == (
+        "transport_exhaustion" if synthetic else "upstream_response"
+    )
+    assert stream.closed is True
+    call = transport.send_streaming.await_args
+    assert call is not None
+    assert call.kwargs["retry_nonstandard_statuses"] is True
 
 
 def test_openai_responses_streaming_direct_raw_passthrough():

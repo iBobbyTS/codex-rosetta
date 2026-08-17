@@ -56,6 +56,10 @@ from ._ordered_failover import OrderedFailoverCoordinator
 ModelGroupProviderRecorder = Callable[[str, str], Any]
 
 
+class ModelGroupConfigurationUnavailable(RuntimeError):
+    """Raised when a configured model group cannot issue an upstream attempt."""
+
+
 class ModelGroupProviderRing:
     """Process-local ordered provider selection for one model group."""
 
@@ -75,6 +79,10 @@ class ModelGroupProviderRing:
     def observe(self) -> tuple[str, int]:
         return self._ring.observe()
 
+    async def await_attempt(self) -> tuple[tuple[str, int], bool, bool]:
+        """Wait for active failover before observing one provider attempt."""
+        return await self._ring.await_observation()
+
     def available(self) -> tuple[str, ...]:
         return self._ring.available()
 
@@ -90,8 +98,16 @@ class ModelGroupProviderRing:
     async def claim(self, observed: str) -> tuple[bool, bool]:
         return await self._ring.claim_with_waited(observed)
 
+    async def claim_observation(
+        self, observation: tuple[str, int]
+    ) -> tuple[bool, bool]:
+        return await self._ring.claim_observation_with_waited(observation)
+
     async def publish(self) -> None:
         await self._ring.publish()
+
+    async def handoff(self) -> None:
+        await self._ring.handoff()
 
     def bind_recorder(self, recorder: ModelGroupProviderRecorder | None) -> None:
         self._record_current = recorder
@@ -253,7 +269,7 @@ def model_group_provider_names(value: Any, *, field: str) -> list[str]:
         not isinstance(item, str) or not item or item != item.strip() for item in value
     ):
         raise ValueError(f"config: {field} entries must be non-empty provider names")
-    return list(value)
+    return cast(list[str], list(value))
 
 
 def active_model_group_provider(value: Any, *, field: str) -> str:
@@ -939,6 +955,7 @@ class GatewayConfig:
             self._validate_provider_credentials(name, provider)
             if "api_keys" in provider:
                 self.token_values.update(provider_api_key_values(provider["api_keys"]))
+        self._all_raw_providers = all_providers
 
         # Filter out disabled providers (enabled defaults to True)
         self._raw_providers: dict[str, dict[str, Any]] = {
@@ -1391,23 +1408,30 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: model group '{group_name}' provider names must be unique"
                 )
+            configured_api_types = {
+                resolve_provider_api_type(name, self._all_raw_providers[name])
+                for name in names
+                if name in self._all_raw_providers
+            }
+            if len(configured_api_types) > 1:
+                raise ValueError(
+                    f"config: model group '{group_name}' providers must use the same api_type"
+                )
             enabled = [name for name in names if name in self._raw_providers]
             if enabled:
-                api_types = {self._raw_providers[name]["api_type"] for name in enabled}
-                if len(api_types) != 1:
-                    raise ValueError(
-                        f"config: model group '{group_name}' providers must use the same api_type"
-                    )
                 ring = ModelGroupProviderRing(group_name, enabled, enabled[0])
                 self.model_group_rings[group_name] = ring
                 self.model_group_provider_names[group_name] = tuple(names)
                 group_models = group_value.get("models", {})
                 if isinstance(group_models, dict):
                     for model_name in group_models:
-                        self.model_group_names_by_model[model_name] = group_name
                         self._expanded_raw_models[model_name]["provider"] = enabled[0]
             else:
                 self.model_group_provider_names[group_name] = tuple(names)
+            group_models = group_value.get("models", {})
+            if isinstance(group_models, dict):
+                for model_name in group_models:
+                    self.model_group_names_by_model[model_name] = group_name
 
     @classmethod
     def _parse_models(
@@ -1503,24 +1527,37 @@ class GatewayConfig:
         """
         from typing import cast
 
-        provider_name = self.models[model]
         group_name = self.model_group_names_by_model.get(model)
         ring = self.model_group_rings.get(group_name) if group_name else None
+        if group_name is not None and ring is None:
+            raise ModelGroupConfigurationUnavailable(
+                f"Model group '{group_name}' configuration unavailable: "
+                "no enabled provider can issue an upstream request"
+            )
+        provider_name = self.models[model]
         if ring is not None:
+            available = ring.available()
+            if not available:
+                raise ModelGroupConfigurationUnavailable(
+                    f"Model group '{group_name}' configuration unavailable: "
+                    "all enabled providers are cooling"
+                )
             provider_name = ring.current
             # A disabled/cooling candidate must never become a fresh route.
-            if (
-                provider_name not in self.providers
-                or provider_name not in ring.available()
-            ):
+            if provider_name not in self.providers or provider_name not in available:
                 provider_name = next(
                     (
                         candidate
-                        for candidate in ring.available()
+                        for candidate in available
                         if candidate in self.providers
                     ),
-                    provider_name,
+                    None,
                 )
+                if provider_name is None:
+                    raise ModelGroupConfigurationUnavailable(
+                        f"Model group '{group_name}' configuration unavailable: "
+                        "no enabled provider can issue an upstream request"
+                    )
         provider_type = self.provider_types[provider_name]
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)

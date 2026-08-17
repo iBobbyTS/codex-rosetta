@@ -25,13 +25,13 @@ from codex_rosetta.gateway.config import (
     DEFAULT_CODEX_HOME,
     DEFAULT_CONFIG_DIR,
     GatewayConfig,
+    ModelGroupConfigurationUnavailable,
     config_path_for_dir,
     default_tool_profile_for_provider,
     discover_config,
     load_config,
     resolve_codex_home,
 )
-from codex_rosetta.gateway.app import _rotate_model_group_after_upstream_failure
 from codex_rosetta.gateway.search_provider_candidates import (
     DeepSeekNativeResponsesSearchProviderCandidate,
 )
@@ -1457,7 +1457,7 @@ class TestModelGroups:
         with pytest.raises(ValueError, match="same api_type"):
             GatewayConfig(raw)
 
-    def test_provider_failure_entrypoint_rotates_once_and_is_group_scoped(self):
+    def test_provider_ring_selection_is_group_scoped_and_persistence_first(self):
         raw = _minimal_raw()
         raw["providers"]["secondary"] = {
             **raw["providers"]["test"],
@@ -1480,9 +1480,9 @@ class TestModelGroups:
             ring.bind_recorder(record)
 
         async def scenario() -> None:
-            assert await _rotate_model_group_after_upstream_failure(
-                object(), cfg, "gpt-test", "test"
-            )
+            ring = cfg.model_group_rings["test-llm"]
+            await ring.select("secondary")
+            ring.mark_failed("test")
             assert (
                 cfg.resolve("openai_responses", "gpt-test")[0].provider_name
                 == "secondary"
@@ -1492,11 +1492,78 @@ class TestModelGroups:
                 == "test"
             )
             assert writes == [("test-llm", "secondary")]
-            assert not await _rotate_model_group_after_upstream_failure(
-                object(), cfg, "gpt-test", "secondary"
-            )
 
         asyncio.run(scenario())
+
+    def test_provider_ring_recorder_failure_preserves_current_and_cooldown(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        cfg = GatewayConfig(raw)
+        ring = cfg.model_group_rings["test-llm"]
+
+        async def fail_record(_group: str, _provider: str) -> None:
+            raise RuntimeError("write failed")
+
+        ring.bind_recorder(fail_record)
+
+        async def scenario() -> None:
+            with pytest.raises(RuntimeError, match="write failed"):
+                await ring.select("secondary")
+
+        asyncio.run(scenario())
+        assert ring.current == "test"
+        assert ring.status_snapshot() == (
+            ("test", "available"),
+            ("secondary", "available"),
+        )
+
+    def test_disabled_candidate_participates_in_api_type_validation(self):
+        raw = _minimal_raw()
+        raw["providers"]["disabled"] = {
+            **raw["providers"]["test"],
+            "enabled": False,
+            "api_type": "responses",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "disabled"]
+
+        with pytest.raises(ValueError, match="same api_type"):
+            GatewayConfig(raw)
+
+    def test_all_disabled_group_is_explicitly_configuration_unavailable(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["enabled"] = False
+        cfg = GatewayConfig(raw)
+
+        assert cfg.model_group_names_by_model["gpt-test"] == "test-llm"
+        with pytest.raises(
+            ModelGroupConfigurationUnavailable,
+            match="no enabled provider",
+        ):
+            cfg.resolve("openai_responses", "gpt-test")
+
+    def test_all_cooling_group_does_not_fallback_to_current_provider(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        cfg = GatewayConfig(raw)
+        ring = cfg.model_group_rings["test-llm"]
+        ring.mark_failed("test")
+        ring.mark_failed("secondary")
+
+        with pytest.raises(
+            ModelGroupConfigurationUnavailable,
+            match="all enabled providers are cooling",
+        ):
+            cfg.resolve("openai_responses", "gpt-test")
 
     @pytest.mark.parametrize(
         ("provider", "message"),

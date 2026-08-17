@@ -267,6 +267,16 @@ def _upstream_http_error_response(
     )
 
 
+def _record_provider_failure(profile: dict[str, Any], result: Any) -> None:
+    """Record one exact non-200 provider failure and its trusted origin."""
+    profile["upstream_provider_failure"] = True
+    profile["provider_failure_origin"] = (
+        "transport_exhaustion"
+        if bool(getattr(result, "synthetic", False))
+        else "upstream_response"
+    )
+
+
 def _conversion_failure_response(
     source_provider: ProviderType,
     exc: ImageWorkerCapacityError | ImageWorkerTimeoutError | ConversionError,
@@ -1692,6 +1702,7 @@ async def handle_non_streaming(  # noqa: C901
     image_fetch_workers: ImageFetchWorkerPool | None = None,
     skip_codex_compaction: bool = False,
     disable_error_dump: bool = False,
+    model_group_failover: bool = False,
 ) -> tuple[Response, dict[str, Any]]:
     """Non-streaming proxy: convert -> forward -> convert back -> respond.
 
@@ -1764,12 +1775,16 @@ async def handle_non_streaming(  # noqa: C901
         log_original_request(body, state=body_log_state)
         t_upstream = time.perf_counter()
         try:
+            retry_kwargs = (
+                {"retry_nonstandard_statuses": True} if model_group_failover else {}
+            )
             resp = await transport.send_request(
                 provider_info,
                 route.target_provider,
                 body,
                 model,
                 extra_headers=extra_headers,
+                **retry_kwargs,
             )
         except UpstreamConnectionError as exc:
             profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
@@ -1785,8 +1800,8 @@ async def handle_non_streaming(  # noqa: C901
         profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
         profile["passthrough"] = True
 
-        if resp.is_error:
-            profile["upstream_provider_failure"] = True
+        if resp.status_code != 200:
+            _record_provider_failure(profile, resp)
             log_upstream_error(
                 resp.status_code,
                 resp.error_text,
@@ -1929,12 +1944,16 @@ async def handle_non_streaming(  # noqa: C901
     # Phase 3: Forward to upstream via transport
     t_upstream = time.perf_counter()
     try:
+        retry_kwargs = (
+            {"retry_nonstandard_statuses": True} if model_group_failover else {}
+        )
         resp = await transport.send_request(
             provider_info,
             route.target_provider,
             target_body,
             model,
             extra_headers=extra_headers,
+            **retry_kwargs,
         )
     except UpstreamConnectionError as exc:
         profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
@@ -1949,8 +1968,8 @@ async def handle_non_streaming(  # noqa: C901
         )
     profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
 
-    if resp.is_error:
-        profile["upstream_provider_failure"] = True
+    if resp.status_code != 200:
+        _record_provider_failure(profile, resp)
         log_upstream_error(
             resp.status_code,
             resp.error_text,
@@ -2630,6 +2649,7 @@ async def _handle_direct_responses_streaming(
     body_log_state: BodyLogState | None,
     inbound_wire_request: InboundWireRequest | None,
     original_request_body: dict[str, Any] | None,
+    model_group_failover: bool,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Handle same-protocol Responses streaming passthrough."""
     profile: dict[str, Any] = {}
@@ -2692,12 +2712,16 @@ async def _handle_direct_responses_streaming(
                 wire_headers=inbound_wire_request.headers,
             )
             profile["wire_passthrough"] = True
+        retry_kwargs = (
+            {"retry_nonstandard_statuses": True} if model_group_failover else {}
+        )
         stream = await transport.send_streaming(
             provider_info,
             route.target_provider,
             body,
             model,
             **send_kwargs,
+            **retry_kwargs,
         )
     except UpstreamConnectionError as exc:
         profile["stream_connect_ms"] = round(
@@ -2753,8 +2777,8 @@ async def _handle_direct_responses_streaming(
     profile["stream_connect_ms"] = round((time.perf_counter() - t_connect) * 1000, 2)
     profile["passthrough"] = True
 
-    if stream.is_error:
-        profile["upstream_provider_failure"] = True
+    if stream.status_code != 200:
+        _record_provider_failure(profile, stream)
         error_text = await stream.read_error()
         await stream.close()
         if trace is not None:
@@ -2849,6 +2873,7 @@ async def handle_streaming(  # noqa: C901
     image_fetch_workers: ImageFetchWorkerPool | None = None,
     web_search_client: TavilySearchClient | None = None,
     inbound_wire_request: InboundWireRequest | None = None,
+    model_group_failover: bool = False,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Streaming proxy: convert -> forward -> stream-convert back -> SSE.
 
@@ -2950,6 +2975,7 @@ async def handle_streaming(  # noqa: C901
             body_log_state=body_log_state,
             inbound_wire_request=inbound_wire_request,
             original_request_body=original_request_body,
+            model_group_failover=model_group_failover,
         )
         profile.update(direct_profile)
         return response, profile
@@ -3054,12 +3080,16 @@ async def handle_streaming(  # noqa: C901
     # *before* committing to a 200 StreamingResponse.
     t_connect = time.perf_counter()
     try:
+        retry_kwargs = (
+            {"retry_nonstandard_statuses": True} if model_group_failover else {}
+        )
         stream = await transport.send_streaming(
             provider_info,
             route.target_provider,
             target_body,
             model,
             extra_headers=extra_headers,
+            **retry_kwargs,
         )
     except UpstreamConnectionError as exc:
         profile["stream_connect_ms"] = round(
@@ -3096,8 +3126,8 @@ async def handle_streaming(  # noqa: C901
 
     # Application-level error — preserve the upstream envelope and codes while
     # labeling its exact human-readable message for the client.
-    if stream.is_error:
-        profile["upstream_provider_failure"] = True
+    if stream.status_code != 200:
+        _record_provider_failure(profile, stream)
         error_text = await stream.read_error()
         await stream.close()
         log_upstream_error(

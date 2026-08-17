@@ -64,6 +64,39 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
     }
 
 
+def _two_provider_gateway_config() -> GatewayConfig:
+    raw = _gateway_config()
+    raw["providers"]["second-provider"] = {
+        **raw["providers"]["test-provider"],
+        "base_urls": ["https://second.example.test/v1"],
+        "current_base_url": "https://second.example.test/v1",
+    }
+    raw["model_groups"]["test"]["provider"] = [
+        "test-provider",
+        "second-provider",
+    ]
+    return GatewayConfig(raw)
+
+
+def _proxy_request(config: GatewayConfig, *, stream: bool = False) -> MagicMock:
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {
+        "model": "gpt-test",
+        "messages": [],
+        **({"stream": True} if stream else {}),
+    }
+    request.app.metadata_store = MagicMock()
+    request.app.codex_tool_store = MagicMock()
+    request.app.transport = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = config
+    return request
+
+
 def _app_request(
     app: Any,
     *,
@@ -741,11 +774,17 @@ def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
 def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
     class _Ring:
         current = "first"
+        generation = 0
+
+        async def await_attempt(self):
+            return (self.current, self.generation), False, False
 
         def observe(self):
-            return self.current, 0
+            return self.current, self.generation
 
-        async def claim(self, observed):
+        async def claim_observation(self, observed):
+            assert observed == (self.current, self.generation)
+            self.generation += 1
             return True, False
 
         def mark_failed(self, provider):
@@ -758,6 +797,9 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
             self.current = provider
 
         async def publish(self):
+            return None
+
+        async def handoff(self):
             return None
 
     class _Config:
@@ -812,15 +854,221 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
     assert config.ring.current == "second"
 
 
+def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    ring = config.model_group_rings["test"]
+    writes: list[tuple[str, str]] = []
+    first_attempts = 0
+    second_attempts = 0
+    both_first_started = asyncio.Event()
+    release_first_failures = asyncio.Event()
+    leader_second_started = asyncio.Event()
+    release_leader_success = asyncio.Event()
+
+    async def record(group: str, provider: str) -> None:
+        writes.append((group, provider))
+
+    ring.bind_recorder(record)
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        nonlocal first_attempts, second_attempts
+        if route.provider_name == "test-provider":
+            first_attempts += 1
+            if first_attempts == 2:
+                both_first_started.set()
+            await both_first_started.wait()
+            await release_first_failures.wait()
+            return JSONResponse({"error": "failed"}, status_code=502), {
+                "upstream_provider_failure": True
+            }
+        second_attempts += 1
+        if second_attempts == 1:
+            leader_second_started.set()
+            await release_leader_success.wait()
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    async def scenario() -> tuple[Any, Any]:
+        first = asyncio.create_task(
+            app_module._proxy_handler(_proxy_request(config), "openai_chat")
+        )
+        second = asyncio.create_task(
+            app_module._proxy_handler(_proxy_request(config), "openai_chat")
+        )
+        await both_first_started.wait()
+        release_first_failures.set()
+        await leader_second_started.wait()
+        await asyncio.sleep(0)
+        assert second_attempts == 1
+        release_leader_success.set()
+        return await asyncio.gather(first, second)
+
+    responses = asyncio.run(scenario())
+
+    assert [response.status_code for response in responses] == [200, 200]
+    assert first_attempts == 2
+    assert second_attempts == 2
+    assert writes == [("test", "second-provider")]
+
+
+def test_provider_failover_leader_cancellation_hands_gate_to_waiter(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    second_attempts = 0
+    leader_second_started = asyncio.Event()
+    never_release = asyncio.Event()
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        nonlocal second_attempts
+        if route.provider_name == "test-provider":
+            return JSONResponse({"error": "failed"}, status_code=502), {
+                "upstream_provider_failure": True
+            }
+        second_attempts += 1
+        if second_attempts == 1:
+            leader_second_started.set()
+            await never_release.wait()
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    async def scenario() -> Any:
+        leader = asyncio.create_task(
+            app_module._proxy_handler(_proxy_request(config), "openai_chat")
+        )
+        await leader_second_started.wait()
+        waiter = asyncio.create_task(
+            app_module._proxy_handler(_proxy_request(config), "openai_chat")
+        )
+        await asyncio.sleep(0)
+        leader.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await leader
+        return await asyncio.wait_for(waiter, timeout=0.2)
+
+    response = asyncio.run(scenario())
+
+    assert response.status_code == 200
+    assert second_attempts == 2
+
+
+def test_provider_persistence_failure_preserves_state_and_hands_off_gate(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    ring = config.model_group_rings["test"]
+
+    async def fail_record(_group: str, _provider: str) -> None:
+        raise RuntimeError("config write failed")
+
+    ring.bind_recorder(fail_record)
+
+    async def fake_handle(*_args: Any, **_kwargs: Any):
+        return JSONResponse({"error": "failed"}, status_code=502), {
+            "upstream_provider_failure": True
+        }
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    async def scenario() -> tuple[Any, bool]:
+        response = await app_module._proxy_handler(
+            _proxy_request(config), "openai_chat"
+        )
+        _observation, _waited, inherited_leader = await ring.await_attempt()
+        await ring.publish()
+        return response, inherited_leader
+
+    response, inherited_leader = asyncio.run(scenario())
+
+    assert response.status_code == 500
+    assert inherited_leader is True
+    assert ring.current == "test-provider"
+    assert ring.status_snapshot() == (
+        ("test-provider", "available"),
+        ("second-provider", "available"),
+    )
+
+
+def test_provider_attempt_loop_preserves_wire_and_single_ingress_telemetry(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    request = _proxy_request(config, stream=True)
+    wire = object()
+    captured_wire: list[object] = []
+    captured_bodies: list[dict[str, Any]] = []
+    telemetry: list[dict[str, Any]] = []
+    stats: list[str] = []
+
+    monkeypatch.setattr(app_module, "take_inbound_wire_request", lambda: wire)
+    monkeypatch.setattr(
+        app_module,
+        "bind_inbound_wire_request",
+        lambda inbound, body: (inbound, dict(body)),
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_record_telemetry",
+        lambda _request, **kwargs: telemetry.append(kwargs),
+    )
+    monkeypatch.setattr(app_module, "record_request_stat", stats.append)
+
+    async def fake_handle(route, _provider, body, **kwargs: Any):
+        captured_wire.append(kwargs["inbound_wire_request"])
+        captured_bodies.append(dict(body))
+        body["mutated"] = route.provider_name
+        if route.provider_name == "test-provider":
+            return JSONResponse({"error": "failed"}, status_code=502), {
+                "upstream_provider_failure": True
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_streaming", fake_handle)
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 200
+    assert captured_wire == [wire, wire]
+    assert all("mutated" not in body for body in captured_bodies)
+    assert len(stats) == 1
+    assert len(telemetry) == 1
+    assert request.json.call_count == 1
+
+
+def test_all_disabled_model_group_returns_configuration_unavailable(
+    monkeypatch,
+) -> None:
+    raw = _gateway_config()
+    raw["providers"]["test-provider"]["enabled"] = False
+    config = GatewayConfig(raw)
+    request = _proxy_request(config)
+
+    async def unexpected_attempt(*_args: Any, **_kwargs: Any):
+        raise AssertionError("an all-disabled group cannot issue an upstream request")
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", unexpected_attempt)
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 503
+    assert isinstance(response, JSONResponse)
+    assert b"configuration unavailable" in response.body
+    assert b"Codex Rosetta blocked" in response.body
+
+
 def test_proxy_handler_does_not_rotate_an_already_open_stream(monkeypatch):
     class _Ring:
         current = "first"
 
-        def observe(self):
-            return self.current, 0
+        async def await_attempt(self):
+            return (self.current, 0), False, False
 
-        async def claim(self, observed):
-            raise AssertionError("an open stream must not enter provider failover")
+        async def handoff(self):
+            raise AssertionError("an open stream must not own provider failover")
 
     class _Config:
         models = {"gpt-test": "first"}
@@ -866,11 +1114,11 @@ def test_proxy_handler_does_not_rotate_rosetta_generated_error(monkeypatch):
     class _Ring:
         current = "first"
 
-        def observe(self):
-            return self.current, 0
+        async def await_attempt(self):
+            return (self.current, 0), False, False
 
-        async def claim(self, observed):
-            raise AssertionError("Rosetta-generated errors must not rotate providers")
+        async def handoff(self):
+            raise AssertionError("Rosetta-generated errors must not own failover")
 
     class _Config:
         models = {"gpt-test": "first"}

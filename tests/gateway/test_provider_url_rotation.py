@@ -486,7 +486,7 @@ def test_502_after_credential_rotation_gets_fresh_url_retry_budget(
 
 
 @pytest.mark.parametrize("status", [400, 401, 429, 500, 504])
-def test_nonstream_non503_retries_without_rotating_credential(
+def test_model_group_nonstream_non503_retries_without_rotating_credential(
     monkeypatch, status: int
 ) -> None:
     async def scenario() -> None:
@@ -502,11 +502,112 @@ def test_nonstream_non503_retries_without_rotating_credential(
             *(_json_response(status, {"error": "x"}) for _ in range(6)),
         )
         result = await _transport(monkeypatch, client).send_request(
-            provider, "openai_responses", {}, "model"
+            provider,
+            "openai_responses",
+            {},
+            "model",
+            retry_nonstandard_statuses=True,
         )
         assert result.status_code == status
         assert provider.current_credential_id == "first"
         assert client.calls == [f"{first}/responses"] * 6
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("status", [201, 302])
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_model_group_non200_status_uses_exact_retry_budget(
+    monkeypatch,
+    status: int,
+    path_kind: str,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        attempts = [
+            _FakeStreamingResponse(
+                status,
+                b'{"error":"not-200"}',
+                content_type=(
+                    "text/event-stream"
+                    if path_kind == "streaming"
+                    else "application/json"
+                ),
+            )
+            for _ in range(6)
+        ]
+        client.add(target, *attempts)
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(
+                provider,
+                target,
+                {},
+                retry_nonstandard_statuses=True,
+            )
+        else:
+            result = await transport.send_request(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+
+        assert result.status_code == status
+        assert client.calls == [target] * 6
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+        if path_kind == "streaming":
+            assert all(item.closed for item in attempts[:-1])
+            assert not attempts[-1].closed
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_non_model_group_nonstandard_status_preserves_single_attempt_behavior(
+    monkeypatch,
+    path_kind: str,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        suffix = "alpha/search" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(target, _json_response(500, {"error": "failed"}))
+        transport = _transport(monkeypatch, client)
+
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, target, {})
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+
+        assert result.status_code == 500
+        assert client.calls == [target]
 
     asyncio.run(scenario())
 
