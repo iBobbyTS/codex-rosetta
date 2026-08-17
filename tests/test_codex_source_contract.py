@@ -6,6 +6,7 @@ import json
 import re
 import runpy
 from pathlib import Path
+from typing import Any
 
 from codex_rosetta.gateway.codex_compaction import COMPACT_PROMPT, SUMMARY_PREFIX
 from codex_rosetta.gateway.config import CONFIGURED_RESPONSES_WEB_SEARCH_MODELS
@@ -20,6 +21,7 @@ COMPATIBILITY_POINTS_PATH = (
 )
 SCRIPT = runpy.run_path(str(SCRIPT_PATH))
 
+CP26_LINKAGE_MODULE_PATHS = SCRIPT["CP26_LINKAGE_MODULE_PATHS"]
 _enum_variants = SCRIPT["_enum_variants"]
 _enum_variant_field_contracts = SCRIPT["_enum_variant_field_contracts"]
 _find_function = SCRIPT["_find_function"]
@@ -111,7 +113,7 @@ def _mutate_inter_agent_communication_method(source: str, method_name: str) -> s
     return source[: impl_open + 1] + mutated_body + source[impl_close:]
 
 
-def _cp26_source_texts(source_root: Path) -> dict[str, str]:
+def _cp26_source_texts(source_root: Path) -> dict[str, Any]:
     paths = {
         "models": "codex-rs/protocol/src/models.rs",
         "router": "codex-rs/core/src/tools/router.rs",
@@ -121,10 +123,15 @@ def _cp26_source_texts(source_root: Path) -> dict[str, str]:
         "agent_communication": "codex-rs/core/src/agent_communication.rs",
         "inter_agent_message": "codex-rs/core/src/context/inter_agent_message.rs",
     }
-    return {
+    sources: dict[str, Any] = {
         name: (source_root / relative_path).read_text(encoding="utf-8")
         for name, relative_path in paths.items()
     }
+    sources["linkage_modules"] = {
+        relative_path: (source_root / relative_path).read_text(encoding="utf-8")
+        for relative_path in CP26_LINKAGE_MODULE_PATHS
+    }
+    return sources
 
 
 def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
@@ -132,6 +139,22 @@ def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
     source_root = REPO_ROOT.parent / "openai-codex-src"
     sources = _cp26_source_texts(source_root)
     baseline = _function_call_encrypted_args_contract(**sources)
+
+    linkage_snapshot = baseline["production_linkage_modules"]
+    assert set(linkage_snapshot) == set(CP26_LINKAGE_MODULE_PATHS)
+    linkage_modules = sources["linkage_modules"]
+    assert isinstance(linkage_modules, dict)
+    for relative_path in CP26_LINKAGE_MODULE_PATHS:
+        mutated_modules = dict(linkage_modules)
+        mutated_modules[relative_path] += "\n// source-contract linkage mutation\n"
+        mutated = _function_call_encrypted_args_contract(
+            **{**sources, "linkage_modules": mutated_modules}
+        )
+        assert mutated != baseline
+        assert (
+            mutated["production_linkage_modules"][relative_path]
+            != linkage_snapshot[relative_path]
+        )
 
     mutated_models = sources["models"].replace(
         "encrypted_function_args: Option<Vec<String>>",

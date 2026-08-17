@@ -210,6 +210,14 @@
         "role_sha256": "87670fb85f1f2e19112e124f95778c7eaebb58af31f62dc7cb48ec6151f8e0f9",
         "type_markers_sha256": "afd466c6f001b43a3584b0f648203f3cde31b26293aa48b61ff3ce2bc0e5c045"
       },
+      "production_linkage_modules": {
+        "codex-rs/core/src/agent/control.rs": "fc7f32488f1de23becbc5899f7078c015995e2e9197db9344c6e77282edce4d6",
+        "codex-rs/core/src/stream_events_utils.rs": "4d456c89855deb13e41d304d849f8ae106f069842104b200da50bcd6a463f252",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs": "630115e8dc5eb2cbe3a1affbeae1972f953598c787c2f554e2f6bea6cf337182",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs": "2a8c4093f8d26a373c79b5ee9b3d326c719fb21b5de3a9351365272142b8b78c",
+        "codex-rs/core/src/tools/parallel.rs": "2eb773163bcbc007ab42e2c9221cdc4158568da534c9c3bfe8819d80a8cb23f8",
+        "codex-rs/core/src/tools/registry.rs": "bf5cb173ffe783cfa5670064a37aea2e9536085c05a5a9a33b5fe72c3c57ed18"
+      },
       "provider_filter_sha256": "9a556d69acb8101fe8d6c2835633dd4b79c4f59790fbccd5437d2bab23dc107f",
       "tool_call_fields": {
         "call_id": {

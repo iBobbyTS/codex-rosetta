@@ -64,9 +64,8 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     ),
     "endpoints": "extracted endpoint constants match",
     "function_call_encrypted_args": (
-        "FunctionCall and inter-agent wire fields, collaboration delivery conversion, "
-        "rendered message envelope, tool/agent log redaction, and non-OpenAI provider "
-        "filtering match"
+        "FunctionCall and inter-agent wire fields, localized delivery/redaction owners, "
+        "and complete frozen production-linkage module contents match"
     ),
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
@@ -120,6 +119,15 @@ RESPONSES_LITE_MODEL_CAPABILITY_KEYS = (
     "tool_mode",
     "use_responses_lite",
     "web_search_tool_type",
+)
+
+CP26_LINKAGE_MODULE_PATHS = (
+    "codex-rs/core/src/tools/parallel.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs",
+    "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs",
+    "codex-rs/core/src/stream_events_utils.rs",
+    "codex-rs/core/src/agent/control.rs",
+    "codex-rs/core/src/tools/registry.rs",
 )
 
 
@@ -410,6 +418,7 @@ def _function_call_encrypted_args_contract(
     multi_agents_v2: str,
     agent_communication: str,
     inter_agent_message: str,
+    linkage_modules: dict[str, str],
 ) -> dict[str, Any]:
     """Extract the bounded CP-26 wire, delivery, and confidentiality owners."""
     return {
@@ -452,6 +461,10 @@ def _function_call_encrypted_args_contract(
         "provider_filter_sha256": _function_body_sha256(
             client, "build_responses_request"
         ),
+        "production_linkage_modules": {
+            path: hashlib.sha256(source.encode("utf-8")).hexdigest()
+            for path, source in sorted(linkage_modules.items())
+        },
     }
 
 
@@ -635,6 +648,10 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     inter_agent_message = _read(
         source_root, "codex-rs/core/src/context/inter_agent_message.rs"
     )
+    cp26_linkage_modules = {
+        relative_path: _read(source_root, relative_path)
+        for relative_path in CP26_LINKAGE_MODULE_PATHS
+    }
     model_catalog = _read(source_root, "codex-rs/models-manager/models.json")
     client = _read(source_root, "codex-rs/core/src/client.rs")
     responses_metadata = _read(source_root, "codex-rs/core/src/responses_metadata.rs")
@@ -749,6 +766,7 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
             multi_agents_v2,
             agent_communication,
             inter_agent_message,
+            cp26_linkage_modules,
         ),
         "message_phase_variants": _enum_variants(models, "MessagePhase"),
         "model_enum_variants": {
