@@ -802,15 +802,22 @@ describe('KeysPage', () => {
 });
 
 describe('ModelsPage', () => {
-  it('left-aligns the model-group provider menu', async () => {
-    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
+  it('shares the modal-width dropdown boundary between provider and profile', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { upstream: { api_type: 'chat' } },
+      model_groups: {},
+      tool_profile_presets: [{ id: 'profile', name: 'Profile', api_types: ['chat'] }],
+    });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     const providerSelect = screen.getByLabelText('Provider');
+    const profileSelect = document.getElementById('modelGroupToolProfile');
     expect(providerSelect.closest('.model-group-modal')).toBeInTheDocument();
-    expect(providerSelect.closest('.model-group-provider-field')).toBeInTheDocument();
-    await fireEvent.click(providerSelect);
-    expect(document.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
+    expect(providerSelect.closest('.model-group-dropdown-field')).toBeInTheDocument();
+    expect(profileSelect?.closest('.model-group-dropdown-field')).toBeInTheDocument();
+    expect(document.querySelectorAll('.model-group-dropdown-field')).toHaveLength(2);
+    await fireEvent.click(profileSelect as HTMLButtonElement);
+    expect(profileSelect?.closest('.model-group-dropdown-field')?.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
   });
 
   it('writes only the model-group contract fields', async () => {
