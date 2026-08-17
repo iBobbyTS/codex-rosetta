@@ -486,7 +486,7 @@ def test_502_after_credential_rotation_gets_fresh_url_retry_budget(
 
 
 @pytest.mark.parametrize("status", [400, 401, 429, 500, 504])
-def test_nonstream_non503_does_not_rotate_credential(monkeypatch, status: int) -> None:
+def test_nonstream_non503_retries_without_rotating_credential(monkeypatch, status: int) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         provider, _ = _provider(
@@ -495,13 +495,16 @@ def test_nonstream_non503_does_not_rotate_credential(monkeypatch, status: int) -
             credentials=(("first", "key-first"), ("second", "key-second")),
         )
         client = _RoutingClient()
-        client.add(f"{first}/responses", _json_response(status, {"error": "x"}))
+        client.add(
+            f"{first}/responses",
+            *(_json_response(status, {"error": "x"}) for _ in range(6)),
+        )
         result = await _transport(monkeypatch, client).send_request(
             provider, "openai_responses", {}, "model"
         )
         assert result.status_code == status
         assert provider.current_credential_id == "first"
-        assert client.calls == [f"{first}/responses"]
+        assert client.calls == [f"{first}/responses"] * 6
 
     asyncio.run(scenario())
 
