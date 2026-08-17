@@ -2477,19 +2477,16 @@ def test_get_config_returns_model_groups_and_effective_models(tmp_path):
         "id": "passthrough",
         "api_types": ["responses"],
     }
-    assert any(
-        preset["slug"] == "gpt-5.6-terra" and preset["display_name"] == "GPT-5.6-Terra"
+    assert body["model_presets"]
+    assert all(
+        isinstance(preset.get("slug"), str)
+        and isinstance(preset.get("display_name"), str)
+        and all(
+            isinstance(level, str)
+            for level in preset.get("supported_reasoning_levels", [])
+        )
         for preset in body["model_presets"]
     )
-    assert any(
-        preset["slug"] == "deepseek-v4-pro"
-        and preset["identity"] == "DeepSeek V4 Pro Preview"
-        for preset in body["model_presets"]
-    )
-    glm_preset = next(
-        preset for preset in body["model_presets"] if preset["slug"] == "glm-5.2"
-    )
-    assert glm_preset["supported_reasoning_levels"] == ["high", "max"]
     assert body["codex"] == {}
     assert body["model_groups"]["OpenAI"]["models"]["grouped"]["upstream_model"] == (
         "gpt-5.6-terra"

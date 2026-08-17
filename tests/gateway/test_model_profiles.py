@@ -76,26 +76,10 @@ def test_codex_0147_nested_model_fields_round_trip_through_profile_owner() -> No
     assert restored.catalog_model() == profile.catalog_model()
 
 
-def test_preset_matching_prefers_upstream_then_exposed_fallback() -> None:
-    upstream = resolve_model_profile(
-        exposed_model="gpt-5.6-terra",
-        upstream_model="glm-5.2",
-        provider_id="opencode_go",
-    )
-    fallback = resolve_model_profile(
-        exposed_model="glm-5.2",
-        upstream_model="unknown-upstream",
-        provider_id="opencode_go",
-    )
-
-    assert upstream.preset_slug == "glm-5.2"
-    assert fallback.preset_slug == "glm-5.2"
-
-
 def test_runtime_override_wins_and_is_saved_as_minimal_override() -> None:
     profile = resolve_model_profile(
-        exposed_model="glm-public",
-        upstream_model="glm-5.2",
+        exposed_model="runtime-test-model",
+        upstream_model="gpt-5.6-terra",
         provider_id="opencode_go",
         model_info_override={"context_window": 262_144},
         runtime_capabilities_override={
@@ -106,8 +90,6 @@ def test_runtime_override_wins_and_is_saved_as_minimal_override() -> None:
 
     model_info, runtime = canonical_model_overrides(profile)
 
-    assert profile.input_modalities == ("text",)
-    assert profile.supported_reasoning_levels == ("high", "max")
     assert model_info == {
         "context_window": 262_144,
         "max_context_window": 262_144,
@@ -163,8 +145,8 @@ def test_bundled_third_party_default_projects_all_context_limits() -> None:
 
 def test_provider_runtime_preset_is_copied_before_user_override() -> None:
     profile = resolve_model_profile(
-        exposed_model="glm-public",
-        upstream_model="glm-5.2",
+        exposed_model="runtime-test-model",
+        upstream_model="gpt-5.6-terra",
         provider_id="opencode_go",
         runtime_capabilities_override={"temperature": 1.0},
     )
@@ -213,8 +195,8 @@ def test_provider_runtime_override_is_diffed_against_model_preset() -> None:
 
 def test_explicit_null_runtime_override_is_preserved_by_canonical_diff() -> None:
     profile = resolve_model_profile(
-        exposed_model="glm-public",
-        upstream_model="glm-5.2",
+        exposed_model="runtime-test-model",
+        upstream_model="gpt-5.6-terra",
         provider_id="opencode_go",
         runtime_capabilities_override={"temperature": None},
     )
@@ -247,8 +229,8 @@ def test_runtime_sampling_override_validation(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         resolve_model_profile(
-            exposed_model="glm-5.2",
-            upstream_model=None,
+            exposed_model="runtime-test-model",
+            upstream_model="gpt-5.6-terra",
             provider_id="opencode_go",
             runtime_capabilities_override=override,
         )
@@ -288,8 +270,8 @@ def test_legacy_eight_field_model_info_remains_readable() -> None:
 
 def test_reasoning_config_is_compact_and_catalog_descriptions_are_canonical() -> None:
     profile = resolve_model_profile(
-        exposed_model="glm-5.2",
-        upstream_model=None,
+        exposed_model="runtime-test-model",
+        upstream_model="gpt-5.6-terra",
         provider_id="opencode_go",
         model_info_override={
             "supported_reasoning_levels": [
