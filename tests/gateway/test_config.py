@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import asyncio
 import os
 import sys
 from argparse import Namespace
@@ -30,6 +31,7 @@ from codex_rosetta.gateway.config import (
     load_config,
     resolve_codex_home,
 )
+from codex_rosetta.gateway.app import _rotate_model_group_after_upstream_failure
 from codex_rosetta.gateway.search_provider_candidates import (
     DeepSeekNativeResponsesSearchProviderCandidate,
 )
@@ -1452,6 +1454,41 @@ class TestModelGroups:
         raw["providers"]["secondary"]["request_encoding"] = "identity"
         with pytest.raises(ValueError, match="same api_type"):
             GatewayConfig(raw)
+
+    def test_provider_failure_entrypoint_rotates_once_and_is_group_scoped(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        raw["model_groups"]["other-llm"] = {
+            "provider": ["test", "secondary"],
+            "type": "llm",
+            "models": {"gpt-5.6-terra": {}},
+        }
+        cfg = GatewayConfig(raw)
+        writes: list[tuple[str, str]] = []
+
+        async def record(group: str, provider: str) -> None:
+            writes.append((group, provider))
+
+        for ring in cfg.model_group_rings.values():
+            ring.bind_recorder(record)
+
+        async def scenario() -> None:
+            assert await _rotate_model_group_after_upstream_failure(
+                object(), cfg, "gpt-test", "test"
+            )
+            assert cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
+            assert cfg.resolve("openai_responses", "gpt-5.6-terra")[0].provider_name == "test"
+            assert writes == [("test-llm", "secondary")]
+            assert not await _rotate_model_group_after_upstream_failure(
+                object(), cfg, "gpt-test", "secondary"
+            )
+
+        asyncio.run(scenario())
 
     @pytest.mark.parametrize(
         ("provider", "message"),
