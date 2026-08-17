@@ -17,7 +17,7 @@ MODEL_INFO_FIELDS = frozenset(
     (*MODEL_INFO_STRING_FIELDS, *MODEL_INFO_INTEGER_FIELDS, *MODEL_INFO_LIST_FIELDS)
 )
 MODEL_PRESET_EXTRA_OVERRIDE_FIELDS = frozenset(
-    {"comp_hash", "supports_reasoning_summary_parameter"}
+    {"comp_hash", "supports_reasoning_summary_parameter", "context_window_presets"}
 )
 MODEL_PRESET_LEGACY_FIELDS = frozenset({"effective_context_window_percent"})
 MODEL_PRESET_IGNORED_CATALOG_FIELDS = frozenset(
@@ -58,6 +58,15 @@ def _cached_model_preset_resource() -> dict[str, Any]:
 def load_model_preset_resource() -> dict[str, Any]:
     """Return an isolated copy of the bundled model-preset resource."""
     return copy.deepcopy(_cached_model_preset_resource())
+
+
+def context_window_presets_for_admin() -> dict[str, list[dict[str, Any]]]:
+    """Return the configured context-window choices keyed by exact model slug."""
+    resource = _cached_model_preset_resource()
+    presets = resource.get("context_window_presets", {})
+    if not isinstance(presets, dict):
+        raise ValueError("bundled Codex context window presets must be an object")
+    return copy.deepcopy(presets)
 
 
 @lru_cache(maxsize=1)
@@ -146,6 +155,29 @@ def _normalize_special_preset_overrides(
             raise ValueError(f"{field}.comp_hash must be a non-empty string")
         normalized["comp_hash"] = comp_hash.strip()
 
+    if "context_window_presets" in value:
+        presets = value["context_window_presets"]
+        if (
+            not isinstance(presets, list)
+            or not presets
+            or not all(
+                isinstance(item, dict)
+                and isinstance(item.get("label"), str)
+                and item["label"].strip()
+                and isinstance(item.get("value"), int)
+                and not isinstance(item["value"], bool)
+                and item["value"] > 0
+                for item in presets
+            )
+        ):
+            raise ValueError(
+                f"{field}.context_window_presets must be a non-empty preset array"
+            )
+        normalized["context_window_presets"] = [
+            {"label": item["label"].strip(), "value": item["value"]}
+            for item in presets
+        ]
+
     for key in (
         "supports_reasoning_summary_parameter",
         "supports_parallel_tool_calls",
@@ -203,8 +235,15 @@ def normalize_model_preset(
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {unknown}")
 
+    model_info = {key: value.get(key) for key in MODEL_INFO_FIELDS}
+    if model_info.get("context_window") is None:
+        context_presets = value.get("context_window_presets")
+        if isinstance(context_presets, list) and context_presets:
+            first = context_presets[0]
+            if isinstance(first, dict):
+                model_info["context_window"] = first.get("value")
     normalized = normalize_model_info(
-        {key: value.get(key) for key in MODEL_INFO_FIELDS},
+        model_info,
         field=field,
     )
     normalized.update(

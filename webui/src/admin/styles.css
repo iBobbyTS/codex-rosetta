@@ -256,11 +256,13 @@ code.copyable:hover { background: var(--bg-hover); }
 .model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu) .modal-body { overflow:visible; }
 .model-info-modal { display:none;width:min(820px,calc(100vw - 560px)); }
 .model-info-modal.open { display:flex; }
-.model-info-field-modified { border-color:var(--orange)!important;box-shadow:0 0 0 1px var(--orange); }
+.model-info-field-modified { border-color:var(--orange)!important;border-radius:var(--radius);box-shadow:0 0 0 1px var(--orange); }
 .field-hint { color:var(--text-dim);font-size:11px;line-height:1.4; }
 .model-info-grid { display:grid;grid-template-columns:1fr 1fr;gap:12px; }
 .model-info-grid .span-2 { grid-column:1 / -1; }
 .model-info-grid textarea { width:100%;min-height:72px;padding:8px 12px;background:var(--bg);border:1px solid var(--border);border-radius:var(--radius);color:var(--text);font-size:13px;font-family:var(--mono);resize:vertical; }
+.context-window-controls { display:grid;grid-template-columns:minmax(150px,1fr) minmax(180px,2fr);gap:8px;align-items:center; }
+.context-window-controls input { min-width:0; }
 .provider-limit-hint { margin:0 0 16px; }
 .provider-limit-row { display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:12px;align-items:center;margin-bottom:12px; }
 .provider-limit-toggle { display:flex;gap:8px;align-items:center;color:var(--text);font-family:var(--mono); }

@@ -43,12 +43,27 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
 
 def test_shared_overrides_match_runtime_snapshot() -> None:
     resource = load_model_preset_resource()
+    assert set(resource["context_window_presets"]) == {
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    }
 
     assert resource["template_slug"] == "gpt-5.6-terra"
     assert resource["shared_overrides"] == EXPECTED_RUNTIME_SHARED_OVERRIDES
     assert not (
         MODEL_PRESET_IGNORED_CATALOG_FIELDS & resource["shared_overrides"].keys()
     )
+
+
+def test_context_window_presets_are_model_data_and_first_value_is_default() -> None:
+    resource = load_model_preset_resource()
+    kimi = next(model for model in resource["models"] if model["slug"] == "kimi-k3")
+
+    assert kimi["context_window_presets"] == [{"label": "1M", "value": 1048576}]
+    normalized = normalize_model_preset(kimi, field="kimi-k3")
+    assert normalized["context_window"] == 1048576
+    assert normalized["context_window_presets"] == kimi["context_window_presets"]
 
 
 def test_every_shared_override_is_allowed_in_each_model_preset() -> None:

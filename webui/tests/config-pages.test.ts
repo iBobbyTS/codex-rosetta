@@ -938,6 +938,27 @@ describe('ModelsPage', () => {
     }));
   });
 
+  it('synchronizes GPT context presets with the editable numeric value', async () => {
+    const preset = { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', description: 'GPT', identity: 'GPT', priority: 1, context_window: 272000, input_modalities: ['text'], supported_reasoning_levels: ['low'] };
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'responses' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset], context_window_presets: { 'gpt-5.6-sol': [{ label: '272k（官方）', value: 272000 }, { label: '500k', value: 500000 }, { label: '800k', value: 800000 }, { label: '1M', value: 1000000 }] } });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
+    await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-5.6-sol' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+
+    const contextInput = screen.getByRole('spinbutton', { name: 'Context Window' });
+    expect(contextInput).toHaveValue(272000);
+    expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('272k（官方）');
+    await fireEvent.input(contextInput, { target: { value: '500000' } });
+    expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('500k');
+    await fireEvent.input(contextInput, { target: { value: '123456' } });
+    expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('Custom');
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', expect.objectContaining({ models: { 'gpt-5.6-sol': { model_info: expect.objectContaining({ context_window: 123456 }) } } })));
+  });
+
   it('returns the main model row to auto-detected after matching the preset again', async () => {
     const preset = { slug: 'gpt-demo', display_name: 'GPT Demo', description: 'Preset description', identity: 'demo', priority: 2, context_window: 64000, input_modalities: ['text'], supported_reasoning_levels: ['low', 'high'], base_instructions: 'hidden system prompt' };
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });

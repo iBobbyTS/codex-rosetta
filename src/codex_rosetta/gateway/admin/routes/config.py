@@ -33,6 +33,7 @@ from ...providers import build_provider_info
 from ...deepseek_responses_search import normalize_deepseek_responses_origin
 from ...local_mode import config_toml_has_model_catalog
 from ...model_presets import (
+    context_window_presets_for_admin,
     detect_model_preset,
     full_model_presets,
     model_presets_for_admin,
@@ -754,6 +755,7 @@ async def get_config(request: Any) -> Response:
                 )
                 for slug, model in full_model_presets().items()
             ],
+            "context_window_presets": context_window_presets_for_admin(),
             "provider_catalog": provider_catalog_for_admin(),
             "web_search_contract": _web_search_contract_for_admin(
                 raw.get("server", {}).get("web_search")
