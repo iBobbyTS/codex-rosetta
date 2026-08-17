@@ -64,8 +64,9 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     ),
     "endpoints": "extracted endpoint constants match",
     "function_call_encrypted_args": (
-        "FunctionCall field contract, ToolCall delivery-source and log-redaction "
-        "semantics, and non-OpenAI provider filtering match"
+        "FunctionCall and inter-agent wire fields, collaboration delivery conversion, "
+        "rendered message envelope, tool/agent log redaction, and non-OpenAI provider "
+        "filtering match"
     ),
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
@@ -99,7 +100,8 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     "tool_spec_wire_types": "tool spec serde wire type mapping matches",
     "tool_exposure_variants": "ToolExposure variants match",
     "tool_registration_sites": (
-        "core registration function bodies and extension contributor sources match"
+        "core registration, eligibility/exposure, and model-visible assembly function "
+        "bodies plus extension contributor sources match"
     ),
     "transport_constants": "extracted transport constants match",
     "websocket_client_metadata_keys": "WebSocket client metadata keys match",
@@ -391,14 +393,58 @@ def _function_body_sha256(text: str, name: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _impl_method_body_sha256(text: str, type_name: str, method_name: str) -> str:
+    """Hash one method body from the inherent impl for a named Rust type."""
+    match = re.search(rf"\bimpl\s+{re.escape(type_name)}\s*\{{", text)
+    if match is None:
+        raise ContractExtractionError(f"missing inherent impl: {type_name}")
+    impl_block = _braced_block(text, match.start())
+    return _function_body_sha256(impl_block, method_name)
+
+
 def _function_call_encrypted_args_contract(
-    models: str, router: str, client: str
+    models: str,
+    router: str,
+    client: str,
+    protocol: str,
+    multi_agents_v2: str,
+    agent_communication: str,
+    inter_agent_message: str,
 ) -> dict[str, Any]:
-    """Extract the CP-26 field, dispatch, logging, and provider-filter owners."""
+    """Extract the bounded CP-26 wire, delivery, and confidentiality owners."""
     return {
+        "agent_communication_log_sha256": _function_body_sha256(
+            agent_communication, "emit_agent_communication_send"
+        ),
+        "communication_from_tool_message_sha256": _function_body_sha256(
+            multi_agents_v2, "communication_from_tool_message"
+        ),
         "function_call_fields": _enum_variant_field_contracts(
             models, "ResponseItem", "FunctionCall"
         ),
+        "inter_agent_communication_fields": _struct_field_contracts(
+            protocol, "InterAgentCommunication"
+        ),
+        "inter_agent_communication_new_encrypted_sha256": _impl_method_body_sha256(
+            protocol, "InterAgentCommunication", "new_encrypted"
+        ),
+        "inter_agent_communication_new_sha256": _impl_method_body_sha256(
+            protocol, "InterAgentCommunication", "new"
+        ),
+        "inter_agent_message_delivery": {
+            "as_str_sha256": _function_body_sha256(inter_agent_message, "as_str"),
+            "body_sha256": _function_body_sha256(inter_agent_message, "body"),
+            "fields": _struct_field_contracts(inter_agent_message, "InterAgentMessage"),
+            "markers_sha256": _function_body_sha256(inter_agent_message, "markers"),
+            "message_type_variants": _enum_variants(
+                inter_agent_message, "InterAgentMessageType"
+            ),
+            "new_sha256": _function_body_sha256(inter_agent_message, "new"),
+            "role_sha256": _function_body_sha256(inter_agent_message, "role"),
+            "type_markers_sha256": _function_body_sha256(
+                inter_agent_message, "type_markers"
+            ),
+        },
         "tool_call_fields": _struct_field_contracts(router, "ToolCall"),
         "build_tool_call_sha256": _function_body_sha256(router, "build_tool_call"),
         "direct_source_sha256": _function_body_sha256(router, "direct_source"),
@@ -446,9 +492,17 @@ def _tool_registration_sites(
             "extension_tool_executors",
             "finalize_tool_router",
             "hosted_model_tool_specs",
+            "image_generation_available",
+            "is_excluded_from_code_mode",
+            "is_hidden_by_code_mode_only",
             "merge_into_namespaces",
+            "multi_agent_v2_enabled",
+            "namespace_tools_enabled",
             "register_code_mode_executors",
+            "search_tool_enabled",
             "spec_for_model_request",
+            "standalone_web_search_enabled",
+            "collab_tools_enabled",
         )
     }
     sites.update(
@@ -570,6 +624,13 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     spec_plan = _read(source_root, "codex-rs/core/src/tools/spec_plan.rs")
     router = _read(source_root, "codex-rs/core/src/tools/router.rs")
     mcp_tool_exposure = _read(source_root, "codex-rs/core/src/mcp_tool_exposure.rs")
+    multi_agents_v2 = _read(
+        source_root, "codex-rs/core/src/tools/handlers/multi_agents_v2.rs"
+    )
+    agent_communication = _read(source_root, "codex-rs/core/src/agent_communication.rs")
+    inter_agent_message = _read(
+        source_root, "codex-rs/core/src/context/inter_agent_message.rs"
+    )
     model_catalog = _read(source_root, "codex-rs/models-manager/models.json")
     client = _read(source_root, "codex-rs/core/src/client.rs")
     responses_metadata = _read(source_root, "codex-rs/core/src/responses_metadata.rs")
@@ -677,7 +738,13 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         "content_item_variants": _enum_variants(models, "ContentItem"),
         "endpoints": _string_constants(client, r"[A-Z0-9_]+_ENDPOINT"),
         "function_call_encrypted_args": _function_call_encrypted_args_contract(
-            models, router, client
+            models,
+            router,
+            client,
+            protocol,
+            multi_agents_v2,
+            agent_communication,
+            inter_agent_message,
         ),
         "message_phase_variants": _enum_variants(models, "MessagePhase"),
         "model_enum_variants": {

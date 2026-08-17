@@ -50,8 +50,16 @@ def test_tool_registration_inventory_uses_current_registry_owners():
         "append_extension_tool_executors",
         "append_mcp_tools",
         "apply_direct_model_only_namespace_overrides",
+        "collab_tools_enabled",
+        "image_generation_available",
+        "is_excluded_from_code_mode",
+        "is_hidden_by_code_mode_only",
+        "multi_agent_v2_enabled",
+        "namespace_tools_enabled",
+        "search_tool_enabled",
         "spec_for_model_request",
         "merge_into_namespaces",
+        "standalone_web_search_enabled",
         "register_code_mode_executors",
         "finalize_tool_router",
     }.issubset(registrations)
@@ -76,49 +84,131 @@ def _mutate_function_body(source: str, function_name: str) -> str:
     declaration_index = _find_function(source, function_name)
     open_index = source.find("{", declaration_index)
     assert open_index >= 0
-    _matching_brace(source, open_index)
+    close_index = _matching_brace(source, open_index)
     return (
         source[: open_index + 1]
-        + "\nlet _source_contract_mutation = true;"
-        + source[open_index + 1 :]
+        + '\npanic!("source-contract mutation")\n'
+        + source[close_index:]
     )
+
+
+def _replace_function_body(source: str, function_name: str, body: str) -> str:
+    declaration_index = _find_function(source, function_name)
+    open_index = source.find("{", declaration_index)
+    assert open_index >= 0
+    close_index = _matching_brace(source, open_index)
+    return source[: open_index + 1] + f"\n{body}\n" + source[close_index:]
+
+
+def _mutate_inter_agent_communication_method(source: str, method_name: str) -> str:
+    impl_match = re.search(r"\bimpl\s+InterAgentCommunication\s*\{", source)
+    assert impl_match is not None
+    impl_open = source.find("{", impl_match.start())
+    impl_close = _matching_brace(source, impl_open)
+    impl_body = source[impl_open + 1 : impl_close]
+    mutated_body = _mutate_function_body(impl_body, method_name)
+    return source[: impl_open + 1] + mutated_body + source[impl_close:]
+
+
+def _cp26_source_texts(source_root: Path) -> dict[str, str]:
+    paths = {
+        "models": "codex-rs/protocol/src/models.rs",
+        "router": "codex-rs/core/src/tools/router.rs",
+        "client": "codex-rs/core/src/client.rs",
+        "protocol": "codex-rs/protocol/src/protocol.rs",
+        "multi_agents_v2": "codex-rs/core/src/tools/handlers/multi_agents_v2.rs",
+        "agent_communication": "codex-rs/core/src/agent_communication.rs",
+        "inter_agent_message": "codex-rs/core/src/context/inter_agent_message.rs",
+    }
+    return {
+        name: (source_root / relative_path).read_text(encoding="utf-8")
+        for name, relative_path in paths.items()
+    }
 
 
 def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
     """Every CP-26 field/dispatch/log/filter owner must affect its snapshot group."""
     source_root = REPO_ROOT.parent / "openai-codex-src"
-    models = (source_root / "codex-rs/protocol/src/models.rs").read_text(
-        encoding="utf-8"
-    )
-    router = (source_root / "codex-rs/core/src/tools/router.rs").read_text(
-        encoding="utf-8"
-    )
-    client = (source_root / "codex-rs/core/src/client.rs").read_text(encoding="utf-8")
-    baseline = _function_call_encrypted_args_contract(models, router, client)
+    sources = _cp26_source_texts(source_root)
+    baseline = _function_call_encrypted_args_contract(**sources)
 
-    mutated_models = models.replace(
+    mutated_models = sources["models"].replace(
         "encrypted_function_args: Option<Vec<String>>",
         "encrypted_function_args: Vec<String>",
         1,
     )
-    assert mutated_models != models
+    assert mutated_models != sources["models"]
     assert (
-        _function_call_encrypted_args_contract(mutated_models, router, client)
+        _function_call_encrypted_args_contract(**{**sources, "models": mutated_models})
         != baseline
     )
 
     for owner in ("build_tool_call", "direct_source", "tool_log_payload"):
-        mutated_router = _mutate_function_body(router, owner)
+        mutated_router = _mutate_function_body(sources["router"], owner)
         assert (
-            _function_call_encrypted_args_contract(models, mutated_router, client)
+            _function_call_encrypted_args_contract(
+                **{**sources, "router": mutated_router}
+            )
             != baseline
         )
 
-    mutated_client = _mutate_function_body(client, "build_responses_request")
+    mutated_client = _mutate_function_body(sources["client"], "build_responses_request")
     assert (
-        _function_call_encrypted_args_contract(models, router, mutated_client)
+        _function_call_encrypted_args_contract(**{**sources, "client": mutated_client})
         != baseline
     )
+
+    for source_name, owner in (
+        ("multi_agents_v2", "communication_from_tool_message"),
+        ("agent_communication", "emit_agent_communication_send"),
+    ):
+        mutated = _mutate_function_body(sources[source_name], owner)
+        assert (
+            _function_call_encrypted_args_contract(**{**sources, source_name: mutated})
+            != baseline
+        )
+
+    mutated_protocol = sources["protocol"].replace(
+        "pub encrypted_content: Option<String>",
+        "pub encrypted_content: String",
+        1,
+    )
+    assert mutated_protocol != sources["protocol"]
+    assert (
+        _function_call_encrypted_args_contract(
+            **{**sources, "protocol": mutated_protocol}
+        )
+        != baseline
+    )
+    for owner in ("new", "new_encrypted"):
+        mutated_protocol = _mutate_inter_agent_communication_method(
+            sources["protocol"], owner
+        )
+        assert (
+            _function_call_encrypted_args_contract(
+                **{**sources, "protocol": mutated_protocol}
+            )
+            != baseline
+        )
+
+    mutated_message = sources["inter_agent_message"].replace(
+        "payload: String", "payload: Vec<u8>", 1
+    )
+    assert mutated_message != sources["inter_agent_message"]
+    assert (
+        _function_call_encrypted_args_contract(
+            **{**sources, "inter_agent_message": mutated_message}
+        )
+        != baseline
+    )
+    for owner in ("as_str", "new", "role", "markers", "type_markers", "body"):
+        mutated_message = _mutate_function_body(sources["inter_agent_message"], owner)
+        assert (
+            _function_call_encrypted_args_contract(
+                **{**sources, "inter_agent_message": mutated_message}
+            )
+            != baseline
+        )
 
 
 def test_new_tool_registration_owners_each_change_the_snapshot_group():
@@ -131,6 +221,24 @@ def test_new_tool_registration_owners_each_change_the_snapshot_group():
         source_root / "codex-rs/core/src/mcp_tool_exposure.rs"
     ).read_text(encoding="utf-8")
     baseline = _tool_registration_sites(source_root, spec_plan, mcp_tool_exposure)
+
+    for owner in (
+        "search_tool_enabled",
+        "namespace_tools_enabled",
+        "multi_agent_v2_enabled",
+        "collab_tools_enabled",
+        "image_generation_available",
+        "is_hidden_by_code_mode_only",
+        "is_excluded_from_code_mode",
+        "standalone_web_search_enabled",
+    ):
+        mutated = _tool_registration_sites(
+            source_root,
+            _replace_function_body(spec_plan, owner, "false"),
+            mcp_tool_exposure,
+        )
+        assert mutated != baseline
+        assert mutated[owner] != baseline[owner]
 
     for owner in (
         "apply_direct_model_only_namespace_overrides",

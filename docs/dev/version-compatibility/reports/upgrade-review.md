@@ -9,6 +9,14 @@ Date: 2026-08-17
 - Target: annotated tag `rust-v0.147.0`, peeled commit
   `be6e8eac029b183056b7e4402879f15d2c85f61b`. The previous reviewed source is
   `rust-v0.145.0` at `25af12f7e61572b0bc18ddb1008be543b91519b0`.
+- Point-in-time client: installed `codex-cli 0.145.0`. This records the client
+  present during analysis; it is not the target source identity or proof that
+  Codex 0.147.0 has been adopted.
+- Codex-Rosetta evidence identities: feature base
+  `345887ad933f8d302ebe75c63ec8bf0daae635bf`; pre-wave-2 final-reviewed head
+  `880a0d78c353f331a1d523d19dce6d28bc502704`. The exact repair/final release
+  head is intentionally left to subsequent bounded review and S04 evidence,
+  avoiding an impossible self-reference inside its own commit.
 - The bounded source range contains 565 commits and 2,025 changed paths.
 - The source-contract extractor now follows the current ToolRegistry owners:
   core sources, MCP exposure, extension contributors, dynamic runtimes,
@@ -19,7 +27,8 @@ Date: 2026-08-17
   detectable. It is **not** a compatibility or release approval.
 - No live-agent test was run in this section. The package remains
   `0.144.0.r0`; the complete live inventory is mandatory and no failed or
-  unverified mandatory cell may be waived.
+  unverified mandatory cell may be waived. This analysis is neither release
+  approval nor publication evidence.
 
 ## Full CP classification
 

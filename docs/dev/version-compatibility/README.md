@@ -29,8 +29,11 @@ Inspection date: 2026-08-17
 
 | Project | Current Value | Description |
 | --- | --- | --- |
+| Point-in-time installed Codex CLI | `codex-cli 0.145.0` | Client present during the 0.147 source analysis; it is not the target source identity or an adoption claim |
 | Target Codex source | `rust-v0.147.0` | Exact annotated release tag in `../openai-codex-src` |
 | Peeled source commit | `be6e8eac029b183056b7e4402879f15d2c85f61b` | Source identity used by the reviewed contract snapshot |
+| Codex-Rosetta feature base | `345887ad933f8d302ebe75c63ec8bf0daae635bf` | Base of the bounded 0.147 adaptation; distinct from both the target source and the evidence head |
+| Pre-wave-2 reviewed evidence head | `880a0d78c353f331a1d523d19dce6d28bc502704` | Exact head examined by the first final-bounded review; the repair and final release heads are bound by subsequent review/S04 evidence rather than self-referenced here |
 | Review mode | Full inventory | Explicit developer decision; CP-01 through CP-26 are classified in the upgrade report |
 | Codex-Rosetta package version | `0.144.0.r0` | Intentionally unchanged until every deterministic and live gate passes |
 

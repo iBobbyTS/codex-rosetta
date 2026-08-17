@@ -87,7 +87,9 @@
       "RESPONSES_ENDPOINT": "/responses"
     },
     "function_call_encrypted_args": {
+      "agent_communication_log_sha256": "ea043a6ad59cbcb3cc70bd531f39fdbe34da7ccd24bb39382b888a9f6d90ee46",
       "build_tool_call_sha256": "9e0c29bfeb1e501d15a963d4806d3b783e87e4619a1539307877a58183e6b433",
+      "communication_from_tool_message_sha256": "a2e2347363564a888bb421a3776c090fdabf8eecb36d204bc943b0876b2446e5",
       "direct_source_sha256": "886a50e3a2ba7f3ad4c06120eab11a00e2f42775b1e016846bc5549eabb0e318",
       "function_call_fields": {
         "arguments": {
@@ -130,6 +132,83 @@
           ],
           "type": "Option<String>"
         }
+      },
+      "inter_agent_communication_fields": {
+        "author": {
+          "attributes": [],
+          "type": "AgentPath"
+        },
+        "content": {
+          "attributes": [],
+          "type": "String"
+        },
+        "encrypted_content": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<String>"
+        },
+        "id": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<ResponseItemId>"
+        },
+        "internal_chat_message_metadata_passthrough": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<InternalChatMessageMetadataPassthrough>"
+        },
+        "other_recipients": {
+          "attributes": [
+            "#[serde(default)]"
+          ],
+          "type": "Vec<AgentPath>"
+        },
+        "recipient": {
+          "attributes": [],
+          "type": "AgentPath"
+        },
+        "trigger_turn": {
+          "attributes": [],
+          "type": "bool"
+        }
+      },
+      "inter_agent_communication_new_encrypted_sha256": "fa1b6e0cdd731d6c2f36910d9301c68c63b8098240555b1194ac402b04e82131",
+      "inter_agent_communication_new_sha256": "85ae95aa38b7214f8c330c1027163585a34667aafd72d2e3442b378653a21a2c",
+      "inter_agent_message_delivery": {
+        "as_str_sha256": "c368128715efda396e68295f395f71bfe2af704d17b8a0d3f3a422f75f284b72",
+        "body_sha256": "d3e57e06e4a04f55bcf3dd4de3a146395ccc5083450f041e088f9b92569f51b1",
+        "fields": {
+          "message_type": {
+            "attributes": [],
+            "type": "InterAgentMessageType"
+          },
+          "payload": {
+            "attributes": [],
+            "type": "String"
+          },
+          "sender": {
+            "attributes": [],
+            "type": "AgentPath"
+          },
+          "task_name": {
+            "attributes": [],
+            "type": "AgentPath"
+          }
+        },
+        "markers_sha256": "2d06af5c6ae119d74216c9816b274fd3b71abe2a7d6e0413207e5ba0ffaef899",
+        "message_type_variants": [
+          "Message",
+          "NewTask"
+        ],
+        "new_sha256": "1963fa01913163e086d4cac3904b2298b20a6eaf4d7518e1d103063861beb5b6",
+        "role_sha256": "87670fb85f1f2e19112e124f95778c7eaebb58af31f62dc7cb48ec6151f8e0f9",
+        "type_markers_sha256": "afd466c6f001b43a3584b0f648203f3cde31b26293aa48b61ff3ce2bc0e5c045"
       },
       "provider_filter_sha256": "9a556d69acb8101fe8d6c2835633dd4b79c4f59790fbccd5437d2bab23dc107f",
       "tool_call_fields": {
@@ -886,6 +965,10 @@
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "00c43b3744f4e42f8d5d8536367eb94d27c8cd3eaf34ed6e148cf60d1f9ce3f7"
       },
+      "collab_tools_enabled": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "f274af055d6f656c65746aff8ac64fd6e4a424d9dd6c7b77c9772eb50501287b"
+      },
       "extension_tool_executors": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "0ec9d73959ea429023840ed5bd04ac633294e0e4b510302fce6b606e474a16a3"
@@ -898,17 +981,45 @@
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "f730a0468b41ff21efe2170465616af7570888519c2c4360584e1b2359269170"
       },
+      "image_generation_available": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "0cfbdd2c76d44ba1d3775207e54cd02945759a129e6208eb805d59a7f68d3e08"
+      },
+      "is_excluded_from_code_mode": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "693a8064a45dd10c8f2ab7f946508327c3483b672baa41a8d9d40cf970e217cf"
+      },
+      "is_hidden_by_code_mode_only": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "8030005d377074cdb7dc93fba89e77daacda5e6de72387547e5b862efa256c23"
+      },
       "merge_into_namespaces": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "a4e96797d7f3916632fbaaecd784edc594c538386f46be213c0ecc57046d58bb"
+      },
+      "multi_agent_v2_enabled": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "39e6938e7dab8e0282e892ac84269940c90f7eb5749563810eaa764b60c466e7"
+      },
+      "namespace_tools_enabled": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "94391e9c855c21e02fd47c411bc8d0d1cdb0976f4db0e88aae55b01b2eef12cc"
       },
       "register_code_mode_executors": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "de2605b3a76993b98661d9b09105505fb843d6b4b21be586a969b82b048d501a"
       },
+      "search_tool_enabled": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "fbf818c2b5e8408c5390bc9a6e758693d281a1308d752ebab4e3c74f0575742f"
+      },
       "spec_for_model_request": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "a7b5c3f8f3a1cdaa04cd0f3490a3c12898a0d295055d024ef31e281f306d65fc"
+      },
+      "standalone_web_search_enabled": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "d009115a8fc8cb1dcee6e83311baa248e137ed033bffd182b78177486041fb20"
       }
     },
     "tool_spec_web_search_fields": {
