@@ -1259,7 +1259,10 @@ def _bind_provider_current_recorders(  # noqa: C901
                 names = group.get("provider")
                 if not isinstance(names, list) or provider_name not in names:
                     raise ValueError
-                group["provider"] = [provider_name, *[item for item in names if item != provider_name]]
+                group["provider"] = [
+                    provider_name,
+                    *[item for item in names if item != provider_name],
+                ]
                 write_config(config_path, document)
             except asyncio.CancelledError:
                 raise

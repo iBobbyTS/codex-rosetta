@@ -1435,7 +1435,9 @@ class TestModelGroups:
         )
         ring = cfg.model_group_rings["test-llm"]
         ring.mark_failed("test")
-        assert cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
+        assert (
+            cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
+        )
         assert ring.next_available("test") == "secondary"
 
     def test_provider_list_rejects_duplicate_or_mixed_api_types(self):
@@ -1481,8 +1483,14 @@ class TestModelGroups:
             assert await _rotate_model_group_after_upstream_failure(
                 object(), cfg, "gpt-test", "test"
             )
-            assert cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
-            assert cfg.resolve("openai_responses", "gpt-5.6-terra")[0].provider_name == "test"
+            assert (
+                cfg.resolve("openai_responses", "gpt-test")[0].provider_name
+                == "secondary"
+            )
+            assert (
+                cfg.resolve("openai_responses", "gpt-5.6-terra")[0].provider_name
+                == "test"
+            )
             assert writes == [("test-llm", "secondary")]
             assert not await _rotate_model_group_after_upstream_failure(
                 object(), cfg, "gpt-test", "secondary"

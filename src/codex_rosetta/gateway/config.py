@@ -1509,9 +1509,16 @@ class GatewayConfig:
         if ring is not None:
             provider_name = ring.current
             # A disabled/cooling candidate must never become a fresh route.
-            if provider_name not in self.providers or provider_name not in ring.available():
+            if (
+                provider_name not in self.providers
+                or provider_name not in ring.available()
+            ):
                 provider_name = next(
-                    (candidate for candidate in ring.available() if candidate in self.providers),
+                    (
+                        candidate
+                        for candidate in ring.available()
+                        if candidate in self.providers
+                    ),
                     provider_name,
                 )
         provider_type = self.provider_types[provider_name]
