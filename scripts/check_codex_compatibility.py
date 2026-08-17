@@ -31,6 +31,7 @@ HIGH_CONFIDENCE_CONTRACT_KEYS = {
     "codex_header_constants",
     "code_mode_exec_shape",
     "endpoints",
+    "function_call_encrypted_args",
     "model_messages_fields",
     "model_info_fields",
     "permission_messages_fields",
@@ -62,6 +63,10 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
         "description, and command schema match"
     ),
     "endpoints": "extracted endpoint constants match",
+    "function_call_encrypted_args": (
+        "FunctionCall field contract, ToolCall delivery-source and log-redaction "
+        "semantics, and non-OpenAI provider filtering match"
+    ),
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
     "permission_messages_fields": (
@@ -141,7 +146,7 @@ def _find_declaration(text: str, declaration: str, name: str) -> int:
 
 
 def _find_function(text: str, name: str) -> int:
-    pattern = re.compile(rf"\bpub(?:\(crate\))?\s+fn\s+{re.escape(name)}\b")
+    pattern = re.compile(rf"\b(?:pub(?:\(crate\))?\s+)?fn\s+{re.escape(name)}\b")
     match = pattern.search(text)
     if match is None:
         raise ContractExtractionError(f"missing function declaration: {name}")
@@ -386,6 +391,95 @@ def _function_body_sha256(text: str, name: str) -> str:
     return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
+def _function_call_encrypted_args_contract(
+    models: str, router: str, client: str
+) -> dict[str, Any]:
+    """Extract the CP-26 field, dispatch, logging, and provider-filter owners."""
+    return {
+        "function_call_fields": _enum_variant_field_contracts(
+            models, "ResponseItem", "FunctionCall"
+        ),
+        "tool_call_fields": _struct_field_contracts(router, "ToolCall"),
+        "build_tool_call_sha256": _function_body_sha256(router, "build_tool_call"),
+        "direct_source_sha256": _function_body_sha256(router, "direct_source"),
+        "tool_log_payload_sha256": _function_body_sha256(router, "tool_log_payload"),
+        "provider_filter_sha256": _function_body_sha256(
+            client, "build_responses_request"
+        ),
+    }
+
+
+def _tool_registration_sites(
+    source_root: Path, spec_plan: str, mcp_tool_exposure: str
+) -> dict[str, dict[str, str]]:
+    """Extract current ToolRegistry registration and model-visible assembly owners."""
+    extension_sources = {
+        "GoalExtension::tools": "codex-rs/ext/goal/src/extension.rs",
+        "ImageGenerationExtension::tools": (
+            "codex-rs/ext/image-generation/src/extension.rs"
+        ),
+        "MemoriesExtension::tools": "codex-rs/ext/memories/src/extension.rs",
+        "SkillsExtension::tools": "codex-rs/ext/skills/src/extension.rs",
+        "WebSearchExtension::tools": "codex-rs/ext/web-search/src/extension.rs",
+        "McpToolContributor::tools": (
+            "codex-rs/ext/extension-api/src/contributors/mcp.rs"
+        ),
+    }
+    sites = {
+        name: {
+            "path": "codex-rs/core/src/tools/spec_plan.rs",
+            "sha256": _function_body_sha256(spec_plan, name),
+        }
+        for name in (
+            "apply_direct_model_only_namespace_overrides",
+            "apply_mcp_tool_exposure_policy",
+            "add_collaboration_tools",
+            "add_core_tool_sources",
+            "add_core_utility_tools",
+            "add_mcp_resource_tools",
+            "add_shell_tools",
+            "append_dynamic_tool_runtimes",
+            "append_extension_tool_executors",
+            "append_tool_search_executor",
+            "build_model_visible_specs",
+            "build_tool_router",
+            "extension_tool_executors",
+            "finalize_tool_router",
+            "hosted_model_tool_specs",
+            "merge_into_namespaces",
+            "register_code_mode_executors",
+            "spec_for_model_request",
+        )
+    }
+    sites.update(
+        {
+            name: {
+                "path": relative_path,
+                "sha256": hashlib.sha256(
+                    _read(source_root, relative_path).encode("utf-8")
+                ).hexdigest(),
+            }
+            for name, relative_path in extension_sources.items()
+        }
+    )
+    sites["append_mcp_tools"] = {
+        "path": "codex-rs/core/src/mcp_tool_exposure.rs",
+        # The constants and filter helpers surrounding append_mcp_tools own Apps
+        # eligibility and per-tool/total budgets, so bind the complete module.
+        "sha256": hashlib.sha256(mcp_tool_exposure.encode("utf-8")).hexdigest(),
+    }
+    sites["CoreToolPlanContext::core_sources"] = {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": _function_body_sha256(spec_plan, "add_core_tool_sources"),
+    }
+    for tool_spec_kind in ("Function", "Namespace"):
+        sites[f"append_dynamic_tool_runtimes::{tool_spec_kind}"] = {
+            "path": "codex-rs/core/src/tools/spec_plan.rs",
+            "sha256": _function_body_sha256(spec_plan, "append_dynamic_tool_runtimes"),
+        }
+    return dict(sorted(sites.items()))
+
+
 def _responses_lite_model_fields(models_json: str) -> list[dict[str, Any]]:
     try:
         payload = json.loads(models_json)
@@ -474,18 +568,8 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
     tool_spec = _read(source_root, "codex-rs/tools/src/tool_spec.rs")
     tool_executor = _read(source_root, "codex-rs/tools/src/tool_executor.rs")
     spec_plan = _read(source_root, "codex-rs/core/src/tools/spec_plan.rs")
-    extension_sources = {
-        "GoalExtension::tools": "codex-rs/ext/goal/src/extension.rs",
-        "ImageGenerationExtension::tools": (
-            "codex-rs/ext/image-generation/src/extension.rs"
-        ),
-        "MemoriesExtension::tools": "codex-rs/ext/memories/src/extension.rs",
-        "SkillsExtension::tools": "codex-rs/ext/skills/src/extension.rs",
-        "WebSearchExtension::tools": "codex-rs/ext/web-search/src/extension.rs",
-        "McpToolContributor::tools": (
-            "codex-rs/ext/extension-api/src/contributors/mcp.rs"
-        ),
-    }
+    router = _read(source_root, "codex-rs/core/src/tools/router.rs")
+    mcp_tool_exposure = _read(source_root, "codex-rs/core/src/mcp_tool_exposure.rs")
     model_catalog = _read(source_root, "codex-rs/models-manager/models.json")
     client = _read(source_root, "codex-rs/core/src/client.rs")
     responses_metadata = _read(source_root, "codex-rs/core/src/responses_metadata.rs")
@@ -592,6 +676,9 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         "compaction_input_fields": _struct_fields(common, "CompactionInput"),
         "content_item_variants": _enum_variants(models, "ContentItem"),
         "endpoints": _string_constants(client, r"[A-Z0-9_]+_ENDPOINT"),
+        "function_call_encrypted_args": _function_call_encrypted_args_contract(
+            models, router, client
+        ),
         "message_phase_variants": _enum_variants(models, "MessagePhase"),
         "model_enum_variants": {
             "ApplyPatchToolType": _enum_variants(openai_models, "ApplyPatchToolType"),
@@ -686,56 +773,9 @@ def extract_contract(source_root: Path) -> dict[str, Any]:
         ),
         "tool_spec_wire_types": _serde_enum_wire_types(tool_spec, "ToolSpec"),
         "tool_exposure_variants": _enum_variants(tool_executor, "ToolExposure"),
-        "tool_registration_sites": {
-            **{
-                name: {
-                    "path": "codex-rs/core/src/tools/spec_plan.rs",
-                    "sha256": _function_body_sha256(spec_plan, name),
-                }
-                for name in (
-                    "apply_mcp_tool_exposure_policy",
-                    "add_collaboration_tools",
-                    "add_core_tool_sources",
-                    "add_core_utility_tools",
-                    "add_mcp_resource_tools",
-                    "add_shell_tools",
-                    "append_dynamic_tool_runtimes",
-                    "append_extension_tool_executors",
-                    "append_tool_search_executor",
-                    "build_model_visible_specs",
-                    "build_tool_router",
-                    "extension_tool_executors",
-                    "finalize_tool_router",
-                    "hosted_model_tool_specs",
-                    "register_code_mode_executors",
-                )
-            },
-            **{
-                name: {
-                    "path": relative_path,
-                    "sha256": hashlib.sha256(
-                        _read(source_root, relative_path).encode("utf-8")
-                    ).hexdigest(),
-                }
-                for name, relative_path in extension_sources.items()
-            },
-            "CoreToolPlanContext::core_sources": {
-                "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(spec_plan, "add_core_tool_sources"),
-            },
-            "append_dynamic_tool_runtimes::Function": {
-                "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(
-                    spec_plan, "append_dynamic_tool_runtimes"
-                ),
-            },
-            "append_dynamic_tool_runtimes::Namespace": {
-                "path": "codex-rs/core/src/tools/spec_plan.rs",
-                "sha256": _function_body_sha256(
-                    spec_plan, "append_dynamic_tool_runtimes"
-                ),
-            },
-        },
+        "tool_registration_sites": _tool_registration_sites(
+            source_root, spec_plan, mcp_tool_exposure
+        ),
         "transport_constants": _string_constants(
             client, r"RESPONSES_WEBSOCKETS_[A-Z0-9_]+_HEADER_VALUE"
         ),

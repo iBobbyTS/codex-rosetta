@@ -22,10 +22,16 @@ SCRIPT = runpy.run_path(str(SCRIPT_PATH))
 
 _enum_variants = SCRIPT["_enum_variants"]
 _enum_variant_field_contracts = SCRIPT["_enum_variant_field_contracts"]
+_find_function = SCRIPT["_find_function"]
+_function_call_encrypted_args_contract = SCRIPT[
+    "_function_call_encrypted_args_contract"
+]
+_matching_brace = SCRIPT["_matching_brace"]
 _responses_lite_model_fields = SCRIPT["_responses_lite_model_fields"]
 _serde_enum_wire_types = SCRIPT["_serde_enum_wire_types"]
 _struct_field_contracts = SCRIPT["_struct_field_contracts"]
 _struct_fields = SCRIPT["_struct_fields"]
+_tool_registration_sites = SCRIPT["_tool_registration_sites"]
 compare_snapshots = SCRIPT["compare_snapshots"]
 classify_snapshots = SCRIPT["classify_snapshots"]
 render_classification = SCRIPT["render_classification"]
@@ -42,6 +48,10 @@ def test_tool_registration_inventory_uses_current_registry_owners():
         "add_core_tool_sources",
         "append_dynamic_tool_runtimes",
         "append_extension_tool_executors",
+        "append_mcp_tools",
+        "apply_direct_model_only_namespace_overrides",
+        "spec_for_model_request",
+        "merge_into_namespaces",
         "register_code_mode_executors",
         "finalize_tool_router",
     }.issubset(registrations)
@@ -51,6 +61,112 @@ def test_tool_registration_inventory_uses_current_registry_owners():
         "add_tool_sources",
         "prepend_code_mode_executors",
     }.isdisjoint(registrations)
+
+    encrypted_args = baseline["contract"]["function_call_encrypted_args"]
+    assert encrypted_args["function_call_fields"]["encrypted_function_args"] == {
+        "attributes": [
+            '#[serde(default, skip_serializing_if = "Option::is_none")]',
+            "#[ts(optional)]",
+        ],
+        "type": "Option<Vec<String>>",
+    }
+
+
+def _mutate_function_body(source: str, function_name: str) -> str:
+    declaration_index = _find_function(source, function_name)
+    open_index = source.find("{", declaration_index)
+    assert open_index >= 0
+    _matching_brace(source, open_index)
+    return (
+        source[: open_index + 1]
+        + "\nlet _source_contract_mutation = true;"
+        + source[open_index + 1 :]
+    )
+
+
+def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
+    """Every CP-26 field/dispatch/log/filter owner must affect its snapshot group."""
+    source_root = REPO_ROOT.parent / "openai-codex-src"
+    models = (source_root / "codex-rs/protocol/src/models.rs").read_text(
+        encoding="utf-8"
+    )
+    router = (source_root / "codex-rs/core/src/tools/router.rs").read_text(
+        encoding="utf-8"
+    )
+    client = (source_root / "codex-rs/core/src/client.rs").read_text(encoding="utf-8")
+    baseline = _function_call_encrypted_args_contract(models, router, client)
+
+    mutated_models = models.replace(
+        "encrypted_function_args: Option<Vec<String>>",
+        "encrypted_function_args: Vec<String>",
+        1,
+    )
+    assert mutated_models != models
+    assert (
+        _function_call_encrypted_args_contract(mutated_models, router, client)
+        != baseline
+    )
+
+    for owner in ("build_tool_call", "direct_source", "tool_log_payload"):
+        mutated_router = _mutate_function_body(router, owner)
+        assert (
+            _function_call_encrypted_args_contract(models, mutated_router, client)
+            != baseline
+        )
+
+    mutated_client = _mutate_function_body(client, "build_responses_request")
+    assert (
+        _function_call_encrypted_args_contract(models, router, mutated_client)
+        != baseline
+    )
+
+
+def test_new_tool_registration_owners_each_change_the_snapshot_group():
+    """Transitive MCP and model-visible assembly changes must invalidate the snapshot."""
+    source_root = REPO_ROOT.parent / "openai-codex-src"
+    spec_plan = (source_root / "codex-rs/core/src/tools/spec_plan.rs").read_text(
+        encoding="utf-8"
+    )
+    mcp_tool_exposure = (
+        source_root / "codex-rs/core/src/mcp_tool_exposure.rs"
+    ).read_text(encoding="utf-8")
+    baseline = _tool_registration_sites(source_root, spec_plan, mcp_tool_exposure)
+
+    for owner in (
+        "apply_direct_model_only_namespace_overrides",
+        "spec_for_model_request",
+        "merge_into_namespaces",
+    ):
+        mutated = _tool_registration_sites(
+            source_root,
+            _mutate_function_body(spec_plan, owner),
+            mcp_tool_exposure,
+        )
+        assert mutated != baseline
+        assert mutated[owner] != baseline[owner]
+
+    mcp_owner_mutations = [
+        _mutate_function_body(mcp_tool_exposure, "append_mcp_tools"),
+        _mutate_function_body(
+            mcp_tool_exposure, "filter_non_codex_apps_mcp_tools_only"
+        ),
+        _mutate_function_body(mcp_tool_exposure, "filter_codex_apps_mcp_tools"),
+        mcp_tool_exposure.replace(
+            "MAX_AGENT_PLUGIN_MCP_SPEC_BYTES: usize = 8_000",
+            "MAX_AGENT_PLUGIN_MCP_SPEC_BYTES: usize = 8_001",
+            1,
+        ),
+        mcp_tool_exposure.replace(
+            "MAX_AGENT_PLUGIN_MCP_TOTAL_BYTES: usize = 64_000",
+            "MAX_AGENT_PLUGIN_MCP_TOTAL_BYTES: usize = 64_001",
+            1,
+        ),
+    ]
+    for mutated_mcp in mcp_owner_mutations:
+        assert mutated_mcp != mcp_tool_exposure
+        mutated = _tool_registration_sites(source_root, spec_plan, mutated_mcp)
+        assert mutated != baseline
+        assert mutated["append_mcp_tools"] != baseline["append_mcp_tools"]
 
 
 def test_compatibility_ledger_has_one_registry_overview_and_matrix_row_per_point():

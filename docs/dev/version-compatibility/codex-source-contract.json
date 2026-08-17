@@ -86,6 +86,72 @@
       "RESPONSES_COMPACT_ENDPOINT": "/responses/compact",
       "RESPONSES_ENDPOINT": "/responses"
     },
+    "function_call_encrypted_args": {
+      "build_tool_call_sha256": "9e0c29bfeb1e501d15a963d4806d3b783e87e4619a1539307877a58183e6b433",
+      "direct_source_sha256": "886a50e3a2ba7f3ad4c06120eab11a00e2f42775b1e016846bc5549eabb0e318",
+      "function_call_fields": {
+        "arguments": {
+          "attributes": [],
+          "type": "String"
+        },
+        "call_id": {
+          "attributes": [],
+          "type": "String"
+        },
+        "encrypted_function_args": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<Vec<String>>"
+        },
+        "id": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<ResponseItemId>"
+        },
+        "internal_chat_message_metadata_passthrough": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<InternalChatMessageMetadataPassthrough>"
+        },
+        "name": {
+          "attributes": [],
+          "type": "String"
+        },
+        "namespace": {
+          "attributes": [
+            "#[serde(default, skip_serializing_if = \"Option::is_none\")]",
+            "#[ts(optional)]"
+          ],
+          "type": "Option<String>"
+        }
+      },
+      "provider_filter_sha256": "9a556d69acb8101fe8d6c2835633dd4b79c4f59790fbccd5437d2bab23dc107f",
+      "tool_call_fields": {
+        "call_id": {
+          "attributes": [],
+          "type": "String"
+        },
+        "encrypted_function_args": {
+          "attributes": [],
+          "type": "Option<Vec<String>>"
+        },
+        "payload": {
+          "attributes": [],
+          "type": "ToolPayload"
+        },
+        "tool_name": {
+          "attributes": [],
+          "type": "ToolName"
+        }
+      },
+      "tool_log_payload_sha256": "abb24dd7311c06496af6ceae74200d5ff537bd3dd60d33fef8fb1bbc81314671"
+    },
     "message_phase_variants": [
       "Commentary",
       "FinalAnswer"
@@ -796,9 +862,17 @@
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "5498cf6e57b4a5d5ebfd2170746cfaa69d5a3caf8cccf0cf756b011db4a7fec8"
       },
+      "append_mcp_tools": {
+        "path": "codex-rs/core/src/mcp_tool_exposure.rs",
+        "sha256": "db17c47bfbc83a441023241db1dc6637bb4598021af0acf6d68b3333b08bfed6"
+      },
       "append_tool_search_executor": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "c809bfd99e0dca9b7366e127dea19c25ca97e800ae0c550879e4cd5e5d8b20c6"
+      },
+      "apply_direct_model_only_namespace_overrides": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "5f801e31ff80aec4eca0048d20a9df93075b201ec00a6e994abc40cbbe35cd12"
       },
       "apply_mcp_tool_exposure_policy": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -824,9 +898,17 @@
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "f730a0468b41ff21efe2170465616af7570888519c2c4360584e1b2359269170"
       },
+      "merge_into_namespaces": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "a4e96797d7f3916632fbaaecd784edc594c538386f46be213c0ecc57046d58bb"
+      },
       "register_code_mode_executors": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "de2605b3a76993b98661d9b09105505fb843d6b4b21be586a969b82b048d501a"
+      },
+      "spec_for_model_request": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "a7b5c3f8f3a1cdaa04cd0f3490a3c12898a0d295055d024ef31e281f306d65fc"
       }
     },
     "tool_spec_web_search_fields": {

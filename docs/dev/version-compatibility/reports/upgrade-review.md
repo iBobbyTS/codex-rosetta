@@ -33,7 +33,7 @@ source inventory and CP-26's already-existing conversion behavior.
 | --- | --- | --- |
 | `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint and core header constants remain stable; new image-turn identity and Provider capabilities are owned by CP-03/21. Live ingress/auth/error capture remains mandatory. |
 | `CP-02 — Responses transparent handling` | Changed | Direct Responses must transparently retain new request metadata, usage fields, and `encrypted_function_args`; focused direct passthrough coverage includes the marker. |
-| `CP-03 — Codex Search and Images endpoints` | Changed | Images adds turn identity and transparent-background result metadata; standalone Search eligibility changes. S03 owns runtime/Provider work and the live route matrix. |
+| `CP-03 — Codex Search and Images endpoints` | Changed | Images adds turn identity and transparent-background result metadata; standalone Search eligibility changes. S02.1 owns deterministic Images runtime work, S03 owns only the managed local-mode standalone Search Provider opt-in, and S04 owns the live route matrix. |
 | `CP-04 — Request and window identity` | Changed | `parent_turn_id` and Code Mode tool-name metadata join the turn metadata contract; converted ownership must remain explicit. |
 | `CP-05 — Responses→Chat bridge` | Changed | The new collaboration marker is intentionally discarded on Chat conversion; new Responses-only metadata must not leak or be fabricated. |
 | `CP-06 — Responses Lite / additional_tools` | Changed | Function/freeform/Namespace assembly moved under the centralized registry and Lite projection must be requalified. |
@@ -50,7 +50,7 @@ source inventory and CP-26's already-existing conversion behavior.
 | `CP-17 — Stream lifecycle` | Changed | Completed usage gains `codex_rollout_budget_units`; direct transport preserves it and converted paths must never fabricate it. |
 | `CP-18 — Message phase` | Possibly unchanged | Phase enum and current bridge ownership show no mapped semantic delta; full UI/tool lifecycle evidence remains required. |
 | `CP-19 — Reasoning` | Possibly unchanged | Reasoning field names remain stable; model-catalog and compaction changes still require the full reasoning/continuation matrix. |
-| `CP-20 — Context compaction resilience` | Changed | Provider compaction capability becomes unsupported/V1/V2 and the fallback implementation changed; S03/S04 own deterministic and live requalification. |
+| `CP-20 — Context compaction resilience` | Changed | Provider compaction capability becomes unsupported/V1/V2 and the fallback implementation changed; S02.1 owns deterministic runtime requalification and S04 owns live evidence. |
 | `CP-21 — GPT relay provider identity` | Changed | Provider capabilities add standalone search/external web access and remote compaction selection; identity must not infer unsupported endpoints. |
 | `CP-22 — Model-group tool profiles` | Changed | New catalog capability fields and ToolExposure variants affect the model-visible surface; Tool Profile/catalog data remain the sole declaration owner. |
 | `CP-23 — Static tool catalog` | Changed | Tool registrations now flow through ToolRegistry and extension contributors; S02 must synchronize the exact static/source inventory rather than copy old registration names. |
