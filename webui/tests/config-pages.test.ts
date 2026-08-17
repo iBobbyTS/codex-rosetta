@@ -802,6 +802,14 @@ describe('KeysPage', () => {
 });
 
 describe('ModelsPage', () => {
+  it('left-aligns the model-group provider menu', async () => {
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.click(screen.getByLabelText('Provider'));
+    expect(document.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
+  });
+
   it('writes only the model-group contract fields', async () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
     render(ModelsPage);
