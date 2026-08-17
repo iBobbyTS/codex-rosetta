@@ -215,6 +215,32 @@ def test_cp26_snapshot_changes_for_each_field_and_semantic_owner():
             != baseline
         )
 
+    localized_conversion_methods = {
+        "to_model_input_item": ("inter_agent_communication_to_model_input_item_sha256"),
+        "to_response_input_item": (
+            "inter_agent_communication_to_response_input_item_sha256"
+        ),
+    }
+    for owner, snapshot_key in localized_conversion_methods.items():
+        mutated_protocol = _mutate_inter_agent_communication_method(
+            sources["protocol"], owner
+        )
+        mutated = _function_call_encrypted_args_contract(
+            **{**sources, "protocol": mutated_protocol}
+        )
+        assert mutated != baseline
+        assert mutated[snapshot_key] != baseline[snapshot_key]
+        assert mutated["protocol_module_sha256"] != baseline["protocol_module_sha256"]
+
+    mutated_protocol = _mutate_inter_agent_communication_method(
+        sources["protocol"], "set_turn_id_if_missing"
+    )
+    mutated = _function_call_encrypted_args_contract(
+        **{**sources, "protocol": mutated_protocol}
+    )
+    assert mutated != baseline
+    assert mutated["protocol_module_sha256"] != baseline["protocol_module_sha256"]
+
     mutated_message = sources["inter_agent_message"].replace(
         "payload: String", "payload: Vec<u8>", 1
     )

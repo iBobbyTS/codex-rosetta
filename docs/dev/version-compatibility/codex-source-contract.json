@@ -180,6 +180,8 @@
       },
       "inter_agent_communication_new_encrypted_sha256": "fa1b6e0cdd731d6c2f36910d9301c68c63b8098240555b1194ac402b04e82131",
       "inter_agent_communication_new_sha256": "85ae95aa38b7214f8c330c1027163585a34667aafd72d2e3442b378653a21a2c",
+      "inter_agent_communication_to_model_input_item_sha256": "4d4b80e07fc80b5c721f947fc3add8537fe4e0e5b916fc680d45cfcf92c832ef",
+      "inter_agent_communication_to_response_input_item_sha256": "d72582f712a539cd8c6b89f15d31b7e06384df0b7c58be910b24642f41f6f5bb",
       "inter_agent_message_delivery": {
         "as_str_sha256": "c368128715efda396e68295f395f71bfe2af704d17b8a0d3f3a422f75f284b72",
         "body_sha256": "d3e57e06e4a04f55bcf3dd4de3a146395ccc5083450f041e088f9b92569f51b1",
@@ -218,6 +220,7 @@
         "codex-rs/core/src/tools/parallel.rs": "2eb773163bcbc007ab42e2c9221cdc4158568da534c9c3bfe8819d80a8cb23f8",
         "codex-rs/core/src/tools/registry.rs": "bf5cb173ffe783cfa5670064a37aea2e9536085c05a5a9a33b5fe72c3c57ed18"
       },
+      "protocol_module_sha256": "6de87633a0a2aa55377d073917e18cda5834fa0841be6bae2c0846d8e7739cec",
       "provider_filter_sha256": "9a556d69acb8101fe8d6c2835633dd4b79c4f59790fbccd5437d2bab23dc107f",
       "tool_call_fields": {
         "call_id": {

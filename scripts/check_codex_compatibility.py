@@ -64,8 +64,8 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     ),
     "endpoints": "extracted endpoint constants match",
     "function_call_encrypted_args": (
-        "FunctionCall and inter-agent wire fields, localized delivery/redaction owners, "
-        "and complete frozen production-linkage module contents match"
+        "complete protocol.rs and frozen production-linkage modules plus localized "
+        "FunctionCall/inter-agent delivery and redaction owners match"
     ),
     "model_messages_fields": "ModelMessages field names, Rust types, and attributes match",
     "model_info_fields": "ModelInfo field names, Rust types, and attributes match",
@@ -440,6 +440,16 @@ def _function_call_encrypted_args_contract(
         "inter_agent_communication_new_sha256": _impl_method_body_sha256(
             protocol, "InterAgentCommunication", "new"
         ),
+        "inter_agent_communication_to_model_input_item_sha256": (
+            _impl_method_body_sha256(
+                protocol, "InterAgentCommunication", "to_model_input_item"
+            )
+        ),
+        "inter_agent_communication_to_response_input_item_sha256": (
+            _impl_method_body_sha256(
+                protocol, "InterAgentCommunication", "to_response_input_item"
+            )
+        ),
         "inter_agent_message_delivery": {
             "as_str_sha256": _function_body_sha256(inter_agent_message, "as_str"),
             "body_sha256": _function_body_sha256(inter_agent_message, "body"),
@@ -465,6 +475,7 @@ def _function_call_encrypted_args_contract(
             path: hashlib.sha256(source.encode("utf-8")).hexdigest()
             for path, source in sorted(linkage_modules.items())
         },
+        "protocol_module_sha256": hashlib.sha256(protocol.encode("utf-8")).hexdigest(),
     }
 
 
