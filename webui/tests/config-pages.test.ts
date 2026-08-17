@@ -833,7 +833,7 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    const providerSelect = screen.getByLabelText('Provider');
+    const providerSelect = screen.getByLabelText('Add provider');
     const profileSelect = document.getElementById('modelGroupToolProfile');
     expect(providerSelect.closest('.model-group-modal')).toBeInTheDocument();
     expect(providerSelect.closest('.model-group-dropdown-field')).toBeInTheDocument();
@@ -850,7 +850,72 @@ describe('ModelsPage', () => {
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { provider: 'upstream', type: 'llm', models: { 'demo-model': {} } }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { providers: ['upstream'], type: 'llm', models: { 'demo-model': {} } }));
+  });
+
+  it('preserves provider rows, renders status, and saves add/remove/reorder exactly', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        first: { api_type: 'chat' },
+        second: { api_type: 'chat' },
+        third: { api_type: 'chat' },
+        disabled: { api_type: 'chat', enabled: false },
+      },
+      model_groups: {
+        Main: {
+          provider: 'first',
+          providers: [
+            { name: 'first', current: true, enabled: true, status: 'available', error: null },
+            { name: 'second', current: false, enabled: true, status: 'cooling', error: null },
+            { name: 'missing', current: false, enabled: false, status: 'disabled', error: "Provider 'missing' not found in config" },
+          ],
+          type: 'llm',
+          models: { 'demo-model': {} },
+        },
+      },
+      tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    const providerRow = (name: string): HTMLTableRowElement => dialog.getByRole('button', { name: `Drag provider ${name}` }).closest('tr') as HTMLTableRowElement;
+
+    expect(providerRow('first')).toHaveClass('suu-sortable-table-enhanced__row--green');
+    expect(providerRow('first')).toHaveTextContent('Available');
+    expect(providerRow('first')).toHaveTextContent('Current');
+    expect(providerRow('second')).toHaveClass('suu-sortable-table-enhanced__row--yellow');
+    expect(providerRow('second')).toHaveTextContent('Cooling');
+    expect(providerRow('missing')).toHaveClass('suu-sortable-table-enhanced__row--red');
+    expect(providerRow('missing')).toHaveTextContent("Provider 'missing' not found in config");
+
+    await fireEvent.click(dialog.getByLabelText('Add provider'));
+    expect(screen.getByRole('option', { name: 'third' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'disabled' })).toBeNull();
+    await fireEvent.click(screen.getByRole('option', { name: 'third' }));
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add Provider' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Remove provider missing' }));
+
+    const source = dialog.getByRole('button', { name: 'Drag provider third' });
+    const target = providerRow('first');
+    const dataTransfer = transfer();
+    await dragAt(source, 'dragstart', dataTransfer);
+    Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
+    await dragAt(target, 'dragover', dataTransfer, 25);
+    await dragAt(target, 'drop', dataTransfer, 25);
+    expect(providerRow('third')).toHaveTextContent('Current');
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      { providers: ['third', 'first', 'second'], type: 'llm', models: { 'demo-model': {} } },
+    ));
+  });
+
+  it('does not remove the last model-group provider', async () => {
+    apiMock.get.mockResolvedValue({ providers: { only: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    expect(screen.getByRole('button', { name: 'Remove provider only' })).toBeDisabled();
   });
 
   it('offers only tool profiles matching the selected provider protocol', async () => {
@@ -877,8 +942,13 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    const providerSelect = screen.getByLabelText('Provider');
+    const providerSelect = screen.getByLabelText('Add provider');
     const profileSelect = screen.getByLabelText('Profile');
+    const replaceProvider = async (current: string, next: string): Promise<void> => {
+      await selectDropdown(providerSelect, next);
+      await fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
+      await fireEvent.click(screen.getByRole('button', { name: `Remove provider ${current}` }));
+    };
 
     await fireEvent.click(profileSelect);
     expect(screen.getByRole('option', { name: 'Chat Default' })).toBeInTheDocument();
@@ -886,7 +956,7 @@ describe('ModelsPage', () => {
     expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Responses Default' })).toBeNull();
 
-    await selectDropdown(providerSelect, 'responses');
+    await replaceProvider('chat', 'responses');
 
     expect(screen.getByRole('option', { name: 'Responses Default' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Pass through' })).toBeInTheDocument();
@@ -894,14 +964,14 @@ describe('ModelsPage', () => {
     expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Chat Default' })).toBeNull();
 
-    await selectDropdown(providerSelect, 'anthropic');
+    await replaceProvider('responses', 'anthropic');
 
     expect(screen.getByRole('option', { name: 'custom-anthropic' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'Responses Default' })).toBeNull();
     expect(screen.queryByRole('option', { name: 'Pass through' })).toBeNull();
 
-    await selectDropdown(providerSelect, 'gemini');
+    await replaceProvider('anthropic', 'gemini');
 
     expect(screen.getByRole('option', { name: 'custom-gemini' })).toBeInTheDocument();
     expect(screen.getByRole('option', { name: 'Shared Profile' })).toBeInTheDocument();
@@ -926,7 +996,7 @@ describe('ModelsPage', () => {
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
       '/admin/api/config/model-groups/Main',
       {
-        provider: 'upstream',
+        providers: ['upstream'],
         type: 'llm',
         tool_profile: 'passthrough',
         models: { 'demo-model': {} },
@@ -957,7 +1027,7 @@ describe('ModelsPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'upstream', type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed', effective_context_window_percent: 95, auto_compact_token_limit: 51200 } } },
+      providers: ['upstream'], type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed', effective_context_window_percent: 95, auto_compact_token_limit: 51200 } } },
     }));
   });
 
@@ -1028,7 +1098,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'upstream', type: 'llm', models: { 'gpt-demo': {} },
+      providers: ['upstream'], type: 'llm', models: { 'gpt-demo': {} },
     }));
   });
 
@@ -1056,7 +1126,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'opencode', type: 'llm', models: { 'qwen3.7-plus': {} },
+      providers: ['opencode'], type: 'llm', models: { 'qwen3.7-plus': {} },
     }));
   });
 
@@ -1083,7 +1153,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'opencode', type: 'llm', models: { 'glm-5.2': {} },
+      providers: ['opencode'], type: 'llm', models: { 'glm-5.2': {} },
     }));
   });
 
@@ -1117,7 +1187,7 @@ describe('ModelsPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'opencode', type: 'llm', models: { 'glm-5.2': { runtime_capabilities: { temperature: 0.4 } } },
+      providers: ['opencode'], type: 'llm', models: { 'glm-5.2': { runtime_capabilities: { temperature: 0.4 } } },
     }));
   });
 

@@ -2932,7 +2932,180 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
     response = _run(get_config(SimpleNamespace(app=app)))
 
     assert response.status_code == 200
-    assert json.loads(response.body)["model_groups"]["OpenAI"]["provider"] == "openai"
+    group = json.loads(response.body)["model_groups"]["OpenAI"]
+    assert group["provider"] == "openai"
+    assert group["providers"] == [
+        {
+            "name": "openai",
+            "current": True,
+            "enabled": True,
+            "status": "available",
+            "error": None,
+        },
+        {
+            "name": "secondary",
+            "current": False,
+            "enabled": True,
+            "status": "available",
+            "error": None,
+        },
+    ]
+
+
+def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_path):
+    runtime = _config_data()
+    runtime["providers"]["secondary"] = {
+        **runtime["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    runtime["providers"]["disabled"] = {
+        **runtime["providers"]["openai"],
+        "enabled": False,
+    }
+    runtime["providers"]["anthropic"] = {
+        **runtime["providers"]["openai"],
+        "api_type": "anthropic",
+    }
+    runtime["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    runtime_config = GatewayConfig(runtime)
+    runtime_config.model_group_rings["OpenAI"].mark_failed("secondary")
+
+    persisted = json.loads(json.dumps(runtime))
+    persisted["model_groups"]["OpenAI"]["provider"] = [
+        "openai",
+        "secondary",
+        "missing",
+        "disabled",
+        "anthropic",
+        "openai",
+    ]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(persisted), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=runtime_config,
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    rows = json.loads(response.body)["model_groups"]["OpenAI"]["providers"]
+    assert [row["name"] for row in rows] == [
+        "openai",
+        "secondary",
+        "missing",
+        "disabled",
+        "anthropic",
+        "openai",
+    ]
+    assert rows[0] == {
+        "name": "openai",
+        "current": True,
+        "enabled": True,
+        "status": "available",
+        "error": None,
+    }
+    assert rows[1] == {
+        "name": "secondary",
+        "current": False,
+        "enabled": True,
+        "status": "cooling",
+        "error": None,
+    }
+    assert rows[2]["status"] == "disabled"
+    assert rows[2]["enabled"] is False
+    assert "not found" in rows[2]["error"]
+    assert rows[3]["status"] == "disabled"
+    assert rows[3]["enabled"] is False
+    assert "is disabled" in rows[3]["error"]
+    assert rows[4]["status"] == "disabled"
+    assert rows[4]["enabled"] is True
+    assert "expected 'chat'" in rows[4]["error"]
+    assert rows[5]["status"] == "disabled"
+    assert rows[5]["current"] is False
+    assert "duplicated" in rows[5]["error"]
+
+
+def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    initial_config.model_group_rings["OpenAI"].mark_failed("secondary")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": ["secondary", "openai"],
+            "type": "llm",
+            "tool_profile": "builtin",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["secondary", "openai"]
+    ring = app.gateway_config.model_group_rings["OpenAI"]
+    assert ring.current == "secondary"
+    assert app.gateway_config.model_group_provider_statuses("OpenAI") == (
+        ("secondary", "available"),
+        ("openai", "available"),
+    )
+
+
+@pytest.mark.parametrize(
+    "provider_names",
+    [
+        [],
+        ["openai", "openai"],
+        ["openai", "anthropic"],
+    ],
+)
+def test_put_model_group_rejects_invalid_exact_provider_lists(tmp_path, provider_names):
+    config = _config_data()
+    config["providers"]["anthropic"] = {
+        **config["providers"]["openai"],
+        "api_type": "anthropic",
+    }
+    original = json.dumps(config)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial_config
+        ),
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": provider_names,
+            "type": "llm",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+    assert request.app.gateway_config is initial_config
 
 
 def test_put_model_group_preserves_hidden_provider_tail(tmp_path):

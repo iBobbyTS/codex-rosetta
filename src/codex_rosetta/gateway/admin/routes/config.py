@@ -19,7 +19,6 @@ from ...config import (
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
     _substitute_env_vars,
     _validate_provider_credential_uuid,
-    active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
     model_group_provider_names,
@@ -407,10 +406,86 @@ def _resolved_admin_model_entry(
     return entry
 
 
+def _model_group_provider_rows_for_admin(
+    group_name: str,
+    provider_names: list[str],
+    raw_providers: dict[str, Any],
+    provider_errors: dict[str, str],
+    runtime_config: GatewayConfig,
+) -> list[dict[str, Any]]:
+    """Project ordered model-group providers with runtime status."""
+    runtime_statuses = dict(runtime_config.model_group_provider_statuses(group_name))
+    runtime_ring = runtime_config.model_group_rings.get(group_name)
+    runtime_current = runtime_ring.current if runtime_ring is not None else None
+    current_index = next(
+        (
+            index
+            for index, provider_name in enumerate(provider_names)
+            if provider_name == runtime_current
+        ),
+        0 if provider_names else -1,
+    )
+    seen_provider_names: set[str] = set()
+    provider_api_types: list[str | None] = []
+    for provider_name in provider_names:
+        provider_config = raw_providers.get(provider_name)
+        try:
+            provider_api_types.append(
+                resolve_provider_api_type(provider_name, provider_config)
+                if isinstance(provider_config, dict)
+                else None
+            )
+        except ValueError:
+            provider_api_types.append(None)
+    group_api_type = next(
+        (api_type for api_type in provider_api_types if api_type is not None),
+        None,
+    )
+    provider_rows: list[dict[str, Any]] = []
+    for index, provider_name in enumerate(provider_names):
+        provider_config = raw_providers.get(provider_name)
+        exists = isinstance(provider_config, dict)
+        enabled = exists and provider_config.get("enabled", True) is not False
+        row_error: str | None = None
+        if provider_name in seen_provider_names:
+            row_error = f"Provider '{provider_name}' is duplicated in this model group"
+        elif not exists:
+            row_error = f"Provider '{provider_name}' not found in config"
+        elif not enabled:
+            row_error = f"Provider '{provider_name}' is disabled"
+        elif provider_name in provider_errors:
+            row_error = provider_errors[provider_name]
+        elif (
+            group_api_type is not None
+            and provider_api_types[index] is not None
+            and provider_api_types[index] != group_api_type
+        ):
+            row_error = (
+                f"Provider '{provider_name}' uses api_type "
+                f"'{provider_api_types[index]}'; expected '{group_api_type}'"
+            )
+        seen_provider_names.add(provider_name)
+        provider_rows.append(
+            {
+                "name": provider_name,
+                "current": index == current_index,
+                "enabled": enabled,
+                "status": (
+                    "disabled"
+                    if row_error is not None
+                    else runtime_statuses.get(provider_name, "available")
+                ),
+                "error": row_error,
+            }
+        )
+    return provider_rows
+
+
 def _normalize_model_groups_for_admin(
     raw_model_groups: dict[str, Any],
     raw_providers: dict[str, Any],
     provider_errors: dict[str, str],
+    runtime_config: GatewayConfig,
 ) -> dict[str, Any]:
     """Normalize model group config for admin UI consumption."""
     groups: dict[str, Any] = {}
@@ -420,15 +495,30 @@ def _normalize_model_groups_for_admin(
     for group_name, group_value in raw_model_groups.items():
         if not isinstance(group_value, dict):
             continue
+        provider_value = group_value.get("provider")
         try:
-            provider = active_model_group_provider(
-                group_value.get("provider"),
+            provider_names = model_group_provider_names(
+                provider_value,
                 field=f"model_groups.{group_name}.provider",
             )
+            provider = provider_names[0]
             group_provider_error = None
         except ValueError as exc:
+            provider_names = (
+                [item for item in provider_value if isinstance(item, str)]
+                if isinstance(provider_value, list)
+                else []
+            )
             provider = ""
             group_provider_error = str(exc)
+
+        provider_rows = _model_group_provider_rows_for_admin(
+            group_name,
+            provider_names,
+            raw_providers,
+            provider_errors,
+            runtime_config,
+        )
         group_type = group_value.get("type", "")
         raw_group_models = group_value.get("models", {})
         models: dict[str, Any] = {}
@@ -443,6 +533,7 @@ def _normalize_model_groups_for_admin(
                 )
         normalized_group = {
             "provider": provider,
+            "providers": provider_rows,
             "type": group_type,
             "models": models,
         }
@@ -451,6 +542,12 @@ def _normalize_model_groups_for_admin(
         provider_error = provider_errors.get(provider)
         if provider_error and not group_provider_error:
             normalized_group["validation_error"] = provider_error
+        if not normalized_group.get("validation_error"):
+            row_error = next(
+                (row["error"] for row in provider_rows if row["error"]), None
+            )
+            if row_error:
+                normalized_group["validation_error"] = row_error
         provider_config = raw_providers.get(provider)
         try:
             api_type = (
@@ -574,6 +671,53 @@ def _updated_model_group_providers(
     except ValueError:
         return [active_provider]
     return [active_provider, *existing_providers[1:]]
+
+
+def _requested_model_group_providers(
+    body: dict[str, Any],
+) -> tuple[list[str], bool] | Response:
+    """Parse the exact provider list or the legacy scalar Admin contract."""
+    exact_provider_list = "providers" in body
+    if exact_provider_list:
+        try:
+            provider_names = model_group_provider_names(
+                body.get("providers"), field="'providers'"
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        if len(set(provider_names)) != len(provider_names):
+            return JSONResponse(
+                {"error": "'providers' entries must be unique"}, status_code=400
+            )
+        return provider_names, True
+
+    provider = body.get("provider")
+    if not isinstance(provider, str) or not provider.strip():
+        return JSONResponse({"error": "'provider' is required"}, status_code=400)
+    return [provider.strip()], False
+
+
+def _validate_requested_model_group_providers(
+    provider_names: list[str], providers: dict[str, Any]
+) -> Response | None:
+    """Fail closed when an Admin provider list cannot form one runtime ring."""
+    missing_providers = [name for name in provider_names if name not in providers]
+    if missing_providers:
+        return JSONResponse(
+            {"error": f"Provider '{missing_providers[0]}' not found in config"},
+            status_code=400,
+        )
+    try:
+        provider_api_types = {
+            resolve_provider_api_type(name, providers[name]) for name in provider_names
+        }
+    except (AttributeError, ValueError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+    if len(provider_api_types) != 1:
+        return JSONResponse(
+            {"error": "'providers' must use the same api_type"}, status_code=400
+        )
+    return None
 
 
 def _model_group_duplicate_response(
@@ -715,7 +859,10 @@ async def get_config(request: Any) -> Response:
     expanded_raw_models = GatewayConfig._expand_model_groups(raw_model_groups)
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
     model_groups = _normalize_model_groups_for_admin(
-        raw_model_groups, providers, provider_errors
+        raw_model_groups,
+        providers,
+        provider_errors,
+        request.app.gateway_config,
     )
     tool_profiles = normalize_tool_profile_documents(raw.get("tool_profiles"))
     tool_profile_input_overrides = normalize_tool_profile_input_overrides(
@@ -1262,10 +1409,11 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
     if isinstance(body, Response):
         return body
 
-    provider = body.get("provider")
-    if not isinstance(provider, str) or not provider.strip():
-        return JSONResponse({"error": "'provider' is required"}, status_code=400)
-    provider = provider.strip()
+    provider_result = _requested_model_group_providers(body)
+    if isinstance(provider_result, Response):
+        return provider_result
+    provider_names, exact_provider_list = provider_result
+    provider = provider_names[0]
 
     group_type = body.get("type")
     if group_type != "llm":
@@ -1281,10 +1429,11 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
     providers = data.get("providers", {})
-    if provider not in providers:
-        return JSONResponse(
-            {"error": f"Provider '{provider}' not found in config"}, status_code=400
-        )
+    provider_error = _validate_requested_model_group_providers(
+        provider_names, providers
+    )
+    if provider_error is not None:
+        return provider_error
 
     model_groups = data.setdefault("model_groups", {})
     if not isinstance(model_groups, dict):
@@ -1327,7 +1476,11 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return profile_error
 
     model_groups[name] = {
-        "provider": _updated_model_group_providers(model_groups, name, provider),
+        "provider": (
+            provider_names
+            if exact_provider_list
+            else _updated_model_group_providers(model_groups, name, provider)
+        ),
         "type": group_type,
         **({"tool_profile": tool_profile} if tool_profile is not None else {}),
         "models": cleaned_models,
@@ -1343,6 +1496,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
             "ok": True,
             "model_group": name,
             "provider": provider,
+            "providers": provider_names,
             "type": group_type,
             "models": dict(new_config.models),
         }
