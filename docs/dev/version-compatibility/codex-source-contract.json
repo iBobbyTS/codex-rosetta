@@ -1017,6 +1017,10 @@
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "a7b5c3f8f3a1cdaa04cd0f3490a3c12898a0d295055d024ef31e281f306d65fc"
       },
+      "spec_plan.rs::module": {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": "6321bbdb398cdfd6bdec1bbc48bb179a663bf4a6f7d6bff2d418bb08a8944202"
+      },
       "standalone_web_search_enabled": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
         "sha256": "d009115a8fc8cb1dcee6e83311baa248e137ed033bffd182b78177486041fb20"

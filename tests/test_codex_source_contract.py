@@ -60,6 +60,7 @@ def test_tool_registration_inventory_uses_current_registry_owners():
         "spec_for_model_request",
         "merge_into_namespaces",
         "standalone_web_search_enabled",
+        "spec_plan.rs::module",
         "register_code_mode_executors",
         "finalize_tool_router",
     }.issubset(registrations)
@@ -221,6 +222,28 @@ def test_new_tool_registration_owners_each_change_the_snapshot_group():
         source_root / "codex-rs/core/src/mcp_tool_exposure.rs"
     ).read_text(encoding="utf-8")
     baseline = _tool_registration_sites(source_root, spec_plan, mcp_tool_exposure)
+
+    previously_unenumerated_helpers = (
+        "tool_suggest_enabled",
+        "wait_agent_timeout_options",
+        "agent_type_description",
+        "code_mode_namespace_descriptions",
+        "tool_environment_mode",
+        "any_environment_allows_login_shell",
+        "unified_exec_should_include_shell_parameter",
+        "multi_agent_v2_handler",
+        "compare_code_mode_tools",
+        "code_mode_namespace_name",
+    )
+    for owner in previously_unenumerated_helpers:
+        assert owner not in baseline
+        mutated = _tool_registration_sites(
+            source_root,
+            _mutate_function_body(spec_plan, owner),
+            mcp_tool_exposure,
+        )
+        assert mutated != baseline
+        assert mutated["spec_plan.rs::module"] != baseline["spec_plan.rs::module"]
 
     for owner in (
         "search_tool_enabled",

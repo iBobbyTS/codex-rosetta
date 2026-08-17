@@ -100,8 +100,8 @@ HIGH_CONFIDENCE_DESCRIPTIONS = {
     "tool_spec_wire_types": "tool spec serde wire type mapping matches",
     "tool_exposure_variants": "ToolExposure variants match",
     "tool_registration_sites": (
-        "core registration, eligibility/exposure, and model-visible assembly function "
-        "bodies plus extension contributor sources match"
+        "complete spec_plan.rs module content, localized core function bodies, and "
+        "extension contributor sources match"
     ),
     "transport_constants": "extracted transport constants match",
     "websocket_client_metadata_keys": "WebSocket client metadata keys match",
@@ -516,6 +516,10 @@ def _tool_registration_sites(
             for name, relative_path in extension_sources.items()
         }
     )
+    sites["spec_plan.rs::module"] = {
+        "path": "codex-rs/core/src/tools/spec_plan.rs",
+        "sha256": hashlib.sha256(spec_plan.encode("utf-8")).hexdigest(),
+    }
     sites["append_mcp_tools"] = {
         "path": "codex-rs/core/src/mcp_tool_exposure.rs",
         # The constants and filter helpers surrounding append_mcp_tools own Apps
