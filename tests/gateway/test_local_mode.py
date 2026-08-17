@@ -596,6 +596,7 @@ def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) 
     assert 'name = "OpenAI"' in updated
     assert 'wire_api = "responses"' in updated
     assert "requires_openai_auth = true" in updated
+    assert "supports_standalone_web_search = true" in updated
     assert 'base_url = "http://127.0.0.1:8765/v1"' in updated
     assert 'experimental_bearer_token = "test-codex-key"' in updated
     assert 'model = "gpt-5.6-sol"' in updated
@@ -639,6 +640,7 @@ def test_sync_uncomments_existing_local_mode_assignments_in_place(
     assert "# model_provider" not in updated
     assert updated.count("model_catalog_json =") == 1
     assert updated.count("model_provider =") == 1
+    assert updated.count("supports_standalone_web_search = true") == 1
 
 
 def test_sync_writes_and_clear_removes_only_memory_model_overrides(
@@ -837,6 +839,7 @@ def test_sync_overwrites_selected_provider_but_preserves_other_provider_params(
         "name": "OpenAI",
         "wire_api": "responses",
         "requires_openai_auth": True,
+        "supports_standalone_web_search": True,
         "base_url": "http://127.0.0.1:43210/v1",
         "experimental_bearer_token": "stable-codex-key",
     }
@@ -847,6 +850,53 @@ def test_sync_overwrites_selected_provider_but_preserves_other_provider_params(
     )
     second.apply()
     assert config_toml.read_text(encoding="utf-8") == updated
+
+
+def test_sync_parsed_managed_provider_advertises_standalone_search_and_preserves_user_config(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    codex_home.mkdir()
+    config_toml = codex_home / "config.toml"
+    config_toml.write_text(
+        'model = "gpt-5.6-sol"\n'
+        "\n"
+        "[model_providers.other]\n"
+        'name = "Other"\n'
+        'base_url = "https://other.example/v1"\n'
+        'custom_parameter = "keep"\n',
+        encoding="utf-8",
+    )
+
+    _sync_transaction(
+        codex_home, gateway_port=43210, api_key="stable-codex-key"
+    ).apply()
+
+    parsed = tomllib.loads(config_toml.read_text(encoding="utf-8"))
+    managed = parsed["model_providers"]["codex_rosetta"]
+    assert managed["supports_standalone_web_search"] is True
+    assert parsed["model_providers"]["other"] == {
+        "name": "Other",
+        "base_url": "https://other.example/v1",
+        "custom_parameter": "keep",
+    }
+
+
+def test_clear_removes_standalone_search_with_only_managed_provider(
+    tmp_path: Path,
+) -> None:
+    codex_home = tmp_path / "codex"
+    _sync_transaction(codex_home).apply()
+    config_toml = codex_home / "config.toml"
+    assert "supports_standalone_web_search = true" in config_toml.read_text(
+        encoding="utf-8"
+    )
+
+    CodexLocalModeTransaction.clear(str(codex_home)).apply()
+
+    cleared = config_toml.read_text(encoding="utf-8")
+    assert "supports_standalone_web_search" not in cleared
+    assert "[model_providers.codex_rosetta]" not in cleared
 
 
 def test_ensure_codex_api_key_creates_once_and_never_rotates() -> None:

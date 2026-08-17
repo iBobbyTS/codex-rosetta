@@ -922,6 +922,7 @@ def _edit_config_toml(
             'name = "OpenAI"',
             'wire_api = "responses"',
             "requires_openai_auth = true",
+            "supports_standalone_web_search = true",
             f'base_url = "http://127.0.0.1:{gateway_port}/v1"',
             f"experimental_bearer_token = {json.dumps(api_key)}",
             "",
