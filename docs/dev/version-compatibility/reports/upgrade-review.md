@@ -42,7 +42,7 @@ source inventory and CP-26's already-existing conversion behavior.
 | --- | --- | --- |
 | `CP-01 — Agent-facing API` | Possibly unchanged | Endpoint and core header constants remain stable; new image-turn identity and Provider capabilities are owned by CP-03/21. Live ingress/auth/error capture remains mandatory. |
 | `CP-02 — Responses transparent handling` | Changed | Direct Responses must transparently retain new request metadata, usage fields, and `encrypted_function_args`; focused direct passthrough coverage includes the marker. |
-| `CP-03 — Codex Search and Images endpoints` | Changed | Images adds turn identity and transparent-background result metadata; standalone Search eligibility changes. S02.1 owns deterministic Images runtime work, S03 owns only the managed local-mode standalone Search Provider opt-in, and S04 owns the live route matrix. |
+| `CP-03 — Codex Search and Images endpoints` | Changed | Images request bodies already pass through the existing auxiliary route; `image_generation_call` is now retained by the Responses stream passthrough with `transparent_background`. S02.1 owns deterministic Images metadata, S03 owns only the managed local-mode standalone Search Provider opt-in, and S04 owns the live route matrix. |
 | `CP-04 — Request and window identity` | Changed | `parent_turn_id` and Code Mode tool-name metadata join the turn metadata contract; converted ownership must remain explicit. |
 | `CP-05 — Responses→Chat bridge` | Changed | The new collaboration marker is intentionally discarded on Chat conversion; new Responses-only metadata must not leak or be fabricated. |
 | `CP-06 — Responses Lite / additional_tools` | Changed | Function/freeform/Namespace assembly moved under the centralized registry and Lite projection must be requalified. |
@@ -56,7 +56,7 @@ source inventory and CP-26's already-existing conversion behavior.
 | `CP-14 — Live-agent runtime authentication` | Possibly unchanged | No new authentication owner was found; the exact 0.147 client and complete dual-auth inventory remain mandatory. |
 | `CP-15 — Web search bridge` | Changed | Custom Providers may opt into standalone `/alpha/search`; S03 enables this only for the managed Rosetta local Provider. |
 | `CP-16 — Self-hosted Bing search` | High-confidence unchanged | No source change alters Rosetta's self-hosted executor contract, but the standing real sidecar gates remain required. |
-| `CP-17 — Stream lifecycle` | Changed | Completed usage gains `codex_rollout_budget_units`; direct transport preserves it and converted paths must never fabricate it. |
+| `CP-17 — Stream lifecycle` | Changed | Completed usage gains optional `codex_rollout_budget_units`; Responses conversion copies it only when supplied, while converted routes never synthesize it. Deterministic converter and SSE regressions are owned by S02.1. |
 | `CP-18 — Message phase` | Possibly unchanged | Phase enum and current bridge ownership show no mapped semantic delta; full UI/tool lifecycle evidence remains required. |
 | `CP-19 — Reasoning` | Possibly unchanged | Reasoning field names remain stable; model-catalog and compaction changes still require the full reasoning/continuation matrix. |
 | `CP-20 — Context compaction resilience` | Changed | Provider compaction capability becomes unsupported/V1/V2 and the fallback implementation changed; S02.1 owns deterministic runtime requalification and S04 owns live evidence. |

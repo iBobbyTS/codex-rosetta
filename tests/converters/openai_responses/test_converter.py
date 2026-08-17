@@ -762,6 +762,25 @@ class TestOpenAIResponsesConverter:
         assert result["usage"]["cache_creation_tokens"] == 3
         assert result["usage"]["reasoning_tokens"] == 8
 
+    def test_response_usage_preserves_rollout_budget_only_when_supplied(self):
+        """Codex 0.147 budget units are copied without inventing a value."""
+        base = {
+            "id": "resp_budget",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+        }
+        without = self.converter.response_from_provider(base)
+        assert "codex_rollout_budget_units" not in without["usage"]
+        with_budget = dict(
+            base, usage=dict(base["usage"], codex_rollout_budget_units=2.5)
+        )
+        converted = self.converter.response_from_provider(with_budget)
+        assert converted["usage"]["codex_rollout_budget_units"] == 2.5
+
     def test_response_from_provider_with_service_tier(self):
         """Test response with service_tier."""
         provider_response = {
@@ -996,6 +1015,7 @@ class TestOpenAIResponsesConverter:
                     "cache_read_tokens": 5,
                     "cache_creation_tokens": 3,
                     "reasoning_tokens": 8,
+                    "codex_rollout_budget_units": 2.5,
                 },
             },
         )
@@ -1006,6 +1026,7 @@ class TestOpenAIResponsesConverter:
         assert result["usage"]["input_tokens_details"]["cached_tokens"] == 5
         assert result["usage"]["input_tokens_details"]["cache_write_tokens"] == 3
         assert result["usage"]["output_tokens_details"]["reasoning_tokens"] == 8
+        assert result["usage"]["codex_rollout_budget_units"] == 2.5
 
     def test_response_to_provider_with_reasoning(self):
         """Test IRResponse with reasoning -> provider reasoning item."""

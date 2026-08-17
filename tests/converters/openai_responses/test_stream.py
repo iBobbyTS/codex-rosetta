@@ -281,6 +281,7 @@ class TestStreamResponseFromProvider:
                         "cached_tokens": 4,
                         "cache_write_tokens": 3,
                     },
+                    "codex_rollout_budget_units": 2.5,
                 },
             },
         }
@@ -294,6 +295,28 @@ class TestStreamResponseFromProvider:
         assert usage_event["usage"]["total_tokens"] == 15
         assert usage_event["usage"]["cache_read_tokens"] == 4
         assert usage_event["usage"]["cache_creation_tokens"] == 3
+        assert usage_event["usage"]["codex_rollout_budget_units"] == 2.5
+
+    def test_image_generation_call_transparent_background_is_passthrough(self):
+        """Responses image result metadata survives stream reconstruction."""
+        ctx = OpenAIResponsesStreamContext()
+        ctx.mark_started()
+        item = {
+            "type": "image_generation_call",
+            "id": "ig_123",
+            "status": "completed",
+            "result": "base64-data",
+            "transparent_background": True,
+        }
+        event = {
+            "type": "response.completed",
+            "response": {"status": "completed", "output": [item]},
+        }
+        events = cast(
+            list[Any], self.converter.stream_response_from_provider(event, context=ctx)
+        )
+        assert ctx.passthrough_output_items == [item]
+        assert events
 
     # --- Response failed ---
 

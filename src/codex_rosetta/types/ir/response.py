@@ -33,6 +33,10 @@ class UsageInfo(TypedDict):
     ]  # 推理内容消耗的Token数 Token count for reasoning/thinking content (Google: thoughts_token_count)
     total_tokens: Required[int]  # 总Token数 Total token count
 
+    # Codex 0.147 provider-reported rollout budget units. Providers may omit it;
+    # converters must never derive this value.
+    codex_rollout_budget_units: NotRequired[int | float]
+
     # 详细统计（可选） Detailed statistics (optional)
     prompt_tokens_details: NotRequired[
         dict[str, int]

@@ -65,6 +65,7 @@ from .utils import build_message_preamble_events, resolve_call_id
 
 RESPONSES_PASSTHROUGH_OUTPUT_ITEM_TYPES = frozenset(
     {
+        "image_generation_call",
         "reasoning",
         "tool_search_call",
         "tool_search_output",
@@ -543,6 +544,11 @@ class OpenAIResponsesConverter(BaseConverter):
             "completion_tokens": p_usage.get("output_tokens") or 0,
             "total_tokens": p_usage.get("total_tokens") or 0,
         }
+        budget_units = p_usage.get("codex_rollout_budget_units")
+        if isinstance(budget_units, (int, float)) and not isinstance(
+            budget_units, bool
+        ):
+            usage_info["codex_rollout_budget_units"] = budget_units
         p_input_details = p_usage.get("input_tokens_details")
         if p_input_details:
             if "cached_tokens" in p_input_details:
@@ -560,7 +566,7 @@ class OpenAIResponsesConverter(BaseConverter):
     @staticmethod
     def _build_provider_usage(ir_usage: Mapping[str, Any]) -> dict[str, Any]:
         """Build Responses API usage dict from IR usage."""
-        return {
+        usage = {
             "input_tokens": ir_usage.get("prompt_tokens") or 0,
             "output_tokens": ir_usage.get("completion_tokens") or 0,
             "total_tokens": ir_usage.get("total_tokens") or 0,
@@ -572,6 +578,9 @@ class OpenAIResponsesConverter(BaseConverter):
                 "reasoning_tokens": ir_usage.get("reasoning_tokens", 0),
             },
         }
+        if "codex_rollout_budget_units" in ir_usage:
+            usage["codex_rollout_budget_units"] = ir_usage["codex_rollout_budget_units"]
+        return usage
 
     def _apply_tool_config(
         self,
@@ -2048,6 +2057,10 @@ class OpenAIResponsesConverter(BaseConverter):
             "output_tokens": pending_usage.get("completion_tokens") or 0,
             "total_tokens": pending_usage.get("total_tokens") or 0,
         }
+        if "codex_rollout_budget_units" in pending_usage:
+            usage["codex_rollout_budget_units"] = pending_usage[
+                "codex_rollout_budget_units"
+            ]
         cache_read = pending_usage.get("cache_read_tokens")
         cache_creation = pending_usage.get("cache_creation_tokens")
         usage["input_tokens_details"] = {

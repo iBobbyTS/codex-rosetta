@@ -169,6 +169,9 @@ class ResponseUsage(TypedDict, total=False):
     total_tokens: int
     """Total number of tokens used."""
 
+    codex_rollout_budget_units: int | float
+    """Provider-reported units consumed from the shared rollout budget."""
+
 
 # ============================================================================
 # Content Output Types
@@ -747,6 +750,9 @@ class ImageGenerationCall(TypedDict, total=False):
 
     status: str | None
     """Generation status."""
+
+    transparent_background: bool | None
+    """Whether the generated image has a transparent background."""
 
 
 class ResponseCompactionItem(TypedDict, total=False):
