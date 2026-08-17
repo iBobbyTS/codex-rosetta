@@ -215,6 +215,14 @@ describe('ProvidersPage', () => {
     expect(await screen.findByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
     expect(apiMock.get).not.toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
+    const urlRows = dialog.getAllByRole('row').filter((row) => row.querySelector('input[aria-label^="Base URL"]'));
+    expect(urlRows[0]).toHaveClass('suu-sortable-table-enhanced__row--green');
+    expect(urlRows[0]).toHaveTextContent('Available');
+    expect(urlRows[1]).toHaveClass('suu-sortable-table-enhanced__row--yellow');
+    expect(urlRows[1]).toHaveTextContent('Cooling');
+    const credentialRows = dialog.getAllByRole('row').filter((row) => row.querySelector('input[aria-label^="Credential ID"]'));
+    expect(credentialRows[0]).toHaveClass('suu-sortable-table-enhanced__row--green');
+    expect(credentialRows[0]).toHaveTextContent('Available');
     expect(dialog.getAllByLabelText(/^Credential key/)).toHaveLength(1);
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
@@ -318,6 +326,11 @@ describe('ProvidersPage', () => {
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const credentialRows = dialog.getAllByRole('row').filter((row) => row.querySelector('input[aria-label^="Credential ID"]'));
+    expect(credentialRows[0]).toHaveClass('suu-sortable-table-enhanced__row--green');
+    expect(credentialRows[0]).toHaveTextContent('Available');
+    expect(credentialRows[1]).toHaveClass('suu-sortable-table-enhanced__row--yellow');
+    expect(credentialRows[1]).toHaveTextContent('Cooling');
     const source = dialog.getByRole('button', { name: 'Drag credential second' });
     const target = dialog.getByRole('button', { name: 'Drag credential first' }).closest('tr')!;
     const dataTransfer = transfer();

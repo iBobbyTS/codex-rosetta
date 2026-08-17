@@ -9,11 +9,12 @@
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
   import { SortableTableEnhanced } from '@ibobbyts/svelte-ui-utils/sortable-table';
 
-  type BaseUrlStatus = { base_url:string; current:boolean; status:'available'|'cooling' };
+  type ProviderRowStatus = 'available'|'cooling';
+  type BaseUrlStatus = { base_url:string; current:boolean; status:ProviderRowStatus };
   type Credential = { uuid:string; id:string; key:string };
-  type UrlRow = { id:string; value:string };
-  type CredentialRow = Credential & { rowId:string };
-  type CredentialStatus = { id:string; current:boolean; status:'available'|'cooling' };
+  type UrlRow = { id:string; value:string; status?:ProviderRowStatus };
+  type CredentialRow = Credential & { rowId:string; status?:ProviderRowStatus };
+  type CredentialStatus = { id:string; current:boolean; status:ProviderRowStatus };
   type RequestEncoding = 'passthrough'|'identity'|'zstd';
   type EncodingProbe = { ok:boolean; status_code:number|null; error:string|null };
   type EncodingDetection = { selected:RequestEncoding|null; identity:EncodingProbe; zstd:EncodingProbe };
@@ -31,8 +32,8 @@
   let modalOpen = $state(false); let deleteOpen = $state(false); let editingName = $state('');
   let rowSequence = 0;
   function nextRowId(prefix:string):string{return `${prefix}-${++rowSequence}`;}
-  function urlRow(value:string):UrlRow{return{id:nextRowId('url'),value};}
-  function credentialRow(value:Credential):CredentialRow{return{rowId:nextRowId('credential'),...value};}
+  function urlRow(value:string,status?:ProviderRowStatus):UrlRow{return{id:nextRowId('url'),value,status};}
+  function credentialRow(value:Credential,status?:ProviderRowStatus):CredentialRow{return{rowId:nextRowId('credential'),...value,status};}
   const initialUrlRow = urlRow('');
   const initialCredentialRow = credentialRow({uuid:crypto.randomUUID(),id:'primary',key:''});
   let name = $state(''); let urlRows = $state<UrlRow[]>([initialUrlRow]); let currentUrlRowId = $state(initialUrlRow.id); let proxy = $state(''); let apiType = $state(''); let requestEncoding = $state<RequestEncoding>('passthrough'); let detectionModel = $state(''); let detectingEncoding = $state(false); let detectionError = $state(''); let allowRedirects = $state(false); let softInterrupt = $state(false); let forceRosettaCompaction = $state(false);
@@ -63,6 +64,7 @@
   function variant(): Variant { return selectedVendor.variants[variantId] ?? Object.values(selectedVendor.variants)[0] ?? {endpoints:{}}; }
   function logoFor(vendor: Vendor): string { return providerLogo(vendor.logo_shim); }
   function protocolLabel(value: string): string { return ['responses','chat','anthropic','google'].includes(value) ? t(`protocol.${value}`) : value; }
+  function rowColorPreset(status?:ProviderRowStatus):'green'|'yellow'|null{return status==='available'?'green':status==='cooling'?'yellow':null;}
   function displayInfo(provider: Provider): { vendor: string; protocol: string; logo: string; invertLogo: boolean } {
     const vendor = vendorById(provider.provider);
     return { vendor: t(vendor.label_key), protocol: protocolLabel(provider.api_type ?? ''), logo: logoFor(vendor), invertLogo: providerLogoNeedsDarkInversion(vendor.logo_shim) };
@@ -77,7 +79,7 @@
   function chooseVariant(value: string): void { variantId = value; applySelection(); }
   function chooseProtocol(value: string): void { apiType = value; if(value==='responses')requestEncoding='passthrough';const next=variantId==='custom'?'':variant().endpoints[value] ?? '';const row=urlRow(next);urlRows=[row];currentUrlRowId=row.id; }
   function deriveSelection(): void { const found=Object.entries(selectedVendor.variants).find(([,item])=>item===variantForUrl(selectedVendor,urlRows[0]?.value??''));variantId=found?.[0]??'custom'; }
-  function setUrl(rowId:string,value:string):void{urlRows=urlRows.map((item)=>item.id===rowId?{...item,value}:item);deriveSelection();}
+  function setUrl(rowId:string,value:string):void{urlRows=urlRows.map((item)=>item.id===rowId?{...item,value,status:normalizeUrl(value)===normalizeUrl(item.value)?item.status:undefined}:item);deriveSelection();}
   function addUrl():void{urlRows=[...urlRows,urlRow('')];}
   function reorderUrls(next:UrlRow[]):void{urlRows=next;deriveSelection();}
   function removeUrl(row:UrlRow):void{if(urlRows.length===1)return;const index=urlRows.findIndex((item)=>item.id===row.id);if(index<0)return;const next=urlRows.filter((item)=>item.id!==row.id);if(currentUrlRowId===row.id)currentUrlRowId=next[index]?.id??next[0]?.id??'';urlRows=next;deriveSelection();}
@@ -96,9 +98,9 @@
   function openNew(): void { clearForm(); modalOpen=true; }
   async function openEdit(providerName: string, provider: Provider, clone = false): Promise<void> {
     invalidateDetection();
-    editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; urlRows=(provider.base_urls??[]).map(urlRow);if(!urlRows.length)urlRows=[urlRow('')];currentUrlRowId=urlRows.find((row)=>row.value===firstUrl(provider))?.id??urlRows[0].id; proxy=provider.proxy ?? '';
+    editingName = clone ? '' : providerName; name = clone ? `${providerName}-copy` : providerName; const urlStatuses=new Map((provider.base_url_statuses??[]).map((item)=>[item.base_url,item.status])); urlRows=(provider.base_urls??[]).map((value)=>urlRow(value,clone?undefined:urlStatuses.get(value)));if(!urlRows.length)urlRows=[urlRow('')];currentUrlRowId=urlRows.find((row)=>row.value===firstUrl(provider))?.id??urlRows[0].id; proxy=provider.proxy ?? '';
     apiType = allowedTypes().includes(provider.api_type ?? '') ? provider.api_type ?? '' : allowedTypes()[0] ?? '';
-    vendorId=vendorById(provider.provider).id; requestEncoding=provider.request_encoding??'passthrough'; detectionModel=''; detectingEncoding=false; detectionError=''; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true;credentialRows=(provider.api_keys??[]).map((item)=>credentialRow({...item,uuid:clone?crypto.randomUUID():item.uuid,key:clone?'':item.key}));if(!credentialRows.length)credentialRows=[credentialRow({uuid:crypto.randomUUID(),id:'primary',key:''})];currentCredentialRowId=credentialRows.find((row)=>row.id===(provider.current_api_key??credentialRows[0].id))?.rowId??credentialRows[0].rowId;deriveSelection();modalOpen=true;error='';
+    vendorId=vendorById(provider.provider).id; requestEncoding=provider.request_encoding??'passthrough'; detectionModel=''; detectingEncoding=false; detectionError=''; allowRedirects=provider.allow_redirects === true; softInterrupt=provider.soft_interrupt === true; forceRosettaCompaction=provider.force_rosetta_compaction === true; const credentialStatuses=new Map((provider.credential_statuses??[]).map((item)=>[item.id,item.status]));credentialRows=(provider.api_keys??[]).map((item)=>credentialRow({...item,uuid:clone?crypto.randomUUID():item.uuid,key:clone?'':item.key},clone?undefined:credentialStatuses.get(item.id)));if(!credentialRows.length)credentialRows=[credentialRow({uuid:crypto.randomUUID(),id:'primary',key:''})];currentCredentialRowId=credentialRows.find((row)=>row.id===(provider.current_api_key??credentialRows[0].id))?.rowId??credentialRows[0].rowId;deriveSelection();modalOpen=true;error='';
   }
   async function load(signal?: AbortSignal): Promise<void> { try { config=await api.get<Config>('/admin/api/config',signal); error=''; } catch(cause){ if (!(cause instanceof DOMException && cause.name==='AbortError')) error=message(cause); } finally { loading=false; } }
   async function save(): Promise<void> {
@@ -155,17 +157,17 @@
   <div class="form-group"><label for="provApiType">{t('label.providerProtocol')}</label><Dropdown id="provApiType" value={apiType} options={protocolGroups().flatMap((group)=>group.items.map((item)=>({value:item,label:protocolLabel(item)})))} fitViewport={true} fitContent={true} menuAlign="left" onChange={(value:DropdownValue)=>chooseProtocol(String(value))} /></div>
   <div class="form-group">
     <div class="form-label">{t('label.baseUrls')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></div>
-    <SortableTableEnhanced items={urlRows} currentId={currentUrlRowId} disabled={busy} onReorder={reorderUrls} onRemove={removeUrl} onCurrentChange={(row)=>{currentUrlRowId=row.id;}} getCurrentLabel={(row)=>t('aria.makeBaseUrlCurrent',{url:row.value||t('label.baseUrl')})} getDragLabel={(row)=>t('aria.dragBaseUrl',{url:row.value||t('label.baseUrl')})} getRemoveLabel={(row)=>t('aria.removeBaseUrl',{url:row.value||t('label.baseUrl')})}>
-      {#snippet header()}<th>{t('col.baseUrl')}</th>{/snippet}
-      {#snippet children(row,index)}<td><input aria-label={t('aria.baseUrl',{index:index+1})} value={row.value} oninput={(event)=>setUrl(row.id,event.currentTarget.value)} placeholder={t('placeholder.baseUrl')} /></td>{/snippet}
+    <SortableTableEnhanced items={urlRows} currentId={currentUrlRowId} disabled={busy} onReorder={reorderUrls} onRemove={removeUrl} onCurrentChange={(row)=>{currentUrlRowId=row.id;}} getRowColorPreset={(row)=>rowColorPreset(row.status)} getCurrentLabel={(row)=>t('aria.makeBaseUrlCurrent',{url:row.value||t('label.baseUrl')})} getDragLabel={(row)=>t('aria.dragBaseUrl',{url:row.value||t('label.baseUrl')})} getRemoveLabel={(row)=>t('aria.removeBaseUrl',{url:row.value||t('label.baseUrl')})}>
+      {#snippet header()}<th>{t('col.baseUrl')}</th><th>{t('col.status')}</th>{/snippet}
+      {#snippet children(row,index)}<td><input aria-label={t('aria.baseUrl',{index:index+1})} value={row.value} oninput={(event)=>setUrl(row.id,event.currentTarget.value)} placeholder={t('placeholder.baseUrl')} /></td><td class="provider-sortable-status">{#if row.status}<span class:available={row.status==='available'} class:cooling={row.status==='cooling'}>{t(`provider.url.${row.status}`)}</span>{/if}</td>{/snippet}
     </SortableTableEnhanced>
     <button type="button" class="btn btn-sm" onclick={addUrl}>{t('btn.addBaseUrl')}</button>
   </div>
   <div class="form-group">
     <div class="form-label">{t('label.providerCredentials')}</div>
-    <SortableTableEnhanced items={credentialRows} getId={(row)=>row.rowId} currentId={currentCredentialRowId} disabled={busy} onReorder={reorderCredentials} onRemove={removeCredential} onCurrentChange={(row)=>{currentCredentialRowId=row.rowId;}} getCurrentLabel={(row)=>t('aria.makeCredentialCurrent',{id:row.id||t('placeholder.credentialId')})} getDragLabel={(row)=>t('aria.dragCredential',{id:row.id||t('placeholder.credentialId')})} getRemoveLabel={(row)=>t('aria.removeCredential',{id:row.id||t('placeholder.credentialId')})}>
-      {#snippet header()}<th>{t('col.credentialId')}</th><th>{t('col.credentialKey')}</th>{/snippet}
-      {#snippet children(row)}<td><input type="text" aria-label={t('aria.credentialId',{id:row.id})} value={row.id} oninput={(event)=>updateCredential(row.rowId,'id',event.currentTarget.value)} placeholder={t('placeholder.credentialId')} /></td><td><CredentialEditor ariaLabel={t('aria.credentialKey',{id:row.id})} clearLabel={t('aria.clearCredentialKey',{id:row.id})} value={row.key} onchange={(value)=>updateCredential(row.rowId,'key',value)} placeholder={'${OPENAI_API_KEY}'} /></td>{/snippet}
+    <SortableTableEnhanced items={credentialRows} getId={(row)=>row.rowId} currentId={currentCredentialRowId} disabled={busy} onReorder={reorderCredentials} onRemove={removeCredential} onCurrentChange={(row)=>{currentCredentialRowId=row.rowId;}} getRowColorPreset={(row)=>rowColorPreset(row.status)} getCurrentLabel={(row)=>t('aria.makeCredentialCurrent',{id:row.id||t('placeholder.credentialId')})} getDragLabel={(row)=>t('aria.dragCredential',{id:row.id||t('placeholder.credentialId')})} getRemoveLabel={(row)=>t('aria.removeCredential',{id:row.id||t('placeholder.credentialId')})}>
+      {#snippet header()}<th>{t('col.credentialId')}</th><th>{t('col.credentialKey')}</th><th>{t('col.status')}</th>{/snippet}
+      {#snippet children(row)}<td><input type="text" aria-label={t('aria.credentialId',{id:row.id})} value={row.id} oninput={(event)=>updateCredential(row.rowId,'id',event.currentTarget.value)} placeholder={t('placeholder.credentialId')} /></td><td><CredentialEditor ariaLabel={t('aria.credentialKey',{id:row.id})} clearLabel={t('aria.clearCredentialKey',{id:row.id})} value={row.key} onchange={(value)=>updateCredential(row.rowId,'key',value)} placeholder={'${OPENAI_API_KEY}'} /></td><td class="provider-sortable-status">{#if row.status}<span class:available={row.status==='available'} class:cooling={row.status==='cooling'}>{t(`provider.url.${row.status}`)}</span>{/if}</td>{/snippet}
     </SortableTableEnhanced>
     <div class="provider-key-actions"><button type="button" class="btn btn-sm" onclick={addCredential}>{t('btn.addCredential')}</button></div>
   </div>
@@ -183,6 +185,7 @@
   .provider-url-status.available{background:color-mix(in srgb,var(--green) 10%,transparent)}
   .provider-url-status.cooling{background:color-mix(in srgb,var(--orange) 12%,transparent)}
   .provider-url-status code{min-width:0;flex:1}
+  .provider-sortable-status{white-space:nowrap;color:var(--text-dim);font-size:11px;font-weight:600}.provider-sortable-status .available{color:var(--green)}.provider-sortable-status .cooling{color:var(--orange)}
   .provider-key-actions{display:flex;gap:6px;margin-top:6px}
   .request-encoding-row{display:grid;grid-template-columns:minmax(180px,1fr) minmax(160px,1fr) auto;gap:8px;align-items:center}
   .request-encoding-error{margin:8px 0 0;padding:8px;border:1px solid var(--red);border-radius:var(--radius);white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.45 monospace;color:var(--red);background:color-mix(in srgb,var(--red) 7%,transparent)}
