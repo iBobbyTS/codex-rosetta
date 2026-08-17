@@ -103,6 +103,41 @@ def test_catalog_codex_source_bindings_match_reviewed_registration_sites():
         assert family["source_symbol"] in sites
         assert sites[family["source_symbol"]]["path"] == family["source_path"]
 
+    expected_0147_dynamic_owners = {
+        "runtime.mcp": (
+            "codex-rs/core/src/mcp_tool_exposure.rs",
+            "append_mcp_tools",
+        ),
+        "runtime.apps_connectors": (
+            "codex-rs/core/src/mcp_tool_exposure.rs",
+            "append_mcp_tools",
+        ),
+        "runtime.thread_function": (
+            "codex-rs/core/src/tools/spec_plan.rs",
+            "append_dynamic_tool_runtimes::Function",
+        ),
+        "runtime.thread_namespace": (
+            "codex-rs/core/src/tools/spec_plan.rs",
+            "append_dynamic_tool_runtimes::Namespace",
+        ),
+        "runtime.extension_contributor": (
+            "codex-rs/core/src/tools/spec_plan.rs",
+            "append_extension_tool_executors",
+        ),
+    }
+    assert {
+        family_id: (family["source_path"], family["source_symbol"])
+        for family_id, family in compiled.dynamic_families.items()
+    } == expected_0147_dynamic_owners
+    for item_id in ("custom.exec", "function.wait"):
+        registration_id = compiled.items[item_id]["source_binding"]["registration_ids"][
+            0
+        ]
+        assert (
+            compiled.source_registrations[registration_id]["source_symbol"]
+            == "register_code_mode_executors"
+        )
+
 
 @pytest.mark.parametrize(
     ("mutate", "error"),
@@ -225,6 +260,23 @@ def test_model_visible_tool_ownership_stays_in_catalog() -> None:
     assert not re.search(r'_remove_tool_definition\([^\n]+["\']', proxy_source)
     adaptation_source = (source_root / "tool_adaptation.py").read_text()
     assert "_localized_chat_tool_definitions" not in adaptation_source
+
+
+def test_runtime_plan_uses_catalog_declaration_order_for_injected_definitions() -> None:
+    profile = _builtin()
+    injected = [
+        "injection.claude_code.read",
+        "injection.claude_code.edit",
+        "injection.claude_code.write",
+        "injection.claude_code.glob",
+        "injection.claude_code.grep",
+    ]
+    for item_id in injected:
+        profile[item_id] = "injected"
+
+    plan = build_tool_runtime_plan({}, _route(profile))
+
+    assert list(plan.definitions)[:5] == injected
 
 
 def test_responses_special_passthrough_bypasses_all_runtime_actions():

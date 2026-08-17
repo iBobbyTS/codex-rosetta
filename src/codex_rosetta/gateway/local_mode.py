@@ -516,8 +516,9 @@ def _materialize_model_preset(
         if key not in explicit_fields
     }
     identity = raw_preset["identity"]
-    for field in ("base_instructions", "model_messages"):
-        model[field] = _replace_identity(terra.get(field), identity_source, identity)
+    model["model_messages"] = _replace_identity(
+        terra.get("model_messages"), identity_source, identity
+    )
 
     model.update(copy.deepcopy(shared_overrides))
     model.update(

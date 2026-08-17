@@ -1,9 +1,9 @@
 {
   "metadata": {
     "schema_version": 7,
-    "catalog_version": "codex-0.145.0",
-    "codex_cli_version": "0.145.0",
-    "codex_source_commit": "25af12f7e61572b0bc18ddb1008be543b91519b0",
+    "catalog_version": "codex-0.147.0",
+    "codex_cli_version": "0.147.0",
+    "codex_source_commit": "be6e8eac029b183056b7e4402879f15d2c85f61b",
     "static_catalog": true,
     "profile_selection": "model_group"
   },
@@ -2526,7 +2526,7 @@
     {
       "id": "item.function.wait",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "prepend_code_mode_executors",
+      "source_symbol": "register_code_mode_executors",
       "registration_kind": "generated",
       "tool_spec_kind": "function",
       "exposure": "Conditional",
@@ -2576,7 +2576,7 @@
     {
       "id": "item.custom.exec",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "prepend_code_mode_executors",
+      "source_symbol": "register_code_mode_executors",
       "registration_kind": "generated",
       "tool_spec_kind": "custom",
       "exposure": "Conditional",
@@ -2915,8 +2915,8 @@
     },
     {
       "id": "family.runtime.mcp",
-      "source_path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
-      "source_symbol": "McpToolContributor::tools",
+      "source_path": "codex-rs/core/src/mcp_tool_exposure.rs",
+      "source_symbol": "append_mcp_tools",
       "registration_kind": "dynamic",
       "tool_spec_kind": "function",
       "exposure": "Dynamic",
@@ -2925,8 +2925,8 @@
     },
     {
       "id": "family.runtime.apps_connectors",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "CoreToolPlanContext::tool_runtimes",
+      "source_path": "codex-rs/core/src/mcp_tool_exposure.rs",
+      "source_symbol": "append_mcp_tools",
       "registration_kind": "dynamic",
       "tool_spec_kind": "function",
       "exposure": "Dynamic",
@@ -2936,7 +2936,7 @@
     {
       "id": "family.runtime.thread_function",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_dynamic_tools::Function",
+      "source_symbol": "append_dynamic_tool_runtimes::Function",
       "registration_kind": "dynamic",
       "tool_spec_kind": "dynamic_function",
       "exposure": "Dynamic",
@@ -2946,7 +2946,7 @@
     {
       "id": "family.runtime.thread_namespace",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_dynamic_tools::Namespace",
+      "source_symbol": "append_dynamic_tool_runtimes::Namespace",
       "registration_kind": "dynamic",
       "tool_spec_kind": "dynamic_namespace",
       "exposure": "Dynamic",
@@ -2956,7 +2956,7 @@
     {
       "id": "family.runtime.extension_contributor",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_extension_tools",
+      "source_symbol": "append_extension_tool_executors",
       "registration_kind": "dynamic",
       "tool_spec_kind": "function",
       "exposure": "Dynamic",
@@ -2967,8 +2967,8 @@
   "dynamic_families": [
     {
       "id": "runtime.mcp",
-      "source_path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
-      "source_symbol": "McpToolContributor::tools",
+      "source_path": "codex-rs/core/src/mcp_tool_exposure.rs",
+      "source_symbol": "append_mcp_tools",
       "tool_spec_kinds": [
         "function"
       ],
@@ -2981,8 +2981,8 @@
     },
     {
       "id": "runtime.apps_connectors",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "CoreToolPlanContext::tool_runtimes",
+      "source_path": "codex-rs/core/src/mcp_tool_exposure.rs",
+      "source_symbol": "append_mcp_tools",
       "tool_spec_kinds": [
         "function",
         "namespace"
@@ -2997,7 +2997,7 @@
     {
       "id": "runtime.thread_function",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_dynamic_tools::Function",
+      "source_symbol": "append_dynamic_tool_runtimes::Function",
       "tool_spec_kinds": [
         "dynamic_function"
       ],
@@ -3010,7 +3010,7 @@
     {
       "id": "runtime.thread_namespace",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_dynamic_tools::Namespace",
+      "source_symbol": "append_dynamic_tool_runtimes::Namespace",
       "tool_spec_kinds": [
         "dynamic_namespace"
       ],
@@ -3023,7 +3023,7 @@
     {
       "id": "runtime.extension_contributor",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_extension_tools",
+      "source_symbol": "append_extension_tool_executors",
       "tool_spec_kinds": [
         "function",
         "namespace"

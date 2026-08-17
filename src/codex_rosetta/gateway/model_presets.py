@@ -30,7 +30,6 @@ MODEL_PRESET_IGNORED_CATALOG_FIELDS = frozenset(
 )
 MODEL_PRESET_TEMPLATE_FIELDS = frozenset(
     {
-        "base_instructions",
         "default_reasoning_level",
         "max_context_window",
         "model_messages",
@@ -60,9 +59,7 @@ def load_model_preset_resource() -> dict[str, Any]:
     return copy.deepcopy(_cached_model_preset_resource())
 
 
-def normalize_context_window_presets(
-    value: Any, *, field: str
-) -> list[dict[str, Any]]:
+def normalize_context_window_presets(value: Any, *, field: str) -> list[dict[str, Any]]:
     required = {
         "label",
         "context_window",
@@ -296,9 +293,7 @@ def normalize_model_preset(
         normalized["effective_context_window_percent"] = selected[
             "effective_context_window_percent"
         ]
-        normalized["auto_compact_token_limit"] = selected[
-            "auto_compact_token_limit"
-        ]
+        normalized["auto_compact_token_limit"] = selected["auto_compact_token_limit"]
     return normalized
 
 
@@ -374,10 +369,9 @@ def _materialize_full_preset(
     model = {
         key: copy.deepcopy(value) for key, value in terra.items() if key not in explicit
     }
-    for key in ("base_instructions", "model_messages"):
-        model[key] = _replace_identity(
-            terra.get(key), resource["identity_source"], preset["identity"]
-        )
+    model["model_messages"] = _replace_identity(
+        terra.get("model_messages"), resource["identity_source"], preset["identity"]
+    )
     model.update(copy.deepcopy(shared))
     model.update(
         {

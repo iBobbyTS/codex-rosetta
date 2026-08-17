@@ -1,8 +1,8 @@
 # Codex 模型目录字段参考
 
 本文说明 Codex 消费的模型目录，以及 Codex-Rosetta 在暴露第三方模型时应如何使用这些字段。当前源码优先检查目标是 Codex
-`0.145.0`、源码提交
-`25af12f7e61572b0bc18ddb1008be543b91519b0`，主要参考：
+`0.147.0`、源码提交
+`be6e8eac029b183056b7e4402879f15d2c85f61b`，主要参考：
 
 - `codex-rs/models-manager/models.json`；
 - `codex-rs/protocol/src/openai_models.rs`；
@@ -22,7 +22,7 @@
 只有网关未配置任何模型时，本地模式才会以全部八个打包条目为基础。只要配置了至少一个
 模型，生成的目录就只包含已配置的模型名称。已配置名称与八个打包 slug 之一相同时，
 会在解析后的 JSON 值层面复用该条目，然后再应用 Rosetta 的运行时 overlay。打包资产仍
-与正式版 `0.145.0` 源码完全一致；生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
+与正式版 `0.147.0` 源码完全一致；生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
 `supports_reasoning_summaries` 布尔字段，因此有意不会与打包资产逐字节一致。
 
 ### 压缩哈希 overlay
@@ -77,22 +77,26 @@ Terra 的指令结构并替换模型身份，同时声明各自的上下文、�
 默认摘要和按字节截断策略。所有第三方预设继续禁用并行工具调用，直到各自的跨协议
 调用、结果关联和 replay 行为得到独立验证。
 
-当前预设资源包含 25 个经过审查的 `shared_overrides`。正式版使用
+当前预设资源包含 27 个经过审查的 `shared_overrides`。Codex 0.147 使用
 `supports_reasoning_summary_parameter`，运行时和预设现在都使用这个精确字段。第三方快照
 有意与官方 Terra 保持差异：service/speed tier 为空、original 图片 detail 关闭、并行工具
 调用关闭，并默认关闭 reasoning summary 参数。这些值是 Rosetta 的安全能力声明，不是把
 只在官方模型上证实的能力照搬给第三方模型。
+新增的两个共享值把 `include_apps_usage_instructions` 和
+`include_plugin_usage_instructions` 保持为 true。Codex 仍只会在 Tool Suggest、Apps、
+Plugins 三者同时启用时提供插件建议指引；catalog metadata 不会绕过这个运行时 AND 门禁。
 
 设计以 Terra 为客户端表面参考，同时让模型身份、上下文、模态、推理档位及其
 默认值、priority、`comp_hash` 和带身份的指令内容保持模型专属。每个受支持的共享键都应
 允许在单个 `models[]` 条目中覆盖，`template_slug` 只补充 Rosetta 尚未识别的字段；
 已知删除或忽略的字段不能通过模板兜底重新出现。
 
-目标正式版打包 JSON 共使用 41 个不同键，其中五个会被 `ModelInfo` 忽略，因此实际
-消费 36 个打包字段。`ModelInfo` 另外接受打包 JSON 未提供、带默认值的
-`effective_context_window_percent=95` 和 `supports_reasoning_summary_parameter=true`；
+目标 0.147.0 打包 JSON 共使用 42 个不同键，其中旧版摘要别名和下列四个键会被
+`ModelInfo` 忽略，因此实际消费 37 个打包字段。`ModelInfo` 另外接受打包 JSON 未提供、
+带默认值的 `effective_context_window_percent=95`、
+`supports_reasoning_summary_parameter=true` 和 `model_specialty=null`；
 `used_fallback_model_metadata` 仅供运行时使用，不能由 catalog JSON 提供。下列表格因此共记录
-43 个 catalog 相关名称：38 个可输入字段和五个会被忽略的打包键；运行时专用字段另行说明。
+45 个 catalog 相关名称：40 个可输入字段和五个会被忽略的打包键；运行时专用字段另行说明。
 
 打包 JSON 中有五个键不属于当前 Rust `ModelInfo`。加载打包文件时，Serde 会忽略它们：
 
@@ -102,7 +106,7 @@ Terra 的指令结构并替换模型身份，同时声明各自的上下文、�
 - `reasoning_summary_format`。
 - `supports_reasoning_summaries`。
 
-下文把它们标记为 **已审查 0.144.x 基线及正式 0.145.0 均未消费**。Rosetta 会从生成的第三方预设中省略它们，
+下文把它们标记为 **已审查 0.147.0 未消费**。Rosetta 会从生成的第三方预设中省略它们，
 并明确阻止 `template_slug` 把它们恢复回来。除非后续 Codex 版本开始消费这些字段，
 否则 Rosetta 不应根据它们实现运行时协议逻辑。`used_fallback_model_metadata` 则相反：
 它是 `ModelInfo` 的客户端内部运行时标志，而且禁止反序列化，因此不是合法的
@@ -120,8 +124,9 @@ catalog 输入字段。
 | `supported_in_api` | 布尔值，`true` | 传递为模型预设的 API 支持标志。 | 只有 Rosetta 确实能路由该别名时才设为 true；此字段不会验证真实上游 API。 |
 | `availability_nux` | 对象或 null，`{"message":"New model available."}` | 模型刚可用时展示的可选 NUX 提示。 | 私有别名通常设为 null；不要把它当能力开关。 |
 | `upgrade` | 对象或 null，`{"model":"replacement","migration_markdown":"Use replacement."}` | 为旧模型提供推荐替代模型和迁移说明。 | 只用于明确的别名迁移。真正的上游路由变化仍放在 Rosetta 配置中。 |
-| `available_in_plans` | 字符串数组，`["plus","team"]` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要据此做 Rosetta 鉴权或路由；访问控制应在网关/provider 层实现。 |
-| `minimal_client_version` | 打包 JSON 中的字符串，`"0.144.0"` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要依靠它拒绝旧客户端；需要时使用明确的网关兼容策略。 |
+| `model_specialty` | 字符串或 null，`"review"` | 可选的模型专长，会复制到模型选择界面使用的 `ModelPreset`；官方 0.147 JSON 在其为 null 时省略。 | 只当作模型专属 UI metadata，不作为路由或能力开关。Rosetta 会在完整记录覆盖中保留显式值。 |
+| `available_in_plans` | 字符串数组，`["plus","team"]` | **已审查 0.147.0 未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要据此做 Rosetta 鉴权或路由；访问控制应在网关/provider 层实现。 |
+| `minimal_client_version` | 打包 JSON 中的字符串，`"0.147.0"` | **已审查 0.147.0 未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要依靠它拒绝旧客户端；需要时使用明确的网关兼容策略。 |
 
 ## 推理、输出和服务档位
 
@@ -129,9 +134,9 @@ catalog 输入字段。
 | --- | --- | --- | --- |
 | `default_reasoning_level` | reasoning effort 或 null，`"medium"` | 用户未选择时使用的默认推理强度。 | 选择上游接受或 Rosetta 已映射的值，并保证它也出现在 `supported_reasoning_levels` 中。 |
 | `supported_reasoning_levels` | 对象数组，`[{"effort":"low","description":"Fast"},{"effort":"high","description":"Deep"}]` | 提供可选的推理强度及 UI 说明。当前枚举包括 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max` 和 `ultra`，后续版本可能变化。 | 只声明上游接受或 Rosetta 明确映射的档位。不要为了获得委派行为而照抄 `ultra`。 |
-| `supports_reasoning_summary_parameter` | 布尔值，默认 `true` | Codex 0.145.0 消费这个 Rust 字段，默认值为 true。它的打包 JSON 同时包含旧版 `supports_reasoning_summaries: true`；该键不是 `ModelInfo` 字段，会被 serde 忽略。 | 只有确定目标客户端需要省略摘要参数，且生成目录由匹配的 Codex 源码消费时才设为 false。Rosetta 为 0.144.x 客户端保留旧键，但正式版能力事实来源仍是 Rust 字段。 |
+| `supports_reasoning_summary_parameter` | 布尔值，默认 `true` | Codex 0.147.0 消费这个 Rust 字段，默认值为 true。它的打包 JSON 同时包含旧版 `supports_reasoning_summaries: true`；该键不是 `ModelInfo` 字段，会被 serde 忽略。 | 只有确定目标客户端需要省略摘要参数，且生成目录由匹配的 Codex 源码消费时才设为 false。Rosetta 为 0.144.x 客户端保留旧键，但正式版能力事实来源仍是 Rust 字段。 |
 | `default_reasoning_summary` | `"auto"`、`"concise"`、`"detailed"` 或 `"none"` | 用户没有配置时的默认摘要模式。 | 第三方模型在端到端验证前优先使用 `none`。 |
-| `reasoning_summary_format` | 字符串，`"experimental"` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要按此字段分支 Rosetta 转换；应检查实际请求和流事件。 |
+| `reasoning_summary_format` | 字符串，`"experimental"` | **已审查 0.147.0 未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设。 | 不要按此字段分支 Rosetta 转换；应检查实际请求和流事件。 |
 | `support_verbosity` | 布尔值，`true` | 为 true 时，Codex 发送用户配置或默认的 Responses `text.verbosity`；为 false 时省略。 | 只有上游接受，或 Rosetta 会剥离/映射时才启用。 |
 | `default_verbosity` | `"low"`、`"medium"`、`"high"` 或 null | 支持 verbosity 且用户未覆盖时的默认值。 | 使用上游真实支持的值；`support_verbosity` 为 false 时，null 最安全。 |
 | `service_tiers` | 对象数组，`[{"id":"priority","name":"Fast","description":"Higher speed"}]` | 为 UI 和 subagent/模型选择列出允许的服务档位，并校验请求档位。 | 除非 Rosetta provider 会把档位映射到真实上游服务等级，否则保持空数组。 |
@@ -165,26 +170,27 @@ catalog 输入字段。
 | `use_responses_lite` | 布尔值，`true` | 启用 Codex 的 Responses Lite 方言：工具/指令移入 input item，使用内部 header，禁用 hosted tool，并期望独立 namespace 工具。 | 固定为 true。Rosetta 负责 Chat 上游所需的 `input[].type="additional_tools"`、developer instructions、custom `exec`、独立 `/v1/alpha/search`、compact/header 和 stream 转换。 |
 | `multi_agent_version` | `"disabled"`、`"v1"`、`"v2"` 或 null | 选择旧 multi-agent、collaboration v2、禁用，或 feature/config fallback；会影响工具定义和 subagent 生命周期。 | 面向最新模型的 Terra 兼容配置固定为 `v2`，catalog 不增加弱模型降级预设。 |
 | `auto_review_model_override` | 字符串或 null，`"review-model"` | 把命令执行批准审查从当前模型改交给另一个模型。 | 指向 Rosetta 已暴露、确实可路由且适合批准审查的别名；普通模型保持 null。 |
-| `prefer_websockets` | 布尔值，`true` | **已审查 0.144.x 基线及正式 0.145.0 均未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设；WebSocket 选择由其他位置控制。 | 不要根据这个字段宣称 WebSocket 支持或切换 Rosetta transport；应验证真实客户端请求路径。 |
+| `prefer_websockets` | 布尔值，`true` | **已审查 0.147.0 未消费：**不在 `ModelInfo` 中，也不写入 Rosetta 第三方预设；WebSocket 选择由其他位置控制。 | 不要根据这个字段宣称 WebSocket 支持或切换 Rosetta transport；应验证真实客户端请求路径。 |
 
-## 指令和 Skills
+## 指令、Apps、Plugins 和 Skills
 
 | 字段 | 类型与示例 | Codex 行为 | Rosetta 适配建议 |
 | --- | --- | --- | --- |
-| `base_instructions` | 字符串，`"You are a coding agent..."` | 没有合法 instruction template 覆盖时使用的基础模型指令。 | 按第三方模型真实的工具和推理能力编写。不要只为了让 Codex 暴露工具而复制整套 GPT Prompt。 |
-| `model_messages` | 对象或 null，`{"instructions_template":"... {{ personality }} ...","instructions_variables":{"personality_default":"","personality_friendly":"...","personality_pragmatic":"..."},"approvals":{"on_request":"...","on_request_auto_review":"..."},"auto_review":{"policy":"...","policy_template":"..."},"permissions":{"danger_full_access":"...","workspace_write":"...","read_only":"..."}}` | 只要存在 `instructions_template`，它就始终替代 `base_instructions`。`{{ personality }}` 占位符加完整 variables 可启用人格文本；`approvals` 提供批准模式消息。alpha.23 新增 `auto_review.policy_template` 和按 sandbox 区分的 `permissions` 消息。 | 先使用 null 或较小、经过测试的模板。只要有 template，所有关键指令都要放在其中，因为 Codex 不会自动追加 `base_instructions`。批准、自动审查和权限消息属于安全敏感的模型指导，只有审查过其行为后才应复制。 |
+| `model_messages` | 对象或 null，包含 `instructions_template`、`instructions_variables`、`approvals`、`collaboration_modes`、`auto_review`、`permissions` 和 `token_budget` | `instructions_template` 现在是唯一的 catalog 指令模板；0.147 删除 `base_instructions`，没有 template 时返回空指令。`collaboration_modes` 提供 default/plan 消息，`token_budget` 提供提醒阈值/消息及 compact fallback 默认值。 | 所有关键指令都放在 template 中。把批准、协作、权限和 token-budget 消息当作安全敏感的模型指导。Rosetta 保留这些嵌套记录，但不重新解释其语义。 |
 | `include_skills_usage_instructions` | 布尔值，`false` | 控制 Codex 是否把完整的“How to use skills”教程追加到 Skills fragment；不会控制 available skills 列表本身是否发送。 | 除非第三方模型确实受益于较长教程且上下文预算充足，否则保持 false。 |
+| `include_plugin_usage_instructions` | 布尔值，`false` | 允许为模型提供插件安装指引；实际建议工具仍要求 Tool Suggest、Apps、Plugins 同时启用。 | 与目标客户端表面保持一致；绝不能只凭这个字段判断插件运行时可用。 |
+| `include_apps_usage_instructions` | 布尔值，默认 `true` | 允许为模型提供 Apps 指引。官方 0.147 条目显式设为 true，只有 `codex-auto-review` 为 false。 | 受支持的 Terra 派生表面保持 true，同时保留运行时 AND 门禁和 Provider 能力检查。 |
 
-### 打包模型的 `base_instructions` 和 `model_messages`
+### 打包模型的 `model_messages`
 
 目录保存了完整字符串，但有用的兼容差异是结构，而不是逐字 Prompt：
 
 | 模型 | Prompt 形态 |
 | --- | --- |
-| `gpt-5.6-sol` | 较新的 App 风格指令和固定人格；template 与 base 基本一致，不使用 personality 占位符。 |
+| `gpt-5.6-sol` | 较新的 App 风格指令模板和固定人格，不使用 personality 占位符。 |
 | `gpt-5.6-terra`、`gpt-5.6-luna` | 两者完全相同，与 Sol 接近，只在段落顺序、可视化和格式规则上有少量差异。 |
 | `gpt-5.5` | 独立的工程/前端 Prompt，支持动态 Friendly 和 Pragmatic 人格；它是唯一设置 `include_skills_usage_instructions: true` 的打包条目。 |
-| `gpt-5.4`、`codex-auto-review` | base instructions 和 model-message template 完全相同，支持动态人格。 |
+| `gpt-5.4`、`codex-auto-review` | 相关的 model-message template，支持动态人格。 |
 | `gpt-5.4-mini` | 结构接近 5.4，但文件链接和最终回答指导更短，使用相同人格变量。 |
 | `gpt-5.2` | 更长的旧式 Prompt，包含 AGENTS、计划示例、验证指导、工具指导和 `update_plan`；没有动态人格。 |
 
@@ -227,7 +233,7 @@ Terra 兼容客户端表面，并把固定的 Responses Lite 请求形态转换�
 | 并行调用 | `supports_parallel_tool_calls: false` | 并发 call ID、结果关联、replay 和模型行为稳定。 |
 | Collaboration | `multi_agent_version: "v2"` | 使用当前 collaboration namespace 和生命周期。 |
 | 视觉 | 每模型 `input_modalities`、共享 `supports_image_detail_original: false` | 模型条目声明是否支持图片；original detail 仍是协议层共享选择。 |
-| 推理摘要 | 仅在明确禁用时使用 `supports_reasoning_summary_parameter: false`，并保留 `default_reasoning_summary: "none"` | alpha.23 在字段省略时默认允许该参数。应验证请求映射、流式摘要、encrypted content 和后续轮次，不要使用已移除的旧字段。 |
+| 推理摘要 | 仅在明确禁用时使用 `supports_reasoning_summary_parameter: false`，并保留 `default_reasoning_summary: "none"` | Codex 0.147 在字段省略时默认允许该参数。应验证请求映射、流式摘要、encrypted content 和后续轮次，不要使用已移除的旧字段。 |
 | Verbosity | `support_verbosity: true`、`default_verbosity: "low"` | 保持 Terra 的客户端行为。当前 Responses→Chat 转换不会转发 `text.verbosity`，因此在增加上游映射前，它只是客户端表面元数据。 |
 | 搜索 | `supports_search_tool: true`、`web_search_tool_type: "text_and_image"` | Responses Lite 使用独立 `web.run`；hosted-search 类型保持 Terra 一致但不参与当前路径。 |
 | 上下文 | 真实 provider 限制、`auto_compact_token_limit: null` | 长会话能在上游拒绝前完成 compact 和 resume。 |
@@ -267,9 +273,18 @@ fallback 预设；不能使用这套表面的模型不属于本 catalog 的支�
   "default_service_tier": null,
   "availability_nux": null,
   "upgrade": null,
-  "base_instructions": "You are a coding agent. Use the provided tools exactly as specified.",
-  "model_messages": null,
+  "model_messages": {
+    "instructions_template": "You are a coding agent. Use the provided tools exactly as specified.",
+    "instructions_variables": null,
+    "approvals": null,
+    "collaboration_modes": null,
+    "auto_review": null,
+    "permissions": null,
+    "token_budget": null
+  },
   "include_skills_usage_instructions": false,
+  "include_plugin_usage_instructions": true,
+  "include_apps_usage_instructions": true,
   "supports_reasoning_summary_parameter": false,
   "default_reasoning_summary": "none",
   "support_verbosity": true,
@@ -294,7 +309,7 @@ fallback 预设；不能使用这套表面的模型不属于本 catalog 的支�
 }
 ```
 
-示例特意省略当前未消费的四个打包键。正式版的音频输入模态、旧版摘要键和权限消息新增项，
+示例特意省略当前未消费的五个打包键。0.147.0 的音频输入模态、旧版摘要键和消息结构新增项，
 必须针对精确目标源码复核后，才能把该示例用于兼容性声明。
 
 ## 升级审查要求

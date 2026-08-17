@@ -1,10 +1,14 @@
 """Tests for bundled model detection shared by Admin and runtime config."""
 
+import hashlib
+from importlib import resources
+
 import pytest
 
 from codex_rosetta.gateway.model_presets import (
     MODEL_PRESET_IGNORED_CATALOG_FIELDS,
     detect_model_preset,
+    full_model_presets,
     load_model_preset_resource,
     model_input_modalities,
     model_presets_for_admin,
@@ -25,6 +29,8 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "multi_agent_version": "v2",
     "use_responses_lite": True,
     "include_skills_usage_instructions": False,
+    "include_plugin_usage_instructions": True,
+    "include_apps_usage_instructions": True,
     "auto_review_model_override": None,
     "auto_compact_token_limit": None,
     "default_reasoning_summary": "none",
@@ -39,6 +45,20 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "service_tiers": [],
     "additional_speed_tiers": [],
 }
+
+CODEX_0147_MODEL_CATALOG_SHA256 = (
+    "384ff2e0ca67f65d2866e422e2ec7dfa5ed9e3fec7a84fe14005247a7087a302"
+)
+
+
+def test_bundled_catalog_matches_reviewed_codex_0147_asset() -> None:
+    raw = (
+        resources.files("codex_rosetta.gateway")
+        .joinpath("codex_models.json")
+        .read_bytes()
+    )
+
+    assert hashlib.sha256(raw).hexdigest() == CODEX_0147_MODEL_CATALOG_SHA256
 
 
 def test_shared_overrides_match_runtime_snapshot() -> None:
@@ -99,9 +119,9 @@ def test_every_context_window_preset_has_complete_limits() -> None:
 def test_context_window_presets_reject_legacy_value_key() -> None:
     resource = load_model_preset_resource()
     model = next(model for model in resource["models"] if model["slug"] == "kimi-k3")
-    model["context_window_presets"][0]["value"] = model["context_window_presets"][0].pop(
-        "context_window"
-    )
+    model["context_window_presets"][0]["value"] = model["context_window_presets"][
+        0
+    ].pop("context_window")
 
     with pytest.raises(ValueError, match="must contain exactly"):
         normalize_model_preset(model, field="kimi-k3")
@@ -149,6 +169,17 @@ def test_admin_detection_combines_codex_catalog_and_third_party_presets() -> Non
         "limit": 10000,
     }
     assert "supports_parallel_tool_calls" not in presets["minimax-m3"]
+
+
+def test_official_and_third_party_presets_preserve_codex_0147_guidance_fields() -> None:
+    presets = full_model_presets()
+
+    assert presets["gpt-5.6-terra"]["include_apps_usage_instructions"] is True
+    assert presets["gpt-5.6-terra"]["include_plugin_usage_instructions"] is True
+    assert "base_instructions" not in presets["gpt-5.6-terra"]
+    assert presets["deepseek-v4-flash"]["include_apps_usage_instructions"] is True
+    assert presets["deepseek-v4-flash"]["include_plugin_usage_instructions"] is True
+    assert "base_instructions" not in presets["deepseek-v4-flash"]
 
 
 def test_model_detection_uses_exact_upstream_slug_then_exposed_slug() -> None:

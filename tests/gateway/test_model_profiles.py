@@ -33,6 +33,49 @@ def test_deep_diff_round_trip_and_empty_normalization() -> None:
     assert normalized_deep_diff(base, base) == {}
 
 
+def test_codex_0147_nested_model_fields_round_trip_through_profile_owner() -> None:
+    token_budget = {
+        "reminder_threshold_tokens": 12_000,
+        "reminder_message_template": "{remaining_tokens}",
+        "guidance_message": "Use the remaining budget deliberately.",
+        "auto_compact_fallback_prompt": "Compact before continuing.",
+        "auto_compact_fallback_buffer_tokens": 4_000,
+    }
+    override = {
+        "model_specialty": "review",
+        "model_messages": {
+            "collaboration_modes": {
+                "default": "Use default collaboration mode.",
+                "plan": "Use plan collaboration mode.",
+            },
+            "token_budget": token_budget,
+        },
+    }
+    profile = resolve_model_profile(
+        exposed_model="terra-alias",
+        upstream_model="gpt-5.6-terra",
+        provider_id="openai",
+        model_info_override=override,
+    )
+
+    assert profile.catalog_model()["model_specialty"] == "review"
+    assert profile.catalog_model()["model_messages"]["token_budget"] == token_budget
+    assert profile.catalog_model()["model_messages"]["collaboration_modes"] == {
+        "default": "Use default collaboration mode.",
+        "plan": "Use plan collaboration mode.",
+    }
+    saved, _runtime = canonical_model_overrides(profile)
+    assert saved == override
+
+    restored = resolve_model_profile(
+        exposed_model="terra-alias",
+        upstream_model="gpt-5.6-terra",
+        provider_id="openai",
+        model_info_override=saved,
+    )
+    assert restored.catalog_model() == profile.catalog_model()
+
+
 def test_preset_matching_prefers_upstream_then_exposed_fallback() -> None:
     upstream = resolve_model_profile(
         exposed_model="gpt-5.6-terra",

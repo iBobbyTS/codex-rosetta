@@ -343,10 +343,9 @@ def test_catalog_materializes_named_third_party_presets_from_terra() -> None:
         assert model["default_verbosity"] == "low"
         assert model["service_tiers"] == []
         assert model["additional_speed_tiers"] == []
-        assert "effective_context_window_percent" not in model
+        assert model["effective_context_window_percent"] == 95
         assert model["comp_hash"] == expected_comp_hashes[slug]
-        assert identity in model["base_instructions"]
-        assert "GPT-5" not in model["base_instructions"]
+        assert "base_instructions" not in model
         messages = json.dumps(model["model_messages"], ensure_ascii=False)
         assert identity in messages
         assert "GPT-5" not in messages
@@ -391,10 +390,13 @@ def test_model_entry_overrides_every_shared_field_and_keeps_unknown_fallback() -
     )
 
     for key, value in official_shared.items():
-        assert model[key] == value
+        if key == "auto_compact_token_limit":
+            assert model[key] == 800_000
+        else:
+            assert model[key] == value
     assert model["future_catalog_field"] == {"from_template": True}
     assert model["supports_reasoning_summary_parameter"] is False
-    assert "effective_context_window_percent" not in model
+    assert model["effective_context_window_percent"] == 95
     assert MODEL_PRESET_IGNORED_CATALOG_FIELDS.isdisjoint(model)
 
 
