@@ -297,6 +297,28 @@ class TestStreamResponseFromProvider:
         assert usage_event["usage"]["cache_creation_tokens"] == 3
         assert usage_event["usage"]["codex_rollout_budget_units"] == 2.5
 
+    @pytest.mark.parametrize(
+        "invalid", [-1, float("nan"), float("inf"), float("-inf"), True]
+    )
+    def test_response_completed_omits_invalid_rollout_budget(self, invalid):
+        """SSE conversion omits invalid provider budget values."""
+        event = {
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "output": [],
+                "usage": {
+                    "input_tokens": 1,
+                    "output_tokens": 2,
+                    "total_tokens": 3,
+                    "codex_rollout_budget_units": invalid,
+                },
+            },
+        }
+        events = cast(list[Any], self.converter.stream_response_from_provider(event))
+        usage_event = [event for event in events if event["type"] == "usage"][0]
+        assert "codex_rollout_budget_units" not in usage_event["usage"]
+
     def test_image_generation_call_transparent_background_is_passthrough(self):
         """Responses image result metadata survives stream reconstruction."""
         ctx = OpenAIResponsesStreamContext()

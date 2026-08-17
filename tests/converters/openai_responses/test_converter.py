@@ -781,6 +781,57 @@ class TestOpenAIResponsesConverter:
         converted = self.converter.response_from_provider(with_budget)
         assert converted["usage"]["codex_rollout_budget_units"] == 2.5
 
+    @pytest.mark.parametrize(
+        "invalid", [-1, float("nan"), float("inf"), float("-inf"), True]
+    )
+    def test_response_usage_omits_invalid_rollout_budget(self, invalid):
+        """Invalid 0.147 budget values are omitted on both conversion legs."""
+        provider = {
+            "id": "resp_budget_invalid",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "gpt-4o",
+            "status": "completed",
+            "output": [],
+            "usage": {
+                "input_tokens": 1,
+                "output_tokens": 2,
+                "total_tokens": 3,
+                "codex_rollout_budget_units": invalid,
+            },
+        }
+        converted = self.converter.response_from_provider(provider)
+        assert "codex_rollout_budget_units" not in converted["usage"]
+        converted["usage"]["codex_rollout_budget_units"] = invalid
+        restored = self.converter.response_to_provider(converted)
+        assert "codex_rollout_budget_units" not in restored["usage"]
+
+    def test_image_generation_result_round_trips_complete_opaque_item(self):
+        """Non-stream Responses preserve the complete image result item."""
+        context = ConversionContext()
+        context.options["metadata_mode"] = "preserve"
+        item = {
+            "type": "image_generation_call",
+            "id": "ig_123",
+            "status": "completed",
+            "revised_prompt": "revised",
+            "result": "base64-data",
+            "transparent_background": True,
+        }
+        provider_response = {
+            "id": "resp_image",
+            "object": "response",
+            "created_at": 1700000000,
+            "model": "gpt-image-2",
+            "status": "completed",
+            "output": [item],
+        }
+        ir_response = self.converter.response_from_provider(
+            provider_response, context=context
+        )
+        restored = self.converter.response_to_provider(ir_response, context=context)
+        assert restored["output"] == [item]
+
     def test_response_from_provider_with_service_tier(self):
         """Test response with service_tier."""
         provider_response = {

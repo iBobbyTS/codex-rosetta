@@ -41,6 +41,7 @@ from .tool_ops import OpenAIResponsesToolOps
 
 RESPONSES_PASSTHROUGH_ITEM_TYPES = frozenset(
     {
+        "image_generation_call",
         "tool_search_call",
         "tool_search_output",
     }

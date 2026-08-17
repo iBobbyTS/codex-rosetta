@@ -11,6 +11,7 @@ nested messages. The converter handles this structural difference.
 
 import copy
 import json
+import math
 import time
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
@@ -395,11 +396,18 @@ class OpenAIResponsesConverter(BaseConverter):
 
         # Collect all content parts into a single assistant message
         message_content: list[dict[str, Any]] = []
+        opaque_items: list[dict[str, Any]] = []
         for ir_item in ir_items:
             if isinstance(ir_item, dict) and "role" in ir_item:
                 # It's a message - extract content
                 content = ir_item.get("content", [])
                 message_content.extend(cast(list, content))
+                custom = (ir_item.get("metadata") or {}).get("custom", {})
+                opaque_items.extend(
+                    copy.deepcopy(item)
+                    for item in custom.get("_passthrough_items", [])
+                    if isinstance(item, dict)
+                )
             elif isinstance(ir_item, dict) and "type" in ir_item:
                 # It's an extension item (system_event etc.) - skip for choices
                 pass
@@ -410,11 +418,17 @@ class OpenAIResponsesConverter(BaseConverter):
         ):
             finish_reason_val = "tool_calls"
 
-        if message_content:
+        if message_content or opaque_items:
+            message: dict[str, Any] = {
+                "role": "assistant",
+                "content": message_content,
+            }
+            if opaque_items:
+                message["metadata"] = {"custom": {"_passthrough_items": opaque_items}}
             choices.append(
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": message_content},
+                    "message": message,
                     "finish_reason": {"reason": finish_reason_val},
                 }
             )
@@ -472,6 +486,15 @@ class OpenAIResponsesConverter(BaseConverter):
             message = choice.get("message")
             if not message:
                 continue
+
+            custom = (message.get("metadata") or {}).get("custom", {})
+            passthrough_items = custom.get("_passthrough_items", [])
+            if isinstance(passthrough_items, list):
+                provider_response["output"].extend(
+                    copy.deepcopy(item)
+                    for item in passthrough_items
+                    if isinstance(item, dict)
+                )
 
             content_parts = message.get("content", [])
             text_parts: list[dict[str, Any]] = []
@@ -545,9 +568,7 @@ class OpenAIResponsesConverter(BaseConverter):
             "total_tokens": p_usage.get("total_tokens") or 0,
         }
         budget_units = p_usage.get("codex_rollout_budget_units")
-        if isinstance(budget_units, (int, float)) and not isinstance(
-            budget_units, bool
-        ):
+        if OpenAIResponsesConverter._valid_budget_units(budget_units):
             usage_info["codex_rollout_budget_units"] = budget_units
         p_input_details = p_usage.get("input_tokens_details")
         if p_input_details:
@@ -578,9 +599,20 @@ class OpenAIResponsesConverter(BaseConverter):
                 "reasoning_tokens": ir_usage.get("reasoning_tokens", 0),
             },
         }
-        if "codex_rollout_budget_units" in ir_usage:
-            usage["codex_rollout_budget_units"] = ir_usage["codex_rollout_budget_units"]
+        budget_units = ir_usage.get("codex_rollout_budget_units")
+        if OpenAIResponsesConverter._valid_budget_units(budget_units):
+            usage["codex_rollout_budget_units"] = budget_units
         return usage
+
+    @staticmethod
+    def _valid_budget_units(value: Any) -> bool:
+        """Return whether a rollout budget value matches the 0.147 domain."""
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and math.isfinite(value)
+            and value >= 0
+        )
 
     def _apply_tool_config(
         self,
@@ -873,7 +905,7 @@ class OpenAIResponsesConverter(BaseConverter):
             ctx.store_output_items_meta(items_meta)
 
     @staticmethod
-    def _apply_preserve_metadata(
+    def _apply_preserve_metadata(  # noqa: C901
         provider_response: dict[str, Any],
         ctx: ConversionContext,
     ) -> None:
@@ -901,9 +933,9 @@ class OpenAIResponsesConverter(BaseConverter):
             if isinstance(tool, dict) and tool.get("type") == "function":
                 tool.setdefault("strict", None)
 
+        output = provider_response.get("output", [])
         # Restore per-output-item metadata
         items_meta = ctx.get_output_items_meta()
-        output = provider_response.get("output", [])
         for i, meta in enumerate(items_meta):
             if i >= len(output):
                 break
@@ -2057,10 +2089,9 @@ class OpenAIResponsesConverter(BaseConverter):
             "output_tokens": pending_usage.get("completion_tokens") or 0,
             "total_tokens": pending_usage.get("total_tokens") or 0,
         }
-        if "codex_rollout_budget_units" in pending_usage:
-            usage["codex_rollout_budget_units"] = pending_usage[
-                "codex_rollout_budget_units"
-            ]
+        budget_units = pending_usage.get("codex_rollout_budget_units")
+        if OpenAIResponsesConverter._valid_budget_units(budget_units):
+            usage["codex_rollout_budget_units"] = budget_units
         cache_read = pending_usage.get("cache_read_tokens")
         cache_creation = pending_usage.get("cache_creation_tokens")
         usage["input_tokens_details"] = {
