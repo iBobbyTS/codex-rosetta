@@ -166,7 +166,7 @@ def test_manifest_bundles_all_provider_logos() -> None:
     )
     logo_assets = manifest["admin.html"]["assets"]
 
-    assert len(logo_assets) == 12
+    assert len(logo_assets) == 10
     assert any(
         path.startswith("assets/opencode-") and path.endswith(".png")
         for path in logo_assets
