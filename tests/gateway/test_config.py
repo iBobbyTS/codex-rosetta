@@ -1602,6 +1602,44 @@ class TestModelGroups:
         assert route.provider_profile.api_type == "chat"
         assert route.resolved_model_profile is cfg.model_profiles["qwen-public"]
 
+    def test_model_group_rotation_resolves_candidate_dependent_runtime_profile(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["provider"] = "opencode_go"
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+            "provider": "custom",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        raw["model_groups"]["test-llm"]["models"] = {
+            "qwen-public": {
+                "upstream_model": "qwen3.7-plus",
+                "model_info": {"context_window": 131_072},
+            }
+        }
+        cfg = GatewayConfig(raw)
+
+        first_route, _provider = cfg.resolve("openai_responses", "qwen-public")
+        asyncio.run(cfg.model_group_rings["test-llm"].select("secondary"))
+        second_route, _provider = cfg.resolve("openai_responses", "qwen-public")
+        cached_second_route, _provider = cfg.resolve("openai_responses", "qwen-public")
+
+        assert first_route.provider_id == "opencode_go"
+        assert first_route.resolved_model_profile is cfg.model_profiles["qwen-public"]
+        assert first_route.resolved_model_profile.runtime_capabilities == {
+            "temperature": 0.55,
+            "top_p": 1.0,
+        }
+        assert second_route.provider_id == "custom"
+        assert second_route.resolved_model_profile.runtime_capabilities == {}
+        assert second_route.model_info["context_window"] == 131_072
+        assert second_route.model_info["max_context_window"] == 131_072
+        assert (
+            cached_second_route.resolved_model_profile
+            is second_route.resolved_model_profile
+        )
+
     def test_full_codex_catalog_supplies_runtime_modalities(self):
         raw = _minimal_raw()
         raw["model_groups"]["test-llm"]["models"] = {

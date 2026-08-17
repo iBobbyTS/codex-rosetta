@@ -310,6 +310,7 @@ async def _run_rosetta_compaction(
     codex_window_id: str | None,
     image_fetch_workers: ImageFetchWorkerPool | None,
     stream: bool,
+    model_group_failover: bool = False,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Execute the internal no-tools summary call and return a V2 item."""
     force_rosetta_compaction = (
@@ -349,6 +350,7 @@ async def _run_rosetta_compaction(
         image_fetch_workers=image_fetch_workers,
         skip_codex_compaction=True,
         disable_error_dump=True,
+        model_group_failover=model_group_failover,
     )
     profile: dict[str, Any] = {
         "compaction_mode": "rosetta",
@@ -363,6 +365,13 @@ async def _run_rosetta_compaction(
     profile.update(
         {f"compaction_summary_{key}": value for key, value in summary_profile.items()}
     )
+    failure_origin = summary_profile.get("provider_failure_origin")
+    if summary_profile.get("upstream_provider_failure") is True and failure_origin in {
+        "upstream_response",
+        "transport_exhaustion",
+    }:
+        profile["upstream_provider_failure"] = True
+        profile["provider_failure_origin"] = failure_origin
     if summary_response.status_code >= 400:
         return summary_response, profile
     try:
@@ -419,6 +428,7 @@ async def _prepare_codex_compaction_request(
     image_fetch_workers: ImageFetchWorkerPool | None,
     stream: bool,
     enabled: bool = True,
+    model_group_failover: bool = False,
 ) -> tuple[dict[str, Any], Response | StreamingResponse | None, dict[str, Any]]:
     """Apply V2 replay/policy, returning an early response only when required."""
     if not enabled:
@@ -464,6 +474,7 @@ async def _prepare_codex_compaction_request(
         codex_window_id=codex_window_id,
         image_fetch_workers=image_fetch_workers,
         stream=stream,
+        model_group_failover=model_group_failover,
     )
     return preparation.body, response, compaction_profile
 
@@ -1743,6 +1754,7 @@ async def handle_non_streaming(  # noqa: C901
         image_fetch_workers=image_fetch_workers,
         stream=False,
         enabled=not skip_codex_compaction,
+        model_group_failover=model_group_failover,
     )
     profile.update(compaction_profile)
     if compaction_response is not None:
@@ -2919,6 +2931,7 @@ async def handle_streaming(  # noqa: C901
         codex_window_id=codex_window_id,
         image_fetch_workers=image_fetch_workers,
         stream=True,
+        model_group_failover=model_group_failover,
     )
     profile.update(compaction_profile)
     if compaction_response is not None:

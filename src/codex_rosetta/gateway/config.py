@@ -985,6 +985,10 @@ class GatewayConfig:
             self.model_input_modalities,
             self.model_upstream_names,
         ) = self._parse_models(self._expanded_raw_models, self._raw_providers)
+        self._candidate_model_profiles: dict[tuple[str, str], ResolvedModelProfile] = {
+            (model, self.models[model]): profile
+            for model, profile in self.model_profiles.items()
+        }
         self.tool_profile_documents = normalize_tool_profile_documents(
             raw.get("tool_profiles")
         )
@@ -1502,6 +1506,27 @@ class GatewayConfig:
             for name in self.model_group_provider_names.get(group_name, ())
         )
 
+    def _model_profile_for_candidate(
+        self,
+        model: str,
+        provider_name: str,
+    ) -> ResolvedModelProfile:
+        """Resolve and cache provider-dependent model runtime parameters."""
+        key = (model, provider_name)
+        cached = self._candidate_model_profiles.get(key)
+        if cached is not None:
+            return cached
+        raw_model = self._expanded_raw_models[model]
+        profile = resolve_model_profile(
+            exposed_model=model,
+            upstream_model=raw_model.get("upstream_model"),
+            provider_id=cast(str, self._raw_providers[provider_name]["provider"]),
+            model_info_override=raw_model.get("model_info"),
+            runtime_capabilities_override=raw_model.get("runtime_capabilities"),
+        )
+        self._candidate_model_profiles[key] = profile
+        return profile
+
     def resolve(
         self,
         source_provider: ProviderType,
@@ -1561,8 +1586,8 @@ class GatewayConfig:
         provider_type = self.provider_types[provider_name]
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
-        input_modalities = self.model_input_modalities.get(model)
-        model_profile = self.model_profiles[model]
+        model_profile = self._model_profile_for_candidate(model, provider_name)
+        input_modalities = list(model_profile.input_modalities)
         provider_id = self._raw_providers[provider_name]["provider"]
         api_type = self._raw_providers[provider_name]["api_type"]
         provider_profile = resolve_provider_profile(provider_id, api_type)

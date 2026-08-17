@@ -7,7 +7,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -25,6 +25,7 @@ from codex_rosetta.gateway.codex_compaction import (
     prepare_codex_compaction,
 )
 from codex_rosetta.gateway.state_scope import GatewayStateScope
+from codex_rosetta.gateway.transport import UpstreamResponse
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute
 
@@ -346,6 +347,7 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
             codex_window_id="thread-a:0",
             image_fetch_workers=None,
             stream=False,
+            model_group_failover=True,
         )
     )
 
@@ -355,7 +357,65 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
     assert captured["upstream_error_log_state"] is None
     assert captured["skip_codex_compaction"] is True
     assert captured["disable_error_dump"] is True
+    assert captured["model_group_failover"] is True
     assert persistence.count_codex_compaction_mappings() == 1
+    persistence.close()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("status_code", "synthetic", "expected_origin"),
+    [
+        (500, False, "upstream_response"),
+        (503, True, "transport_exhaustion"),
+    ],
+)
+def test_compaction_summary_failure_promotes_model_group_rotation_marker(
+    tmp_path,
+    stream: bool,
+    status_code: int,
+    synthetic: bool,
+    expected_origin: str,
+) -> None:
+    persistence = PersistenceManager(str(tmp_path))
+    transport = MagicMock()
+    transport.send_request = AsyncMock(
+        return_value=UpstreamResponse(
+            status_code=status_code,
+            body=None,
+            raw_content=b'{"error":{"message":"summary failed"}}',
+            synthetic=synthetic,
+        )
+    )
+    handler = proxy.handle_streaming if stream else proxy.handle_non_streaming
+
+    response, profile = asyncio.run(
+        handler(
+            _route(),
+            MagicMock(force_rosetta_compaction=False),
+            _request("context_limit"),
+            transport=transport,
+            persistence=persistence,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+            model_group_failover=True,
+        )
+    )
+
+    assert response.status_code == status_code
+    assert not isinstance(response, StreamingResponse)
+    assert transport.send_request.await_count == 1
+    call = transport.send_request.await_args
+    assert call is not None
+    assert call.kwargs["retry_nonstandard_statuses"] is True
+    assert profile["upstream_provider_failure"] is True
+    assert profile["provider_failure_origin"] == expected_origin
+    assert profile["compaction_summary_upstream_provider_failure"] is True
+    assert profile["compaction_summary_provider_failure_origin"] == expected_origin
     persistence.close()
 
 
