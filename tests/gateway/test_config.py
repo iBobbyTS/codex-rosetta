@@ -1620,6 +1620,7 @@ class TestModelGroups:
         }
         cfg = GatewayConfig(raw)
 
+        assert ("qwen-public", "secondary") in cfg._candidate_model_profiles
         first_route, _provider = cfg.resolve("openai_responses", "qwen-public")
         asyncio.run(cfg.model_group_rings["test-llm"].select("secondary"))
         second_route, _provider = cfg.resolve("openai_responses", "qwen-public")
@@ -1639,6 +1640,61 @@ class TestModelGroups:
             cached_second_route.resolved_model_profile
             is second_route.resolved_model_profile
         )
+
+    def test_model_group_incompatible_candidate_runtime_override_fails_startup(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["provider"] = "opencode_go"
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+            "provider": "custom",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        raw["model_groups"]["test-llm"]["models"] = {
+            "qwen-public": {
+                "upstream_model": "qwen3.7-plus",
+                "runtime_capabilities": {"temperature": 0.7},
+            }
+        }
+
+        with pytest.raises(
+            ValueError,
+            match=r"runtime_capabilities contains unsupported fields: \['temperature'\]",
+        ):
+            GatewayConfig(raw)
+
+    def test_model_group_compatible_runtime_override_is_cached_per_candidate(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["provider"] = "opencode_go"
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
+        raw["model_groups"]["test-llm"]["models"] = {
+            "qwen-public": {
+                "upstream_model": "qwen3.7-plus",
+                "runtime_capabilities": {"temperature": 0.7},
+            }
+        }
+
+        cfg = GatewayConfig(raw)
+        primary_profile = cfg._candidate_model_profiles[("qwen-public", "test")]
+        secondary_profile = cfg._candidate_model_profiles[("qwen-public", "secondary")]
+        asyncio.run(cfg.model_group_rings["test-llm"].select("secondary"))
+        route, _provider = cfg.resolve("openai_responses", "qwen-public")
+
+        assert primary_profile.runtime_capabilities == {
+            "temperature": 0.7,
+            "top_p": 1.0,
+        }
+        assert secondary_profile.runtime_capabilities == {
+            "temperature": 0.7,
+            "top_p": 1.0,
+        }
+        assert route.resolved_model_profile is secondary_profile
 
     def test_full_codex_catalog_supplies_runtime_modalities(self):
         raw = _minimal_raw()

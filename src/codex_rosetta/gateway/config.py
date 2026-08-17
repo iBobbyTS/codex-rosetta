@@ -989,6 +989,12 @@ class GatewayConfig:
             (model, self.models[model]): profile
             for model, profile in self.model_profiles.items()
         }
+        for model, group_name in self.model_group_names_by_model.items():
+            ring = self.model_group_rings.get(group_name)
+            if ring is None or model not in self.models:
+                continue
+            for provider_name in ring.candidates:
+                self._model_profile_for_candidate(model, provider_name)
         self.tool_profile_documents = normalize_tool_profile_documents(
             raw.get("tool_profiles")
         )

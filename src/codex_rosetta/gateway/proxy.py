@@ -372,7 +372,7 @@ async def _run_rosetta_compaction(
     }:
         profile["upstream_provider_failure"] = True
         profile["provider_failure_origin"] = failure_origin
-    if summary_response.status_code >= 400:
+    if summary_response.status_code != 200:
         return summary_response, profile
     try:
         summary_payload = json.loads(summary_response.body)

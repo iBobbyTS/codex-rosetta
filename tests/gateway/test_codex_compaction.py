@@ -366,6 +366,9 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
 @pytest.mark.parametrize(
     ("status_code", "synthetic", "expected_origin"),
     [
+        (201, False, "upstream_response"),
+        (204, False, "upstream_response"),
+        (302, False, "upstream_response"),
         (500, False, "upstream_response"),
         (503, True, "transport_exhaustion"),
     ],
@@ -379,11 +382,14 @@ def test_compaction_summary_failure_promotes_model_group_rotation_marker(
 ) -> None:
     persistence = PersistenceManager(str(tmp_path))
     transport = MagicMock()
+    raw_content = (
+        b"" if status_code == 204 else b'{"error":{"message":"summary failed"}}'
+    )
     transport.send_request = AsyncMock(
         return_value=UpstreamResponse(
             status_code=status_code,
             body=None,
-            raw_content=b'{"error":{"message":"summary failed"}}',
+            raw_content=raw_content,
             synthetic=synthetic,
         )
     )
@@ -408,6 +414,15 @@ def test_compaction_summary_failure_promotes_model_group_rotation_marker(
 
     assert response.status_code == status_code
     assert not isinstance(response, StreamingResponse)
+    assert json.loads(response.body) == {
+        "error": {
+            "message": (
+                "Upstream: HTTP 204 error response did not include a message"
+                if status_code == 204
+                else "Upstream: summary failed"
+            )
+        }
+    }
     assert transport.send_request.await_count == 1
     call = transport.send_request.await_args
     assert call is not None
