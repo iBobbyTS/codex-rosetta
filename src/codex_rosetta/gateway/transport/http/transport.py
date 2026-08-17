@@ -750,21 +750,13 @@ class HttpTransport:
                 502,
                 503,
             ):
-                retry_attempt = [attempt]
-
-                async def retry_operation() -> _FailoverAttemptT:
+                for delay in _FAILOVER_RETRY_POLICY.delays:
+                    if status_of(attempt) in (200, 502, 503):
+                        break
                     if release_before_nonstandard_retry is not None:
-                        await release_before_nonstandard_retry(retry_attempt[0])
-                    next_attempt = await operation()
-                    retry_attempt[0] = next_attempt
-                    return next_attempt
-
-                attempt = await _FAILOVER_RETRY_POLICY.run(
-                    attempt,
-                    retry_operation,
-                    lambda item: status_of(item) not in (200, 502, 503),
-                    sleep=self._retry_sleep,
-                )
+                        await release_before_nonstandard_retry(attempt)
+                    await self._retry_sleep(delay)
+                    attempt = await operation()
                 if status_of(attempt) not in (502, 503) and not is_url_trigger(attempt):
                     return output_of(attempt)
             attempt, exhausted = await self._retry_before_credential_rotation(
@@ -989,28 +981,24 @@ class HttpTransport:
         except (HttpClientError, ValueError) as exc:
             raise UpstreamConnectionError(str(exc)) from exc
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code in (502, 503):
-            raw_content = await _read_bounded_failover_error_body(
-                resp,
-                MAX_UPSTREAM_ERROR_BODY_BYTES,
+        if resp.status_code != 200:
+            body_reader = (
+                _read_bounded_failover_error_body
+                if resp.status_code in (502, 503)
+                else _read_bounded_body
             )
+            raw_content = await body_reader(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
             return UpstreamResponse(
                 status_code=resp.status_code,
                 body=None,
                 raw_content=raw_content,
             )
-        max_bytes = (
-            MAX_UPSTREAM_ERROR_BODY_BYTES
-            if resp.status_code >= 400
-            else MAX_UPSTREAM_SUCCESS_BODY_BYTES
-        )
-        raw_content = await _read_bounded_body(resp, max_bytes)
+        raw_content = await _read_bounded_body(resp, MAX_UPSTREAM_SUCCESS_BODY_BYTES)
         return UpstreamResponse(
             status_code=resp.status_code,
             body=(
                 json.loads(raw_content)
-                if resp.status_code < 400
-                and not _is_base_url_rotation_trigger(resp.status_code, raw_content)
+                if not _is_base_url_rotation_trigger(resp.status_code, raw_content)
                 else None
             ),
             raw_content=raw_content,
@@ -1133,10 +1121,10 @@ class HttpTransport:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code in (502, 503):
+        if resp.status_code != 200:
             body_reader = (
                 _read_bounded_failover_error_body
-                if failover_enabled
+                if failover_enabled and resp.status_code in (502, 503)
                 else _read_bounded_body
             )
             raw_error = await body_reader(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
@@ -1148,22 +1136,9 @@ class HttpTransport:
                     idle_timeout=self._stream_idle_timeout,
                     close_timeout=self._close_timeout,
                 ),
-                resp.status_code == 502,
+                _is_base_url_rotation_trigger(resp.status_code, raw_error),
             )
         await _enforce_identity_encoding(resp)
-        if resp.status_code >= 400:
-            raw_error = await _read_bounded_body(
-                resp,
-                MAX_UPSTREAM_ERROR_BODY_BYTES,
-            )
-            stream = HttpUpstreamStream(
-                resp,
-                error_text=raw_error.decode("utf-8", errors="replace"),
-                response_closed=True,
-                idle_timeout=self._stream_idle_timeout,
-                close_timeout=self._close_timeout,
-            )
-            return stream, _is_base_url_rotation_trigger(resp.status_code, raw_error)
         content_type = str(resp.headers.get("content-type", "")).lower()
         if "text/html" in content_type:
             raw_content = await _read_bounded_body(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
@@ -1312,41 +1287,33 @@ class HttpTransport:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code in (502, 503):
-            raw_content = await _read_bounded_failover_error_body(
-                resp,
-                MAX_UPSTREAM_ERROR_BODY_BYTES,
+        if resp.status_code != 200:
+            body_reader = (
+                _read_bounded_failover_error_body
+                if resp.status_code in (502, 503)
+                else _read_bounded_body
             )
+            raw_content = await body_reader(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
             return UpstreamResponse(
                 status_code=resp.status_code,
                 body=None,
                 raw_content=raw_content,
             )
-        max_bytes = (
-            MAX_UPSTREAM_ERROR_BODY_BYTES
-            if resp.status_code >= 400
-            else MAX_UPSTREAM_SUCCESS_BODY_BYTES
-        )
-        raw_content = await _read_bounded_body(resp, max_bytes)
+        raw_content = await _read_bounded_body(resp, MAX_UPSTREAM_SUCCESS_BODY_BYTES)
         if _is_base_url_rotation_trigger(resp.status_code, raw_content):
             return UpstreamResponse(
                 status_code=resp.status_code,
                 body=None,
                 raw_content=raw_content,
             )
-        if 200 <= resp.status_code < 300:
-            invalid_json = False
-            try:
-                parsed_body = _parse_strict_utf8_json(raw_content)
-            except ValueError, UnicodeDecodeError:
-                invalid_json = True
-                parsed_body = None
-            if invalid_json:
-                raise UpstreamProtocolError(
-                    "Upstream response is not valid JSON"
-                ) from None
-        else:
+        invalid_json = False
+        try:
+            parsed_body = _parse_strict_utf8_json(raw_content)
+        except ValueError, UnicodeDecodeError:
+            invalid_json = True
             parsed_body = None
+        if invalid_json:
+            raise UpstreamProtocolError("Upstream response is not valid JSON") from None
         return UpstreamResponse(
             status_code=resp.status_code,
             body=parsed_body,

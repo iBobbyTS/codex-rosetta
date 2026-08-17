@@ -650,23 +650,21 @@ def test_passthrough_invalid_success_json_is_protocol_error(
     assert response.closed is True
 
 
-def test_passthrough_invalid_success_unicode_is_protocol_error(
+def test_passthrough_204_preserves_bounded_error_bytes_without_json_parsing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FakeStreamingResponse(204, [b'"\xff"'])
     transport, _client = _transport(monkeypatch, response)
 
-    with pytest.raises(
-        UpstreamProtocolError, match="^Upstream response is not valid JSON$"
-    ) as caught:
-        asyncio.run(
-            transport.send_passthrough(
-                _provider(), "https://upstream.example/v1/alpha/search", {}
-            )
+    result = asyncio.run(
+        transport.send_passthrough(
+            _provider(), "https://upstream.example/v1/alpha/search", {}
         )
+    )
 
-    assert caught.value.__cause__ is None
-    assert caught.value.__context__ is None
+    assert result.status_code == 204
+    assert result.body is None
+    assert result.raw_content == b'"\xff"'
     assert response.closed is True
 
 

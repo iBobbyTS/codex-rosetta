@@ -122,7 +122,7 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert "request_conversion_ms" not in profile
 
 
-@pytest.mark.parametrize("status_code", [201, 302])
+@pytest.mark.parametrize("status_code", [201, 204, 302])
 @pytest.mark.parametrize("synthetic", [False, True])
 def test_direct_nonstream_non200_records_exact_provider_failure_origin(
     status_code: int,
@@ -131,7 +131,7 @@ def test_direct_nonstream_non200_records_exact_provider_failure_origin(
     upstream = UpstreamResponse(
         status_code=status_code,
         body=None,
-        raw_content=b'{"error":{"message":"not 200"}}',
+        raw_content=(b"" if status_code == 204 else b'{"error":{"message":"not 200"}}'),
         synthetic=synthetic,
     )
     transport = MagicMock()
@@ -654,16 +654,14 @@ class _RawStream(UpstreamStream):
         self.closed = True
 
 
-@pytest.mark.parametrize("status_code", [201, 302])
+@pytest.mark.parametrize("status_code", [201, 204, 302])
 @pytest.mark.parametrize("synthetic", [False, True])
 def test_direct_stream_non200_records_exact_provider_failure_origin(
     status_code: int,
     synthetic: bool,
 ) -> None:
-    stream = _RawStream(
-        [b'{"error":{"message":"not 200"}}'],
-        status_code=status_code,
-    )
+    chunks = [] if status_code == 204 else [b'{"error":{"message":"not 200"}}']
+    stream = _RawStream(chunks, status_code=status_code)
     stream.synthetic = synthetic
     transport = MagicMock()
     transport.send_streaming = AsyncMock(return_value=stream)

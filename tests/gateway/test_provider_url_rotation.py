@@ -515,7 +515,7 @@ def test_model_group_nonstream_non503_retries_without_rotating_credential(
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("status", [201, 302])
+@pytest.mark.parametrize("status", [201, 204, 302])
 @pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_model_group_non200_status_uses_exact_retry_budget(
     monkeypatch,
@@ -531,7 +531,7 @@ def test_model_group_non200_status_uses_exact_retry_budget(
         attempts = [
             _FakeStreamingResponse(
                 status,
-                b'{"error":"not-200"}',
+                b"" if status == 204 else b'{"error":"not-200"}',
                 content_type=(
                     "text/event-stream"
                     if path_kind == "streaming"
@@ -575,8 +575,51 @@ def test_model_group_non200_status_uses_exact_retry_budget(
         assert client.calls == [target] * 6
         assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
         if path_kind == "streaming":
-            assert all(item.closed for item in attempts[:-1])
-            assert not attempts[-1].closed
+            assert all(item.closed for item in attempts)
+
+    asyncio.run(scenario())
+
+
+def test_model_group_stream_cancellation_during_retry_sleep_closes_attempt(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        target = f"{origin}/responses"
+        response = _FakeStreamingResponse(
+            204,
+            b"",
+            content_type="text/event-stream",
+        )
+        client = _RoutingClient()
+        client.add(target, response)
+        retry_sleep_started = asyncio.Event()
+        never_release = asyncio.Event()
+
+        async def blocking_sleep(_delay: float) -> None:
+            retry_sleep_started.set()
+            await never_release.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        request = asyncio.create_task(
+            transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+        )
+        await retry_sleep_started.wait()
+        assert response.closed is True
+
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+
+        assert response.closed is True
+        assert client.calls == [target]
 
     asyncio.run(scenario())
 

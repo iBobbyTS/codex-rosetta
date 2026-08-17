@@ -780,6 +780,8 @@ async def _proxy_handler(  # noqa: C901
                     404,
                     f"Unknown model: '{model}'. Configured models: {configured}",
                 )
+                status_code = response.status_code
+                error_detail = _response_error_detail(response)
                 response.headers["x-request-id"] = request_id
                 return response
 
@@ -787,6 +789,8 @@ async def _proxy_handler(  # noqa: C901
                 response = error_response_for_source(
                     source_provider, 401, "Authenticated principal is unavailable"
                 )
+                status_code = response.status_code
+                error_detail = _response_error_detail(response)
                 response.headers["x-request-id"] = request_id
                 return response
 

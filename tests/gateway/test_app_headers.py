@@ -1039,6 +1039,69 @@ def test_provider_attempt_loop_preserves_wire_and_single_ingress_telemetry(
     assert request.json.call_count == 1
 
 
+def test_empty_204_provider_failure_rotates_model_group(monkeypatch) -> None:
+    config = _two_provider_gateway_config()
+    attempted_providers: list[str] = []
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        attempted_providers.append(route.provider_name)
+        if route.provider_name == "test-provider":
+            return JSONResponse({}, status_code=204), {
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+
+    assert response.status_code == 200
+    assert attempted_providers == ["test-provider", "second-provider"]
+    assert config.model_group_rings["test"].current == "second-provider"
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status", "expected_error"),
+    [
+        ("unknown-model", 404, "Unknown model"),
+        ("missing-principal", 401, "Authenticated principal is unavailable"),
+    ],
+)
+def test_early_proxy_errors_record_exact_telemetry_status(
+    monkeypatch,
+    case: str,
+    expected_status: int,
+    expected_error: str,
+) -> None:
+    config = GatewayConfig(_gateway_config())
+    request = _proxy_request(config)
+    telemetry: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        app_module,
+        "_record_telemetry",
+        lambda _request, **kwargs: telemetry.append(kwargs),
+    )
+    if case == "unknown-model":
+        request.json.return_value = {"model": "unknown", "messages": []}
+        principal_token = None
+    else:
+        principal_token = api_key_principal_var.set(None)
+
+    try:
+        response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+    finally:
+        if principal_token is not None:
+            api_key_principal_var.reset(principal_token)
+
+    assert response.status_code == expected_status
+    assert len(telemetry) == 1
+    assert telemetry[0]["status_code"] == expected_status
+    assert expected_error in telemetry[0]["error_detail"]
+
+
 def test_all_disabled_model_group_returns_configuration_unavailable(
     monkeypatch,
 ) -> None:
