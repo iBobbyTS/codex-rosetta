@@ -75,6 +75,49 @@ def test_runtime_override_wins_and_is_saved_as_minimal_override() -> None:
     }
 
 
+def test_context_window_preset_first_entry_drives_runtime_model_info() -> None:
+    context_presets = [
+        {
+            "label": "500k",
+            "context_window": 500_000,
+            "effective_context_window_percent": 95,
+            "auto_compact_token_limit": 400_000,
+        }
+    ]
+    profile = resolve_model_profile(
+        exposed_model="gpt-5.6-sol",
+        upstream_model=None,
+        provider_id="openai",
+        model_info_override={
+            "identity": "GPT-5.6-Sol",
+            "context_window_presets": context_presets,
+        },
+    )
+
+    assert profile.model_info["context_window"] == 500_000
+    assert profile.model_info["max_context_window"] == 500_000
+    assert profile.model_info["effective_context_window_percent"] == 95
+    assert profile.model_info["auto_compact_token_limit"] == 400_000
+    assert profile.model_info["context_window_presets"] == context_presets
+    model_info, _runtime = canonical_model_overrides(profile)
+    assert model_info == {
+        "identity": "GPT-5.6-Sol",
+        "context_window_presets": context_presets,
+    }
+
+
+def test_bundled_third_party_default_projects_all_context_limits() -> None:
+    profile = resolve_model_profile(
+        exposed_model="deepseek-v4-pro",
+        upstream_model=None,
+        provider_id="deepseek",
+    )
+
+    assert profile.model_info["context_window"] == 1_000_000
+    assert profile.model_info["effective_context_window_percent"] == 95
+    assert profile.model_info["auto_compact_token_limit"] == 800_000
+
+
 def test_provider_runtime_preset_is_copied_before_user_override() -> None:
     profile = resolve_model_profile(
         exposed_model="glm-public",

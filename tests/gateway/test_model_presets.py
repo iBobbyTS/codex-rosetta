@@ -60,10 +60,51 @@ def test_context_window_presets_are_model_data_and_first_value_is_default() -> N
     resource = load_model_preset_resource()
     kimi = next(model for model in resource["models"] if model["slug"] == "kimi-k3")
 
-    assert kimi["context_window_presets"] == [{"label": "1M", "value": 1048576}]
+    assert kimi["context_window_presets"][0] == {
+        "label": "1M",
+        "context_window": 1048576,
+        "effective_context_window_percent": 95,
+        "auto_compact_token_limit": 838861,
+    }
+    assert kimi["context_window_presets"][1]["context_window"] == 500000
     normalized = normalize_model_preset(kimi, field="kimi-k3")
     assert normalized["context_window"] == 1048576
+    assert normalized["effective_context_window_percent"] == 95
+    assert normalized["auto_compact_token_limit"] == 838861
     assert normalized["context_window_presets"] == kimi["context_window_presets"]
+
+
+def test_every_context_window_preset_has_complete_limits() -> None:
+    resource = load_model_preset_resource()
+    preset_groups = list(resource["context_window_presets"].values()) + [
+        model["context_window_presets"] for model in resource["models"]
+    ]
+
+    for presets in preset_groups:
+        for preset in presets:
+            context_window = preset["context_window"]
+            assert set(preset) == {
+                "label",
+                "context_window",
+                "effective_context_window_percent",
+                "auto_compact_token_limit",
+            }
+            assert preset["effective_context_window_percent"] == 95
+            assert preset["auto_compact_token_limit"] == round(context_window * 0.8)
+            assert preset["auto_compact_token_limit"] <= context_window
+        if any(preset["context_window"] >= 1000000 for preset in presets):
+            assert any(preset["context_window"] == 500000 for preset in presets)
+
+
+def test_context_window_presets_reject_legacy_value_key() -> None:
+    resource = load_model_preset_resource()
+    model = next(model for model in resource["models"] if model["slug"] == "kimi-k3")
+    model["context_window_presets"][0]["value"] = model["context_window_presets"][0].pop(
+        "context_window"
+    )
+
+    with pytest.raises(ValueError, match="must contain exactly"):
+        normalize_model_preset(model, field="kimi-k3")
 
 
 def test_every_shared_override_is_allowed_in_each_model_preset() -> None:
@@ -79,7 +120,10 @@ def test_every_shared_override_is_allowed_in_each_model_preset() -> None:
 
     for key, value in shared_overrides.items():
         assert key in normalized
-        assert normalized[key] == value
+        if key == "auto_compact_token_limit":
+            assert normalized[key] == 800000
+        else:
+            assert normalized[key] == value
 
 
 def test_admin_detection_combines_codex_catalog_and_third_party_presets() -> None:

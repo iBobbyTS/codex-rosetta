@@ -11,6 +11,7 @@ from .model_presets import (
     MODEL_INFO_FIELDS,
     full_model_presets,
     match_full_model_preset,
+    normalize_context_window_presets,
 )
 from .provider_profiles import get_provider_catalog_entry
 
@@ -165,6 +166,20 @@ def _legacy_override_base(
     override: dict[str, Any],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Expand the legacy eight-field document onto a complete catalog record."""
+    if "context_window_presets" in override:
+        expanded = copy.deepcopy(override)
+        context_presets = normalize_context_window_presets(
+            expanded["context_window_presets"], field="model_info.context_window_presets"
+        )
+        selected = context_presets[0]
+        expanded["context_window_presets"] = context_presets
+        expanded["context_window"] = selected["context_window"]
+        expanded["max_context_window"] = selected["context_window"]
+        expanded["effective_context_window_percent"] = selected[
+            "effective_context_window_percent"
+        ]
+        expanded["auto_compact_token_limit"] = selected["auto_compact_token_limit"]
+        return (copy.deepcopy(preset) if preset is not None else {}), expanded
     if not override or not set(override) <= MODEL_INFO_FIELDS:
         return (copy.deepcopy(preset) if preset is not None else {}), override
     base = copy.deepcopy(preset or full_model_presets()["gpt-5.6-terra"])
@@ -298,6 +313,14 @@ def canonical_model_overrides(
         model_diff = normalized_deep_diff(
             editable_model_info(profile.model_info), editable_model_info(base)
         )
+    if "context_window_presets" in model_diff:
+        for field in (
+            "context_window",
+            "max_context_window",
+            "effective_context_window_percent",
+            "auto_compact_token_limit",
+        ):
+            model_diff.pop(field, None)
     runtime_diff = normalized_deep_diff(
         profile.runtime_capabilities, profile.runtime_preset
     )

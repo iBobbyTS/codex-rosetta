@@ -3,22 +3,22 @@
   "identity_source": "GPT-5",
   "context_window_presets": {
     "gpt-5.6-sol": [
-      {"label": "272k（官方）", "value": 272000},
-      {"label": "500k", "value": 500000},
-      {"label": "800k", "value": 800000},
-      {"label": "1M", "value": 1000000}
+      {"label": "272k（官方）", "context_window": 272000, "effective_context_window_percent": 95, "auto_compact_token_limit": 217600},
+      {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000},
+      {"label": "800k", "context_window": 800000, "effective_context_window_percent": 95, "auto_compact_token_limit": 640000},
+      {"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}
     ],
     "gpt-5.6-terra": [
-      {"label": "272k（官方）", "value": 272000},
-      {"label": "500k", "value": 500000},
-      {"label": "800k", "value": 800000},
-      {"label": "1M", "value": 1000000}
+      {"label": "272k（官方）", "context_window": 272000, "effective_context_window_percent": 95, "auto_compact_token_limit": 217600},
+      {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000},
+      {"label": "800k", "context_window": 800000, "effective_context_window_percent": 95, "auto_compact_token_limit": 640000},
+      {"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}
     ],
     "gpt-5.6-luna": [
-      {"label": "272k（官方）", "value": 272000},
-      {"label": "500k", "value": 500000},
-      {"label": "800k", "value": 800000},
-      {"label": "1M", "value": 1000000}
+      {"label": "272k（官方）", "context_window": 272000, "effective_context_window_percent": 95, "auto_compact_token_limit": 217600},
+      {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000},
+      {"label": "800k", "context_window": 800000, "effective_context_window_percent": 95, "auto_compact_token_limit": 640000},
+      {"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}
     ]
   },
   "shared_overrides": {
@@ -55,7 +55,7 @@
       "description": "Stronger version of DeepSeek V4",
       "identity": "DeepSeek V4 Pro Preview",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
       "supported_reasoning_levels": ["high", "max"],
       "comp_hash": "dsv4-pre"
@@ -66,7 +66,7 @@
       "description": "Cheaper version of DeepSeek V4",
       "identity": "DeepSeek V4 Flash Preview",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
       "supported_reasoning_levels": ["high", "max"],
       "comp_hash": "dsv4-pre"
@@ -77,7 +77,7 @@
       "description": "Flagship model by Z.ai",
       "identity": "GLM 5.2 by z.ai(智谱)",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
       "supported_reasoning_levels": ["high", "max"],
       "comp_hash": "glm-5.2"
@@ -88,7 +88,7 @@
       "description": "Multi-modal Qwen 3.7",
       "identity": "Qwen 3.7 Plus by Alibaba",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
       "comp_hash": "qwen3.7-plus"
@@ -99,7 +99,7 @@
       "description": "Stronger Qwen 3.7 (without multi-modal)",
       "identity": "Qwen 3.7 Max by Alibaba",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
       "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
       "comp_hash": "qwen3.7-max-text"
@@ -110,7 +110,7 @@
       "description": "Stronger Qwen 3.7 (with multi-modal)",
       "identity": "Qwen 3.7 Max by Alibaba",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
       "comp_hash": "qwen3.7-max-image"
@@ -121,7 +121,7 @@
       "description": "Cheaper version of MiMo V2.5 by Xiaomi, best for working not coding",
       "identity": "MiMo V2.5 Flash by Xiaomi",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "comp_hash": "mimo-2.5"
@@ -132,7 +132,7 @@
       "description": "Stronger version of MiMo V2.5 by Xiaomi, best for working not coding",
       "identity": "MiMo V2.5 Pro by Xiaomi",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "comp_hash": "mimo-2.5"
@@ -143,7 +143,7 @@
       "description": "MiniMax M3",
       "identity": "MiniMax M3",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1000000}],
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "supports_reasoning_summary_parameter": true,
@@ -157,7 +157,7 @@
       "description": "Kimi K2.7 Code",
       "identity": "Kimi K2.7 Code by Moonshot",
       "priority": 20,
-      "context_window_presets": [{"label": "262k", "value": 262144}],
+      "context_window_presets": [{"label": "262k", "context_window": 262144, "effective_context_window_percent": 95, "auto_compact_token_limit": 209715}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "comp_hash": "kimi-2.7"
@@ -168,7 +168,7 @@
       "description": "Kimi K3",
       "identity": "Kimi K3 by Moonshot",
       "priority": 20,
-      "context_window_presets": [{"label": "1M", "value": 1048576}],
+      "context_window_presets": [{"label": "1M", "context_window": 1048576, "effective_context_window_percent": 95, "auto_compact_token_limit": 838861}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["high"],
       "comp_hash": "kimi-3"

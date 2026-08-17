@@ -934,13 +934,13 @@ describe('ModelsPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      provider: 'upstream', type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed' } } },
+      provider: 'upstream', type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed', effective_context_window_percent: 95, auto_compact_token_limit: 51200 } } },
     }));
   });
 
   it('synchronizes GPT context presets with the editable numeric value', async () => {
     const preset = { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', description: 'GPT', identity: 'GPT', priority: 1, context_window: 272000, input_modalities: ['text'], supported_reasoning_levels: ['low'] };
-    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'responses' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset], context_window_presets: { 'gpt-5.6-sol': [{ label: '272k（官方）', value: 272000 }, { label: '500k', value: 500000 }, { label: '800k', value: 800000 }, { label: '1M', value: 1000000 }] } });
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'responses' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset], context_window_presets: { 'gpt-5.6-sol': [{ label: '272k（官方）', context_window: 272000, effective_context_window_percent: 95, auto_compact_token_limit: 217600 }, { label: '500k', context_window: 500000, effective_context_window_percent: 95, auto_compact_token_limit: 400000 }, { label: '800k', context_window: 800000, effective_context_window_percent: 95, auto_compact_token_limit: 640000 }, { label: '1M', context_window: 1000000, effective_context_window_percent: 95, auto_compact_token_limit: 800000 }] } });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
@@ -949,14 +949,42 @@ describe('ModelsPage', () => {
 
     const contextInput = screen.getByRole('spinbutton', { name: 'Context Window' });
     expect(contextInput).toHaveValue(272000);
+    expect(screen.getByRole('spinbutton', { name: 'Effective Context Window (%)' })).toHaveValue(95);
+    const compactLimit = screen.getByRole('spinbutton', { name: 'Auto Compact Token Limit' });
+    expect(compactLimit).toHaveValue(217600);
     expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('272k（官方）');
+    await selectDropdown(screen.getByRole('button', { name: 'Context Window' }), '800k');
+    expect(contextInput).toHaveValue(800000);
+    expect(compactLimit).toHaveValue(640000);
     await fireEvent.input(contextInput, { target: { value: '500000' } });
     expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('500k');
+    expect(compactLimit).toHaveValue(640000);
     await fireEvent.input(contextInput, { target: { value: '123456' } });
     expect(screen.getByRole('button', { name: 'Context Window' })).toHaveTextContent('Custom');
+    expect(compactLimit).toHaveValue(640000);
+    await fireEvent.input(compactLimit, { target: { value: '123457' } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Auto compact token limit must not exceed the context window.');
+    await fireEvent.input(compactLimit, { target: { value: '100000' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', expect.objectContaining({ models: { 'gpt-5.6-sol': { model_info: expect.objectContaining({ context_window: 123456 }) } } })));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', expect.objectContaining({ models: { 'gpt-5.6-sol': { model_info: expect.objectContaining({ context_window: 123456, effective_context_window_percent: 95, auto_compact_token_limit: 100000, context_window_presets: expect.arrayContaining([{ label: 'Custom', context_window: 123456, effective_context_window_percent: 95, auto_compact_token_limit: 100000 }]) }) } } })));
+  });
+
+  it('keeps all GPT presets visible when a saved override contains one current preset', async () => {
+    const preset = { slug: 'gpt-5.6-sol', display_name: 'GPT-5.6-Sol', description: 'GPT', identity: 'GPT', priority: 1, context_window: 272000, input_modalities: ['text'], supported_reasoning_levels: ['low'] };
+    const contextPresets = [{ label: '272k（官方）', context_window: 272000, effective_context_window_percent: 95, auto_compact_token_limit: 217600 }, { label: '500k', context_window: 500000, effective_context_window_percent: 95, auto_compact_token_limit: 400000 }, { label: '800k', context_window: 800000, effective_context_window_percent: 95, auto_compact_token_limit: 640000 }, { label: '1M', context_window: 1000000, effective_context_window_percent: 95, auto_compact_token_limit: 800000 }];
+    apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'responses' } }, model_groups: { Main: { provider: 'upstream', models: { 'gpt-5.6-sol': { model_info: { ...preset, context_window: 500000, effective_context_window_percent: 95, auto_compact_token_limit: 400000, context_window_presets: [contextPresets[1]] }, has_overrides: true } } } }, tool_profile_presets: [], model_presets: [preset], context_window_presets: { 'gpt-5.6-sol': contextPresets } });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Context Window' }));
+
+    expect(screen.getByRole('option', { name: '272k（官方）' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '500k' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '800k' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: '1M' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Custom' })).toBeInTheDocument();
   });
 
   it('returns the main model row to auto-detected after matching the preset again', async () => {

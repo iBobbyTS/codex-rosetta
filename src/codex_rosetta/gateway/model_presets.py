@@ -60,13 +60,66 @@ def load_model_preset_resource() -> dict[str, Any]:
     return copy.deepcopy(_cached_model_preset_resource())
 
 
+def normalize_context_window_presets(
+    value: Any, *, field: str
+) -> list[dict[str, Any]]:
+    required = {
+        "label",
+        "context_window",
+        "effective_context_window_percent",
+        "auto_compact_token_limit",
+    }
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{field} must be a non-empty preset array")
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if not isinstance(item, dict) or set(item) != required:
+            raise ValueError(f"{item_field} must contain exactly {sorted(required)}")
+        label = item["label"]
+        context_window = item["context_window"]
+        percent = item["effective_context_window_percent"]
+        compact_limit = item["auto_compact_token_limit"]
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError(f"{item_field}.label must be a non-empty string")
+        for key, number in (
+            ("context_window", context_window),
+            ("effective_context_window_percent", percent),
+            ("auto_compact_token_limit", compact_limit),
+        ):
+            if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
+                raise ValueError(f"{item_field}.{key} must be a positive integer")
+        if percent > 100:
+            raise ValueError(
+                f"{item_field}.effective_context_window_percent must not exceed 100"
+            )
+        if compact_limit > context_window:
+            raise ValueError(
+                f"{item_field}.auto_compact_token_limit must not exceed context_window"
+            )
+        normalized.append(
+            {
+                "label": label.strip(),
+                "context_window": context_window,
+                "effective_context_window_percent": percent,
+                "auto_compact_token_limit": compact_limit,
+            }
+        )
+    return normalized
+
+
 def context_window_presets_for_admin() -> dict[str, list[dict[str, Any]]]:
     """Return the configured context-window choices keyed by exact model slug."""
     resource = _cached_model_preset_resource()
     presets = resource.get("context_window_presets", {})
     if not isinstance(presets, dict):
         raise ValueError("bundled Codex context window presets must be an object")
-    return copy.deepcopy(presets)
+    return {
+        slug: normalize_context_window_presets(
+            value, field=f"bundled context window presets for {slug}"
+        )
+        for slug, value in presets.items()
+    }
 
 
 @lru_cache(maxsize=1)
@@ -156,27 +209,10 @@ def _normalize_special_preset_overrides(
         normalized["comp_hash"] = comp_hash.strip()
 
     if "context_window_presets" in value:
-        presets = value["context_window_presets"]
-        if (
-            not isinstance(presets, list)
-            or not presets
-            or not all(
-                isinstance(item, dict)
-                and isinstance(item.get("label"), str)
-                and item["label"].strip()
-                and isinstance(item.get("value"), int)
-                and not isinstance(item["value"], bool)
-                and item["value"] > 0
-                for item in presets
-            )
-        ):
-            raise ValueError(
-                f"{field}.context_window_presets must be a non-empty preset array"
-            )
-        normalized["context_window_presets"] = [
-            {"label": item["label"].strip(), "value": item["value"]}
-            for item in presets
-        ]
+        normalized["context_window_presets"] = normalize_context_window_presets(
+            value["context_window_presets"],
+            field=f"{field}.context_window_presets",
+        )
 
     for key in (
         "supports_reasoning_summary_parameter",
@@ -235,13 +271,12 @@ def normalize_model_preset(
     if unknown:
         raise ValueError(f"{field} contains unsupported fields: {unknown}")
 
+    special_overrides = _normalize_special_preset_overrides(value, field=field)
     model_info = {key: value.get(key) for key in MODEL_INFO_FIELDS}
     if model_info.get("context_window") is None:
-        context_presets = value.get("context_window_presets")
-        if isinstance(context_presets, list) and context_presets:
-            first = context_presets[0]
-            if isinstance(first, dict):
-                model_info["context_window"] = first.get("value")
+        context_presets = special_overrides.get("context_window_presets")
+        if context_presets:
+            model_info["context_window"] = context_presets[0]["context_window"]
     normalized = normalize_model_info(
         model_info,
         field=field,
@@ -253,7 +288,17 @@ def normalize_model_preset(
             if key in value
         }
     )
-    normalized.update(_normalize_special_preset_overrides(value, field=field))
+    normalized.update(special_overrides)
+    context_presets = special_overrides.get("context_window_presets")
+    if context_presets:
+        selected = context_presets[0]
+        normalized["context_window"] = selected["context_window"]
+        normalized["effective_context_window_percent"] = selected[
+            "effective_context_window_percent"
+        ]
+        normalized["auto_compact_token_limit"] = selected[
+            "auto_compact_token_limit"
+        ]
     return normalized
 
 
