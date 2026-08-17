@@ -13,7 +13,7 @@ import pytest
 from codex_rosetta._vendor.httpserver import JSONResponse, Request, StreamingResponse
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.auth import api_key_principal_var
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import GatewayConfig, ModelGroupProviderRing
 from codex_rosetta.gateway.admin.routes.config import reload_config
 from codex_rosetta.gateway.headers import (
     MAX_REQUEST_ID_BYTES,
@@ -601,6 +601,57 @@ def test_proxy_handler_forwards_user_agent_to_non_streaming_proxy(monkeypatch):
     assert "x-future-codex-capability" not in captured_headers
 
 
+def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
+    """A final upstream marker causes one fresh attempt on the next provider."""
+    ring = ModelGroupProviderRing("test", ["first", "second"], "first")
+
+    class _Config:
+        models = {"gpt-test": "first"}
+        model_group_names_by_model = {"gpt-test": "test"}
+        model_group_rings = {"test": ring}
+        model_group_provider_names = {"test": ("first", "second")}
+        web_search_candidates = ()
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            provider = ring.current
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name=provider,
+                ),
+                MagicMock(soft_interrupt=False, configured_id=provider),
+            )
+
+    calls: list[str] = []
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        calls.append(args[1].configured_id if hasattr(args[1], "configured_id") else ring.current)
+        if len(calls) == 1:
+                return JSONResponse({"error": "upstream"}, status=500), {
+                "upstream_provider_failure": True
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+    request = MagicMock()
+    request._provider_failover_attempts = 0
+    request.headers = {}
+    request.json.return_value = {"model": "gpt-test", "messages": []}
+    request.app.gateway_config = _Config()
+    request.app.metadata_store = MagicMock()
+    request.app.codex_tool_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 200
+    assert calls == ["first", "second"]
+
+
 def test_proxy_handler_uses_denylist_only_for_direct_responses(monkeypatch):
     captured_headers: dict[str, str] = {}
 
@@ -736,6 +787,174 @@ def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
     assert response.status_code == 200
     assert isinstance(response, JSONResponse)
     assert json.loads(response.body) == {"ok": True}
+
+
+def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
+    class _Ring:
+        current = "first"
+
+        def observe(self):
+            return self.current, 0
+
+        async def claim(self, observed):
+            return True, False
+
+        def mark_failed(self, provider):
+            assert provider == "first"
+
+        def available(self):
+            return ("first", "second")
+
+        async def select(self, provider):
+            self.current = provider
+
+        async def publish(self):
+            return None
+
+    class _Config:
+        models = {"gpt-test": "first"}
+        model_group_names_by_model = {"gpt-test": "main"}
+
+        def __init__(self):
+            self.ring = _Ring()
+            self.model_group_rings = {"main": self.ring}
+            self.providers = {"first": MagicMock(), "second": MagicMock()}
+            self.calls: list[str] = []
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            self.calls.append(self.ring.current)
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name=self.ring.current,
+                ),
+                self.providers[self.ring.current],
+            )
+
+    config = _Config()
+    calls = 0
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return JSONResponse({"error": "first failed"}, status_code=502), {
+                "upstream_provider_failure": True
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {"model": "gpt-test", "messages": []}
+    request.app.metadata_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = config
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 200
+    assert calls == 2
+    assert config.calls == ["first", "second"]
+    assert config.ring.current == "second"
+
+
+def test_proxy_handler_does_not_rotate_an_already_open_stream(monkeypatch):
+    class _Ring:
+        current = "first"
+
+        def observe(self):
+            return self.current, 0
+
+        async def claim(self, observed):
+            raise AssertionError("an open stream must not enter provider failover")
+
+    class _Config:
+        models = {"gpt-test": "first"}
+        model_group_names_by_model = {"gpt-test": "main"}
+        model_group_rings = {"main": _Ring()}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name="first",
+                ),
+                MagicMock(),
+            )
+
+    async def _empty_stream():
+        if False:
+            yield b""
+
+    async def _fake_handle_streaming(*args: Any, **kwargs: Any):
+        return StreamingResponse(_empty_stream(), content_type="text/event-stream"), {
+            "upstream_provider_failure": True
+        }
+
+    monkeypatch.setattr(app_module, "handle_streaming", _fake_handle_streaming)
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {"model": "gpt-test", "messages": [], "stream": True}
+    request.app.metadata_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert isinstance(response, StreamingResponse)
+
+
+def test_proxy_handler_does_not_rotate_rosetta_generated_error(monkeypatch):
+    class _Ring:
+        current = "first"
+
+        def observe(self):
+            return self.current, 0
+
+        async def claim(self, observed):
+            raise AssertionError("Rosetta-generated errors must not rotate providers")
+
+    class _Config:
+        models = {"gpt-test": "first"}
+        model_group_names_by_model = {"gpt-test": "main"}
+        model_group_rings = {"main": _Ring()}
+
+        def resolve(self, source_provider: ProviderType, model: str):
+            return (
+                ResolvedRoute(
+                    source_provider=source_provider,
+                    target_provider="openai_chat",
+                    provider_name="first",
+                ),
+                MagicMock(),
+            )
+
+    async def _fake_handle_non_streaming(*args: Any, **kwargs: Any):
+        return JSONResponse({"error": "payload too large"}, status_code=413), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", _fake_handle_non_streaming)
+    request = MagicMock()
+    request.headers = {}
+    request.json.return_value = {"model": "gpt-test", "messages": []}
+    request.app.metadata_store = MagicMock()
+    request.app.metrics = None
+    request.app.request_log = None
+    request.app.persistence = None
+    request.app.profiler_state = None
+    request.app.gateway_config = _Config()
+
+    response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
+
+    assert response.status_code == 413
 
 
 def test_proxy_handler_passes_codex_window_id_to_streaming_proxy(monkeypatch):

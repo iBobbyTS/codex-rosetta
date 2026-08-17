@@ -714,6 +714,7 @@ async def _proxy_handler(  # noqa: C901
     source_provider: ProviderType,
     model_override: str | None = None,
     force_stream: bool = False,
+    _provider_failover_attempts: int = 0,
 ) -> Response | StreamingResponse:
     """Shared handler for all proxy endpoints."""
     config: GatewayConfig = request.app.gateway_config
@@ -899,11 +900,8 @@ async def _proxy_handler(  # noqa: C901
         if (
             profile.get("upstream_provider_failure")
             and not isinstance(response, StreamingResponse)
-            and getattr(request, "_provider_failover_attempts", 0) < 32
+            and _provider_failover_attempts < 32
         ):
-            request._provider_failover_attempts = getattr(
-                request, "_provider_failover_attempts", 0
-            ) + 1
             if await _rotate_model_group_after_upstream_failure(
                 request, config, model, route.provider_name
             ):
@@ -912,6 +910,7 @@ async def _proxy_handler(  # noqa: C901
                     source_provider=source_provider,
                     model_override=model_override,
                     force_stream=force_stream,
+                    _provider_failover_attempts=_provider_failover_attempts + 1,
                 )
         if late_developer_rewritten_items:
             profile["late_developer_rewritten_items"] = late_developer_rewritten_items
