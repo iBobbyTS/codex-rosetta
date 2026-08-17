@@ -55,34 +55,34 @@
       "slug": "deepseek-v4-pro",
       "display_name": "DeepSeek V4 Pro",
       "description": "Stronger version of DeepSeek V4",
-      "identity": "DeepSeek V4 Pro Preview",
+      "identity": "DeepSeek V4 Pro GA (0813)",
       "priority": 20,
       "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
-      "supported_reasoning_levels": ["high", "max"],
-      "comp_hash": "dsv4-pre"
+      "supported_reasoning_levels": ["low", "high", "max"],
+      "comp_hash": "dsv4-ga"
     },
     {
       "slug": "deepseek-v4-flash",
       "display_name": "DeepSeek V4 Flash",
       "description": "Cheaper version of DeepSeek V4",
-      "identity": "DeepSeek V4 Flash Preview",
+      "identity": "DeepSeek V4 Flash GA (0729)",
       "priority": 20,
       "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
-      "supported_reasoning_levels": ["high", "max"],
-      "comp_hash": "dsv4-pre"
+      "supported_reasoning_levels": ["low", "high", "max"],
+      "comp_hash": "dsv4-ga"
     },
     {
-      "slug": "glm-5.2",
-      "display_name": "GLM 5.2",
+      "slug": "glm-5.3",
+      "display_name": "GLM 5.3",
       "description": "Flagship model by Z.ai",
-      "identity": "GLM 5.2 by z.ai(智谱)",
+      "identity": "GLM 5.3 by z.ai(智谱)",
       "priority": 20,
       "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
       "input_modalities": ["text"],
       "supported_reasoning_levels": ["high", "max"],
-      "comp_hash": "glm-5.2"
+      "comp_hash": "glm-5.3"
     },
     {
       "slug": "qwen3.7-plus",
@@ -116,6 +116,17 @@
       "input_modalities": ["text", "image"],
       "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
       "comp_hash": "qwen3.7-max-image"
+    },
+    {
+      "slug": "qwen3.8-max",
+      "display_name": "Qwen 3.8 Max",
+      "description": "Qwen 3.8 (without multi-modal)",
+      "identity": "Qwen 3.8 Max by Alibaba",
+      "priority": 20,
+      "context_window_presets": [{"label": "1M", "context_window": 1000000, "effective_context_window_percent": 95, "auto_compact_token_limit": 800000}, {"label": "500k", "context_window": 500000, "effective_context_window_percent": 95, "auto_compact_token_limit": 400000}],
+      "input_modalities": ["text"],
+      "supported_reasoning_levels": ["low", "medium", "high", "xhigh", "max"],
+      "comp_hash": "qwen3.8-max-text"
     },
     {
       "slug": "mimo-v2.5",
