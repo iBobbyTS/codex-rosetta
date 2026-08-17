@@ -513,6 +513,7 @@ class HttpUpstreamStream(UpstreamStream):
         close_timeout: float = DEFAULT_UPSTREAM_CLOSE_TIMEOUT_SECONDS,
     ) -> None:
         self.status_code = resp.status_code
+        self.synthetic = False
         self._resp = resp
         self._error_text = error_text
         self._prefetched_raw = prefetched_raw
@@ -739,6 +740,18 @@ class HttpTransport:
             attempt = await operation()
             if not allow_failover or (single_attempt and status_of(attempt) == 502):
                 return output_of(attempt)
+            # Any upstream status other than success/handled failover statuses
+            # gets the standard five retry attempts before provider-level
+            # rotation is considered by the proxy layer.
+            if status_of(attempt) not in (200, 502, 503):
+                attempt = await _FAILOVER_RETRY_POLICY.run(
+                    attempt,
+                    operation,
+                    lambda item: status_of(item) not in (200, 502, 503),
+                    sleep=self._retry_sleep,
+                )
+                if status_of(attempt) not in (502, 503) and not is_url_trigger(attempt):
+                    return output_of(attempt)
             attempt, exhausted = await self._retry_before_credential_rotation(
                 provider_info,
                 attempt,
@@ -914,11 +927,13 @@ class HttpTransport:
                 status_code=502,
                 body=None,
                 raw_content=_all_domains_502(len(provider_info.base_urls)),
+                synthetic=True,
             ),
             lambda: UpstreamResponse(
                 status_code=503,
                 body=None,
                 raw_content=_all_credentials_503(len(provider_info.credential_ids)),
+                synthetic=True,
             ),
         )
 
@@ -1032,13 +1047,15 @@ class HttpTransport:
 
     def _synthetic_stream(self, status_code: int, message: bytes) -> HttpUpstreamStream:
         """Build a closed stream carrying one synthetic failover error."""
-        return HttpUpstreamStream(
+        stream = HttpUpstreamStream(
             cast(Any, _ClosedSyntheticResponse(status_code)),
             error_text=message.decode(),
             response_closed=True,
             idle_timeout=self._stream_idle_timeout,
             close_timeout=self._close_timeout,
         )
+        stream.synthetic = True
+        return stream
 
     async def _send_streaming_once(
         self,
@@ -1199,11 +1216,13 @@ class HttpTransport:
                 status_code=502,
                 body=None,
                 raw_content=_all_domains_502(len(provider_info.base_urls)),
+                synthetic=True,
             ),
             lambda: UpstreamResponse(
                 status_code=503,
                 body=None,
                 raw_content=_all_credentials_503(len(provider_info.credential_ids)),
+                synthetic=True,
             ),
         )
 

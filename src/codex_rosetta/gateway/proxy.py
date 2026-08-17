@@ -1786,6 +1786,8 @@ async def handle_non_streaming(  # noqa: C901
         profile["passthrough"] = True
 
         if resp.is_error:
+            if not resp.synthetic:
+                profile["upstream_provider_failure"] = True
             log_upstream_error(
                 resp.status_code,
                 resp.error_text,
@@ -1949,6 +1951,8 @@ async def handle_non_streaming(  # noqa: C901
     profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
 
     if resp.is_error:
+        if not resp.synthetic:
+            profile["upstream_provider_failure"] = True
         log_upstream_error(
             resp.status_code,
             resp.error_text,
@@ -2752,6 +2756,8 @@ async def _handle_direct_responses_streaming(
     profile["passthrough"] = True
 
     if stream.is_error:
+        if not getattr(stream, "synthetic", False):
+            profile["upstream_provider_failure"] = True
         error_text = await stream.read_error()
         await stream.close()
         if trace is not None:
@@ -3094,6 +3100,8 @@ async def handle_streaming(  # noqa: C901
     # Application-level error — preserve the upstream envelope and codes while
     # labeling its exact human-readable message for the client.
     if stream.is_error:
+        if not getattr(stream, "synthetic", False):
+            profile["upstream_provider_failure"] = True
         error_text = await stream.read_error()
         await stream.close()
         log_upstream_error(

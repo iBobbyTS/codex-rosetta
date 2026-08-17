@@ -36,6 +36,7 @@ class UpstreamResponse:
     status_code: int
     body: dict[str, Any] | None
     raw_content: bytes
+    synthetic: bool = False
 
     @property
     def is_error(self) -> bool:

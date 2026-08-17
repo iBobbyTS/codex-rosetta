@@ -99,6 +99,38 @@ _INBOUND_BODY_TIMEOUT_SECONDS = 120.0
 _INBOUND_MAX_CONCURRENT_REQUEST_PARSES = 64
 
 
+async def _rotate_model_group_after_upstream_failure(
+    request: Any,
+    config: GatewayConfig,
+    model: str,
+    provider_name: str,
+) -> bool:
+    """Rotate one group ring after a final upstream failure.
+
+    The existing coordinator supplies generation checks, one leader, waiter
+    wake-up, and cancellation-safe gate ownership.
+    """
+    group_name = config.model_group_names_by_model.get(model)
+    ring = config.model_group_rings.get(group_name) if group_name else None
+    if ring is None or provider_name != ring.current:
+        return False
+    observed, _generation = ring.observe()
+    leader, _waited = await ring.claim(observed)
+    if not leader:
+        return ring.current != provider_name
+    try:
+        ring.mark_failed(provider_name)
+        next_provider = next(
+            (item for item in ring.available() if item != provider_name), None
+        )
+        if next_provider is None:
+            return False
+        await ring.select(next_provider)
+        return True
+    finally:
+        await ring.publish()
+
+
 class GatewayApp(App):
     """HTTP app that applies the Gateway error contract outside route code."""
 
@@ -677,7 +709,7 @@ def _request_exposes_web_run(body: dict[str, Any]) -> bool:
     return False
 
 
-async def _proxy_handler(
+async def _proxy_handler(  # noqa: C901
     request: Any,
     source_provider: ProviderType,
     model_override: str | None = None,
@@ -864,6 +896,23 @@ async def _proxy_handler(
                 body_log_state=getattr(request.app, "body_log_state", None),
                 image_fetch_workers=getattr(request.app, "image_fetch_workers", None),
             )
+        if (
+            profile.get("upstream_provider_failure")
+            and not isinstance(response, StreamingResponse)
+            and getattr(request, "_provider_failover_attempts", 0) < 32
+        ):
+            request._provider_failover_attempts = getattr(
+                request, "_provider_failover_attempts", 0
+            ) + 1
+            if await _rotate_model_group_after_upstream_failure(
+                request, config, model, route.provider_name
+            ):
+                return await _proxy_handler(
+                    request,
+                    source_provider=source_provider,
+                    model_override=model_override,
+                    force_stream=force_stream,
+                )
         if late_developer_rewritten_items:
             profile["late_developer_rewritten_items"] = late_developer_rewritten_items
         status_code = response.status_code
@@ -1147,7 +1196,7 @@ def _flush_now(app: App) -> None:
     logger.info("Persistence flushed and closed on shutdown")
 
 
-def _bind_provider_current_recorders(
+def _bind_provider_current_recorders(  # noqa: C901
     config: GatewayConfig,
     config_path: str | None,
 ) -> None:
