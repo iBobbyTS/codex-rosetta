@@ -337,6 +337,33 @@ async def _read_bounded_body(
     return b"".join(chunks)
 
 
+async def _read_bounded_failover_error_body(
+    resp: HttpStreamingResponse,
+    max_bytes: int,
+) -> bytes:
+    """Read a 502/503 body without letting response metadata preempt failover."""
+    chunks: list[bytes] = []
+    total = 0
+    try:
+        read_size = min(_READ_CHUNK_BYTES, max_bytes + 1)
+        async for chunk in resp.aiter_bytes(chunk_size=read_size):
+            total += len(chunk)
+            if total > max_bytes:
+                raise UpstreamResponseTooLargeError(
+                    f"Upstream response body exceeds {max_bytes} bytes"
+                )
+            chunks.append(chunk)
+    except UpstreamConnectionError:
+        raise
+    except HttpResponseLimitError as exc:
+        raise _header_safety_error(exc) from exc
+    except HttpClientError as exc:
+        raise UpstreamConnectionError(str(exc)) from exc
+    finally:
+        await resp.aclose()
+    return b"".join(chunks)
+
+
 def _is_base_url_rotation_trigger(status_code: int, content: bytes) -> bool:
     """Match the frozen real-502 or observed CDN-page trigger whitelist."""
     return status_code == 502 or all(marker in content for marker in _CDN_502_MARKERS)
@@ -652,18 +679,18 @@ class HttpTransport:
         credential_observation_of: Callable[[_CredentialResultT], tuple[str, int]],
         *,
         single_attempt: bool,
-    ) -> tuple[_CredentialResultT, UpstreamResponse | None]:
+    ) -> tuple[_CredentialResultT, bool]:
         """Resolve literal 503s under one credential gate at a time."""
         result = initial_result
         if single_attempt or not is_503(result):
-            return result, None
+            return result, False
         leader, waited = await provider_info.claim_credential_rotation_observation(
             observation
         )
         if not leader or waited:
             if leader:
                 await provider_info.publish_credential_rotation()
-            return await operation(), None
+            return await operation(), False
         try:
             while is_503(result):
                 result = await _FAILOVER_RETRY_POLICY.run(
@@ -673,23 +700,17 @@ class HttpTransport:
                     sleep=self._retry_sleep,
                 )
                 if not is_503(result):
-                    return result, None
+                    return result, False
                 failed_credential = credential_observation_of(result)[0]
                 provider_info.mark_credential_failed(failed_credential)
                 next_credential = provider_info.next_available_credential(
                     failed_credential
                 )
                 if next_credential is None:
-                    return result, UpstreamResponse(
-                        status_code=503,
-                        body=None,
-                        raw_content=_all_credentials_503(
-                            len(provider_info.credential_ids)
-                        ),
-                    )
+                    return result, True
                 await provider_info.select_credential(next_credential)
                 result = await operation()
-            return result, None
+            return result, False
         finally:
             await provider_info.publish_credential_rotation()
 
@@ -703,7 +724,7 @@ class HttpTransport:
         url_observation_of: Callable[[_FailoverAttemptT], tuple[str, int]],
         credential_observation_of: Callable[[_FailoverAttemptT], tuple[str, int]],
         url_failure: Callable[[], _FailoverOutputT],
-        credential_failure: Callable[[UpstreamResponse | None], _FailoverOutputT],
+        credential_failure: Callable[[], _FailoverOutputT],
         *,
         allow_failover: bool = True,
     ) -> _FailoverOutputT:
@@ -714,7 +735,7 @@ class HttpTransport:
             if not provider_info.has_available_base_url():
                 return url_failure()
             if not provider_info.has_available_credential():
-                return credential_failure(None)
+                return credential_failure()
             attempt = await operation()
             if not allow_failover or (single_attempt and status_of(attempt) == 502):
                 return output_of(attempt)
@@ -727,8 +748,8 @@ class HttpTransport:
                 credential_observation_of,
                 single_attempt=credential_single_attempt,
             )
-            if exhausted is not None:
-                return credential_failure(exhausted)
+            if exhausted:
+                return output_of(attempt)
             if not is_url_trigger(attempt):
                 return output_of(attempt)
             if not await _claim_url_rotation_immediately(
@@ -765,7 +786,7 @@ class HttpTransport:
         url_observation_of: Callable[[_FailoverAttemptT], tuple[str, int]],
         credential_observation_of: Callable[[_FailoverAttemptT], tuple[str, int]],
         url_failure: Callable[[], _FailoverOutputT],
-        credential_failure: Callable[[UpstreamResponse | None], _FailoverOutputT],
+        credential_failure: Callable[[], _FailoverOutputT],
         *,
         single_attempt: bool,
         credential_single_attempt: bool,
@@ -789,8 +810,8 @@ class HttpTransport:
                 credential_observation_of,
                 single_attempt=credential_single_attempt,
             )
-            if exhausted is not None:
-                return credential_failure(exhausted)
+            if exhausted:
+                return output_of(attempt)
             if retrying_credential and status_of(attempt) == 502 and not single_attempt:
                 continue
             if single_attempt and status_of(attempt) == 502:
@@ -801,7 +822,7 @@ class HttpTransport:
             provider_info.mark_base_url_failed(observed)
             next_url = provider_info.next_available_base_url(observed)
             if next_url is None:
-                return url_failure()
+                return output_of(attempt)
             await provider_info.select_base_url(next_url)
             attempt = await operation()
 
@@ -838,7 +859,7 @@ class HttpTransport:
         extra_headers: dict[str, str] | None,
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
-        preserve_failover_error_body: bool,
+        failover_enabled: bool,
     ) -> tuple[HttpUpstreamStream, bool, tuple[str, int], tuple[str, int]]:
         url_observation = provider_info.observe_url_rotation()
         credential_observation, credential_headers = (
@@ -852,7 +873,7 @@ class HttpTransport:
             extra_headers=extra_headers,
             wire_body=wire_body,
             wire_headers=wire_headers,
-            preserve_failover_error_body=preserve_failover_error_body,
+            failover_enabled=failover_enabled,
             credential_headers=credential_headers,
         )
         return result, trigger, url_observation, credential_observation
@@ -894,13 +915,10 @@ class HttpTransport:
                 body=None,
                 raw_content=_all_domains_502(len(provider_info.base_urls)),
             ),
-            lambda exhausted: (
-                exhausted
-                or UpstreamResponse(
-                    status_code=503,
-                    body=None,
-                    raw_content=_all_credentials_503(len(provider_info.credential_ids)),
-                )
+            lambda: UpstreamResponse(
+                status_code=503,
+                body=None,
+                raw_content=_all_credentials_503(len(provider_info.credential_ids)),
             ),
         )
 
@@ -939,12 +957,16 @@ class HttpTransport:
         except (HttpClientError, ValueError) as exc:
             raise UpstreamConnectionError(str(exc)) from exc
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code == 502:
-            await resp.aclose()
-            return UpstreamResponse(status_code=502, body=None, raw_content=b"")
-        if resp.status_code == 503:
-            await resp.aclose()
-            return UpstreamResponse(status_code=503, body=None, raw_content=b"")
+        if resp.status_code in (502, 503):
+            raw_content = await _read_bounded_failover_error_body(
+                resp,
+                MAX_UPSTREAM_ERROR_BODY_BYTES,
+            )
+            return UpstreamResponse(
+                status_code=resp.status_code,
+                body=None,
+                raw_content=raw_content,
+            )
         max_bytes = (
             MAX_UPSTREAM_ERROR_BODY_BYTES
             if resp.status_code >= 400
@@ -987,7 +1009,7 @@ class HttpTransport:
                 extra_headers=extra_headers,
                 wire_body=wire_body,
                 wire_headers=wire_headers,
-                preserve_failover_error_body=not allow_failover,
+                failover_enabled=allow_failover,
             )
 
         return await self._send_with_failover(
@@ -1001,13 +1023,9 @@ class HttpTransport:
             lambda: self._synthetic_stream(
                 502, _all_domains_502(len(provider_info.base_urls))
             ),
-            lambda exhausted: self._synthetic_stream(
+            lambda: self._synthetic_stream(
                 503,
-                (
-                    exhausted.raw_content
-                    if exhausted is not None
-                    else _all_credentials_503(len(provider_info.credential_ids))
-                ),
+                _all_credentials_503(len(provider_info.credential_ids)),
             ),
             allow_failover=allow_failover,
         )
@@ -1032,7 +1050,7 @@ class HttpTransport:
         extra_headers: dict[str, str] | None,
         wire_body: bytes | None,
         wire_headers: dict[str, str] | None,
-        preserve_failover_error_body: bool,
+        failover_enabled: bool,
         credential_headers: dict[str, str],
     ) -> tuple[HttpUpstreamStream, bool]:
         url, headers, req_body = _prepare_upstream(
@@ -1079,19 +1097,16 @@ class HttpTransport:
 
         assert isinstance(resp, HttpStreamingResponse)
         if resp.status_code in (502, 503):
-            error_text = ""
-            if preserve_failover_error_body:
-                raw_error = await _read_bounded_body(
-                    resp,
-                    MAX_UPSTREAM_ERROR_BODY_BYTES,
-                )
-                error_text = raw_error.decode("utf-8", errors="replace")
-            else:
-                await resp.aclose()
+            body_reader = (
+                _read_bounded_failover_error_body
+                if failover_enabled
+                else _read_bounded_body
+            )
+            raw_error = await body_reader(resp, MAX_UPSTREAM_ERROR_BODY_BYTES)
             return (
                 HttpUpstreamStream(
                     resp,
-                    error_text=error_text,
+                    error_text=raw_error.decode("utf-8", errors="replace"),
                     response_closed=True,
                     idle_timeout=self._stream_idle_timeout,
                     close_timeout=self._close_timeout,
@@ -1185,13 +1200,10 @@ class HttpTransport:
                 body=None,
                 raw_content=_all_domains_502(len(provider_info.base_urls)),
             ),
-            lambda exhausted: (
-                exhausted
-                or UpstreamResponse(
-                    status_code=503,
-                    body=None,
-                    raw_content=_all_credentials_503(len(provider_info.credential_ids)),
-                )
+            lambda: UpstreamResponse(
+                status_code=503,
+                body=None,
+                raw_content=_all_credentials_503(len(provider_info.credential_ids)),
             ),
         )
 
@@ -1259,12 +1271,16 @@ class HttpTransport:
             raise UpstreamConnectionError(str(exc)) from exc
 
         assert isinstance(resp, HttpStreamingResponse)
-        if resp.status_code == 502:
-            await resp.aclose()
-            return UpstreamResponse(status_code=502, body=None, raw_content=b"")
-        if resp.status_code == 503:
-            await resp.aclose()
-            return UpstreamResponse(status_code=503, body=None, raw_content=b"")
+        if resp.status_code in (502, 503):
+            raw_content = await _read_bounded_failover_error_body(
+                resp,
+                MAX_UPSTREAM_ERROR_BODY_BYTES,
+            )
+            return UpstreamResponse(
+                status_code=resp.status_code,
+                body=None,
+                raw_content=raw_content,
+            )
         max_bytes = (
             MAX_UPSTREAM_ERROR_BODY_BYTES
             if resp.status_code >= 400

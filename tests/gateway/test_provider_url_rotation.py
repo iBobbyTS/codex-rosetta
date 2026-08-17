@@ -506,7 +506,9 @@ def test_nonstream_non503_does_not_rotate_credential(monkeypatch, status: int) -
     asyncio.run(scenario())
 
 
-def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None:
+def test_nonstream_503_exhaustion_preserves_last_error_and_cooling_is_bounded(
+    monkeypatch,
+) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         provider, _ = _provider(
@@ -532,7 +534,8 @@ def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None
         )
         assert result.status_code == 503
         assert cooling_result.status_code == 503
-        assert result.raw_content == (
+        assert result.raw_content == b'{"error": "busy"}'
+        assert cooling_result.raw_content == (
             b'{"error":{"message":"All 2 credentials responded with HTTP 503",'
             b'"type":"upstream_error"}}'
         )
@@ -540,6 +543,48 @@ def test_nonstream_503_exhaustion_is_count_only_and_bounded(monkeypatch) -> None
         assert client.calls == calls_after_exhaustion
         assert len(client.calls) == 12
         assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize("status", [502, 503])
+def test_failover_exhaustion_returns_last_upstream_error(
+    monkeypatch,
+    path_kind: str,
+    status: int,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        last_error = {"error": {"message": f"last-{path_kind}-{status}"}}
+        client = _RoutingClient()
+        client.add(
+            target,
+            *(_json_response(status, {"error": "earlier"}) for _ in range(5)),
+            _json_response(status, last_error),
+        )
+        transport = _transport(monkeypatch, client)
+
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+            error_body = await result.read_error()
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, target, {})
+            error_body = result.error_text
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+            error_body = result.error_text
+
+        assert result.status_code == status
+        assert json.loads(error_body) == last_error
+        assert client.calls == [target] * 6
 
     asyncio.run(scenario())
 
@@ -1316,7 +1361,7 @@ def test_unrelated_html_is_not_a_rotation_trigger(monkeypatch, streaming: bool) 
     asyncio.run(scenario())
 
 
-def test_full_ring_returns_static_502_and_all_cooling_skips_upstream(
+def test_full_ring_returns_last_502_and_all_cooling_skips_upstream(
     monkeypatch,
 ) -> None:
     async def scenario() -> None:
@@ -1334,9 +1379,9 @@ def test_full_ring_returns_static_502_and_all_cooling_skips_upstream(
             provider, "openai_responses", {}, "model"
         )
 
-        expected = b"All 2 domains responded with HTTP 502"
         assert result.status_code == cooling_result.status_code == 502
-        assert expected in result.raw_content
+        assert result.raw_content == b'{"error": "bad"}'
+        assert b"All 2 domains responded with HTTP 502" in cooling_result.raw_content
         assert first.encode() not in result.raw_content
         assert second.encode() not in result.raw_content
         assert client.calls == calls_after_first_ring
