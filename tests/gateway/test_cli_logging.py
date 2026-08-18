@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -202,6 +203,72 @@ def test_main_rejects_removed_cli_option(
         cli.main()
 
     assert exc_info.value.code == 2
+
+
+def test_main_reports_address_in_use_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text("{}", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    config = SimpleNamespace(
+        host="127.0.0.1",
+        port=8765,
+        socket=None,
+        providers={},
+        models={},
+        log_bodies=False,
+        local_mode=False,
+    )
+
+    class FakeGatewayConfig:
+        def __new__(cls, _raw):
+            return config
+
+        @classmethod
+        def from_raw_with_env(cls, _raw):
+            return config
+
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "codex-rosetta-gateway",
+            "--config",
+            str(tmp_path),
+            "--codex-home",
+            str(codex_home),
+            "--no-local-mode",
+            "--port",
+            "8888",
+        ],
+    )
+    monkeypatch.setattr(cli, "GatewayConfig", FakeGatewayConfig)
+    monkeypatch.setattr(cli, "load_config", lambda _path: {})
+    monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(gateway_app, "create_app", lambda *_args, **_kwargs: object())
+    logged_errors: list[str] = []
+    monkeypatch.setattr(
+        cli.logger,
+        "error",
+        lambda message, *args: logged_errors.append(message % args),
+    )
+
+    async def fake_run_gateway(*_args, **_kwargs) -> None:
+        raise OSError(errno.EADDRINUSE, "address already in use")
+
+    monkeypatch.setattr(gateway_app, "run_gateway", fake_run_gateway)
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 1
+    assert logged_errors == [
+        "Cannot start codex-rosetta gateway because 127.0.0.1:8888 is already in use."
+    ]
+    assert capsys.readouterr().err == ""
 
 
 def test_main_manages_web_run_sidecar_around_gateway_lifecycle(

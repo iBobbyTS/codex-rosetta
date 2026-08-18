@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import secrets
 import subprocess
@@ -715,6 +716,15 @@ def main() -> None:
             asyncio.run(run_gateway(app, host, port, socket=socket_path))
         except KeyboardInterrupt:
             pass
+        except OSError as exc:
+            if exc.errno != errno.EADDRINUSE:
+                raise
+            target = f"Unix socket {socket_path}" if socket_path else f"{host}:{port}"
+            logger.error(
+                "Cannot start codex-rosetta gateway because %s is already in use.",
+                target,
+            )
+            raise SystemExit(1) from None
     finally:
         if sidecar is not None:
             sidecar.stop()
