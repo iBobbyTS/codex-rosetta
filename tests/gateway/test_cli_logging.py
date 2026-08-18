@@ -51,7 +51,6 @@ def test_main_passes_selected_log_level_to_logging_setup(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(tmp_path),
             "--codex-home",
@@ -106,7 +105,6 @@ def test_main_initializes_missing_config_and_continues_startup(
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     argv = [
         "codex-rosetta-gateway",
-        "--no-banner",
         "--confirm-clear-existing-catalog",
     ]
     if explicit_config:
@@ -189,15 +187,15 @@ def test_main_initializes_missing_config_and_continues_startup(
     assert started == [("127.0.0.1", 8765)]
 
 
-@pytest.mark.parametrize("removed_option", ["--verbose", "-v"])
-def test_main_rejects_removed_verbose_option(
+@pytest.mark.parametrize("removed_option", ["--verbose", "-v", "--no-banner"])
+def test_main_rejects_removed_cli_option(
     monkeypatch: pytest.MonkeyPatch,
     removed_option: str,
 ) -> None:
     monkeypatch.setattr(
         cli.sys,
         "argv",
-        ["codex-rosetta-gateway", "--no-banner", removed_option],
+        ["codex-rosetta-gateway", removed_option],
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -258,7 +256,6 @@ def test_main_manages_web_run_sidecar_around_gateway_lifecycle(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(tmp_path),
             "--codex-home",

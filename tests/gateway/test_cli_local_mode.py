@@ -64,7 +64,6 @@ def test_local_mode_flag_persists_for_later_startups(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -94,7 +93,6 @@ def test_local_mode_flag_persists_for_later_startups(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -132,7 +130,6 @@ def test_confirm_flag_records_consent_without_enabling_local_mode(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -174,7 +171,6 @@ def test_no_local_mode_flag_persists_without_modifying_codex_home(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -207,7 +203,6 @@ def test_noninteractive_first_start_requires_confirmation_flag(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -270,7 +265,6 @@ def test_interactive_decline_disables_mode_without_modifying_codex_home(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -360,7 +354,6 @@ def test_remote_host_prints_manual_configuration_warning(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",
@@ -392,7 +385,6 @@ def test_local_mode_codex_provider_uses_effective_cli_port(
         "argv",
         [
             "codex-rosetta-gateway",
-            "--no-banner",
             "--config",
             str(config_dir),
             "--codex-home",

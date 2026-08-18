@@ -505,7 +505,6 @@ def main() -> int:
             "127.0.0.1",
             "--port",
             str(port),
-            "--no-banner",
             "--local-mode",
             "--confirm-clear-existing-catalog",
         ],

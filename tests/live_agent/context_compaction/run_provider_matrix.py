@@ -517,7 +517,6 @@ def _run_cell(cell: str, index: int, timeout_seconds: int) -> dict[str, Any]:
             "127.0.0.1",
             "--port",
             str(port),
-            "--no-banner",
             "--local-mode",
             "--confirm-clear-existing-catalog",
         ],

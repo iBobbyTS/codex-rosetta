@@ -14,7 +14,6 @@ import asyncio
 
 from codex_rosetta import __version__
 
-from .banner import print_banner
 from .config import (
     CODEX_HOME_ENV,
     CONFIG_DIRS_TO_TRY,
@@ -562,11 +561,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--no-banner",
-        action="store_true",
-        help="Suppress the startup banner",
-    )
-    parser.add_argument(
         "--edit",
         "-e",
         action="store_true",
@@ -651,10 +645,6 @@ def main() -> None:
 
     if _dispatch_command(args, add_parser, local_mode_parser):
         return
-
-    # --- normal server startup ---
-    if not args.no_banner:
-        print_banner()
 
     try:
         codex_home = resolve_codex_home(args.codex_home)
