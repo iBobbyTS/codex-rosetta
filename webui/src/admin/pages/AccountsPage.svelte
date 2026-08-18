@@ -210,12 +210,32 @@
   {/if}
 </div>
 
-<Dialog open={sub2apiOpen} title={t('accounts.sub2apiTitle')} size="lg" closeLabel={t('btn.cancel')} onClose={() => { if (!sub2apiBusy) sub2apiOpen = false; }}>
+<Dialog open={sub2apiOpen} title={t('accounts.sub2apiTitle')} size="md" closeLabel={t('btn.cancel')} onClose={() => { if (!sub2apiBusy) sub2apiOpen = false; }}>
   <div class="account-dialog-content">
-    <p>{t('accounts.sub2apiGuide')}</p>
-    <button class="btn btn-sm" type="button" onclick={() => void copySub2APIScript()}>{t('accounts.sub2apiCopyScript')}</button>
-    <label><span>{t('accounts.sub2apiUrl')}</span><input bind:value={sub2apiUrl} placeholder="ai-pixel.online" /></label>
-    <label><span>{t('accounts.sub2apiAuth')}</span><textarea bind:value={sub2apiAuth} rows="6" placeholder="Paste authentication JSON here"></textarea></label>
+    <section class="sub2api-guide" aria-labelledby="sub2api-guide-title">
+      <h3 id="sub2api-guide-title">{t('accounts.sub2apiGuideTitle')}</h3>
+      <ol class="sub2api-steps">
+        <li>{t('accounts.sub2apiGuideOpen')}</li>
+        <li>
+          <div class="sub2api-step-action">
+            <span>{t('accounts.sub2apiGuideConsole')}</span>
+            <button class="btn btn-sm" type="button" onclick={() => void copySub2APIScript()}>{t('accounts.sub2apiCopyScript')}</button>
+          </div>
+        </li>
+        <li>{t('accounts.sub2apiGuidePaste')}</li>
+      </ol>
+    </section>
+
+    <div class="sub2api-fields">
+      <label class="sub2api-field" for="sub2api-base-url">
+        <span>{t('accounts.sub2apiUrl')}</span>
+        <input id="sub2api-base-url" bind:value={sub2apiUrl} placeholder="ai-pixel.online" autocomplete="url" spellcheck="false" />
+      </label>
+      <label class="sub2api-field" for="sub2api-auth-json">
+        <span>{t('accounts.sub2apiAuth')}</span>
+        <textarea id="sub2api-auth-json" bind:value={sub2apiAuth} rows="8" placeholder="Paste authentication JSON here" spellcheck="false"></textarea>
+      </label>
+    </div>
   </div>
   <svelte:fragment slot="footer">
     <button class="suu-dialog__button" type="button" disabled={sub2apiBusy} onclick={() => sub2apiOpen = false}>{t('btn.cancel')}</button>
@@ -224,3 +244,94 @@
 </Dialog>
 
 <ConfirmDialog open={deleteAccount !== null} title={t('accounts.deleteTitle')} message={t('accounts.deleteMessage')} confirmLabel={t('btn.delete')} cancelLabel={t('btn.cancel')} closeLabel={t('btn.cancel')} intent="danger" onClose={() => deleteAccount = null} onConfirm={() => void confirmDelete()} />
+
+<style>
+  .account-dialog-content {
+    display: grid;
+    gap: 20px;
+  }
+
+  .sub2api-guide {
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 2px);
+    background: color-mix(in srgb, var(--bg-card) 72%, var(--bg));
+  }
+
+  .sub2api-guide h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+  }
+
+  .sub2api-steps {
+    display: grid;
+    gap: 12px;
+    margin: 0;
+    padding-left: 24px;
+    color: var(--text-dim);
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  .sub2api-steps li::marker {
+    color: var(--accent);
+    font-weight: 700;
+  }
+
+  .sub2api-step-action {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .sub2api-step-action .btn {
+    flex: 0 0 auto;
+  }
+
+  .sub2api-fields {
+    display: grid;
+    gap: 16px;
+  }
+
+  .sub2api-field {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 650;
+  }
+
+  .sub2api-field input,
+  .sub2api-field textarea {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 var(--mono);
+  }
+
+  .sub2api-field textarea {
+    min-height: 156px;
+    resize: vertical;
+  }
+
+  .sub2api-field input:focus,
+  .sub2api-field textarea:focus {
+    border-color: var(--accent);
+    outline: none;
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  @media (max-width: 640px) {
+    .sub2api-step-action {
+      align-items: flex-start;
+      flex-direction: column;
+    }
+  }
+</style>

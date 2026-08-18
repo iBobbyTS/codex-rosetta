@@ -590,3 +590,30 @@ def test_account_store_refresh_updates_metadata_without_replacing_credentials(
     assert private is not None
     assert private["metadata"]["workspace"] == "Calgary"
     assert private["credentials"]["access_token"] == "keep-me"
+
+
+def test_account_list_order_is_stable_by_created_at(tmp_path: Path) -> None:
+    store = AccountStore(str(tmp_path / "config.jsonc"))
+    first = store.upsert(
+        provider="chatgpt",
+        identity="first",
+        metadata={"email": "first@example.test"},
+        credentials={"access_token": "first"},
+    )
+    second = store.upsert(
+        provider="chatgpt",
+        identity="second",
+        metadata={"email": "second@example.test"},
+        credentials={"access_token": "second"},
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "UPDATE accounts SET created_at = ? WHERE id = ?",
+            ("2026-01-01 00:00:00", first["id"]),
+        )
+        connection.execute(
+            "UPDATE accounts SET created_at = ? WHERE id = ?",
+            ("2026-01-02 00:00:00", second["id"]),
+        )
+    store.update_metadata(first["id"], {"email": "first-updated@example.test"})
+    assert [row["id"] for row in store.list_public()] == [second["id"], first["id"]]

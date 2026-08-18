@@ -18,6 +18,16 @@ vi.mock('../src/shared/i18n.svelte', () => ({
     'accounts.oauthMissingUrl': 'ChatGPT login did not return an authorization URL.',
     'accounts.oauthStarted': 'Complete ChatGPT login in the opened window, then return here.',
     'accounts.loginSub2API': 'Log in with Sub2API',
+    'accounts.sub2apiTitle': 'Add Sub2API account',
+    'accounts.sub2apiGuideTitle': 'How to add the account',
+    'accounts.sub2apiGuideOpen': 'Open the logged-in Sub2API site.',
+    'accounts.sub2apiGuideConsole': 'Open the browser Console and run the script.',
+    'accounts.sub2apiGuidePaste': 'Paste the generated JSON below, then save.',
+    'accounts.sub2apiCopyScript': 'Copy browser script',
+    'accounts.sub2apiUrl': 'Base URL',
+    'accounts.sub2apiAuth': 'Authentication JSON',
+    'btn.cancel': 'Cancel',
+    'btn.save': 'Save',
     'section.accounts': 'Accounts',
     'loading.accounts': 'Loading accounts...',
     'accounts.name': 'Name',
@@ -164,5 +174,20 @@ describe('AccountsPage ChatGPT OAuth polling', () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(apiMock.get).toHaveBeenCalledTimes(callsAtTimeout);
+  });
+});
+
+describe('AccountsPage Sub2API dialog', () => {
+  it('presents the instructions and account fields as a guided form', async () => {
+    render(AccountsPage);
+    await vi.runAllTicks();
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Log in with Sub2API' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Add Sub2API account' });
+    expect(dialog).toHaveTextContent('How to add the account');
+    expect(screen.getByRole('button', { name: 'Copy browser script' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Base URL')).toHaveAttribute('placeholder', 'ai-pixel.online');
+    expect(screen.getByLabelText('Authentication JSON').tagName).toBe('TEXTAREA');
   });
 });

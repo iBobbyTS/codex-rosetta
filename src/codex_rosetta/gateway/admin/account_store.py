@@ -86,7 +86,7 @@ class AccountStore:
         if provider:
             query += " WHERE provider = ?"
             params = (provider,)
-        query += " ORDER BY updated_at DESC, id"
+        query += " ORDER BY created_at DESC, id"
         with self._lock:
             connection = self._connect()
             try:
