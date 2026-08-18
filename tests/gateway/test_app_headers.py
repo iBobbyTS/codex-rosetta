@@ -13,7 +13,7 @@ import pytest
 from codex_rosetta._vendor.httpserver import JSONResponse, Request, StreamingResponse
 from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.gateway.auth import api_key_principal_var
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import GatewayConfig, _ModelGroupProviderCandidate
 from codex_rosetta.gateway.admin.routes.config import reload_config
 from codex_rosetta.gateway.headers import (
     MAX_REQUEST_ID_BYTES,
@@ -962,7 +962,7 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
 ) -> None:
     config = _two_provider_gateway_config()
     ring = config.model_group_rings["test"]
-    writes: list[tuple[str, str]] = []
+    writes: list[tuple[str, _ModelGroupProviderCandidate]] = []
     first_attempts = 0
     second_attempts = 0
     both_first_started = asyncio.Event()
@@ -970,7 +970,7 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
     leader_second_started = asyncio.Event()
     release_leader_success = asyncio.Event()
 
-    async def record(group: str, provider: str) -> None:
+    async def record(group: str, provider: _ModelGroupProviderCandidate) -> None:
         writes.append((group, provider))
 
     ring.bind_recorder(record)
@@ -1067,7 +1067,7 @@ def test_provider_persistence_failure_preserves_state_and_hands_off_gate(
     config = _two_provider_gateway_config()
     ring = config.model_group_rings["test"]
 
-    async def fail_record(_group: str, _provider: str) -> None:
+    async def fail_record(_group: str, _provider: _ModelGroupProviderCandidate) -> None:
         raise RuntimeError("config write failed")
 
     ring.bind_recorder(fail_record)

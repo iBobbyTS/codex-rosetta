@@ -349,7 +349,8 @@ def test_deepseek_disabled_rotation_retries_current_without_selecting_sibling():
     )
     factory_credentials: list[str] = []
 
-    def factory(credential, _origin, _proxy_url):
+    def factory(credential, origin, proxy_url):
+        del origin, proxy_url
         factory_credentials.append(credential)
         return failure
 

@@ -1713,9 +1713,11 @@ class TestModelGroups:
             "models": {"gpt-5.6-terra": {}},
         }
         cfg = GatewayConfig(raw)
-        writes: list[tuple[str, str]] = []
+        writes: list[tuple[str, gateway_config._ModelGroupProviderCandidate]] = []
 
-        async def record(group: str, provider: str) -> None:
+        async def record(
+            group: str, provider: gateway_config._ModelGroupProviderCandidate
+        ) -> None:
             writes.append((group, provider))
 
         for ring in cfg.model_group_rings.values():
@@ -1748,7 +1750,10 @@ class TestModelGroups:
         cfg = GatewayConfig(raw)
         ring = cfg.model_group_rings["test-llm"]
 
-        async def fail_record(_group: str, _provider: str) -> None:
+        async def fail_record(
+            _group: str,
+            _provider: gateway_config._ModelGroupProviderCandidate,
+        ) -> None:
             raise RuntimeError("write failed")
 
         ring.bind_recorder(fail_record)
@@ -1875,6 +1880,7 @@ class TestModelGroups:
             "top_p": 1.0,
         }
         assert second_route.provider_id == "custom"
+        assert second_route.resolved_model_profile is not None
         assert second_route.resolved_model_profile.runtime_capabilities == {}
         assert second_route.model_info["context_window"] == 131_072
         assert second_route.model_info["max_context_window"] == 131_072
