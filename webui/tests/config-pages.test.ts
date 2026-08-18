@@ -15,6 +15,10 @@ async function selectDropdown(control: HTMLElement, label: string): Promise<void
   await fireEvent.click(option);
 }
 
+async function selectModelGroupProvider(name: string, index = 0): Promise<void> {
+  await selectDropdown(screen.getAllByLabelText('Select Provider')[index], name);
+}
+
 function transfer(): { value: string; effectAllowed: string; setData: (_type: string, value: string) => void; getData: () => string } {
   return {
     value: '',
@@ -825,7 +829,7 @@ describe('KeysPage', () => {
 });
 
 describe('ModelsPage', () => {
-  it('shares the modal-width dropdown boundary between provider and profile', async () => {
+  it('renders provider selection inside each sortable row', async () => {
     apiMock.get.mockResolvedValue({
       providers: { upstream: { api_type: 'chat' } },
       model_groups: {},
@@ -833,12 +837,14 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    const providerSelect = screen.getByLabelText('Add provider');
+    const providerSelect = screen.getByLabelText('Select Provider');
     const profileSelect = document.getElementById('modelGroupToolProfile');
     expect(providerSelect.closest('.model-group-modal')).toBeInTheDocument();
-    expect(providerSelect.closest('.model-group-dropdown-field')).toBeInTheDocument();
+    expect(providerSelect.closest('tr')).toBeInTheDocument();
+    expect(providerSelect.closest('.model-group-provider-select')).toBeInTheDocument();
+    expect(providerSelect.closest('.model-group-dropdown-field')).toBeNull();
     expect(profileSelect?.closest('.model-group-dropdown-field')).toBeInTheDocument();
-    expect(document.querySelectorAll('.model-group-dropdown-field')).toHaveLength(2);
+    expect(document.querySelectorAll('.model-group-dropdown-field')).toHaveLength(1);
     await fireEvent.click(profileSelect as HTMLButtonElement);
     expect(profileSelect?.closest('.model-group-dropdown-field')?.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
   });
@@ -847,6 +853,8 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await selectModelGroupProvider('upstream');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -888,11 +896,14 @@ describe('ModelsPage', () => {
     expect(providerRow('missing')).toHaveClass('suu-sortable-table-enhanced__row--red');
     expect(providerRow('missing')).toHaveTextContent("Provider 'missing' not found in config");
 
-    await fireEvent.click(dialog.getByLabelText('Add provider'));
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add Provider' }));
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
+    const newProviderSelect = dialog.getAllByLabelText('Select Provider').at(-1)!;
+    await fireEvent.click(newProviderSelect);
     expect(screen.getByRole('option', { name: 'third' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'disabled' })).toBeNull();
     await fireEvent.click(screen.getByRole('option', { name: 'third' }));
-    await fireEvent.click(dialog.getByRole('button', { name: '+ Add Provider' }));
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled();
     await fireEvent.click(dialog.getByRole('button', { name: 'Remove provider missing' }));
 
     const source = dialog.getByRole('button', { name: 'Drag provider third' });
@@ -915,7 +926,7 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { only: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    expect(screen.getByRole('button', { name: 'Remove provider only' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /^Remove provider/ })).toBeDisabled();
   });
 
   it('offers only tool profiles matching the selected provider protocol', async () => {
@@ -942,13 +953,13 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
-    const providerSelect = screen.getByLabelText('Add provider');
+    const providerSelect = screen.getByLabelText('Select Provider');
     const profileSelect = screen.getByLabelText('Profile');
-    const replaceProvider = async (current: string, next: string): Promise<void> => {
+    const replaceProvider = async (_current: string, next: string): Promise<void> => {
       await selectDropdown(providerSelect, next);
-      await fireEvent.click(screen.getByRole('button', { name: '+ Add Provider' }));
-      await fireEvent.click(screen.getByRole('button', { name: `Remove provider ${current}` }));
     };
+
+    await selectDropdown(providerSelect, 'chat');
 
     await fireEvent.click(profileSelect);
     expect(screen.getByRole('option', { name: 'Chat Default' })).toBeInTheDocument();
@@ -988,6 +999,7 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('upstream');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
     await selectDropdown(screen.getByLabelText('Profile'), 'Pass through');
@@ -1009,6 +1021,7 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('upstream');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
@@ -1036,6 +1049,7 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'responses' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset], context_window_presets: { 'gpt-5.6-sol': [{ label: '272k（官方）', context_window: 272000, effective_context_window_percent: 95, auto_compact_token_limit: 217600 }, { label: '500k', context_window: 500000, effective_context_window_percent: 95, auto_compact_token_limit: 400000 }, { label: '800k', context_window: 800000, effective_context_window_percent: 95, auto_compact_token_limit: 640000 }, { label: '1M', context_window: 1000000, effective_context_window_percent: 95, auto_compact_token_limit: 800000 }] } });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('upstream');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-5.6-sol' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
@@ -1085,6 +1099,7 @@ describe('ModelsPage', () => {
     apiMock.get.mockResolvedValue({ providers: { upstream: { api_type: 'chat' } }, model_groups: {}, tool_profile_presets: [], model_presets: [preset] });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('upstream');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'gpt-demo' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Enter Model Information Manually' }));
@@ -1177,6 +1192,7 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('opencode');
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'glm-5.2' } });
     await fireEvent.click(screen.getByRole('button', { name: 'opencode Extra Configuration' }));
@@ -1209,6 +1225,7 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('opencode');
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'glm-5.2' } });
 
     expect(screen.queryByRole('button', { name: 'opencode Extra Configuration' })).toBeNull();
@@ -1232,6 +1249,7 @@ describe('ModelsPage', () => {
     });
     render(ModelsPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    await selectModelGroupProvider('opencode');
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'public-qwen' } });
     await fireEvent.input(screen.getByLabelText('Upstream model'), { target: { value: 'qwen3.7-plus' } });
     await fireEvent.click(screen.getByRole('button', { name: 'opencode Extra Configuration' }));
