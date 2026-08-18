@@ -794,7 +794,7 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
         def available(self):
             return ("first", "second")
 
-        async def select(self, provider):
+        async def select_automatically(self, provider):
             self.current = provider
 
         async def publish(self):
@@ -832,7 +832,8 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
         calls += 1
         if calls == 1:
             return JSONResponse({"error": "first failed"}, status_code=502), {
-                "upstream_provider_failure": True
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
             }
         return JSONResponse({"ok": True}), {}
 
@@ -900,6 +901,62 @@ def test_proxy_handler_rotates_fixed_credential_candidate_without_provider_selec
     assert config.model_group_rings["test"].current.credential_uuid == second_uuid
 
 
+def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(
+    monkeypatch,
+) -> None:
+    first_uuid = "0488ffa0-e7b7-59ed-b1d0-6d43275607f5"
+    second_uuid = "00000000-0000-4000-8000-000000000002"
+    raw = _gateway_config()
+    raw["providers"]["test-provider"].update(
+        auto_rotate_credentials=False,
+        api_keys=[
+            *raw["providers"]["test-provider"]["api_keys"],
+            {
+                "uuid": second_uuid,
+                "id": "second",
+                "key": "sk-second",
+            },
+        ],
+    )
+    raw["model_groups"]["test"]["provider"] = [
+        {"provider": "test-provider", "credential_uuid": first_uuid},
+        {"provider": "test-provider", "credential_uuid": second_uuid},
+    ]
+    config = GatewayConfig(raw)
+    ring = config.model_group_rings["test"]
+    writes: list[Any] = []
+    attempts: list[str] = []
+
+    async def record(_group: str, candidate: Any) -> None:
+        writes.append(candidate)
+
+    ring.bind_recorder(record)
+
+    async def fake_handle(_route, provider, *_args: Any, **_kwargs: Any):
+        attempts.append(provider.current_credential_id)
+        if provider.current_credential_id == "primary":
+            return JSONResponse({"error": "unavailable"}, status_code=503), {
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "transport_exhaustion",
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+
+    assert response.status_code == 503
+    assert attempts == ["primary"]
+    assert writes == []
+    assert ring.current.credential_uuid == first_uuid
+    assert ring.status_snapshot() == (
+        (ring.candidates[0], "available"),
+        (ring.candidates[1], "available"),
+    )
+
+
 def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
     monkeypatch,
 ) -> None:
@@ -927,7 +984,8 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
             await both_first_started.wait()
             await release_first_failures.wait()
             return JSONResponse({"error": "failed"}, status_code=502), {
-                "upstream_provider_failure": True
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
             }
         second_attempts += 1
         if second_attempts == 1:
@@ -972,7 +1030,8 @@ def test_provider_failover_leader_cancellation_hands_gate_to_waiter(
         nonlocal second_attempts
         if route.provider_name == "test-provider":
             return JSONResponse({"error": "failed"}, status_code=502), {
-                "upstream_provider_failure": True
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
             }
         second_attempts += 1
         if second_attempts == 1:
@@ -1015,7 +1074,8 @@ def test_provider_persistence_failure_preserves_state_and_hands_off_gate(
 
     async def fake_handle(*_args: Any, **_kwargs: Any):
         return JSONResponse({"error": "failed"}, status_code=502), {
-            "upstream_provider_failure": True
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "upstream_response",
         }
 
     monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
@@ -1069,7 +1129,8 @@ def test_provider_attempt_loop_preserves_wire_and_single_ingress_telemetry(
         body["mutated"] = route.provider_name
         if route.provider_name == "test-provider":
             return JSONResponse({"error": "failed"}, status_code=502), {
-                "upstream_provider_failure": True
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
             }
         return JSONResponse({"ok": True}), {}
 

@@ -1590,6 +1590,89 @@ class TestModelGroups:
         _route, restored = cfg.resolve("openai_responses", "gpt-other")
         assert restored.auth_headers()["Authorization"] == "Bearer sk-test"
 
+    def test_provider_only_candidate_requires_one_globally_available_credential(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["api_keys"].append(
+            {
+                "uuid": "00000000-0000-4000-8000-000000000002",
+                "id": "secondary",
+                "key": "sk-secondary",
+            }
+        )
+        raw["model_groups"]["other-llm"] = {
+            "provider": ["test"],
+            "type": "llm",
+            "models": {"gpt-other": {"upstream_model": "gpt-5.6-sol"}},
+        }
+        cfg = GatewayConfig(raw)
+        provider = cfg.providers["test"]
+        provider.mark_credential_failed("primary")
+        provider.mark_credential_failed("secondary")
+
+        assert cfg.available_model_group_candidates("test-llm") == ()
+        assert cfg.available_model_group_candidates("other-llm") == ()
+        with pytest.raises(ModelGroupConfigurationUnavailable, match="cooling"):
+            cfg.resolve("openai_responses", "gpt-test")
+        with pytest.raises(ModelGroupConfigurationUnavailable, match="cooling"):
+            cfg.resolve("openai_responses", "gpt-other")
+
+    def test_automatic_pair_selection_preserves_concurrent_global_cooldown(self):
+        raw = _minimal_raw()
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        raw["providers"]["test"].update(
+            auto_rotate_credentials=False,
+            api_keys=[
+                *raw["providers"]["test"]["api_keys"],
+                {
+                    "uuid": second_uuid,
+                    "id": "secondary",
+                    "key": "sk-secondary",
+                },
+            ],
+        )
+        first_pair = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        }
+        second_pair = {"provider": "test", "credential_uuid": second_uuid}
+        raw["model_groups"]["test-llm"]["provider"] = [first_pair, second_pair]
+        raw["model_groups"]["other-llm"] = {
+            "provider": [second_pair],
+            "type": "llm",
+            "models": {"gpt-other": {"upstream_model": "gpt-5.6-sol"}},
+        }
+        cfg = GatewayConfig(raw)
+        selection_observed = asyncio.Event()
+        cooldown_established = asyncio.Event()
+
+        async def select_after_observation() -> None:
+            target = cfg.available_model_group_candidates("test-llm")[1]
+            selection_observed.set()
+            await cooldown_established.wait()
+            await cfg.model_group_rings["test-llm"].select_automatically(target)
+
+        async def cool_target() -> None:
+            await selection_observed.wait()
+            cfg.providers["test"].mark_credential_failed("secondary")
+            cooldown_established.set()
+
+        async def scenario() -> None:
+            await asyncio.gather(select_after_observation(), cool_target())
+
+        asyncio.run(scenario())
+
+        assert cfg.providers["test"].credential_statuses() == (
+            ("primary", "available"),
+            ("secondary", "cooling"),
+        )
+        with pytest.raises(ModelGroupConfigurationUnavailable, match="cooling"):
+            cfg.resolve("openai_responses", "gpt-other")
+
+        other_ring = cfg.model_group_rings["other-llm"]
+        asyncio.run(other_ring.select(other_ring.current))
+        _route, restored = cfg.resolve("openai_responses", "gpt-other")
+        assert restored.current_credential_id == "secondary"
+
     def test_empty_model_group_is_loadable_and_configuration_unavailable(self):
         raw = _minimal_raw()
         raw["model_groups"]["test-llm"]["provider"] = []

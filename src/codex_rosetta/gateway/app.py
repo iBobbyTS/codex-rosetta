@@ -897,6 +897,7 @@ async def _proxy_handler(  # noqa: C901
             provider_failed = bool(
                 ring is not None
                 and profile.get("upstream_provider_failure")
+                and profile.get("provider_failure_origin") == "upstream_response"
                 and not isinstance(response, StreamingResponse)
             )
             if provider_failed:
@@ -937,7 +938,7 @@ async def _proxy_handler(  # noqa: C901
                     # Persistence succeeds before either runtime current or
                     # cooldown state changes, so recorder failure cannot split
                     # the two authoritative views.
-                    await ring.select(next_provider)
+                    await ring.select_automatically(next_provider)
                     ring.mark_failed(failed_provider)
                     _clear_request_local_state(
                         state_scope,

@@ -167,14 +167,30 @@ class ModelGroupProviderRing:
         return candidate
 
     async def select(self, provider: _ModelGroupProviderCandidate | str) -> None:
+        """Persist an explicit selection and clear its local/global cooldown."""
+        await self._select(provider, clear_cooldown=True)
+
+    async def select_automatically(
+        self, provider: _ModelGroupProviderCandidate | str
+    ) -> None:
+        """Persist automatic failover without clearing concurrent cooldowns."""
+        await self._select(provider, clear_cooldown=False)
+
+    async def _select(
+        self,
+        provider: _ModelGroupProviderCandidate | str,
+        *,
+        clear_cooldown: bool,
+    ) -> None:
         provider = self._canonical_candidate(provider)
         if self._record_current is not None and provider != self.current:
             result = self._record_current(self.group_name, provider)
             if hasattr(result, "__await__"):
                 await result
-        self._ring.clear_cooldown(provider)
-        if self._clear_candidate_cooldown is not None:
-            self._clear_candidate_cooldown(provider)
+        if clear_cooldown:
+            self._ring.clear_cooldown(provider)
+            if self._clear_candidate_cooldown is not None:
+                self._clear_candidate_cooldown(provider)
         self._ring.set_current(provider)
 
 
@@ -1712,10 +1728,9 @@ class GatewayConfig:
         provider = self.providers.get(candidate.provider_name)
         if provider is None or not provider.has_available_base_url():
             return False
-        return (
-            candidate.credential_uuid is None
-            or provider.credential_uuid_is_available(candidate.credential_uuid)
-        )
+        if candidate.credential_uuid is None:
+            return provider.has_available_credential()
+        return provider.credential_uuid_is_available(candidate.credential_uuid)
 
     def available_model_group_candidates(
         self, group_name: str
