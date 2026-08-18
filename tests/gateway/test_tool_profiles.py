@@ -479,6 +479,7 @@ def test_gateway_config_resolves_group_profile_into_supported_route(api_type):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -587,6 +588,7 @@ def test_gateway_config_rejects_unknown_group_profile():
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -625,6 +627,7 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -666,6 +669,7 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -705,6 +709,7 @@ def test_gateway_config_applies_custom_profile_to_anthropic_and_google(api_type)
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -750,6 +755,7 @@ def test_gateway_config_uses_no_default_profile_for_anthropic_and_google(api_typ
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": api_type,
@@ -787,6 +793,7 @@ def test_gateway_config_resolves_bundled_profile_input_overrides():
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -843,6 +850,7 @@ def test_tool_mapping_only_provider_applies_selected_group_profile():
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",
@@ -1294,6 +1302,7 @@ def test_later_external_candidate_projects_search_on_all_shared_surfaces(
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "api_type": "responses",

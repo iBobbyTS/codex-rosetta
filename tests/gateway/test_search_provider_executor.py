@@ -90,6 +90,7 @@ def deepseek_candidate(
     credential: str = "deepseek-secret",
     additional_credentials: tuple[tuple[str, str], ...] = (),
     proxy_url: str | None = None,
+    auto_rotate_credentials: bool = True,
 ):
     candidate = object.__new__(DeepSeekNativeResponsesSearchProviderCandidate)
     object.__setattr__(candidate, "row_id", "deepseek")
@@ -101,6 +102,7 @@ def deepseek_candidate(
             "deepseek",
             configured_id="official",
             api_keys=(("primary", credential), *additional_credentials),
+            auto_rotate_credentials=auto_rotate_credentials,
             base_urls=("https://api.deepseek.com",),
             auth_header_fn=openai_auth,
             url_template="{base_url}/responses",
@@ -336,6 +338,45 @@ def test_deepseek_executor_rotates_only_literal_503_and_persists_current():
     assert writes == [("official", "second")]
     assert budget.external_calls == 1
     assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+
+
+def test_deepseek_disabled_rotation_retries_current_without_selecting_sibling():
+    failure = FakeDeepSeekClient(
+        DeepSeekSearchError(
+            DeepSeekSearchErrorCategory.HTTP_ERROR,
+            status_code=503,
+        )
+    )
+    factory_credentials: list[str] = []
+
+    def factory(credential, _origin, _proxy_url):
+        factory_credentials.append(credential)
+        return failure
+
+    candidate = deepseek_candidate(
+        credential="key-first",
+        additional_credentials=(("second", "key-second"),),
+        auto_rotate_credentials=False,
+    )
+
+    with pytest.raises(SearchProviderAttemptError) as caught:
+        run(
+            SearchProviderExecutor(
+                deepseek_client_factory=factory,
+                _retry_sleep=lambda _delay: asyncio.sleep(0),
+            ).execute(
+                candidate,
+                SearchRequest.from_body({}, [("q", WebSearchSettings())]),
+            )
+        )
+
+    assert caught.value.category is SearchProviderAttemptCategory.UPSTREAM_FAILURE
+    assert factory_credentials == ["key-first"] * 6
+    assert candidate.provider_info.current_credential_id == "primary"
+    assert candidate.provider_info.credential_statuses() == (
+        ("primary", "cooling"),
+        ("second", "available"),
+    )
 
 
 @pytest.mark.parametrize("failures_before_success", range(1, 6))

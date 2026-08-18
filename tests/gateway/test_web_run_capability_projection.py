@@ -423,6 +423,7 @@ def test_gateway_config_resolve_carries_typed_enum() -> None:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "provider": "custom",

@@ -35,6 +35,7 @@ def _config(
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": [f"https://{label}.example.test/v1"],
                     "current_base_url": f"https://{label}.example.test/v1",
                     "api_type": "chat",

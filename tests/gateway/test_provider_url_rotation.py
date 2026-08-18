@@ -90,13 +90,17 @@ def _provider(
     current: str | None = None,
     credentials: tuple[tuple[str, str], ...] = (("primary", "provider-key"),),
     current_credential: str | None = None,
+    auto_rotate_credentials: bool = True,
+    credential_uuids: tuple[tuple[str, str], ...] = (),
 ) -> tuple[ProviderInfo, list[tuple[str, str]]]:
     writes: list[tuple[str, str]] = []
     provider = ProviderInfo(
         "openai_responses",
         configured_id=row_id,
         api_keys=credentials,
+        credential_uuids=credential_uuids,
         current_api_key=current_credential,
+        auto_rotate_credentials=auto_rotate_credentials,
         base_urls=base_urls,
         current_base_url=current or base_urls[0],
         auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
@@ -826,6 +830,72 @@ def test_passthrough_503_rotates_credential_on_same_url(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("representation", ["request", "stream", "passthrough"])
+@pytest.mark.parametrize("fixed_pair", [False, True])
+def test_disabled_rotation_retries_only_selected_credential(
+    monkeypatch,
+    representation: str,
+    fixed_pair: bool,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+            auto_rotate_credentials=False,
+            credential_uuids=((first_uuid, "first"), (second_uuid, "second")),
+        )
+        selected = (
+            provider.for_model_group_candidate(object(), credential_uuid=second_uuid)
+            if fixed_pair
+            else provider
+        )
+        target = (
+            f"{origin}/models"
+            if representation == "passthrough"
+            else f"{origin}/responses"
+        )
+        client = _RoutingClient()
+        client.add(target, *_literal_503s())
+        transport = _transport(monkeypatch, client)
+
+        async def send():
+            if representation == "request":
+                return await transport.send_request(
+                    selected, "openai_responses", {}, "model"
+                )
+            if representation == "stream":
+                return await transport.send_streaming(
+                    selected, "openai_responses", {}, "model"
+                )
+            return await transport.send_passthrough(selected, target, {}, method="POST")
+
+        result = await send()
+
+        expected_key = "key-second" if fixed_pair else "key-first"
+        expected_id = "second" if fixed_pair else "first"
+        assert result.status_code == 503
+        assert not result.synthetic
+        assert [item["Authorization"] for item in client.headers] == [
+            f"Bearer {expected_key}"
+        ] * 6
+        assert provider.current_credential_id == "first"
+        assert provider.credential_statuses() == (
+            ("first", "cooling" if expected_id == "first" else "available"),
+            ("second", "cooling" if expected_id == "second" else "available"),
+        )
+
+        unavailable = await send()
+        assert unavailable.status_code == 503
+        assert unavailable.synthetic
+        assert len(client.calls) == 6
+
+    asyncio.run(scenario())
+
+
 def test_search_passthrough_exhausts_credential_ring_before_provider_failure(
     monkeypatch,
 ) -> None:
@@ -1354,6 +1424,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                         },
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": [first, second],
                     "current_base_url": first,
                 },
@@ -1369,6 +1440,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": [other],
                     "current_base_url": other,
                 },
@@ -1399,6 +1471,68 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
         assert saved["providers"]["row-a"]["current_api_key"] == "secondary"
         assert saved["providers"]["row-b"]["current_base_url"] == other
         assert saved["providers"]["row-b"]["current_api_key"] == "primary"
+
+    asyncio.run(scenario())
+
+
+def test_app_bound_model_group_recorder_persists_exact_pair_before_publish(
+    tmp_path,
+) -> None:
+    async def scenario() -> None:
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        first_pair = {"provider": "row-a", "credential_uuid": first_uuid}
+        second_pair = {"provider": "row-a", "credential_uuid": second_uuid}
+        document = {
+            "providers": {
+                "row-a": {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "request_encoding": "passthrough",
+                    "api_keys": [
+                        {"uuid": first_uuid, "id": "first", "key": "key-first"},
+                        {
+                            "uuid": second_uuid,
+                            "id": "renamed-second",
+                            "key": "key-second",
+                        },
+                    ],
+                    "current_api_key": "first",
+                    "auto_rotate_credentials": False,
+                    "base_urls": ["https://upstream.example/v1"],
+                    "current_base_url": "https://upstream.example/v1",
+                }
+            },
+            "model_groups": {
+                "models": {
+                    "provider": [first_pair, second_pair],
+                    "type": "llm",
+                    "models": {"gpt-5.6-terra": {}},
+                }
+            },
+            "server": {
+                "admin_password": "test-admin-password",
+                "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+            },
+        }
+        config_path = tmp_path / "config.jsonc"
+        config_path.write_text(json.dumps(document))
+        config = GatewayConfig(document)
+        _bind_provider_current_recorders(config, str(config_path))
+        ring = config.model_group_rings["models"]
+
+        observation = ring.observe()
+        leader, _waited = await ring.claim_observation(observation)
+        assert leader is True
+        await ring.select(ring.candidates[1])
+        await ring.publish()
+
+        saved = json.loads(config_path.read_text())
+        assert saved["model_groups"]["models"]["provider"] == [
+            second_pair,
+            first_pair,
+        ]
+        assert config.providers["row-a"].current_credential_id == "first"
 
     asyncio.run(scenario())
 

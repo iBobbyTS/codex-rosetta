@@ -75,6 +75,7 @@ def _config_data() -> dict[str, Any]:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             }
         },
         "model_groups": {
@@ -753,6 +754,7 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -903,6 +905,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     },
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
             "wrong-api": {
                 "provider": "deepseek",
@@ -917,6 +920,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
             "wrong-origin": {
                 "provider": "deepseek",
@@ -932,6 +936,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
         }
     )
@@ -1029,6 +1034,7 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config["server"]["web_search"] = {"providers": rows}
     config_path = tmp_path / "config.jsonc"
@@ -1142,6 +1148,7 @@ def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -2238,6 +2245,7 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "force_rosetta_compaction": True,
     }
 
@@ -2259,6 +2267,7 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -2288,6 +2297,7 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2310,6 +2320,7 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -2356,6 +2367,7 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -2408,6 +2420,7 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2462,6 +2475,7 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -2523,6 +2537,7 @@ def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2574,6 +2589,7 @@ def test_put_provider_rejects_missing_persisted_provider(tmp_path):
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2611,6 +2627,7 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
 
     response = _run(put_provider(request))
@@ -2634,6 +2651,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2668,6 +2686,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
             }
         ],
         "current_api_key": "renamed-primary",
+        "auto_rotate_credentials": True,
     }
 
     response = _run(put_provider(request))
@@ -3189,6 +3208,7 @@ def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")

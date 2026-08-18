@@ -5,6 +5,7 @@
     "openai_chat": {
       "api_keys": [{"uuid": "3c705c8b-08d0-4e62-9175-8ba1c5724eba", "id": "primary", "key": "${OPENAI_API_KEY}"}],
       "current_api_key": "primary",
+      "auto_rotate_credentials": true,
       "base_urls": ["https://api.openai.com/v1"],
       "current_base_url": "https://api.openai.com/v1",
       "provider": "openai",
@@ -14,6 +15,7 @@
     "openai_responses": {
       "api_keys": [{"uuid": "38a59448-22bc-4fb8-a746-e3958793baaf", "id": "primary", "key": "${OPENAI_API_KEY}"}],
       "current_api_key": "primary",
+      "auto_rotate_credentials": true,
       "base_urls": ["https://api.openai.com/v1"],
       "current_base_url": "https://api.openai.com/v1",
       "provider": "openai",
@@ -25,6 +27,7 @@
     "anthropic": {
       "api_keys": [{"uuid": "3e3a0c1d-42e8-46f6-bf57-4063fe0840ec", "id": "primary", "key": "${ANTHROPIC_API_KEY}"}],
       "current_api_key": "primary",
+      "auto_rotate_credentials": true,
       "base_urls": ["https://api.anthropic.com"],
       "current_base_url": "https://api.anthropic.com",
       "provider": "anthropic",
@@ -33,6 +36,7 @@
     "google": {
       "api_keys": [{"uuid": "d265d03d-02c6-4283-b8c2-38ff2ee07845", "id": "primary", "key": "${GOOGLE_API_KEY}"}],
       "current_api_key": "primary",
+      "auto_rotate_credentials": true,
       "base_urls": ["https://generativelanguage.googleapis.com"],
       "current_base_url": "https://generativelanguage.googleapis.com",
       "provider": "google",

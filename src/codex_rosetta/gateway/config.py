@@ -11,6 +11,7 @@ import sys
 import tempfile
 import uuid
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit
 
@@ -53,7 +54,34 @@ from .transport import ProviderInfo
 from ._ordered_failover import OrderedFailoverCoordinator
 
 
-ModelGroupProviderRecorder = Callable[[str, str], Any]
+@dataclass(frozen=True, slots=True, eq=False)
+class _ModelGroupProviderCandidate:
+    """Stable runtime identity for one model-group routing candidate."""
+
+    provider_name: str
+    credential_uuid: str | None = None
+
+    def __hash__(self) -> int:
+        if self.credential_uuid is None:
+            return hash(self.provider_name)
+        return hash((self.provider_name, self.credential_uuid))
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, str):
+            return self.credential_uuid is None and self.provider_name == other
+        if not isinstance(other, _ModelGroupProviderCandidate):
+            return NotImplemented
+        return (
+            self.provider_name,
+            self.credential_uuid,
+        ) == (
+            other.provider_name,
+            other.credential_uuid,
+        )
+
+
+ModelGroupProviderRecorder = Callable[[str, _ModelGroupProviderCandidate], Any]
+ModelGroupCandidateCooldownClearer = Callable[[_ModelGroupProviderCandidate], None]
 
 
 class ModelGroupConfigurationUnavailable(RuntimeError):
@@ -63,43 +91,55 @@ class ModelGroupConfigurationUnavailable(RuntimeError):
 class ModelGroupProviderRing:
     """Process-local ordered provider selection for one model group."""
 
-    def __init__(self, group_name: str, providers: list[str], current: str) -> None:
+    def __init__(
+        self,
+        group_name: str,
+        providers: list[_ModelGroupProviderCandidate],
+        current: _ModelGroupProviderCandidate,
+    ) -> None:
         self.group_name = group_name
         self._ring = OrderedFailoverCoordinator(providers, current)
         self._record_current: ModelGroupProviderRecorder | None = None
+        self._clear_candidate_cooldown: ModelGroupCandidateCooldownClearer | None = None
 
     @property
-    def current(self) -> str:
+    def current(self) -> _ModelGroupProviderCandidate:
         return self._ring.current
 
     @property
-    def candidates(self) -> tuple[str, ...]:
+    def candidates(self) -> tuple[_ModelGroupProviderCandidate, ...]:
         return self._ring.candidates
 
-    def observe(self) -> tuple[str, int]:
+    def observe(self) -> tuple[_ModelGroupProviderCandidate, int]:
         return self._ring.observe()
 
-    async def await_attempt(self) -> tuple[tuple[str, int], bool, bool]:
+    async def await_attempt(
+        self,
+    ) -> tuple[tuple[_ModelGroupProviderCandidate, int], bool, bool]:
         """Wait for active failover before observing one provider attempt."""
         return await self._ring.await_observation()
 
-    def available(self) -> tuple[str, ...]:
+    def available(self) -> tuple[_ModelGroupProviderCandidate, ...]:
         return self._ring.available()
 
-    def status_snapshot(self) -> tuple[tuple[str, str], ...]:
+    def status_snapshot(
+        self,
+    ) -> tuple[tuple[_ModelGroupProviderCandidate, str], ...]:
         return self._ring.status_snapshot()
 
-    def mark_failed(self, provider: str) -> None:
-        self._ring.mark_failed(provider)
+    def mark_failed(self, provider: _ModelGroupProviderCandidate | str) -> None:
+        self._ring.mark_failed(self._canonical_candidate(provider))
 
-    def next_available(self, failed: str) -> str | None:
-        return self._ring.next_available_after(failed)
+    def next_available(
+        self, failed: _ModelGroupProviderCandidate | str
+    ) -> _ModelGroupProviderCandidate | None:
+        return self._ring.next_available_after(self._canonical_candidate(failed))
 
-    async def claim(self, observed: str) -> tuple[bool, bool]:
+    async def claim(self, observed: _ModelGroupProviderCandidate) -> tuple[bool, bool]:
         return await self._ring.claim_with_waited(observed)
 
     async def claim_observation(
-        self, observation: tuple[str, int]
+        self, observation: tuple[_ModelGroupProviderCandidate, int]
     ) -> tuple[bool, bool]:
         return await self._ring.claim_observation_with_waited(observation)
 
@@ -112,14 +152,29 @@ class ModelGroupProviderRing:
     def bind_recorder(self, recorder: ModelGroupProviderRecorder | None) -> None:
         self._record_current = recorder
 
-    async def select(self, provider: str) -> None:
-        if provider not in self.candidates:
+    def bind_candidate_cooldown_clearer(
+        self, clearer: ModelGroupCandidateCooldownClearer | None
+    ) -> None:
+        """Bind the config-owned global credential cooldown hook."""
+        self._clear_candidate_cooldown = clearer
+
+    def _canonical_candidate(
+        self, provider: _ModelGroupProviderCandidate | str
+    ) -> _ModelGroupProviderCandidate:
+        candidate = next((item for item in self.candidates if item == provider), None)
+        if candidate is None:
             raise ValueError("provider must be a member of the model group")
+        return candidate
+
+    async def select(self, provider: _ModelGroupProviderCandidate | str) -> None:
+        provider = self._canonical_candidate(provider)
         if self._record_current is not None and provider != self.current:
             result = self._record_current(self.group_name, provider)
             if hasattr(result, "__await__"):
                 await result
         self._ring.clear_cooldown(provider)
+        if self._clear_candidate_cooldown is not None:
+            self._clear_candidate_cooldown(provider)
         self._ring.set_current(provider)
 
 
@@ -134,6 +189,57 @@ def _validate_provider_credential_uuid(value: Any, *, field: str) -> str:
     if str(parsed) != value:
         raise ValueError(f"{field} must be a canonical UUID string")
     return value
+
+
+def _model_group_provider_candidates(
+    value: Any,
+    *,
+    field: str,
+) -> list[_ModelGroupProviderCandidate]:
+    """Validate and normalize one ordered model-group candidate list."""
+    if not isinstance(value, list):
+        raise ValueError(f"config: {field} must be a list")
+    candidates: list[_ModelGroupProviderCandidate] = []
+    for index, item in enumerate(value):
+        item_field = f"{field}[{index}]"
+        if isinstance(item, str):
+            if not item or item != item.strip():
+                raise ValueError(
+                    f"config: {field} entries must be non-empty provider names"
+                )
+            candidates.append(_ModelGroupProviderCandidate(item))
+            continue
+        if not isinstance(item, dict) or set(item) != {
+            "provider",
+            "credential_uuid",
+        }:
+            raise ValueError(
+                f"config: {item_field} must be a provider name or "
+                "provider/credential_uuid object"
+            )
+        provider_name = item.get("provider")
+        if (
+            not isinstance(provider_name, str)
+            or not provider_name
+            or provider_name != provider_name.strip()
+        ):
+            raise ValueError(f"config: {item_field}.provider must be non-empty")
+        credential_uuid = _validate_provider_credential_uuid(
+            item.get("credential_uuid"),
+            field=f"config: {item_field}.credential_uuid",
+        )
+        candidates.append(_ModelGroupProviderCandidate(provider_name, credential_uuid))
+    return candidates
+
+
+def _model_group_candidate_raw(candidate: _ModelGroupProviderCandidate) -> Any:
+    """Serialize one normalized model-group candidate without credentials."""
+    if candidate.credential_uuid is None:
+        return candidate.provider_name
+    return {
+        "provider": candidate.provider_name,
+        "credential_uuid": candidate.credential_uuid,
+    }
 
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -263,18 +369,18 @@ def resolve_provider_api_type(
 
 def model_group_provider_names(value: Any, *, field: str) -> list[str]:
     """Validate and return one model group's ordered provider names."""
-    if not isinstance(value, list) or not value:
-        raise ValueError(f"config: {field} must be a non-empty list")
-    if any(
-        not isinstance(item, str) or not item or item != item.strip() for item in value
-    ):
-        raise ValueError(f"config: {field} entries must be non-empty provider names")
-    return cast(list[str], list(value))
+    return [
+        candidate.provider_name
+        for candidate in _model_group_provider_candidates(value, field=field)
+    ]
 
 
 def active_model_group_provider(value: Any, *, field: str) -> str:
     """Return the active provider from a model group's ordered provider list."""
-    return model_group_provider_names(value, field=field)[0]
+    names = model_group_provider_names(value, field=field)
+    if not names:
+        raise ValueError(f"config: {field} must contain an active provider")
+    return names[0]
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -657,10 +763,13 @@ def resolve_model_tool_profile_names(
     for group_name, group in raw_model_groups.items():
         if not isinstance(group, dict) or group.get("type") != "llm":
             continue
-        provider_name = active_model_group_provider(
+        candidates = _model_group_provider_candidates(
             group.get("provider"),
             field=f"model_groups.{group_name}.provider",
         )
+        if not candidates:
+            continue
+        provider_name = candidates[0].provider_name
         provider_config = raw_providers.get(provider_name)
         if not isinstance(provider_config, dict):
             continue
@@ -975,6 +1084,9 @@ class GatewayConfig:
         self._expanded_raw_models = self._expand_model_groups(
             raw.get("model_groups", {})
         )
+        self.model_group_candidates: dict[
+            str, tuple[_ModelGroupProviderCandidate, ...]
+        ] = {}
         self.model_group_provider_names: dict[str, tuple[str, ...]] = {}
         self.model_group_names_by_model: dict[str, str] = {}
         self.model_group_rings: dict[str, ModelGroupProviderRing] = {}
@@ -993,8 +1105,8 @@ class GatewayConfig:
             ring = self.model_group_rings.get(group_name)
             if ring is None or model not in self.models:
                 continue
-            for provider_name in ring.candidates:
-                self._model_profile_for_candidate(model, provider_name)
+            for candidate in ring.candidates:
+                self._model_profile_for_candidate(model, candidate.provider_name)
         self.tool_profile_documents = normalize_tool_profile_documents(
             raw.get("tool_profiles")
         )
@@ -1122,6 +1234,7 @@ class GatewayConfig:
                 provider.name = "deepseek"
         for provider in self.providers.values():
             self.token_values.update(provider.credential_values)
+        self._bind_model_group_candidate_cooldown_clearers()
         self.web_search_candidates = build_search_provider_candidates(
             self.web_search.providers,
             self.providers,
@@ -1191,6 +1304,10 @@ class GatewayConfig:
     @staticmethod
     def _validate_provider_credentials(name: str, cfg: dict[str, Any]) -> None:
         """Validate canonical credentials for enabled and disabled rows."""
+        if not isinstance(cfg.get("auto_rotate_credentials"), bool):
+            raise ValueError(
+                f"config: provider '{name}' auto_rotate_credentials must be a boolean"
+            )
         if "api_key" in cfg:
             raise ValueError(
                 f"config: provider '{name}' api_key is unsupported; use api_keys"
@@ -1375,7 +1492,7 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: invalid model group entry for '{group_name}'"
                 )
-            provider_name = active_model_group_provider(
+            candidates = _model_group_provider_candidates(
                 group_value.get("provider"),
                 field=f"model_groups.{group_name}.provider",
             )
@@ -1389,6 +1506,9 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: model group '{group_name}' models must be an object"
                 )
+            if not candidates:
+                continue
+            provider_name = candidates[0].provider_name
 
             for model_name, model_value in group_models.items():
                 if model_name in expanded:
@@ -1410,38 +1530,100 @@ class GatewayConfig:
         for group_name, group_value in raw_model_groups.items():
             if not isinstance(group_value, dict) or group_value.get("type") != "llm":
                 continue
-            names = model_group_provider_names(
+            candidates = _model_group_provider_candidates(
                 group_value.get("provider"),
                 field=f"model_groups.{group_name}.provider",
             )
-            if len(set(names)) != len(names):
+            self.model_group_candidates[group_name] = tuple(candidates)
+            if len(set(candidates)) != len(candidates):
                 raise ValueError(
-                    f"config: model group '{group_name}' provider names must be unique"
+                    f"config: model group '{group_name}' candidates must be unique"
                 )
+            self._validate_model_group_candidates(group_name, candidates)
             configured_api_types = {
-                resolve_provider_api_type(name, self._all_raw_providers[name])
-                for name in names
-                if name in self._all_raw_providers
+                resolve_provider_api_type(
+                    candidate.provider_name,
+                    self._all_raw_providers[candidate.provider_name],
+                )
+                for candidate in candidates
+                if candidate.provider_name in self._all_raw_providers
             }
             if len(configured_api_types) > 1:
                 raise ValueError(
                     f"config: model group '{group_name}' providers must use the same api_type"
                 )
-            enabled = [name for name in names if name in self._raw_providers]
+            enabled = [
+                candidate
+                for candidate in candidates
+                if candidate.provider_name in self._raw_providers
+            ]
             if enabled:
                 ring = ModelGroupProviderRing(group_name, enabled, enabled[0])
                 self.model_group_rings[group_name] = ring
-                self.model_group_provider_names[group_name] = tuple(names)
+                self.model_group_provider_names[group_name] = tuple(
+                    candidate.provider_name for candidate in candidates
+                )
                 group_models = group_value.get("models", {})
                 if isinstance(group_models, dict):
                     for model_name in group_models:
-                        self._expanded_raw_models[model_name]["provider"] = enabled[0]
+                        self._expanded_raw_models[model_name]["provider"] = enabled[
+                            0
+                        ].provider_name
             else:
-                self.model_group_provider_names[group_name] = tuple(names)
+                self.model_group_provider_names[group_name] = tuple(
+                    candidate.provider_name for candidate in candidates
+                )
             group_models = group_value.get("models", {})
             if isinstance(group_models, dict):
                 for model_name in group_models:
                     self.model_group_names_by_model[model_name] = group_name
+
+    def _validate_model_group_candidates(
+        self,
+        group_name: str,
+        candidates: list[_ModelGroupProviderCandidate],
+    ) -> None:
+        """Validate Provider mode and UUID binding for one model group."""
+        for candidate in candidates:
+            provider_cfg = self._all_raw_providers.get(candidate.provider_name)
+            if provider_cfg is None:
+                if candidate.credential_uuid is not None:
+                    raise ValueError(
+                        f"config: model group '{group_name}' fixed credential "
+                        f"references unknown provider '{candidate.provider_name}'"
+                    )
+                continue
+            auto_rotate = provider_cfg["auto_rotate_credentials"]
+            if candidate.credential_uuid is None:
+                if auto_rotate is not True:
+                    raise ValueError(
+                        f"config: model group '{group_name}' provider-only candidate "
+                        f"'{candidate.provider_name}' requires "
+                        "auto_rotate_credentials true"
+                    )
+                continue
+            if auto_rotate is not False:
+                raise ValueError(
+                    f"config: model group '{group_name}' fixed credential candidate "
+                    f"'{candidate.provider_name}' requires "
+                    "auto_rotate_credentials false"
+                )
+            configured_uuids = {
+                item.get("uuid")
+                for item in provider_cfg.get("api_keys", [])
+                if isinstance(item, dict)
+            }
+            if candidate.credential_uuid not in configured_uuids:
+                raise ValueError(
+                    f"config: model group '{group_name}' credential UUID must belong "
+                    f"to provider '{candidate.provider_name}'"
+                )
+
+    def _bind_model_group_candidate_cooldown_clearers(self) -> None:
+        for ring in self.model_group_rings.values():
+            ring.bind_candidate_cooldown_clearer(
+                self._clear_model_group_candidate_credential_cooldown
+            )
 
     @classmethod
     def _parse_models(
@@ -1508,8 +1690,44 @@ class GatewayConfig:
             )
         statuses = dict(ring.status_snapshot())
         return tuple(
-            (name, statuses.get(name, "disabled"))
-            for name in self.model_group_provider_names.get(group_name, ())
+            (
+                candidate.provider_name,
+                statuses.get(candidate, "disabled"),
+            )
+            for candidate in self.model_group_candidates.get(group_name, ())
+        )
+
+    def _clear_model_group_candidate_credential_cooldown(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> None:
+        if candidate.credential_uuid is None:
+            return
+        provider = self.providers.get(candidate.provider_name)
+        if provider is not None:
+            provider.clear_credential_uuid_cooldown(candidate.credential_uuid)
+
+    def _model_group_candidate_available(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> bool:
+        provider = self.providers.get(candidate.provider_name)
+        if provider is None:
+            return False
+        return (
+            candidate.credential_uuid is None
+            or provider.credential_uuid_is_available(candidate.credential_uuid)
+        )
+
+    def available_model_group_candidates(
+        self, group_name: str
+    ) -> tuple[_ModelGroupProviderCandidate, ...]:
+        """Return group candidates eligible in both routing and credential state."""
+        ring = self.model_group_rings.get(group_name)
+        if ring is None:
+            return ()
+        return tuple(
+            candidate
+            for candidate in ring.available()
+            if self._model_group_candidate_available(candidate)
         )
 
     def _model_profile_for_candidate(
@@ -1566,29 +1784,32 @@ class GatewayConfig:
                 "no enabled provider can issue an upstream request"
             )
         provider_name = self.models[model]
+        selected_candidate: _ModelGroupProviderCandidate | None = None
         if ring is not None:
-            available = ring.available()
+            assert group_name is not None
+            available = self.available_model_group_candidates(group_name)
             if not available:
                 raise ModelGroupConfigurationUnavailable(
                     f"Model group '{group_name}' configuration unavailable: "
                     "all enabled providers are cooling"
                 )
-            provider_name = ring.current
+            selected_candidate = ring.current
             # A disabled/cooling candidate must never become a fresh route.
-            if provider_name not in self.providers or provider_name not in available:
-                provider_name = next(
+            if selected_candidate not in available:
+                selected_candidate = next(
                     (
                         candidate
                         for candidate in available
-                        if candidate in self.providers
+                        if candidate.provider_name in self.providers
                     ),
                     None,
                 )
-                if provider_name is None:
+                if selected_candidate is None:
                     raise ModelGroupConfigurationUnavailable(
                         f"Model group '{group_name}' configuration unavailable: "
                         "no enabled provider can issue an upstream request"
                     )
+            provider_name = selected_candidate.provider_name
         provider_type = self.provider_types[provider_name]
         shim_name = self.provider_shim_names.get(provider_name)
         upstream_model = self.model_upstream_names.get(model)
@@ -1642,4 +1863,10 @@ class GatewayConfig:
                 self_hosted_ready=False,
             ),
         )
-        return route, self.providers[provider_name]
+        provider_info = self.providers[provider_name]
+        if selected_candidate is not None:
+            provider_info = provider_info.for_model_group_candidate(
+                selected_candidate,
+                credential_uuid=selected_candidate.credential_uuid,
+            )
+        return route, provider_info

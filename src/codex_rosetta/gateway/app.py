@@ -35,6 +35,8 @@ from .auth import (
 from .config import (
     GatewayConfig,
     ModelGroupConfigurationUnavailable,
+    _model_group_candidate_raw,
+    _model_group_provider_candidates,
     load_config_raw,
     resolve_codex_home,
     write_config,
@@ -752,7 +754,7 @@ async def _proxy_handler(  # noqa: C901
 
     try:
         while True:
-            observation: tuple[str, int] | None = None
+            observation: tuple[Any, int] | None = None
             if ring is not None:
                 if failover_leader:
                     observation = ring.observe()
@@ -899,6 +901,7 @@ async def _proxy_handler(  # noqa: C901
             )
             if provider_failed:
                 assert ring is not None
+                assert group_name is not None
                 assert observation is not None
                 if not failover_leader:
                     failover_leader, _waited = await ring.claim_observation(observation)
@@ -911,11 +914,21 @@ async def _proxy_handler(  # noqa: C901
                         state_scope = None
                         continue
 
-                failed_provider = route.provider_name
+                failed_provider = getattr(
+                    provider_info, "model_group_candidate_identity", None
+                )
+                configured_candidates = getattr(ring, "candidates", ring.available())
+                if failed_provider not in configured_candidates:
+                    failed_provider = route.provider_name
+                eligible_candidates = (
+                    config.available_model_group_candidates(group_name)
+                    if hasattr(config, "available_model_group_candidates")
+                    else ring.available()
+                )
                 next_provider = next(
                     (
                         candidate
-                        for candidate in ring.available()
+                        for candidate in eligible_candidates
                         if candidate != failed_provider
                     ),
                     None,
@@ -1281,7 +1294,7 @@ def _bind_provider_current_recorders(  # noqa: C901
                     "Provider credential state could not be persisted"
                 ) from None
 
-    async def record_model_group(group_name: str, provider_name: str) -> None:
+    async def record_model_group(group_name: str, provider_name: Any) -> None:
         if config_path is None:
             raise RuntimeError("Model group provider state cannot be persisted")
         async with write_lock:
@@ -1293,12 +1306,19 @@ def _bind_provider_current_recorders(  # noqa: C901
                 group = groups.get(group_name)
                 if not isinstance(group, dict):
                     raise ValueError
-                names = group.get("provider")
-                if not isinstance(names, list) or provider_name not in names:
+                candidates = _model_group_provider_candidates(
+                    group.get("provider"),
+                    field=f"model_groups.{group_name}.provider",
+                )
+                if provider_name not in candidates:
                     raise ValueError
                 group["provider"] = [
-                    provider_name,
-                    *[item for item in names if item != provider_name],
+                    _model_group_candidate_raw(provider_name),
+                    *[
+                        _model_group_candidate_raw(item)
+                        for item in candidates
+                        if item != provider_name
+                    ],
                 ]
                 write_config(config_path, document)
             except asyncio.CancelledError:

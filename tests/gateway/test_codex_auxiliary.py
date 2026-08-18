@@ -161,6 +161,7 @@ def _make_config(
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": [upstream_base_url],
             "current_base_url": upstream_base_url,
         }
@@ -180,6 +181,7 @@ def _make_config(
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": ["https://search-provider.example/v1"],
             "current_base_url": "https://search-provider.example/v1",
             "proxy": "http://search-proxy.example:8080",
@@ -221,6 +223,7 @@ def _make_config(
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": ["https://secondary-upstream.example/v1"],
             "current_base_url": "https://secondary-upstream.example/v1",
         }

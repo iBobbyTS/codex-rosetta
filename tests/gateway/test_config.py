@@ -30,6 +30,7 @@ from codex_rosetta.gateway.config import (
     default_tool_profile_for_provider,
     discover_config,
     load_config,
+    load_config_raw,
     resolve_codex_home,
 )
 from codex_rosetta.gateway.search_provider_candidates import (
@@ -51,6 +52,19 @@ def test_default_config_search_only_uses_xdg_directory() -> None:
     assert DEFAULT_CONFIG_DIR == expected
     assert CONFIG_DIRS_TO_TRY == [expected]
     assert config_path_for_dir(expected) == os.path.join(expected, "config.jsonc")
+
+
+def test_example_config_parses_with_explicit_provider_rotation_mode() -> None:
+    path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "examples", "gateway", "config.jsonc"
+    )
+    raw = load_config_raw(path)
+
+    assert len(raw["providers"]) == 4
+    assert all(
+        provider.get("auto_rotate_credentials") is True
+        for provider in raw["providers"].values()
+    )
 
 
 def test_legacy_single_api_key_field_is_rejected() -> None:
@@ -90,6 +104,18 @@ def test_provider_credential_uuids_must_be_unique_within_provider() -> None:
     )
 
     with pytest.raises(ValueError, match="api_keys UUIDs must be unique"):
+        GatewayConfig(raw)
+
+
+@pytest.mark.parametrize("value", [None, 1, "true", [], {}])
+def test_provider_auto_rotate_credentials_is_required_boolean(value) -> None:
+    raw = _minimal_raw()
+    if value is None:
+        raw["providers"]["test"].pop("auto_rotate_credentials")
+    else:
+        raw["providers"]["test"]["auto_rotate_credentials"] = value
+
+    with pytest.raises(ValueError, match="auto_rotate_credentials must be a boolean"):
         GatewayConfig(raw)
 
 
@@ -214,6 +240,7 @@ def test_unified_responses_protocol_resolves_direct_profile(
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": [base_url],
                 "current_base_url": base_url,
                 "provider": provider,
@@ -326,6 +353,7 @@ def _minimal_raw(**server_overrides) -> dict:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.com"],
                 "current_base_url": "https://api.example.com",
                 "provider": "custom",
@@ -863,6 +891,7 @@ class TestWebSearchConfig:
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": ["https://api.deepseek.com"],
             "current_base_url": "https://api.deepseek.com",
             "provider": "deepseek",
@@ -1122,6 +1151,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.deepseek.com"],
                     "current_base_url": "https://api.deepseek.com",
                     "provider": "deepseek",
@@ -1154,6 +1184,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.minimaxi.com/anthropic"],
                     "current_base_url": "https://api.minimaxi.com/anthropic",
                     "provider": "minimax",
@@ -1190,6 +1221,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
                     "provider": "custom",
@@ -1230,6 +1262,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.deepseek.com/"],
                     "current_base_url": "https://api.deepseek.com/",
                     "api_type": "chat",
@@ -1262,6 +1295,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://relay.example/v1"],
                     "current_base_url": "https://relay.example/v1",
                     "api_type": "chat",
@@ -1294,6 +1328,7 @@ class TestProviderApiTypeResolution:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.example.com"],
                     "current_base_url": "https://api.example.com",
                     "provider": "qwen",
@@ -1356,6 +1391,7 @@ class TestProviderApiTypeResolution:
                 {"uuid": _PRIMARY_CREDENTIAL_UUID, "id": "primary", "key": "sk-test"}
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": ["https://provider.example"],
             "current_base_url": "https://provider.example",
             "provider": "custom",
@@ -1370,6 +1406,7 @@ class TestProviderApiTypeResolution:
                 {"uuid": _PRIMARY_CREDENTIAL_UUID, "id": "primary", "key": "sk-test"}
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
             "base_urls": ["https://api.openai.com/v1"],
             "current_base_url": "https://api.openai.com/v1",
             "provider": "openai",
@@ -1440,6 +1477,128 @@ class TestModelGroups:
         )
         assert ring.next_available("test") == "secondary"
 
+    def test_provider_statuses_preserve_disabled_configured_candidates(self):
+        raw = _minimal_raw()
+        raw["providers"]["disabled"] = {
+            **raw["providers"]["test"],
+            "enabled": False,
+        }
+        raw["model_groups"]["test-llm"]["provider"] = ["test", "disabled"]
+
+        cfg = GatewayConfig(raw)
+
+        assert cfg.model_group_provider_statuses("test-llm") == (
+            ("test", "available"),
+            ("disabled", "disabled"),
+        )
+
+    def test_fixed_credential_candidates_round_trip_and_do_not_select_siblings(self):
+        raw = _minimal_raw()
+        secondary_uuid = "00000000-0000-4000-8000-000000000002"
+        raw["providers"]["test"].update(
+            auto_rotate_credentials=False,
+            api_keys=[
+                *raw["providers"]["test"]["api_keys"],
+                {
+                    "uuid": secondary_uuid,
+                    "id": "renamable-secondary",
+                    "key": "sk-secondary",
+                },
+            ],
+        )
+        first_candidate = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        }
+        second_candidate = {
+            "provider": "test",
+            "credential_uuid": secondary_uuid,
+        }
+        raw["model_groups"]["test-llm"]["provider"] = [
+            first_candidate,
+            second_candidate,
+        ]
+
+        cfg = GatewayConfig(raw)
+        ring = cfg.model_group_rings["test-llm"]
+        _route, first_view = cfg.resolve("openai_responses", "gpt-test")
+        asyncio.run(ring.select(ring.candidates[1]))
+        _route, second_view = cfg.resolve("openai_responses", "gpt-test")
+
+        assert cfg.model_group_provider_names["test-llm"] == ("test", "test")
+        assert first_view.auth_headers()["Authorization"] == "Bearer sk-test"
+        assert second_view.auth_headers()["Authorization"] == "Bearer sk-secondary"
+        assert cfg.providers["test"].current_credential_id == "primary"
+        assert [
+            gateway_config._model_group_candidate_raw(item) for item in ring.candidates
+        ] == [first_candidate, second_candidate]
+
+    @pytest.mark.parametrize(
+        ("auto_rotate", "candidate", "message"),
+        [
+            (
+                True,
+                {
+                    "provider": "test",
+                    "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+                },
+                "requires auto_rotate_credentials false",
+            ),
+            (False, "test", "requires auto_rotate_credentials true"),
+            (
+                False,
+                {
+                    "provider": "test",
+                    "credential_uuid": "00000000-0000-4000-8000-000000000099",
+                },
+                "credential UUID must belong",
+            ),
+        ],
+    )
+    def test_candidate_shape_must_match_provider_mode(
+        self, auto_rotate, candidate, message
+    ):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["auto_rotate_credentials"] = auto_rotate
+        raw["model_groups"]["test-llm"]["provider"] = [candidate]
+
+        with pytest.raises(ValueError, match=message):
+            GatewayConfig(raw)
+
+    def test_fixed_credential_cooldown_is_global_across_groups_and_select_clears(self):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["auto_rotate_credentials"] = False
+        pair = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        }
+        raw["model_groups"]["test-llm"]["provider"] = [pair]
+        raw["model_groups"]["other-llm"] = {
+            "provider": [pair],
+            "type": "llm",
+            "models": {"gpt-other": {"upstream_model": "gpt-5.6-sol"}},
+        }
+        cfg = GatewayConfig(raw)
+        _route, view = cfg.resolve("openai_responses", "gpt-test")
+        view.mark_credential_failed(view.current_credential_id)
+
+        with pytest.raises(ModelGroupConfigurationUnavailable, match="cooling"):
+            cfg.resolve("openai_responses", "gpt-other")
+
+        ring = cfg.model_group_rings["other-llm"]
+        asyncio.run(ring.select(ring.current))
+        _route, restored = cfg.resolve("openai_responses", "gpt-other")
+        assert restored.auth_headers()["Authorization"] == "Bearer sk-test"
+
+    def test_empty_model_group_is_loadable_and_configuration_unavailable(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["provider"] = []
+        cfg = GatewayConfig(raw)
+
+        assert cfg.model_group_provider_names["test-llm"] == ()
+        with pytest.raises(ModelGroupConfigurationUnavailable, match="no enabled"):
+            cfg.resolve("openai_responses", "gpt-test")
+
     def test_provider_list_rejects_duplicate_or_mixed_api_types(self):
         raw = _minimal_raw()
         raw["providers"]["secondary"] = {
@@ -1448,7 +1607,7 @@ class TestModelGroups:
             "current_base_url": "https://secondary.example.com",
         }
         raw["model_groups"]["test-llm"]["provider"] = ["test", "test"]
-        with pytest.raises(ValueError, match="provider names must be unique"):
+        with pytest.raises(ValueError, match="candidates must be unique"):
             GatewayConfig(raw)
 
         raw["model_groups"]["test-llm"]["provider"] = ["test", "secondary"]
@@ -1568,12 +1727,12 @@ class TestModelGroups:
     @pytest.mark.parametrize(
         ("provider", "message"),
         [
-            ("test", "must be a non-empty list"),
-            ([], "must be a non-empty list"),
+            ("test", "must be a list"),
+            (None, "must be a list"),
             ([""], "entries must be non-empty provider names"),
             ([" test"], "entries must be non-empty provider names"),
             (["test "], "entries must be non-empty provider names"),
-            ([1], "entries must be non-empty provider names"),
+            ([1], "must be a provider name or"),
         ],
     )
     def test_provider_list_rejects_invalid_values(self, provider, message):
@@ -1867,6 +2026,7 @@ def test_cli_add_model_group_then_grouped_model(tmp_path):
                             }
                         ],
                         "current_api_key": "primary",
+                        "auto_rotate_credentials": True,
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "api_type": "chat",
@@ -1920,6 +2080,7 @@ def test_cli_add_provider_persists_explicit_protocol(tmp_path):
     assert saved["providers"]["relay"] == {
         "api_keys": [{"id": "primary", "key": "sk-test"}],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://relay.example/v1"],
         "current_base_url": "https://relay.example/v1",
         "api_type": "responses",
@@ -1942,6 +2103,7 @@ def test_cli_add_custom_responses_model_group_selects_injection_profile(tmp_path
                             }
                         ],
                         "current_api_key": "primary",
+                        "auto_rotate_credentials": True,
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",
@@ -1986,6 +2148,7 @@ def test_cli_add_custom_responses_group_selects_injection_profile(tmp_path):
                             }
                         ],
                         "current_api_key": "primary",
+                        "auto_rotate_credentials": True,
                         "base_urls": ["https://api.example.test"],
                         "current_base_url": "https://api.example.test",
                         "provider": "custom",

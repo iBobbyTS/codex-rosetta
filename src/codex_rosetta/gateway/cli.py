@@ -156,6 +156,7 @@ def _create_initial_config(config_path: str) -> None:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",
                 "api_type": "responses",
@@ -171,6 +172,7 @@ def _create_initial_config(config_path: str) -> None:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://opencode.ai/zen/go/v1"],
                 "current_base_url": "https://opencode.ai/zen/go/v1",
                 "api_type": "chat",
@@ -185,6 +187,7 @@ def _create_initial_config(config_path: str) -> None:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://open.bigmodel.cn/api/paas/v4"],
                 "current_base_url": "https://open.bigmodel.cn/api/paas/v4",
                 "api_type": "chat",
@@ -199,6 +202,7 @@ def _create_initial_config(config_path: str) -> None:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.deepseek.com"],
                 "current_base_url": "https://api.deepseek.com",
                 "api_type": "chat",
@@ -291,6 +295,7 @@ def _cmd_add_provider(args: argparse.Namespace) -> None:
     provider_entry: dict[str, Any] = {
         "api_keys": [{"uuid": str(uuid.uuid4()), "id": "primary", "key": api_key}],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": [base_url],
         "current_base_url": base_url,
         "api_type": args.api_type,

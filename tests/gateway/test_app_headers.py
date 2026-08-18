@@ -38,6 +38,7 @@ def _gateway_config(*, admin_cors_origins: list[str] | None = None) -> dict[str,
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",
                 "api_type": "chat",
@@ -852,6 +853,51 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
     assert calls == 2
     assert config.calls == ["first", "second"]
     assert config.ring.current == "second"
+
+
+def test_proxy_handler_rotates_fixed_credential_candidate_without_provider_selection(
+    monkeypatch,
+) -> None:
+    first_uuid = "0488ffa0-e7b7-59ed-b1d0-6d43275607f5"
+    second_uuid = "00000000-0000-4000-8000-000000000002"
+    raw = _gateway_config()
+    raw["providers"]["test-provider"].update(
+        auto_rotate_credentials=False,
+        api_keys=[
+            *raw["providers"]["test-provider"]["api_keys"],
+            {
+                "uuid": second_uuid,
+                "id": "renamed-second",
+                "key": "sk-second",
+            },
+        ],
+    )
+    raw["model_groups"]["test"]["provider"] = [
+        {"provider": "test-provider", "credential_uuid": first_uuid},
+        {"provider": "test-provider", "credential_uuid": second_uuid},
+    ]
+    config = GatewayConfig(raw)
+    attempts: list[str] = []
+
+    async def fake_handle(_route, provider, *_args: Any, **_kwargs: Any):
+        attempts.append(provider.current_credential_id)
+        if provider.current_credential_id == "primary":
+            return JSONResponse({"error": "failed"}, status_code=503), {
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "upstream_response",
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+
+    assert response.status_code == 200
+    assert attempts == ["primary", "renamed-second"]
+    assert config.providers["test-provider"].current_credential_id == "primary"
+    assert config.model_group_rings["test"].current.credential_uuid == second_uuid
 
 
 def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
