@@ -7,6 +7,7 @@ import hashlib
 import os
 import secrets
 import shutil
+import signal
 import socket
 import subprocess
 from collections.abc import MutableMapping, Sequence
@@ -23,7 +24,7 @@ DEFAULT_WEB_RUN_HOST_PORT = 8766
 MAX_WEB_RUN_PORT_ATTEMPTS = 100
 WEB_RUN_STARTUP_TIMEOUT_SECONDS = 300.0
 DOCKER_DAEMON_TIMEOUT_SECONDS = 30
-DOCKER_COMPOSE_TIMEOUT_SECONDS = 600
+DOCKER_COMPOSE_TIMEOUT_SECONDS = 30
 DOCKER_COMPOSE_STOP_GRACE_SECONDS = 30
 WEB_RUN_HOST_PORT_ENV = "CODEX_ROSETTA_WEB_RUN_HOST_PORT"
 
@@ -106,6 +107,12 @@ class WebRunSidecarSupervisor:
                 environment=environment,
             )
             if result.returncode != 0:
+                if _is_compose_timeout(result):
+                    raise WebRunSidecarStartupError(
+                        "failed to start web-run sidecar: "
+                        f"Docker Compose startup timed out after "
+                        f"{DOCKER_COMPOSE_TIMEOUT_SECONDS} seconds"
+                    )
                 self._best_effort_down(environment)
                 if _is_port_conflict(result):
                     candidate += 1
@@ -208,20 +215,39 @@ class WebRunSidecarSupervisor:
             *arguments,
         ]
         try:
-            return subprocess.run(
+            process = subprocess.Popen(
                 command,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=DOCKER_COMPOSE_TIMEOUT_SECONDS,
-                check=False,
                 env=environment,
+                start_new_session=os.name == "posix",
             )
-        except subprocess.TimeoutExpired as exc:
+            try:
+                stdout, stderr = process.communicate(
+                    timeout=DOCKER_COMPOSE_TIMEOUT_SECONDS
+                )
+            except subprocess.TimeoutExpired:
+                _terminate_compose_process(process)
+                stdout, _stderr = process.communicate()
+                return subprocess.CompletedProcess(
+                    command,
+                    returncode=124,
+                    stdout=stdout,
+                    stderr=(
+                        "docker-compose command timed out after "
+                        f"{DOCKER_COMPOSE_TIMEOUT_SECONDS} seconds"
+                    ),
+                )
+            except BaseException:
+                _terminate_compose_process(process)
+                process.communicate()
+                raise
             return subprocess.CompletedProcess(
                 command,
-                returncode=124,
-                stdout=_decode_subprocess_output(exc.stdout),
-                stderr="docker-compose command timed out",
+                returncode=process.returncode,
+                stdout=stdout,
+                stderr=stderr,
             )
         except OSError as exc:
             return subprocess.CompletedProcess(
@@ -317,12 +343,20 @@ def _is_port_conflict(result: subprocess.CompletedProcess[str]) -> bool:
     return any(marker in output for marker in _PORT_CONFLICT_MARKERS)
 
 
-def _decode_subprocess_output(value: bytes | str | None) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value
+def _is_compose_timeout(result: subprocess.CompletedProcess[str]) -> bool:
+    return result.returncode == 124 and "docker-compose command timed out" in (
+        result.stderr or ""
+    )
+
+
+def _terminate_compose_process(process: subprocess.Popen[str]) -> None:
+    try:
+        if os.name == "posix":
+            os.killpg(process.pid, signal.SIGKILL)
+        else:
+            process.kill()
+    except ProcessLookupError:
+        pass
 
 
 __all__: Sequence[str] = (

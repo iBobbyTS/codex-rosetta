@@ -520,6 +520,21 @@ def _dispatch_command(
 _KNOWN_PROVIDERS = known_provider_types()
 
 
+def _start_web_run_sidecar(
+    config_path: str, *, enabled: bool
+) -> WebRunSidecarSupervisor | None:
+    if not enabled:
+        return None
+    sidecar = WebRunSidecarSupervisor(config_path)
+    try:
+        sidecar.start()
+    except WebRunSidecarStartupError as exc:
+        sidecar.stop()
+        logger.error("%s", exc)
+        raise SystemExit(1) from None
+    return sidecar
+
+
 def main() -> None:
     """Parse CLI arguments and either run a subcommand or start the server."""
     from .app import create_app
@@ -665,14 +680,8 @@ def main() -> None:
 
     _configure_local_mode_startup(parser, args, config_path, codex_home)
     setup_logging(log_level=args.log_level)
-    sidecar = WebRunSidecarSupervisor(config_path) if args.with_web_run else None
+    sidecar = _start_web_run_sidecar(config_path, enabled=args.with_web_run)
     try:
-        if sidecar is not None:
-            try:
-                sidecar.start()
-            except WebRunSidecarStartupError as exc:
-                parser.error(str(exc))
-
         runtime_config = load_config(config_path)
 
         # CLI --proxy overrides config-level server.proxy

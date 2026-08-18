@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -158,6 +160,82 @@ def test_supervisor_cleans_compose_project_when_health_never_becomes_ready(
     assert supervisor.endpoint is None
 
 
+def test_supervisor_reports_compose_startup_timeout_without_blocking_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = WebRunSidecarSupervisor(
+        str(tmp_path / "config.jsonc"),
+        compose_file=_compose_file(tmp_path),
+    )
+
+    monkeypatch.setattr(supervisor, "_check_prerequisites", lambda: None)
+    monkeypatch.setattr(
+        web_run_supervisor,
+        "_is_loopback_port_available",
+        lambda _port: True,
+    )
+    monkeypatch.setattr(
+        supervisor,
+        "_run_compose",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            [],
+            124,
+            "",
+            "docker-compose command timed out after 30 seconds",
+        ),
+    )
+
+    def unexpected_cleanup(_environment: dict[str, str]) -> None:
+        pytest.fail("timed-out startup must not perform another blocking Compose call")
+
+    monkeypatch.setattr(supervisor, "_best_effort_down", unexpected_cleanup)
+
+    with pytest.raises(
+        WebRunSidecarStartupError,
+        match="Docker Compose startup timed out after 30 seconds",
+    ):
+        supervisor.start()
+
+
+def test_run_compose_converts_timeout_to_bounded_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = WebRunSidecarSupervisor(
+        str(tmp_path / "config.jsonc"),
+        compose_file=_compose_file(tmp_path),
+    )
+
+    real_popen = subprocess.Popen
+
+    def spawn_process_with_child(*_args, **kwargs):
+        assert kwargs["start_new_session"] is True
+        return real_popen(
+            [
+                sys.executable,
+                "-c",
+                "import subprocess, sys, time; "
+                "print('partial build output', flush=True); "
+                "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                "time.sleep(60)",
+            ],
+            **kwargs,
+        )
+
+    monkeypatch.setattr(
+        web_run_supervisor.subprocess, "Popen", spawn_process_with_child
+    )
+    monkeypatch.setattr(web_run_supervisor, "DOCKER_COMPOSE_TIMEOUT_SECONDS", 0.1)
+
+    started_at = time.monotonic()
+    result = supervisor._run_compose("up", environment={})
+    elapsed = time.monotonic() - started_at
+
+    assert result.returncode == 124
+    assert result.stdout == "partial build output\n"
+    assert result.stderr == "docker-compose command timed out after 0.1 seconds"
+    assert elapsed < 2.0
+
+
 def test_managed_compose_resource_uses_dynamic_loopback_port() -> None:
     compose_file = web_run_supervisor._managed_compose_file()
     contents = compose_file.read_text(encoding="utf-8")
@@ -200,8 +278,8 @@ def test_web_run_container_uses_patchright_without_playwright_runtime() -> None:
     assert "_PDF_DOWNLOAD_TIMEOUT_SECONDS = 120.0" in app_source
 
 
-def test_supervisor_uses_extended_lifecycle_timeouts() -> None:
+def test_supervisor_uses_bounded_lifecycle_timeouts() -> None:
     assert web_run_supervisor.WEB_RUN_STARTUP_TIMEOUT_SECONDS == 300.0
     assert web_run_supervisor.DOCKER_DAEMON_TIMEOUT_SECONDS == 30
-    assert web_run_supervisor.DOCKER_COMPOSE_TIMEOUT_SECONDS == 600
+    assert web_run_supervisor.DOCKER_COMPOSE_TIMEOUT_SECONDS == 30
     assert web_run_supervisor.DOCKER_COMPOSE_STOP_GRACE_SECONDS == 30

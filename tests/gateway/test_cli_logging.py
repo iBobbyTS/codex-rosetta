@@ -354,3 +354,67 @@ def test_main_manages_web_run_sidecar_around_gateway_lifecycle(
         "run-gateway",
         "sidecar-stop",
     ]
+
+
+def test_main_logs_web_run_startup_failure_without_traceback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text("{}", encoding="utf-8")
+    codex_home = tmp_path / "codex-home"
+    events: list[str] = []
+    logged_errors: list[str] = []
+    config = SimpleNamespace(local_mode=False)
+
+    class FakeGatewayConfig:
+        @classmethod
+        def from_raw_with_env(cls, _raw):
+            return config
+
+    class FailingSupervisor:
+        def __init__(self, _config_path: str) -> None:
+            pass
+
+        def start(self) -> None:
+            raise cli.WebRunSidecarStartupError(
+                "failed to start web-run sidecar: Docker Compose startup timed out "
+                "after 30 seconds"
+            )
+
+        def stop(self) -> None:
+            events.append("sidecar-stop")
+
+    monkeypatch.setattr(
+        cli.sys,
+        "argv",
+        [
+            "codex-rosetta-gateway",
+            "--config",
+            str(tmp_path),
+            "--codex-home",
+            str(codex_home),
+            "--no-local-mode",
+            "--with-web-run",
+        ],
+    )
+    monkeypatch.setattr(cli, "WebRunSidecarSupervisor", FailingSupervisor)
+    monkeypatch.setattr(cli, "GatewayConfig", FakeGatewayConfig)
+    monkeypatch.setattr(cli, "setup_logging", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli.logger,
+        "error",
+        lambda message, *args: logged_errors.append(message % args),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main()
+
+    assert exc_info.value.code == 1
+    assert logged_errors == [
+        "failed to start web-run sidecar: Docker Compose startup timed out after "
+        "30 seconds"
+    ]
+    assert events == ["sidecar-stop"]
+    assert capsys.readouterr().err == ""
