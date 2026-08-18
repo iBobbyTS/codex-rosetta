@@ -250,14 +250,18 @@ code.copyable:hover { background: var(--bg-hover); }
 .provider-key-input input { flex:1; }
 .provider-key-input .key-btn { flex-shrink:0; }
 .modal-actions { display: flex; flex: 0 0 auto; justify-content: flex-end; gap: 8px; padding: 20px 24px 24px; }
+.suu-dropdown__menu--portal { min-width: 0; max-width: calc(100vw - 40px); }
+.suu-dropdown__menu--portal.suu-dropdown__menu--left,
+.suu-dropdown__menu--portal.suu-dropdown__menu--right {
+  left: var(--suu-dropdown-menu-left, auto);
+  right: var(--suu-dropdown-menu-right, auto);
+}
 .model-group-modal-shell { display:flex;align-items:flex-start;gap:12px;max-width:calc(100vw - 32px); }
 .model-group-dropdown-field { position:relative; }
 .model-group-dropdown-field .suu-dropdown { position:static; }
-.model-group-dropdown-field .suu-dropdown__menu { width:max-content;min-width:0;max-width:100%; }
+.model-group-dropdown-field .suu-dropdown__menu:not(.suu-dropdown__menu--portal) { width:max-content;min-width:0;max-width:100%; }
 .model-group-dropdown-field .suu-dropdown__option { white-space:normal;overflow-wrap:anywhere; }
-.model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu),
-.model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu) .modal-body { overflow:visible; }
-.model-group-modal:has(.model-group-provider-table .suu-dropdown__menu),
+.model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu) .modal-body,
 .model-group-modal:has(.model-group-provider-table .suu-dropdown__menu) .modal-body,
 .model-group-provider-table:has(.suu-dropdown__menu),
 .model-group-provider-table:has(.suu-dropdown__menu) .suu-sortable-table-wrap { overflow:visible; }
@@ -364,7 +368,7 @@ canvas { width: 100%; height: 160px; }
 .model-group-provider-select { display:block;width:100%;min-width:0;max-width:100%; }
 .model-group-provider-select .suu-dropdown__button { width:100%;min-width:0; }
 .model-group-provider-select .suu-dropdown__button > span:first-child { min-width:0;white-space:normal;overflow-wrap:anywhere;text-align:left; }
-.model-group-provider-select .suu-dropdown__menu { right:auto;left:0;width:100%;min-width:100%;max-width:100%; }
+.model-group-provider-select .suu-dropdown__menu:not(.suu-dropdown__menu--portal) { right:auto;left:0;width:100%;min-width:100%;max-width:100%; }
 .model-group-provider-select .suu-dropdown__option { white-space:normal;overflow-wrap:anywhere; }
 .model-group-provider-status { white-space:nowrap; }
 .model-group-provider-status span { margin-right:8px; }

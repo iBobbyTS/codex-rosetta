@@ -981,7 +981,7 @@ describe('ModelsPage', () => {
     expect(profileSelect?.closest('.model-group-dropdown-field')).toBeInTheDocument();
     expect(document.querySelectorAll('.model-group-dropdown-field')).toHaveLength(1);
     await fireEvent.click(profileSelect as HTMLButtonElement);
-    expect(profileSelect?.closest('.model-group-dropdown-field')?.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
+    expect(document.querySelector('.suu-dropdown__menu--portal.suu-dropdown__menu--left')).toBeInTheDocument();
   });
 
   it('writes only the model-group contract fields', async () => {
