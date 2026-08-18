@@ -226,25 +226,46 @@ def _claim_payload(
 def _metadata_from_claims(access_token: str, id_token: str) -> dict[str, str]:
     access, identity = _claim_payload(access_token, id_token)
     auth = access.get("https://api.openai.com/auth")
+    identity_auth = identity.get("https://api.openai.com/auth")
     if not isinstance(auth, dict):
-        auth = identity.get("https://api.openai.com/auth")
-    if not isinstance(auth, dict):
-        auth = {}
-    organizations = auth.get("organizations") or identity.get("organizations")
+        auth = identity_auth if isinstance(identity_auth, dict) else {}
+    if not isinstance(identity_auth, dict):
+        identity_auth = {}
+    organizations = auth.get("organizations") or identity_auth.get("organizations")
+    poid = _first_string(auth.get("poid"), identity_auth.get("poid"))
     workspace = ""
+    workspace_key = poid
     if isinstance(organizations, list) and organizations:
-        first = organizations[0]
+        first = next(
+            (
+                organization
+                for organization in organizations
+                if isinstance(organization, dict)
+                and poid
+                and organization.get("id") == poid
+            ),
+            organizations[0],
+        )
         if isinstance(first, dict):
             workspace = _first_string(
                 first.get("name"),
                 first.get("display_name"),
                 first.get("organization_name"),
+                first.get("title"),
             )
+            workspace_key = workspace_key or _first_string(first.get("id"))
         else:
             workspace = _first_string(first)
     email = _first_string(identity.get("email"), access.get("email"))
     name = _first_string(identity.get("name"), identity.get("preferred_username"))
-    account_id = _first_string(auth.get("account_id"), identity.get("account_id"))
+    account_id = _first_string(
+        auth.get("account_id"),
+        auth.get("chatgpt_account_id"),
+        identity.get("account_id"),
+        identity.get("chatgpt_account_id"),
+        identity_auth.get("account_id"),
+        identity_auth.get("chatgpt_account_id"),
+    )
     plan = _first_string(
         auth.get("chatgpt_plan_type"), identity.get("chatgpt_plan_type")
     )
@@ -254,6 +275,7 @@ def _metadata_from_claims(access_token: str, id_token: str) -> dict[str, str]:
         "workspace": workspace,
         "subscription_type": plan,
         "account_id": account_id,
+        "workspace_key": workspace_key,
     }
 
 
@@ -326,6 +348,13 @@ def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
             entitlement.get("subscription_plan"),
             account.get("plan_type"),
             account.get("planType"),
+        ),
+        "workspace_key": _first_string(
+            account.get("workspace_id"),
+            account.get("organization_id"),
+            account.get("team_id"),
+            selected.get("key"),
+            account.get("id"),
         ),
     }
 
@@ -472,8 +501,12 @@ async def chatgpt_callback(request: Any) -> Response:
             **{key: value for key, value in fetched.items() if value},
         }
         account_id = metadata.get("account_id", "") or metadata.get("email", "")
+        workspace_key = metadata.pop("workspace_key", "") or metadata.get(
+            "workspace", ""
+        )
         if not account_id:
             raise ValueError("无法识别 ChatGPT 账号身份")
+        identity = f"{account_id}:{workspace_key}" if workspace_key else account_id
         expires_at = _decode_jwt(tokens["access_token"]).get("exp")
         credentials = {**tokens}
         if isinstance(expires_at, (int, float)):
@@ -483,7 +516,7 @@ async def chatgpt_callback(request: Any) -> Response:
         await asyncio.to_thread(
             store.upsert,
             provider="chatgpt",
-            identity=account_id,
+            identity=identity,
             metadata=metadata,
             credentials=credentials,
         )

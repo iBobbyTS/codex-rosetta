@@ -76,6 +76,24 @@ def test_account_store_upsert_deduplicates_and_hides_credentials(
     assert "access_token" not in rows[0]
 
 
+def test_chatgpt_workspaces_have_distinct_stable_identities(tmp_path: Path) -> None:
+    store = AccountStore(str(tmp_path / "config.jsonc"))
+    first = store.upsert(
+        provider="chatgpt",
+        identity="acct-1:workspace-a",
+        metadata={"name": "A", "email": "owner@example.test", "workspace": "A"},
+        credentials={"access_token": "a"},
+    )
+    second = store.upsert(
+        provider="chatgpt",
+        identity="acct-1:workspace-b",
+        metadata={"name": "B", "email": "owner@example.test", "workspace": "B"},
+        credentials={"access_token": "b"},
+    )
+    assert first["id"] != second["id"]
+    assert {row["workspace"] for row in store.list_public()} == {"A", "B"}
+
+
 def test_authorization_url_contains_pkce_and_state() -> None:
     url = _authorization_url("http://localhost:1455/auth/callback", "verifier", "state")
     assert "code_challenge_method=S256" in url
@@ -132,7 +150,26 @@ def test_metadata_claims_extract_requested_columns() -> None:
         "workspace": "Team",
         "subscription_type": "plus",
         "account_id": "acct",
+        "workspace_key": "",
     }
+
+
+def test_metadata_claims_use_chatgpt_account_and_organization_identity() -> None:
+    metadata = _metadata_from_claims(
+        _jwt({}),
+        _jwt(
+            {
+                "email": "owner@example.test",
+                "https://api.openai.com/auth": {
+                    "chatgpt_account_id": "acct",
+                    "organizations": [{"id": "org-1", "title": "Workspace One"}],
+                },
+            }
+        ),
+    )
+    assert metadata["account_id"] == "acct"
+    assert metadata["workspace"] == "Workspace One"
+    assert metadata["workspace_key"] == "org-1"
 
 
 def test_metadata_request_parses_reference_account_records(
@@ -186,6 +223,7 @@ def test_metadata_request_parses_reference_account_records(
         "email": "alice@example.com",
         "workspace": "team",
         "subscription_type": "plus",
+        "workspace_key": "",
     }
     assert fixture["accounts"][1]["account"]["structure"] == "team"
 
