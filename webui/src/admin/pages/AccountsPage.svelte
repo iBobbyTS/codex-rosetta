@@ -48,7 +48,8 @@
     busy = true;
     error = '';
     notice = '';
-    const popup = typeof window.open === 'function' ? window.open('about:blank', 'codex-chatgpt-login') : null;
+    let popup: Window | null = null;
+    const callbackOrigin = 'http://localhost:1455';
     let poll = 0;
     let settled = false;
     let attemptId = '';
@@ -77,7 +78,7 @@
     };
     const onMessage = (event: MessageEvent<unknown>) => {
       if (event.source !== popup) return;
-      if (event.origin !== window.location.origin) return;
+      if (event.origin !== callbackOrigin) return;
       const data = event.data;
       if (!data || typeof data !== 'object') return;
       const signal = 'signal' in data && typeof data.signal === 'string' ? data.signal : '';
@@ -92,6 +93,7 @@
       if (!result.authorization_url) throw new Error(t('accounts.oauthMissingUrl'));
       if (!result.attempt_id) throw new Error('ChatGPT login did not return a completion signal.');
       attemptId = result.attempt_id;
+      popup = typeof window.open === 'function' ? window.open('about:blank', 'codex-chatgpt-login') : null;
       window.addEventListener('message', onMessage);
       if (popup) popup.location.href = result.authorization_url;
       else window.location.href = result.authorization_url;

@@ -71,7 +71,7 @@ describe('AccountsPage ChatGPT OAuth polling', () => {
   function sendCallback(data: Record<string, unknown>, source = popup): void {
     window.dispatchEvent(new MessageEvent('message', {
       data,
-      origin: window.location.origin,
+      origin: 'http://localhost:1455',
       source: source as unknown as Window,
     }));
   }

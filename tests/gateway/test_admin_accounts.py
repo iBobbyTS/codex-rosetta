@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import socket
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -76,14 +77,11 @@ def test_account_store_upsert_deduplicates_and_hides_credentials(
 
 
 def test_authorization_url_contains_pkce_and_state() -> None:
-    url = _authorization_url(
-        "http://localhost:8765/oauth/chatgpt/callback", "verifier", "state"
-    )
+    url = _authorization_url("http://localhost:1455/auth/callback", "verifier", "state")
     assert "code_challenge_method=S256" in url
     assert "state=state" in url
-    assert (
-        "redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Foauth%2Fchatgpt%2Fcallback" in url
-    )
+    assert "redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" in url
+    assert "originator=codex_vscode" in url
 
 
 def test_start_returns_attempt_signal_bound_to_pending_state(tmp_path: Path) -> None:
@@ -97,6 +95,24 @@ def test_start_returns_attempt_signal_bound_to_pending_state(tmp_path: Path) -> 
     state = query["state"][0]
     assert payload["attempt_id"] == state
     assert app.chatgpt_oauth_pending[state].attempt_id == payload["attempt_id"]
+    assert app.chatgpt_oauth_pending[state].opener_origin == "http://localhost:8765"
+    listener = app.chatgpt_oauth_listener
+    assert listener is not None
+    listener.close()
+
+
+def test_start_reports_occupied_callback_port(tmp_path: Path) -> None:
+    app = _app(tmp_path)
+    occupied = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    occupied.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    occupied.bind(("127.0.0.1", 1455))
+    occupied.listen(1)
+    try:
+        response = asyncio.run(start_chatgpt_login(_callback_request(app, "")))
+    finally:
+        occupied.close()
+    assert response.status_code == 409
+    assert b"1455" in response.body
 
 
 def test_metadata_claims_extract_requested_columns() -> None:
@@ -251,7 +267,7 @@ def _seed_pending(app: Any, state: str) -> None:
     app.chatgpt_oauth_pending = {
         state: PendingOAuth(
             verifier="verifier",
-            redirect_uri="http://localhost:8765/oauth/chatgpt/callback",
+            redirect_uri="http://localhost:8765/auth/callback",
             expires_at=chatgpt_oauth.time.monotonic() + 300,
             attempt_id=f"attempt-{state}",
         )

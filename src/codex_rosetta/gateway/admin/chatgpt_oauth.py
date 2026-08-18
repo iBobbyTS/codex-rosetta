@@ -8,15 +8,17 @@ import hashlib
 import html
 import json
 import secrets
+import socket
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Any
 
-from codex_rosetta._vendor.httpserver import JSONResponse, Response
+from codex_rosetta._vendor.httpserver import JSONResponse, Request, Response
 
 from .account_store import get_account_store
 
@@ -25,7 +27,8 @@ AUTH_ENDPOINT = "https://auth.openai.com/oauth/authorize"
 TOKEN_ENDPOINT = "https://auth.openai.com/oauth/token"
 METADATA_ENDPOINT = "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
 SCOPES = "openid profile email offline_access api.connectors.read api.connectors.invoke"
-CALLBACK_PATH = "/oauth/chatgpt/callback"
+CALLBACK_PATH = "/auth/callback"
+CALLBACK_PORT = 1455
 LOGIN_TIMEOUT_SECONDS = 300
 
 
@@ -38,6 +41,7 @@ class PendingOAuth:
     # window.  It is deliberately separate from OAuth state so the browser can
     # distinguish a completed transaction from a direct popup close.
     attempt_id: str = ""
+    opener_origin: str = ""
 
 
 def _pending(request: Any) -> tuple[dict[str, PendingOAuth], threading.RLock]:
@@ -66,8 +70,66 @@ def _pkce_challenge(verifier: str) -> str:
 
 
 def _redirect_uri(request: Any) -> str:
+    return f"http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}"
+
+
+def _opener_origin(request: Any) -> str:
+    origin = request.headers.get("origin", "")
+    if origin.startswith("http://localhost:"):
+        return origin
     port = int(getattr(request.app, "gateway_port", 8765))
-    return f"http://localhost:{port}{CALLBACK_PATH}"
+    return f"http://localhost:{port}"
+
+
+def _write_callback_response(connection: socket.socket, response: Response) -> None:
+    reason = HTTPStatus(response.status_code).phrase
+    headers = dict(response.headers)
+    headers.setdefault("Content-Length", str(len(response.body)))
+    headers.setdefault("Connection", "close")
+    serialized = "HTTP/1.1 {} {}\r\n{}\r\n".format(
+        response.status_code,
+        reason,
+        "".join(f"{key}: {value}\r\n" for key, value in headers.items()),
+    ).encode("latin-1")
+    connection.sendall(serialized + response.body)
+
+
+def _run_callback_listener(app: Any, listener: socket.socket) -> None:
+    """Serve one OAuth callback on the registered localhost:1455 listener."""
+    deadline = time.monotonic() + LOGIN_TIMEOUT_SECONDS
+    listener.settimeout(1.0)
+    try:
+        while time.monotonic() < deadline:
+            try:
+                connection, address = listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with connection:
+                connection.settimeout(5.0)
+                raw = connection.recv(16 * 1024)
+                first_line = raw.decode("utf-8", errors="replace").splitlines()[0]
+                target = first_line.split(" ", 2)[1]
+                parsed = urllib.parse.urlsplit(target)
+                if parsed.path != CALLBACK_PATH:
+                    response = _success_page("OAuth 回调路径无效。", status=400)
+                else:
+                    callback_request = Request(
+                        "GET", parsed.path, parsed.query, {}, b"", address, app
+                    )
+                    try:
+                        response = asyncio.run(chatgpt_callback(callback_request))
+                    except Exception:
+                        response = _success_page(
+                            "OAuth 回调处理失败，请返回管理页面重试。", status=500
+                        )
+                _write_callback_response(connection, response)
+            return
+    finally:
+        listener.close()
+        if getattr(app, "chatgpt_oauth_listener", None) is listener:
+            app.chatgpt_oauth_listener = None
 
 
 def _authorization_url(redirect_uri: str, verifier: str, state: str) -> str:
@@ -82,7 +144,7 @@ def _authorization_url(redirect_uri: str, verifier: str, state: str) -> str:
             "id_token_add_organizations": "true",
             "codex_cli_simplified_flow": "true",
             "state": state,
-            "originator": "codex_rosetta_gateway",
+            "originator": "codex_vscode",
         }
     )
     return f"{AUTH_ENDPOINT}?{query}"
@@ -90,6 +152,22 @@ def _authorization_url(redirect_uri: str, verifier: str, state: str) -> str:
 
 async def start_chatgpt_login(request: Any) -> Response:
     """Create one expiring PKCE login transaction for the authenticated Admin."""
+    listener: socket.socket | None = None
+    try:
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", CALLBACK_PORT))
+        listener.listen(1)
+    except OSError:
+        if listener is not None:
+            listener.close()
+        return JSONResponse(
+            {
+                "error": f"ChatGPT 登录回调端口 {CALLBACK_PORT} 已被占用，请关闭占用该端口的程序后重试。",
+                "code": "oauth_callback_port_in_use",
+            },
+            status_code=409,
+        )
     pending, lock = _pending(request)
     now = time.monotonic()
     verifier = _random_url_token()
@@ -104,7 +182,15 @@ async def start_chatgpt_login(request: Any) -> Response:
             redirect_uri=redirect_uri,
             expires_at=now + LOGIN_TIMEOUT_SECONDS,
             attempt_id=state,
+            opener_origin=_opener_origin(request),
         )
+    request.app.chatgpt_oauth_listener = listener
+    threading.Thread(
+        target=_run_callback_listener,
+        args=(request.app, listener),
+        name="chatgpt-oauth-callback",
+        daemon=True,
+    ).start()
     return JSONResponse(
         {
             "authorization_url": _authorization_url(redirect_uri, verifier, state),
@@ -288,6 +374,7 @@ def _success_page(
     status: int = 200,
     attempt_id: str = "",
     outcome: str = "",
+    target_origin: str = "",
 ) -> Response:
     title = "ChatGPT 登录成功" if status < 400 else "ChatGPT 登录失败"
     completion = ""
@@ -314,7 +401,7 @@ def _success_page(
         )
         completion = (
             "<script>"
-            f"window.opener&&window.opener.postMessage({payload},window.location.origin);"
+            f"window.opener&&window.opener.postMessage({payload},{json.dumps(target_origin)});"
             "window.close();"
             "</script>"
         )
@@ -349,6 +436,7 @@ async def chatgpt_callback(request: Any) -> Response:
             status=400,
             attempt_id=transaction.attempt_id,
             outcome="failed",
+            target_origin=transaction.opener_origin,
         )
     error_values = request.query_params.get("error") or []
     if error_values:
@@ -357,6 +445,7 @@ async def chatgpt_callback(request: Any) -> Response:
             status=400,
             attempt_id=transaction.attempt_id,
             outcome="failed",
+            target_origin=transaction.opener_origin,
         )
     code_values = request.query_params.get("code") or []
     if not code_values or not code_values[0]:
@@ -365,6 +454,7 @@ async def chatgpt_callback(request: Any) -> Response:
             status=400,
             attempt_id=transaction.attempt_id,
             outcome="failed",
+            target_origin=transaction.opener_origin,
         )
     try:
         tokens = await asyncio.to_thread(
@@ -403,7 +493,11 @@ async def chatgpt_callback(request: Any) -> Response:
             status=400,
             attempt_id=transaction.attempt_id,
             outcome="failed",
+            target_origin=transaction.opener_origin,
         )
     return _success_page(
-        "账号已保存。", attempt_id=transaction.attempt_id, outcome="saved"
+        "账号已保存。",
+        attempt_id=transaction.attempt_id,
+        outcome="saved",
+        target_origin=transaction.opener_origin,
     )

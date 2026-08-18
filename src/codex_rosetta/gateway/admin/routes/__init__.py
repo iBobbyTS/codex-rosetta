@@ -126,7 +126,7 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/accounts/<account_id>", methods=["DELETE"])(delete_account)
     # OAuth providers redirect the browser without the Admin API token.  This
     # narrow callback endpoint consumes a one-time state before any mutation.
-    app.route("/oauth/chatgpt/callback", methods=["GET"])(chatgpt_callback)
+    app.route("/auth/callback", methods=["GET"])(chatgpt_callback)
     # Config CRUD
     app.route("/admin/api/config", methods=["GET"])(get_config)
     app.route("/admin/api/config/providers/<name>", methods=["PUT"])(put_provider)
