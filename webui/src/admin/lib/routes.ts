@@ -1,4 +1,5 @@
 export const routes = [
+  { id: 'accounts', path: '/admin/accounts', labelKey: 'nav.accounts' },
   { id: 'providers', path: '/admin/providers', labelKey: 'nav.providers' },
   { id: 'models', path: '/admin/models', labelKey: 'nav.models' },
   { id: 'keys', path: '/admin/keys', labelKey: 'nav.keys' },

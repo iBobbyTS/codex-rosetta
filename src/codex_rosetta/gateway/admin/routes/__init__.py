@@ -32,6 +32,7 @@ from .auth import (
     serve_admin_asset,
     serve_admin_html,
 )
+from .accounts import add_sub2api, chatgpt_callback, delete_account, get_accounts, start_chatgpt
 from .config import (
     delete_model_group,
     delete_provider,
@@ -104,6 +105,7 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/", methods=["GET"])(serve_admin_html)
     app.route("/admin/assets/<path:asset_path>", methods=["GET"])(serve_admin_asset)
     for page in (
+        "accounts",
         "providers",
         "models",
         "keys",
@@ -118,6 +120,13 @@ def register_admin_routes(app: Any) -> None:
     # Admin auth
     app.route("/admin/api/login", methods=["POST"])(admin_login)
     app.route("/admin/api/auth-check", methods=["GET"])(admin_check)
+    app.route("/admin/api/accounts", methods=["GET"])(get_accounts)
+    app.route("/admin/api/accounts/chatgpt/start", methods=["POST"])(start_chatgpt)
+    app.route("/admin/api/accounts/sub2api", methods=["POST"])(add_sub2api)
+    app.route("/admin/api/accounts/<account_id>", methods=["DELETE"])(delete_account)
+    # OAuth providers redirect the browser without the Admin API token.  This
+    # narrow callback endpoint consumes a one-time state before any mutation.
+    app.route("/oauth/chatgpt/callback", methods=["GET"])(chatgpt_callback)
     # Config CRUD
     app.route("/admin/api/config", methods=["GET"])(get_config)
     app.route("/admin/api/config/providers/<name>", methods=["PUT"])(put_provider)

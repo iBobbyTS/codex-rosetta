@@ -5,6 +5,7 @@
   import { language, setLanguage, t } from '../shared/i18n.svelte';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
   import DashboardPage from './pages/DashboardPage.svelte';
+  import AccountsPage from './pages/AccountsPage.svelte';
   import GatewayLogsPage from './pages/GatewayLogsPage.svelte';
   import KeysPage from './pages/KeysPage.svelte';
   import ModelsPage from './pages/ModelsPage.svelte';
@@ -128,7 +129,8 @@
     <div style="flex:1"></div><div class="config-path">{configPath}</div>
   </nav>
   <main class="content">
-    {#if route === 'providers'}<ProvidersPage />
+    {#if route === 'accounts'}<AccountsPage />
+    {:else if route === 'providers'}<ProvidersPage />
     {:else if route === 'models'}<ModelsPage />
     {:else if route === 'keys'}<KeysPage />
     {:else if route === 'tools'}<ToolsPage />
