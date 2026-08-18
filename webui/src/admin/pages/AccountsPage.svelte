@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { isSupportedOAuthHost } from '../lib/oauth-host';
+  import { getCodexPlanPresentation } from '../lib/codex-plans';
   import { ConfirmDialog, Dialog } from '@ibobbyts/svelte-ui-utils/dialog';
   import { t } from '../../shared/i18n.svelte';
 
@@ -180,7 +181,8 @@
       <thead><tr><th>{t('accounts.name')}</th><th>{t('accounts.email')}</th><th>{t('accounts.workspace')}</th><th>{t('accounts.subscription')}</th><th>{t('accounts.actions')}</th></tr></thead>
       <tbody>
         {#each accounts.filter((account) => account.provider === 'chatgpt') as account}
-          <tr><td>{account.name ?? ''}</td><td>{account.email ?? ''}</td><td>{account.workspace ?? ''}</td><td>{account.subscription_type ?? ''}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
+          {@const plan = getCodexPlanPresentation(account.subscription_type)}
+          <tr><td>{account.name ?? ''}</td><td>{account.email ?? ''}</td><td>{account.workspace ?? ''}</td><td>{plan.label}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
         {:else}<tr><td colspan="5" class="empty">{t('empty.accounts')}</td></tr>{/each}
       </tbody>
     </table></div>
