@@ -1048,7 +1048,8 @@ describe('ModelsPage', () => {
     Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
     await dragAt(target, 'dragover', dataTransfer, 25);
     await dragAt(target, 'drop', dataTransfer, 25);
-    expect(providerRow('third')).toHaveTextContent('Current');
+    expect(providerRow('first')).toHaveTextContent('Current');
+    expect(providerRow('third')).not.toHaveTextContent('Current');
 
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
