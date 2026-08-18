@@ -216,6 +216,7 @@ describe('ProvidersPage', () => {
     expect(screen.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
     expect(screen.getByDisplayValue('http://proxy.example:8080')).toBeInTheDocument();
     expect(screen.getByLabelText('Upstream request encoding')).toHaveAttribute('data-value', 'identity');
+    expect(screen.getByText(/Controls request-body encoding/).closest('.hint-popup')).not.toBeNull();
     expect(await screen.findByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
     expect(apiMock.get).not.toHaveBeenCalledWith('/admin/api/config/providers/official/key');
     const dialog = within(screen.getByRole('dialog', { name: /Edit Provider/ }));
@@ -576,7 +577,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const toggle = screen.getByLabelText('Force Rosetta prompt compaction');
     expect(toggle).toBeChecked();
-    expect(screen.getByText(/summary plaintext in SQLite for seven days/)).toBeInTheDocument();
+    expect(screen.getByText(/summary plaintext in SQLite for seven days/).closest('.hint-popup')).not.toBeNull();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
     expect(apiMock.put.mock.calls[0][1]).toMatchObject({ force_rosetta_compaction: true });

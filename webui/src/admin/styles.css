@@ -238,6 +238,8 @@ code.copyable:hover { background: var(--bg-hover); }
 .form-group { margin-bottom: 14px; }
 .form-group label, .form-group .form-label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .form-group label { width: fit-content; }
+.form-group .form-label-with-hint { display:flex;align-items:center;width:fit-content; }
+.form-group .form-label-with-hint > label { margin-bottom:0; }
 .form-group input, .form-group .suu-dropdown__button {
   width: 100%; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border);
   border-radius: var(--radius); color: var(--text); font-size: 14px; font-family: var(--mono);
