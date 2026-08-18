@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -17,11 +18,13 @@ from ...config import (
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
+    _ModelGroupProviderCandidate,
+    _model_group_candidate_raw,
+    _model_group_provider_candidates,
     _substitute_env_vars,
     _validate_provider_credential_uuid,
     default_tool_profile_for_provider,
     load_config_raw,
-    model_group_provider_names,
     normalize_codex_settings,
     normalize_local_mode_settings,
     normalize_web_search,
@@ -75,6 +78,7 @@ import logging
 
 logger = logging.getLogger("codex-rosetta-gateway")
 _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
+_CREDENTIAL_REFERENCE_CODE_PREFIX = "provider_credential_references:"
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -408,26 +412,29 @@ def _resolved_admin_model_entry(
 
 def _model_group_provider_rows_for_admin(
     group_name: str,
-    provider_names: list[str],
+    candidates: list[_ModelGroupProviderCandidate],
     raw_providers: dict[str, Any],
     provider_errors: dict[str, str],
     runtime_config: GatewayConfig,
 ) -> list[dict[str, Any]]:
     """Project ordered model-group providers with runtime status."""
-    runtime_statuses = dict(runtime_config.model_group_provider_statuses(group_name))
     runtime_ring = runtime_config.model_group_rings.get(group_name)
     runtime_current = runtime_ring.current if runtime_ring is not None else None
+    runtime_statuses = (
+        dict(runtime_ring.status_snapshot()) if runtime_ring is not None else {}
+    )
     current_index = next(
         (
             index
-            for index, provider_name in enumerate(provider_names)
-            if provider_name == runtime_current
+            for index, candidate in enumerate(candidates)
+            if candidate == runtime_current
         ),
-        0 if provider_names else -1,
+        0 if candidates else -1,
     )
-    seen_provider_names: set[str] = set()
+    seen_candidates: set[_ModelGroupProviderCandidate] = set()
     provider_api_types: list[str | None] = []
-    for provider_name in provider_names:
+    for candidate in candidates:
+        provider_name = candidate.provider_name
         provider_config = raw_providers.get(provider_name)
         try:
             provider_api_types.append(
@@ -442,19 +449,36 @@ def _model_group_provider_rows_for_admin(
         None,
     )
     provider_rows: list[dict[str, Any]] = []
-    for index, provider_name in enumerate(provider_names):
+    for index, candidate in enumerate(candidates):
+        provider_name = candidate.provider_name
         provider_config = raw_providers.get(provider_name)
         exists = isinstance(provider_config, dict)
         enabled = exists and provider_config.get("enabled", True) is not False
         row_error: str | None = None
-        if provider_name in seen_provider_names:
-            row_error = f"Provider '{provider_name}' is duplicated in this model group"
+        credential_id: str | None = None
+        if candidate in seen_candidates:
+            row_error = f"Candidate for Provider '{provider_name}' is duplicated"
         elif not exists:
             row_error = f"Provider '{provider_name}' not found in config"
         elif not enabled:
             row_error = f"Provider '{provider_name}' is disabled"
         elif provider_name in provider_errors:
             row_error = provider_errors[provider_name]
+        elif candidate.credential_uuid is not None:
+            credential_id = next(
+                (
+                    item.get("id")
+                    for item in provider_config.get("api_keys", [])
+                    if isinstance(item, dict)
+                    and item.get("uuid") == candidate.credential_uuid
+                    and isinstance(item.get("id"), str)
+                ),
+                None,
+            )
+            if credential_id is None:
+                row_error = (
+                    f"Credential UUID for Provider '{provider_name}' was not found"
+                )
         elif (
             group_api_type is not None
             and provider_api_types[index] is not None
@@ -464,21 +488,52 @@ def _model_group_provider_rows_for_admin(
                 f"Provider '{provider_name}' uses api_type "
                 f"'{provider_api_types[index]}'; expected '{group_api_type}'"
             )
-        seen_provider_names.add(provider_name)
+        seen_candidates.add(candidate)
         provider_rows.append(
             {
                 "name": provider_name,
+                "credential_uuid": candidate.credential_uuid,
+                "credential_id": credential_id,
+                "auto_rotate_credentials": (
+                    provider_config.get("auto_rotate_credentials")
+                    if isinstance(provider_config, dict)
+                    else None
+                ),
                 "current": index == current_index,
                 "enabled": enabled,
                 "status": (
                     "disabled"
                     if row_error is not None
-                    else runtime_statuses.get(provider_name, "available")
+                    else runtime_statuses.get(candidate, "available")
                 ),
                 "error": row_error,
             }
         )
     return provider_rows
+
+
+def _admin_model_group_candidates(
+    provider_value: Any, *, field: str
+) -> tuple[list[_ModelGroupProviderCandidate], str | None]:
+    """Parse candidates for Admin projection, retaining invalid row identities."""
+    try:
+        return _model_group_provider_candidates(provider_value, field=field), None
+    except ValueError as exc:
+        candidates: list[_ModelGroupProviderCandidate] = []
+        if isinstance(provider_value, list):
+            for item in provider_value:
+                if isinstance(item, str):
+                    candidates.append(_ModelGroupProviderCandidate(item))
+                elif isinstance(item, dict) and isinstance(item.get("provider"), str):
+                    candidates.append(
+                        _ModelGroupProviderCandidate(
+                            item["provider"],
+                            item.get("credential_uuid")
+                            if isinstance(item.get("credential_uuid"), str)
+                            else None,
+                        )
+                    )
+        return candidates, str(exc)
 
 
 def _normalize_model_groups_for_admin(
@@ -496,25 +551,15 @@ def _normalize_model_groups_for_admin(
         if not isinstance(group_value, dict):
             continue
         provider_value = group_value.get("provider")
-        try:
-            provider_names = model_group_provider_names(
-                provider_value,
-                field=f"model_groups.{group_name}.provider",
-            )
-            provider = provider_names[0]
-            group_provider_error = None
-        except ValueError as exc:
-            provider_names = (
-                [item for item in provider_value if isinstance(item, str)]
-                if isinstance(provider_value, list)
-                else []
-            )
-            provider = ""
-            group_provider_error = str(exc)
+        candidates, group_provider_error = _admin_model_group_candidates(
+            provider_value,
+            field=f"model_groups.{group_name}.provider",
+        )
+        provider = candidates[0].provider_name if candidates else ""
 
         provider_rows = _model_group_provider_rows_for_admin(
             group_name,
-            provider_names,
+            candidates,
             raw_providers,
             provider_errors,
             runtime_config,
@@ -658,49 +703,58 @@ def _clean_group_models(
 
 def _updated_model_group_providers(
     model_groups: dict[str, Any], group_name: str, active_provider: str
-) -> list[str]:
+) -> list[Any]:
     """Replace the active provider while preserving an existing hidden tail."""
     existing_group = model_groups.get(group_name)
     if not isinstance(existing_group, dict):
         return [active_provider]
     try:
-        existing_providers = model_group_provider_names(
+        existing_candidates = _model_group_provider_candidates(
             existing_group.get("provider"),
             field=f"model_groups.{group_name}.provider",
         )
     except ValueError:
         return [active_provider]
-    return [active_provider, *existing_providers[1:]]
+    return [
+        active_provider,
+        *[_model_group_candidate_raw(item) for item in existing_candidates[1:]],
+    ]
 
 
 def _requested_model_group_providers(
     body: dict[str, Any],
-) -> tuple[list[str], bool] | Response:
+) -> tuple[list[_ModelGroupProviderCandidate], bool] | Response:
     """Parse the exact provider list or the legacy scalar Admin contract."""
     exact_provider_list = "providers" in body
     if exact_provider_list:
         try:
-            provider_names = model_group_provider_names(
+            candidates = _model_group_provider_candidates(
                 body.get("providers"), field="'providers'"
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        if len(set(provider_names)) != len(provider_names):
+        if not candidates:
+            return JSONResponse(
+                {"error": "'providers' must contain at least one candidate"},
+                status_code=400,
+            )
+        if len(set(candidates)) != len(candidates):
             return JSONResponse(
                 {"error": "'providers' entries must be unique"}, status_code=400
             )
-        return provider_names, True
+        return candidates, True
 
     provider = body.get("provider")
     if not isinstance(provider, str) or not provider.strip():
         return JSONResponse({"error": "'provider' is required"}, status_code=400)
-    return [provider.strip()], False
+    return [_ModelGroupProviderCandidate(provider.strip())], False
 
 
 def _validate_requested_model_group_providers(
-    provider_names: list[str], providers: dict[str, Any]
+    candidates: list[_ModelGroupProviderCandidate], providers: dict[str, Any]
 ) -> Response | None:
     """Fail closed when an Admin provider list cannot form one runtime ring."""
+    provider_names = [candidate.provider_name for candidate in candidates]
     missing_providers = [name for name in provider_names if name not in providers]
     if missing_providers:
         return JSONResponse(
@@ -717,6 +771,46 @@ def _validate_requested_model_group_providers(
         return JSONResponse(
             {"error": "'providers' must use the same api_type"}, status_code=400
         )
+    for candidate in candidates:
+        provider_config = providers[candidate.provider_name]
+        auto_rotate = provider_config.get("auto_rotate_credentials")
+        if candidate.credential_uuid is None:
+            if auto_rotate is not True:
+                return JSONResponse(
+                    {
+                        "error": (
+                            f"Provider '{candidate.provider_name}' requires a "
+                            "credential UUID when automatic rotation is disabled"
+                        )
+                    },
+                    status_code=400,
+                )
+            continue
+        if auto_rotate is not False:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"Provider '{candidate.provider_name}' does not accept a "
+                        "credential UUID when automatic rotation is enabled"
+                    )
+                },
+                status_code=400,
+            )
+        configured_uuids = {
+            item.get("uuid")
+            for item in provider_config.get("api_keys", [])
+            if isinstance(item, dict)
+        }
+        if candidate.credential_uuid not in configured_uuids:
+            return JSONResponse(
+                {
+                    "error": (
+                        f"Credential UUID does not belong to Provider "
+                        f"'{candidate.provider_name}'"
+                    )
+                },
+                status_code=400,
+            )
     return None
 
 
@@ -943,6 +1037,105 @@ async def get_config(request: Any) -> Response:
     )
 
 
+def _provider_credential_uuid_for_id(
+    api_keys: list[dict[str, str]], credential_id: str
+) -> str:
+    """Return the stable UUID for one validated credential ID."""
+    return next(item["uuid"] for item in api_keys if item["id"] == credential_id)
+
+
+def _referencing_model_groups_for_credentials(
+    data: dict[str, Any], provider_name: str, credential_uuids: set[str]
+) -> list[str]:
+    """Return every model group referencing one of the named Provider UUIDs."""
+    if not credential_uuids:
+        return []
+    model_groups = data.get("model_groups", {})
+    if not isinstance(model_groups, dict):
+        return []
+    affected: list[str] = []
+    for group_name, group in model_groups.items():
+        if not isinstance(group, dict) or not isinstance(group.get("provider"), list):
+            continue
+        if any(
+            isinstance(item, dict)
+            and item.get("provider") == provider_name
+            and item.get("credential_uuid") in credential_uuids
+            for item in group["provider"]
+        ):
+            affected.append(str(group_name))
+    return affected
+
+
+def _rewrite_provider_candidate_mode(
+    data: dict[str, Any],
+    provider_name: str,
+    *,
+    previous_auto_rotate: bool,
+    auto_rotate: bool,
+    current_credential_uuid: str,
+) -> None:
+    """Rewrite this Provider's candidates for one explicit mode transition."""
+    if previous_auto_rotate == auto_rotate:
+        return
+    model_groups = data.get("model_groups", {})
+    if not isinstance(model_groups, dict):
+        return
+    for group in model_groups.values():
+        if not isinstance(group, dict) or not isinstance(group.get("provider"), list):
+            continue
+        rewritten: list[Any] = []
+        provider_added = False
+        for item in group["provider"]:
+            item_provider = (
+                item
+                if isinstance(item, str)
+                else item.get("provider")
+                if isinstance(item, dict)
+                else None
+            )
+            if item_provider != provider_name:
+                rewritten.append(item)
+                continue
+            if auto_rotate:
+                if not provider_added:
+                    rewritten.append(provider_name)
+                    provider_added = True
+            elif isinstance(item, str):
+                rewritten.append(
+                    {
+                        "provider": provider_name,
+                        "credential_uuid": current_credential_uuid,
+                    }
+                )
+            else:
+                rewritten.append(item)
+        group["provider"] = rewritten
+
+
+def _remove_credential_candidate_references(
+    data: dict[str, Any], provider_name: str, credential_uuids: set[str]
+) -> None:
+    """Remove every exact Provider/credential candidate while retaining groups."""
+    if not credential_uuids:
+        return
+    model_groups = data.get("model_groups", {})
+    if not isinstance(model_groups, dict):
+        return
+    for group in model_groups.values():
+        if not isinstance(group, dict) or not isinstance(group.get("provider"), list):
+            continue
+        group["provider"] = [
+            item
+            for item in group["provider"]
+            if not (
+                isinstance(item, dict)
+                and item.get("provider") == provider_name
+                and item.get("credential_uuid") in credential_uuids
+            )
+        ]
+
+
 async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
@@ -960,6 +1153,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     base_urls = body.get("base_urls")
     current_base_url = body.get("current_base_url")
     provider = body.get("provider")
+    auto_rotate_credentials = body.get("auto_rotate_credentials")
+    confirm_credential_deletion = body.get("confirm_credential_deletion", False)
 
     try:
         data = load_config_raw(config_path)
@@ -992,18 +1187,47 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         or current_base_url not in base_urls
         or not isinstance(provider, str)
         or not provider.strip()
+        or not isinstance(auto_rotate_credentials, bool)
+        or not isinstance(confirm_credential_deletion, bool)
     ):
         return JSONResponse(
             {
                 "error": (
                     "non-empty unique 'api_keys', member 'current_api_key', "
                     "non-empty 'base_urls', member 'current_base_url', and "
-                    "'provider' are required"
+                    "'provider' plus boolean 'auto_rotate_credentials' are required"
                 )
             },
             status_code=400,
         )
     body["provider"] = provider.strip()
+
+    existing_credential_uuids = {
+        item.get("uuid")
+        for item in existing_provider.get("api_keys", [])
+        if isinstance(item, dict) and isinstance(item.get("uuid"), str)
+    }
+    deleted_credential_uuids = existing_credential_uuids - {
+        item["uuid"] for item in merged_keys
+    }
+    affected_model_groups = _referencing_model_groups_for_credentials(
+        data, resolve_name, deleted_credential_uuids
+    )
+    if affected_model_groups and not confirm_credential_deletion:
+        return JSONResponse(
+            {
+                "error": (
+                    "Credentials are referenced by model groups: "
+                    f"{affected_model_groups}"
+                ),
+                "code": (
+                    _CREDENTIAL_REFERENCE_CODE_PREFIX
+                    + json.dumps(affected_model_groups, separators=(",", ":"))
+                ),
+                "affected_model_groups": affected_model_groups,
+            },
+            status_code=409,
+        )
 
     provider_entry = _build_provider_entry(
         body,
@@ -1024,6 +1248,21 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             return rename_err
 
     data.setdefault("providers", {})[name] = provider_entry
+    if isinstance(existing_provider, dict) and existing_provider:
+        _rewrite_provider_candidate_mode(
+            data,
+            name,
+            previous_auto_rotate=existing_provider["auto_rotate_credentials"],
+            auto_rotate=auto_rotate_credentials,
+            current_credential_uuid=_provider_credential_uuid_for_id(
+                merged_keys, current_api_key
+            ),
+        )
+    _remove_credential_candidate_references(
+        data,
+        name,
+        deleted_credential_uuids,
+    )
     if is_new_provider or is_rename:
         data["providers"] = dict(
             sorted(
@@ -1140,6 +1379,7 @@ async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Respo
     current_api_key = body.get("current_api_key")
     proxy = body.get("proxy", "")
     allow_redirects = body.get("allow_redirects", False)
+    auto_rotate_credentials = body.get("auto_rotate_credentials")
     if (
         not isinstance(model, str)
         or not model.strip()
@@ -1151,13 +1391,14 @@ async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Respo
         or not current_api_key.strip()
         or not isinstance(proxy, str)
         or not isinstance(allow_redirects, bool)
+        or not isinstance(auto_rotate_credentials, bool)
     ):
         return JSONResponse(
             {
                 "error": (
                     "non-empty 'model', 'provider', HTTP(S) 'current_base_url', "
                     "and 'current_api_key' plus string 'proxy' and boolean "
-                    "'allow_redirects' are required"
+                    "'allow_redirects'/'auto_rotate_credentials' are required"
                 )
             },
             status_code=400,
@@ -1196,6 +1437,7 @@ async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Respo
         "current_base_url": current_base_url,
         "api_keys": selected_keys,
         "current_api_key": current_api_key.strip(),
+        "auto_rotate_credentials": auto_rotate_credentials,
         "proxy": proxy.strip(),
         "allow_redirects": allow_redirects,
     }
@@ -1298,7 +1540,10 @@ async def delete_provider(request: Any, **kwargs: Any) -> Response:
         for group_name, group in model_groups.items()
         if isinstance(group, dict)
         and isinstance(group.get("provider"), list)
-        and name in group["provider"]
+        and any(
+            item == name or (isinstance(item, dict) and item.get("provider") == name)
+            for item in group["provider"]
+        )
     ]
 
     from ._shared import _qp
@@ -1412,7 +1657,8 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
     provider_result = _requested_model_group_providers(body)
     if isinstance(provider_result, Response):
         return provider_result
-    provider_names, exact_provider_list = provider_result
+    candidates, exact_provider_list = provider_result
+    provider_names = [candidate.provider_name for candidate in candidates]
     provider = provider_names[0]
 
     group_type = body.get("type")
@@ -1429,9 +1675,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
     providers = data.get("providers", {})
-    provider_error = _validate_requested_model_group_providers(
-        provider_names, providers
-    )
+    provider_error = _validate_requested_model_group_providers(candidates, providers)
     if provider_error is not None:
         return provider_error
 
@@ -1477,7 +1721,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
 
     model_groups[name] = {
         "provider": (
-            provider_names
+            [_model_group_candidate_raw(candidate) for candidate in candidates]
             if exact_provider_list
             else _updated_model_group_providers(model_groups, name, provider)
         ),
@@ -1496,7 +1740,9 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
             "ok": True,
             "model_group": name,
             "provider": provider,
-            "providers": provider_names,
+            "providers": [
+                _model_group_candidate_raw(candidate) for candidate in candidates
+            ],
             "type": group_type,
             "models": dict(new_config.models),
         }

@@ -64,6 +64,19 @@ ID 和掩码凭据；`current_api_key` 通过可编辑 ID 选中一个条目。A
 凭据在进程内冷却一小时；有限环全部耗尽时只报告凭据数量。手动选择允许恢复冷却中的
 条目，并且只清除该条目的冷却状态。成功请求不会按请求次数轮换凭据。
 
+每个 Provider 都必须显式设置布尔字段 `auto_rotate_credentials`。值为 `true` 时，
+Provider 保留上述内部 503 重试与凭据轮换行为，模型组以名称保存该 Provider。值为
+`false` 时，Provider 内部绝不选择其他凭据；模型组改为保存有序的
+`{provider, credential_uuid}` 候选项。凭据的可编辑 ID 改名后，UUID 仍保持候选项身份
+不变。Admin UI 要求每个关闭自动轮换的 Provider 行选择凭据，允许同一个 Provider
+使用不同凭据，并拒绝完全重复的 pair。一个模型组内的所有候选项仍必须使用相同的
+`api_type`；不支持异构 Provider 模型组。
+
+从自动轮换切换为模型组管理时，现有模型组行会绑定到该 Provider 当时的当前凭据
+UUID；重新开启自动轮换时，会在该 Provider 首次出现的位置合并其所有 pair。移除被
+引用的凭据时，界面会先列出所有受影响模型组并要求确认；确认后会移除所有匹配 pair，
+若没有候选项则保留一个空的、不可用的模型组。
+
 ## Codex 工具本地化
 
 - [基础对话](codex-tool-localization/basic-conversation.md)
