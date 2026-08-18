@@ -575,8 +575,15 @@ describe('ProvidersPage', () => {
     });
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
     const toggle = screen.getByLabelText('Force Rosetta prompt compaction');
+    const requestEncoding = screen.getByLabelText('Upstream request encoding');
+    const divider = dialog.getByRole('separator');
+    const proxyUrl = dialog.getByPlaceholderText('e.g. http://127.0.0.1:7890');
     expect(toggle).toBeChecked();
+    expect(requestEncoding.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(toggle.compareDocumentPosition(divider) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(divider.compareDocumentPosition(proxyUrl) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.getByText(/summary plaintext in SQLite for seven days/).closest('.hint-popup')).not.toBeNull();
     await fireEvent.click(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalled());
@@ -601,6 +608,7 @@ describe('ProvidersPage', () => {
     render(ProvidersPage);
     await fireEvent.click(await screen.findByRole('button', { name: '+ 添加服务方' }));
     await selectDropdown(screen.getByLabelText('协议'), 'OpenAI Responses');
+    expect(screen.getByText('Base URL (遇到502按顺序自动轮换)')).toBeInTheDocument();
     expect(screen.getByLabelText('强制 Rosetta 提示词压缩')).toBeInTheDocument();
     expect(screen.getByText(/SQLite 中以明文保存摘要七天/)).toBeInTheDocument();
   });
