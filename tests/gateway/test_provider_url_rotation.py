@@ -7,10 +7,14 @@ import json
 from collections import defaultdict, deque
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+import codex_rosetta.gateway.app as app_module
+from codex_rosetta._vendor.httpserver import Response
 from codex_rosetta.gateway.app import _bind_provider_current_recorders
+from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
@@ -1041,6 +1045,156 @@ def _literal_502s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
 
 def _literal_503s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
     return tuple(_json_response(503, {"error": "busy"}) for _ in range(count))
+
+
+@pytest.mark.parametrize("with_other_provider", [False, True])
+def test_model_group_skips_same_provider_pair_after_shared_url_exhaustion(
+    monkeypatch,
+    with_other_provider: bool,
+) -> None:
+    async def scenario() -> None:
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        first_pair = {"provider": "row-a", "credential_uuid": first_uuid}
+        second_pair = {"provider": "row-a", "credential_uuid": second_uuid}
+        first_origin = "https://first.example/v1"
+        second_origin = "https://second.example/v1"
+        candidates: list[Any] = [first_pair, second_pair]
+        providers: dict[str, Any] = {
+            "row-a": {
+                "provider": "openai",
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "api_keys": [
+                    {"uuid": first_uuid, "id": "first", "key": "key-first"},
+                    {"uuid": second_uuid, "id": "second", "key": "key-second"},
+                ],
+                "current_api_key": "first",
+                "auto_rotate_credentials": False,
+                "base_urls": [first_origin],
+                "current_base_url": first_origin,
+            }
+        }
+        if with_other_provider:
+            providers["row-b"] = {
+                "provider": "openai",
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "api_keys": [
+                    {
+                        "uuid": "00000000-0000-4000-8000-000000000003",
+                        "id": "primary",
+                        "key": "key-other",
+                    }
+                ],
+                "current_api_key": "primary",
+                "auto_rotate_credentials": True,
+                "base_urls": [second_origin],
+                "current_base_url": second_origin,
+            }
+            candidates.append("row-b")
+        config = GatewayConfig(
+            {
+                "providers": providers,
+                "model_groups": {
+                    "models": {
+                        "provider": candidates,
+                        "type": "llm",
+                        "models": {"gpt-5.6-terra": {}},
+                    }
+                },
+                "server": {
+                    "admin_password": "test-admin-password",
+                    "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+                },
+            }
+        )
+        ring = config.model_group_rings["models"]
+        writes: list[Any] = []
+
+        async def record(_group: str, candidate: Any) -> None:
+            writes.append(candidate)
+
+        ring.bind_recorder(record)
+        client = _RoutingClient()
+        client.add(
+            f"{first_origin}/responses",
+            *_literal_502s(5),
+            _json_response(502, {"error": "last-real"}),
+        )
+        if with_other_provider:
+            client.add(
+                f"{second_origin}/responses",
+                _json_response(200, {"ok": True}),
+            )
+        transport = _transport(monkeypatch, client)
+
+        async def handle(_route, provider, *_args: Any, **_kwargs: Any):
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "gpt-5.6-terra"
+            )
+            return Response(
+                result.raw_content,
+                status_code=result.status_code,
+                content_type="application/json",
+            ), {
+                **(
+                    {
+                        "upstream_provider_failure": True,
+                        "provider_failure_origin": (
+                            "rosetta_local" if result.synthetic else "upstream_response"
+                        ),
+                    }
+                    if result.status_code == 502
+                    else {}
+                )
+            }
+
+        monkeypatch.setattr(app_module, "handle_non_streaming", handle)
+        request = MagicMock()
+        request.headers = {}
+        request.json.return_value = {"model": "gpt-5.6-terra", "input": []}
+        request.app.metadata_store = MagicMock()
+        request.app.codex_tool_store = MagicMock()
+        request.app.transport = transport
+        request.app.metrics = None
+        request.app.request_log = None
+        request.app.persistence = None
+        request.app.profiler_state = None
+        request.app.gateway_config = config
+
+        principal_token = api_key_principal_var.set("test")
+        try:
+            response = await app_module._proxy_handler(request, "openai_responses")
+        finally:
+            api_key_principal_var.reset(principal_token)
+
+        assert client.calls.count(f"{first_origin}/responses") == 6
+        assert config.providers["row-a"].base_url_statuses() == (
+            (first_origin, "cooling"),
+        )
+        assert config.providers["row-a"].credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
+        assert ring.status_snapshot()[0][1] == "cooling"
+        assert ring.status_snapshot()[1][1] == "available"
+        if with_other_provider:
+            assert response.status_code == 200
+            assert client.calls == [f"{first_origin}/responses"] * 6 + [
+                f"{second_origin}/responses"
+            ]
+            assert writes == ["row-b"]
+            assert ring.current == "row-b"
+        else:
+            assert response.status_code == 502
+            assert isinstance(response, Response)
+            assert response.body == b'{"error": "last-real"}'
+            assert client.calls == [f"{first_origin}/responses"] * 6
+            assert writes == []
+            assert ring.current.credential_uuid == first_uuid
+
+    asyncio.run(scenario())
 
 
 def test_retry_policy_is_status_neutral_and_stops_on_caller_result() -> None:

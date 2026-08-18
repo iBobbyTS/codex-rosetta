@@ -1710,7 +1710,7 @@ class GatewayConfig:
         self, candidate: _ModelGroupProviderCandidate
     ) -> bool:
         provider = self.providers.get(candidate.provider_name)
-        if provider is None:
+        if provider is None or not provider.has_available_base_url():
             return False
         return (
             candidate.credential_uuid is None
