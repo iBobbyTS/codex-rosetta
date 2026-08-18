@@ -28,6 +28,7 @@ def _make_app():
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
                     "api_type": "chat",

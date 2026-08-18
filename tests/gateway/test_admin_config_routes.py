@@ -75,6 +75,7 @@ def _config_data() -> dict[str, Any]:
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             }
         },
         "model_groups": {
@@ -95,6 +96,38 @@ def _config_data() -> dict[str, Any]:
             ],
         },
     }
+
+
+def _provider_put_body(config: dict[str, Any], name: str) -> dict[str, Any]:
+    provider = config["providers"][name]
+    return {
+        field: json.loads(json.dumps(provider[field]))
+        for field in (
+            "provider",
+            "api_type",
+            "base_urls",
+            "current_base_url",
+            "api_keys",
+            "current_api_key",
+            "auto_rotate_credentials",
+        )
+    }
+
+
+def _provider_admin_request(
+    config_path: Any, config: dict[str, Any], name: str, body: dict[str, Any]
+) -> SimpleNamespace:
+    initial_config = GatewayConfig(config)
+    return SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=initial_config,
+            stream_trace_state=StreamTraceState(initial_config.stream_trace),
+            auth_state=None,
+        ),
+        path_params={"name": name},
+        json=lambda: body,
+    )
 
 
 class _PersistenceState:
@@ -753,6 +786,7 @@ def test_get_config_masks_all_canonical_tavily_api_keys(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config["server"]["web_search"] = {
         "providers": [
@@ -903,6 +937,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     },
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
             "wrong-api": {
                 "provider": "deepseek",
@@ -917,6 +952,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
             "wrong-origin": {
                 "provider": "deepseek",
@@ -932,6 +968,7 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
             },
         }
     )
@@ -1029,6 +1066,7 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config["server"]["web_search"] = {"providers": rows}
     config_path = tmp_path / "config.jsonc"
@@ -1142,6 +1180,7 @@ def test_put_server_settings_stores_only_deepseek_provider_name(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -1437,6 +1476,7 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "allow_redirects": True,
         "soft_interrupt": False,
     }
@@ -1454,6 +1494,7 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": [
             "https://api.deepseek.com",
             "https://api.deepseek.example/v1",
@@ -1737,6 +1778,7 @@ def test_put_provider_preserves_matching_masks(tmp_path):
             },
         ],
         "current_api_key": "second",
+        "auto_rotate_credentials": True,
     }
     request = SimpleNamespace(
         app=SimpleNamespace(
@@ -1870,6 +1912,7 @@ def test_detect_request_encoding_uses_only_current_masked_draft_target(
                 }
             ],
             "current_api_key": "selected",
+            "auto_rotate_credentials": True,
             "proxy": "http://draft-proxy.example:8080",
             "allow_redirects": True,
         },
@@ -1928,6 +1971,7 @@ def test_detect_request_encoding_resolves_only_saved_environment_credential_owne
                 }
             ],
             "current_api_key": credential_id,
+            "auto_rotate_credentials": True,
             "proxy": "",
             "allow_redirects": False,
         },
@@ -1973,6 +2017,7 @@ def test_detect_request_encoding_accepts_unsaved_raw_draft_without_writing(tmp_p
                 }
             ],
             "current_api_key": "fresh",
+            "auto_rotate_credentials": True,
             "proxy": "",
             "allow_redirects": False,
         },
@@ -2022,6 +2067,7 @@ def test_detect_request_encoding_redacts_complete_failures(tmp_path):
                 }
             ],
             "current_api_key": "selected",
+            "auto_rotate_credentials": True,
             "proxy": "",
             "allow_redirects": False,
         },
@@ -2088,6 +2134,7 @@ def test_put_provider_rejects_empty_credential_without_write(tmp_path):
             }
         ],
         "current_api_key": "new",
+        "auto_rotate_credentials": True,
     }
 
     response = _run(put_provider(request))
@@ -2111,6 +2158,7 @@ def test_put_provider_rejects_empty_credential_without_write(tmp_path):
             {"uuid": "5fb4abbb-9e26-5386-a28b-ff319896f053", "id": "new", "key": ""}
         ],
         "current_api_key": "new",
+        "auto_rotate_credentials": True,
     }
     response = _run(put_provider(request))
 
@@ -2143,6 +2191,7 @@ def test_put_provider_rejects_soft_interrupt_for_non_chat_protocol(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "soft_interrupt": True,
     }
 
@@ -2179,6 +2228,7 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "force_rosetta_compaction": True,
     }
 
@@ -2203,6 +2253,7 @@ def test_put_provider_persists_and_hot_loads_force_rosetta_compaction(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "force_rosetta_compaction": False,
     }
     response = _run(put_provider(request))
@@ -2238,6 +2289,7 @@ def test_put_provider_rejects_force_rosetta_compaction_for_chat(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "force_rosetta_compaction": True,
     }
 
@@ -2259,6 +2311,7 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -2288,6 +2341,7 @@ def test_put_provider_sorts_new_provider_by_name_before_persisting(tmp_path):
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2310,6 +2364,7 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://zulu.example.test"],
         "current_base_url": "https://zulu.example.test",
         "provider": "openai",
@@ -2333,6 +2388,7 @@ def test_put_provider_sorts_renamed_provider_and_updates_references(tmp_path):
             "api_type": "chat",
             "base_urls": ["https://beta.example.test"],
             "current_base_url": "https://beta.example.test",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2356,6 +2412,7 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -2387,6 +2444,7 @@ def test_put_provider_rename_updates_search_dependency(tmp_path):
             "request_encoding": "passthrough",
             "base_urls": ["https://new.example.test"],
             "current_base_url": "https://new.example.test",
+            "auto_rotate_credentials": True,
         },
     )
     response = _run(put_provider(request))
@@ -2408,6 +2466,7 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2438,6 +2497,7 @@ def test_put_provider_rename_updates_deepseek_search_dependency(tmp_path):
             "request_encoding": "passthrough",
             "base_urls": ["https://api.deepseek.com"],
             "current_base_url": "https://api.deepseek.com",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2462,6 +2522,7 @@ def test_delete_provider_rejects_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://search.example.test"],
         "current_base_url": "https://search.example.test",
         "provider": "openai",
@@ -2523,6 +2584,7 @@ def test_delete_provider_rejects_deepseek_search_dependency(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2574,6 +2636,7 @@ def test_put_provider_rejects_missing_persisted_provider(tmp_path):
                 }
             ],
             "current_api_key": "primary",
+            "auto_rotate_credentials": True,
         },
     )
 
@@ -2611,6 +2674,7 @@ def test_put_provider_persists_direct_responses_protocol(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
 
     response = _run(put_provider(request))
@@ -2634,6 +2698,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
         "base_urls": ["https://api.deepseek.com"],
         "current_base_url": "https://api.deepseek.com",
         "provider": "deepseek",
@@ -2668,6 +2733,7 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
             }
         ],
         "current_api_key": "renamed-primary",
+        "auto_rotate_credentials": True,
     }
 
     response = _run(put_provider(request))
@@ -2685,6 +2751,278 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert saved["providers"]["DeepSeek"]["provider"] == "deepseek"
     assert saved["providers"]["DeepSeek"]["api_type"] == "chat"
     assert "type" not in saved["providers"]["DeepSeek"]
+
+
+def test_put_provider_requires_explicit_auto_rotation_without_write(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data, indent=2).encode()
+    config_path.write_bytes(original)
+    body = _provider_put_body(data, "openai")
+    body.pop("auto_rotate_credentials")
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert b"boolean 'auto_rotate_credentials'" in response.body
+    assert config_path.read_bytes() == original
+    assert (
+        request.app.gateway_config.providers["openai"].auto_rotate_credentials is True
+    )
+
+
+def test_put_provider_disables_rotation_and_activates_current_uuid_pairs(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["auto_rotate_credentials"] = False
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    expected = {
+        "provider": "openai",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+    }
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
+    assert (
+        request.app.gateway_config.providers["openai"].auto_rotate_credentials is False
+    )
+    current = request.app.gateway_config.model_group_rings["OpenAI"].current
+    assert current.provider_name == "openai"
+    assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
+
+
+def test_put_provider_enables_rotation_and_collapses_pairs_at_first_occurrence(
+    tmp_path,
+):
+    data = _config_data()
+    data["providers"]["openai"]["auto_rotate_credentials"] = False
+    data["providers"]["openai"]["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    data["providers"]["secondary"] = {
+        **json.loads(json.dumps(data["providers"]["openai"])),
+        "auto_rotate_credentials": True,
+        "base_urls": ["https://secondary.example.test"],
+        "current_base_url": "https://secondary.example.test",
+    }
+    data["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
+        "secondary",
+        {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID},
+    ]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["auto_rotate_credentials"] = True
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["openai", "secondary"]
+
+
+def test_provider_rename_updates_string_and_uuid_pair_candidates():
+    data = {
+        "providers": {"old": {}},
+        "model_groups": {
+            "mixed": {
+                "provider": [
+                    "old",
+                    {
+                        "provider": "old",
+                        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+                    },
+                    "other",
+                ]
+            }
+        },
+    }
+
+    error = _shared._handle_provider_rename(data, "old", "renamed")
+
+    assert error is None
+    assert data["model_groups"]["mixed"]["provider"] == [
+        "renamed",
+        {
+            "provider": "renamed",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        },
+        "other",
+    ]
+
+
+def test_put_provider_previews_then_confirms_referenced_credential_deletion(
+    tmp_path,
+):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    data["model_groups"] = {
+        "Promote": {
+            "provider": [
+                {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
+                {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID},
+            ],
+            "type": "llm",
+            "models": {"promote-model": {"upstream_model": "gpt-5.6-terra"}},
+        },
+        "Empty": {
+            "provider": [
+                {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+            ],
+            "type": "llm",
+            "models": {"empty-model": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    }
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data).encode()
+    config_path.write_bytes(original)
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][1]]
+    body["api_keys"][0]["id"] = "renamed-secondary"
+    body["current_api_key"] = "renamed-secondary"
+    request = _provider_admin_request(config_path, data, "openai", body)
+    initial_runtime = request.app.gateway_config
+
+    preview = _run(put_provider(request))
+
+    payload = json.loads(preview.body)
+    assert preview.status_code == 409
+    assert payload["affected_model_groups"] == ["Promote", "Empty"]
+    assert payload["code"].startswith("provider_credential_references:")
+    assert config_path.read_bytes() == original
+    assert request.app.gateway_config is initial_runtime
+
+    body["confirm_credential_deletion"] = ["Promote", "Empty"]
+    confirmed = _run(put_provider(request))
+
+    assert confirmed.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Promote"]["provider"] == [
+        {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID}
+    ]
+    assert saved["model_groups"]["Empty"]["provider"] == []
+    assert saved["providers"]["openai"]["api_keys"][0] == {
+        "uuid": _SECONDARY_CREDENTIAL_UUID,
+        "id": "renamed-secondary",
+        "key": "sk-secondary",
+    }
+    assert (
+        request.app.gateway_config.model_group_rings["Promote"].current.credential_uuid
+        == _SECONDARY_CREDENTIAL_UUID
+    )
+    assert "Empty" not in request.app.gateway_config.model_group_rings
+
+
+def test_put_provider_rejects_stale_credential_reference_confirmation(tmp_path):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    pair = {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    data["model_groups"] = {
+        "Original": {
+            "provider": [pair],
+            "type": "llm",
+            "models": {"original-model": {"upstream_model": "gpt-5.6-terra"}},
+        }
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][1]]
+    body["current_api_key"] = "secondary"
+    request = _provider_admin_request(config_path, data, "openai", body)
+    initial_runtime = request.app.gateway_config
+
+    preview = _run(put_provider(request))
+
+    preview_payload = json.loads(preview.body)
+    assert preview.status_code == 409
+    assert preview_payload["affected_model_groups"] == ["Original"]
+    assert "sk-primary" not in preview.body.decode()
+
+    changed = json.loads(config_path.read_text(encoding="utf-8"))
+    changed["model_groups"]["Added"] = {
+        "provider": [pair],
+        "type": "llm",
+        "models": {"added-model": {"upstream_model": "gpt-5.6-terra"}},
+    }
+    changed_bytes = json.dumps(changed).encode()
+    config_path.write_bytes(changed_bytes)
+    body["confirm_credential_deletion"] = preview_payload["affected_model_groups"]
+
+    stale = _run(put_provider(request))
+
+    stale_payload = json.loads(stale.body)
+    assert stale.status_code == 409
+    assert stale_payload["affected_model_groups"] == ["Original", "Added"]
+    assert "sk-primary" not in stale.body.decode()
+    assert config_path.read_bytes() == changed_bytes
+    assert request.app.gateway_config is initial_runtime
+
+    body["confirm_credential_deletion"] = stale_payload["affected_model_groups"]
+    confirmed = _run(put_provider(request))
+
+    assert confirmed.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Original"]["provider"] == []
+    assert saved["model_groups"]["Added"]["provider"] == []
+    assert request.app.gateway_config is not initial_runtime
+
+
+def test_delete_provider_recognizes_uuid_pair_reference(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["auto_rotate_credentials"] = False
+    data["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data).encode()
+    config_path.write_bytes(original)
+    request = SimpleNamespace(
+        app=SimpleNamespace(config_path=str(config_path)),
+        path_params={"name": "openai"},
+        query_params={},
+    )
+
+    response = _run(delete_provider(request))
+
+    assert response.status_code == 409
+    assert b"OpenAI" in response.body
+    assert config_path.read_bytes() == original
 
 
 def test_get_config_returns_model_groups_and_effective_models(tmp_path):
@@ -2937,6 +3275,9 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
     assert group["providers"] == [
         {
             "name": "openai",
+            "credential_uuid": None,
+            "credential_id": None,
+            "auto_rotate_credentials": True,
             "current": True,
             "enabled": True,
             "status": "available",
@@ -2944,6 +3285,9 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
         },
         {
             "name": "secondary",
+            "credential_uuid": None,
+            "credential_id": None,
+            "auto_rotate_credentials": True,
             "current": False,
             "enabled": True,
             "status": "available",
@@ -3003,6 +3347,9 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     ]
     assert rows[0] == {
         "name": "openai",
+        "credential_uuid": None,
+        "credential_id": None,
+        "auto_rotate_credentials": True,
         "current": True,
         "enabled": True,
         "status": "available",
@@ -3010,6 +3357,9 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     }
     assert rows[1] == {
         "name": "secondary",
+        "credential_uuid": None,
+        "credential_id": None,
+        "auto_rotate_credentials": True,
         "current": False,
         "enabled": True,
         "status": "cooling",
@@ -3027,6 +3377,52 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     assert rows[5]["status"] == "disabled"
     assert rows[5]["current"] is False
     assert "duplicated" in rows[5]["error"]
+
+
+def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    pair = {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    config["model_groups"]["OpenAI"]["provider"] = [pair]
+    config["model_groups"]["Shared"] = {
+        "provider": [pair],
+        "type": "llm",
+        "models": {"shared-model": {"upstream_model": "gpt-5.6-terra"}},
+    }
+    runtime_config = GatewayConfig(config)
+    runtime_config.providers["openai"].mark_credential_failed("primary")
+    assert runtime_config.model_group_provider_statuses("OpenAI") == (
+        ("openai", "available"),
+    )
+    assert runtime_config.model_group_provider_statuses("Shared") == (
+        ("openai", "available"),
+    )
+    assert runtime_config.available_model_group_candidates("OpenAI") == ()
+    assert runtime_config.available_model_group_candidates("Shared") == ()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=runtime_config,
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    groups = json.loads(response.body)["model_groups"]
+    for group_name in ("OpenAI", "Shared"):
+        assert groups[group_name]["providers"][0] == {
+            "name": "openai",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+            "credential_id": "primary",
+            "auto_rotate_credentials": False,
+            "current": True,
+            "enabled": True,
+            "status": "cooling",
+            "error": None,
+        }
 
 
 def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_path):
@@ -3069,6 +3465,117 @@ def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_p
         ("secondary", "available"),
         ("openai", "available"),
     )
+
+
+def test_put_model_group_accepts_distinct_same_provider_uuid_pairs(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    config["providers"]["openai"]["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    config["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    initial_config.providers["openai"].mark_credential_failed("secondary")
+    assert not initial_config.providers["openai"].credential_uuid_is_available(
+        _SECONDARY_CREDENTIAL_UUID
+    )
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    candidates = [
+        {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID},
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
+    ]
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": candidates,
+            "type": "llm",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    assert (
+        json.loads(config_path.read_text())["model_groups"]["OpenAI"]["provider"]
+        == candidates
+    )
+    assert app.gateway_config.model_group_rings["OpenAI"].current.credential_uuid == (
+        _SECONDARY_CREDENTIAL_UUID
+    )
+    assert app.gateway_config.providers["openai"].credential_uuid_is_available(
+        _SECONDARY_CREDENTIAL_UUID
+    )
+    projected = json.loads(_run(get_config(SimpleNamespace(app=app))).body)
+    rows = projected["model_groups"]["OpenAI"]["providers"]
+    assert [(row["name"], row["credential_id"]) for row in rows] == [
+        ("openai", "secondary"),
+        ("openai", "primary"),
+    ]
+    assert rows[0]["credential_uuid"] == _SECONDARY_CREDENTIAL_UUID
+    assert rows[0]["auto_rotate_credentials"] is False
+    assert rows[0]["current"] is True
+
+
+@pytest.mark.parametrize(
+    "candidates",
+    [
+        [
+            {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
+            {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
+        ],
+        ["openai"],
+        [
+            {
+                "provider": "openai",
+                "credential_uuid": "00000000-0000-4000-8000-000000000099",
+            }
+        ],
+    ],
+)
+def test_put_model_group_rejects_invalid_pair_candidates_without_write(
+    tmp_path, candidates
+):
+    config = _config_data()
+    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    config["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    original = json.dumps(config)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial_config
+        ),
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": candidates,
+            "type": "llm",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+    assert request.app.gateway_config is initial_config
 
 
 @pytest.mark.parametrize(
@@ -3189,6 +3696,7 @@ def test_put_model_group_persists_opencode_sampling_limits(tmp_path):
             }
         ],
         "current_api_key": "primary",
+        "auto_rotate_credentials": True,
     }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")

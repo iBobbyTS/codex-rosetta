@@ -73,6 +73,24 @@ ring reports only its size. Manual selection may restore a cooling entry and
 clears only that entry's cooldown. Successful request counts never rotate
 credentials.
 
+Every Provider must explicitly set the boolean `auto_rotate_credentials` field.
+When it is `true`, the Provider keeps the internal 503 retry and credential
+rotation behavior above, and model groups store that Provider as a name. When it
+is `false`, the Provider never selects a sibling credential internally; model
+groups instead store ordered `{provider, credential_uuid}` candidates. The UUID
+keeps a candidate stable when its editable credential ID changes. The Admin UI
+requires a credential for every disabled-rotation Provider row, permits the same
+Provider with different credentials, and rejects duplicate exact pairs. All
+candidates in a model group must still use the same `api_type`; heterogeneous
+model groups are unsupported.
+
+Changing a Provider from automatic to model-group-managed rotation binds its
+existing model-group rows to the then-current credential UUID. Changing it back
+collapses that Provider's pairs at their first occurrence. Removing a referenced
+credential first lists every affected model group and requires confirmation;
+confirmation removes every matching pair while retaining an empty, unavailable
+group when no candidate remains.
+
 ## Codex tool localization
 
 - [Basic conversation](codex-tool-localization/basic-conversation.md)

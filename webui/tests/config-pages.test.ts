@@ -70,6 +70,85 @@ beforeEach(() => {
 });
 
 describe('ProvidersPage', () => {
+  it('shows the exact automatic-rotation help and posts the explicit default', async () => {
+    apiMock.get.mockResolvedValue({ providers: {}, known_api_types: ['chat'], provider_catalog: providerCatalog });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    expect(dialog.getByRole('checkbox', { name: 'Automatic rotation' })).toBeChecked();
+    expect(dialog.getByText(/When automatic rotation is enabled, a 503/)).toHaveTextContent('model group manages key rotation and selection');
+    await selectDropdown(dialog.getByRole('button', { name: 'Protocol' }), 'OpenAI Chat Completions');
+    await fireEvent.input(dialog.getByLabelText('Provider Name'), { target: { value: 'new-provider' } });
+    await fireEvent.input(dialog.getByLabelText('Base URL 1'), { target: { value: 'https://new.example.test' } });
+    await fireEvent.input(dialog.getByLabelText('Credential key primary'), { target: { value: 'new-secret' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/new-provider',
+      expect.objectContaining({ auto_rotate_credentials: true }),
+    ));
+  });
+
+  it('confirms referenced credential deletion with every affected model group', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        relay: {
+          provider: 'openai', base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+          api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }, { uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret' }],
+          current_api_key: 'primary', auto_rotate_credentials: false, api_type: 'chat',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    let confirmationAttempts = 0;
+    apiMock.put.mockImplementation((_path: string, body: Record<string, unknown>) => {
+      if (Array.isArray(body.confirm_credential_deletion)) {
+        confirmationAttempts += 1;
+        if (confirmationAttempts === 1) return Promise.reject({
+          message: 'Credential references changed',
+          code: 'provider_credential_references:["Group A","Group C"]',
+        });
+        return Promise.resolve({ ok: true });
+      }
+      return Promise.reject({
+        message: 'Credentials are referenced',
+        code: 'provider_credential_references:["Group A","Group B"]',
+      });
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const editDialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.click(editDialog.getByRole('button', { name: 'Remove credential primary' }));
+    await fireEvent.click(editDialog.getByRole('button', { name: 'Save' }));
+    const confirm = within(await screen.findByRole('dialog', { name: 'Delete referenced credentials' }));
+    expect(confirm.getByText(/Group A, Group B/)).toBeInTheDocument();
+    expect(apiMock.put).toHaveBeenCalledTimes(1);
+    await fireEvent.click(confirm.getAllByRole('button', { name: 'Cancel' }).at(-1)!);
+    expect(apiMock.put).toHaveBeenCalledTimes(1);
+
+    await fireEvent.click(editDialog.getByRole('button', { name: 'Save' }));
+    const reopened = within(await screen.findByRole('dialog', { name: 'Delete referenced credentials' }));
+    await fireEvent.click(reopened.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenLastCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({
+        auto_rotate_credentials: false,
+        confirm_credential_deletion: ['Group A', 'Group B'],
+        current_api_key: 'secondary',
+        api_keys: [{ uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret' }],
+      }),
+    ));
+    const refreshed = within(await screen.findByRole('dialog', { name: 'Delete referenced credentials' }));
+    expect(refreshed.getByText(/Group A, Group C/)).toBeInTheDocument();
+    await fireEvent.click(refreshed.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenLastCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({ confirm_credential_deletion: ['Group A', 'Group C'] }),
+    ));
+    expect(apiMock.put).toHaveBeenCalledTimes(4);
+  });
+
   it('round-trips an untouched canonical credential mask', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
@@ -203,7 +282,7 @@ describe('ProvidersPage', () => {
 
   it('persists the provider while deriving its variant from that provider and URL', async () => {
     const config = {
-      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], api_type: 'responses', request_encoding: 'identity', proxy: 'http://proxy.example:8080' } },
+      providers: { official: { provider: 'openai', base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'], current_base_url: 'https://api.openai.com/v1', base_url_statuses: [{ base_url: 'https://api.openai.com/v1', current: true, status: 'available' }, { base_url: 'https://backup.example/v1', current: false, status: 'cooling' }], api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary', credential_statuses: [{ id: 'primary', current: true, status: 'available' }], auto_rotate_credentials: true, api_type: 'responses', request_encoding: 'identity', proxy: 'http://proxy.example:8080' } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
       provider_catalog: providerCatalog,
       registered_shims: [{ name: 'openai', logo: '/admin/assets/openai.svg' }],
@@ -245,6 +324,7 @@ describe('ProvidersPage', () => {
       force_rosetta_compaction: false,
       api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
       current_api_key: 'primary',
+      auto_rotate_credentials: true,
     });
     expect(body).not.toHaveProperty('preset');
     expect(body).not.toHaveProperty('base');
@@ -503,6 +583,7 @@ describe('ProvidersPage', () => {
             { uuid: FALLBACK_UUID, id: 'fallback', key: 'fall***cret' },
           ],
           current_api_key: 'fallback',
+          auto_rotate_credentials: true,
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -543,6 +624,7 @@ describe('ProvidersPage', () => {
         { uuid: expect.any(String), id: 'fallback', key: 'fresh-fallback-secret' },
       ],
       current_api_key: 'fallback',
+      auto_rotate_credentials: true,
       proxy: 'http://proxy.example:8080',
       allow_redirects: false,
       force_rosetta_compaction: false,
@@ -567,6 +649,7 @@ describe('ProvidersPage', () => {
           force_rosetta_compaction: true,
           api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
           current_api_key: 'primary',
+          auto_rotate_credentials: true,
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'],
@@ -579,7 +662,7 @@ describe('ProvidersPage', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
     const toggle = screen.getByLabelText('Force Rosetta prompt compaction');
     const requestEncoding = screen.getByLabelText('Upstream request encoding');
-    const divider = dialog.getByRole('separator');
+    const divider = dialog.getAllByRole('separator').at(-1)!;
     const proxyUrl = dialog.getByPlaceholderText('e.g. http://127.0.0.1:7890');
     expect(toggle).toBeChecked();
     expect(requestEncoding.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -623,6 +706,7 @@ describe('ProvidersPage', () => {
           current_base_url: 'https://current.example/v1',
           api_keys: [{ uuid: FIRST_UUID, id: 'first', key: 'firs***cret' }, { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }],
           current_api_key: 'current', proxy: 'http://proxy.example:8080', allow_redirects: true,
+          auto_rotate_credentials: true,
         },
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
@@ -645,7 +729,7 @@ describe('ProvidersPage', () => {
         provider: 'openai', api_type: 'responses', model: 'manual-model',
         current_base_url: 'https://current.example/v1',
         api_keys: [{ uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' }], current_api_key: 'current',
-        proxy: 'http://proxy.example:8080', allow_redirects: true,
+        auto_rotate_credentials: true, proxy: 'http://proxy.example:8080', allow_redirects: true,
       },
     ));
     expect(apiMock.put).not.toHaveBeenCalled();
@@ -742,7 +826,7 @@ describe('ProvidersPage', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
     await selectDropdown(dialog.getByLabelText('Protocol'), 'OpenAI Chat Completions');
     expect(dialog.queryByRole('button', { name: 'Auto-detect' })).not.toBeInTheDocument();
-    expect(dialog.getByRole('separator').compareDocumentPosition(dialog.getByPlaceholderText('e.g. http://127.0.0.1:7890')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(dialog.getAllByRole('separator').at(-1)!.compareDocumentPosition(dialog.getByPlaceholderText('e.g. http://127.0.0.1:7890')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(dialog.queryByLabelText('Detection model')).not.toBeInTheDocument();
   });
 });
@@ -840,6 +924,46 @@ describe('KeysPage', () => {
 });
 
 describe('ModelsPage', () => {
+  it('renders a full Provider selector until a false-mode Provider needs a key pair', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        automatic: { api_type: 'chat', auto_rotate_credentials: true, api_keys: [{ uuid: PRIMARY_UUID, id: 'automatic-key' }] },
+        fixed: { api_type: 'chat', auto_rotate_credentials: false, api_keys: [{ uuid: FIRST_UUID, id: 'first' }, { uuid: SECOND_UUID, id: 'second' }] },
+      },
+      model_groups: {}, tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Model Group' }));
+    expect(dialog.getAllByLabelText('Select Provider')).toHaveLength(1);
+    expect(dialog.queryByLabelText('Select credential')).toBeNull();
+
+    await selectModelGroupProvider('fixed');
+    expect(dialog.getByLabelText('Select Provider').closest('.model-group-provider-pair')).toBeInTheDocument();
+    const firstCredential = dialog.getByLabelText('Select credential');
+    expect(firstCredential).toHaveTextContent('Select credential');
+    await fireEvent.input(dialog.getByLabelText('Model Group Name'), { target: { value: 'Pairs' } });
+    await fireEvent.input(dialog.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await selectDropdown(firstCredential, 'first');
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled();
+
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add Provider' }));
+    await selectModelGroupProvider('fixed', 1);
+    await selectDropdown(dialog.getAllByLabelText('Select credential')[1], 'first');
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await selectDropdown(dialog.getAllByLabelText('Select credential')[1], 'second');
+    expect(dialog.getByRole('button', { name: 'Save' })).toBeEnabled();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Pairs', {
+      providers: [
+        { provider: 'fixed', credential_uuid: FIRST_UUID },
+        { provider: 'fixed', credential_uuid: SECOND_UUID },
+      ],
+      type: 'llm', models: { 'demo-model': {} },
+    }));
+  });
+
   it('renders provider selection inside each sortable row', async () => {
     apiMock.get.mockResolvedValue({
       providers: { upstream: { api_type: 'chat' } },
@@ -857,7 +981,7 @@ describe('ModelsPage', () => {
     expect(profileSelect?.closest('.model-group-dropdown-field')).toBeInTheDocument();
     expect(document.querySelectorAll('.model-group-dropdown-field')).toHaveLength(1);
     await fireEvent.click(profileSelect as HTMLButtonElement);
-    expect(profileSelect?.closest('.model-group-dropdown-field')?.querySelector('.suu-dropdown__menu--left')).toBeInTheDocument();
+    expect(document.querySelector('.suu-dropdown__menu--portal.suu-dropdown__menu--left')).toBeInTheDocument();
   });
 
   it('writes only the model-group contract fields', async () => {
@@ -924,7 +1048,8 @@ describe('ModelsPage', () => {
     Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
     await dragAt(target, 'dragover', dataTransfer, 25);
     await dragAt(target, 'drop', dataTransfer, 25);
-    expect(providerRow('third')).toHaveTextContent('Current');
+    expect(providerRow('first')).toHaveTextContent('Current');
+    expect(providerRow('third')).not.toHaveTextContent('Current');
 
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(

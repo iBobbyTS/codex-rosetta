@@ -20,6 +20,7 @@ class TestBuildProviderInfo:
             "openai_responses",
             {
                 "api_keys": [{"id": "primary", "key": "test"}],
+                "auto_rotate_credentials": True,
                 "base_urls": [
                     "https://first.example/v1/",
                     "https://second.example/v1",
@@ -42,6 +43,7 @@ class TestBuildProviderInfo:
             "openai_responses",
             {
                 "api_keys": [{"id": "primary", "key": "test"}],
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://upstream.example/v1"],
                 "request_encoding": "passthrough",
                 "force_rosetta_compaction": True,
@@ -53,6 +55,7 @@ class TestBuildProviderInfo:
 
 def _gateway_config(provider: dict[str, object]) -> GatewayConfig:
     provider = dict(provider)
+    provider["auto_rotate_credentials"] = True
     if provider.get("api_type") == "responses":
         provider["request_encoding"] = "passthrough"
     return GatewayConfig(

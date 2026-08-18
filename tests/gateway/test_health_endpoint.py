@@ -364,6 +364,7 @@ def test_public_health_routes_redact_legacy_raw_tokens_but_keep_other_details():
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
                     "api_type": "chat",

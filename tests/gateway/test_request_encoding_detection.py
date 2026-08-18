@@ -88,6 +88,7 @@ def _provider(request_encoding: str):
                 }
             ],
             "current_api_key": "current",
+            "auto_rotate_credentials": True,
         },
     )
 

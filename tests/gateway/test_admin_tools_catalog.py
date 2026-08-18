@@ -202,6 +202,7 @@ def _make_app():
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": ["https://api.example.test/v1"],
                     "current_base_url": "https://api.example.test/v1",
                     "api_type": "chat",
@@ -759,6 +760,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
                     }
                 ],
                 "current_api_key": "primary",
+                "auto_rotate_credentials": True,
                 "base_urls": ["https://api.example.test/v1"],
                 "current_base_url": "https://api.example.test/v1",
                 "provider": "custom",

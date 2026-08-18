@@ -66,6 +66,7 @@ def _config() -> GatewayConfig:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                 },
                 "search-provider": {
                     "provider": "openai",
@@ -81,6 +82,7 @@ def _config() -> GatewayConfig:
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                 },
             },
             "model_groups": {

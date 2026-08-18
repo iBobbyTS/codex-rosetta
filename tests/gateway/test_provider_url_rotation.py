@@ -7,10 +7,14 @@ import json
 from collections import defaultdict, deque
 from types import SimpleNamespace
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 
+import codex_rosetta.gateway.app as app_module
+from codex_rosetta._vendor.httpserver import Response
 from codex_rosetta.gateway.app import _bind_provider_current_recorders
+from codex_rosetta.gateway.auth import api_key_principal_var
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
@@ -90,13 +94,17 @@ def _provider(
     current: str | None = None,
     credentials: tuple[tuple[str, str], ...] = (("primary", "provider-key"),),
     current_credential: str | None = None,
+    auto_rotate_credentials: bool = True,
+    credential_uuids: tuple[tuple[str, str], ...] = (),
 ) -> tuple[ProviderInfo, list[tuple[str, str]]]:
     writes: list[tuple[str, str]] = []
     provider = ProviderInfo(
         "openai_responses",
         configured_id=row_id,
         api_keys=credentials,
+        credential_uuids=credential_uuids,
         current_api_key=current_credential,
+        auto_rotate_credentials=auto_rotate_credentials,
         base_urls=base_urls,
         current_base_url=current or base_urls[0],
         auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
@@ -826,6 +834,72 @@ def test_passthrough_503_rotates_credential_on_same_url(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("representation", ["request", "stream", "passthrough"])
+@pytest.mark.parametrize("fixed_pair", [False, True])
+def test_disabled_rotation_retries_only_selected_credential(
+    monkeypatch,
+    representation: str,
+    fixed_pair: bool,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+            auto_rotate_credentials=False,
+            credential_uuids=((first_uuid, "first"), (second_uuid, "second")),
+        )
+        selected = (
+            provider.for_model_group_candidate(object(), credential_uuid=second_uuid)
+            if fixed_pair
+            else provider
+        )
+        target = (
+            f"{origin}/models"
+            if representation == "passthrough"
+            else f"{origin}/responses"
+        )
+        client = _RoutingClient()
+        client.add(target, *_literal_503s())
+        transport = _transport(monkeypatch, client)
+
+        async def send():
+            if representation == "request":
+                return await transport.send_request(
+                    selected, "openai_responses", {}, "model"
+                )
+            if representation == "stream":
+                return await transport.send_streaming(
+                    selected, "openai_responses", {}, "model"
+                )
+            return await transport.send_passthrough(selected, target, {}, method="POST")
+
+        result = await send()
+
+        expected_key = "key-second" if fixed_pair else "key-first"
+        expected_id = "second" if fixed_pair else "first"
+        assert result.status_code == 503
+        assert not result.synthetic
+        assert [item["Authorization"] for item in client.headers] == [
+            f"Bearer {expected_key}"
+        ] * 6
+        assert provider.current_credential_id == "first"
+        assert provider.credential_statuses() == (
+            ("first", "cooling" if expected_id == "first" else "available"),
+            ("second", "cooling" if expected_id == "second" else "available"),
+        )
+
+        unavailable = await send()
+        assert unavailable.status_code == 503
+        assert unavailable.synthetic
+        assert len(client.calls) == 6
+
+    asyncio.run(scenario())
+
+
 def test_search_passthrough_exhausts_credential_ring_before_provider_failure(
     monkeypatch,
 ) -> None:
@@ -971,6 +1045,156 @@ def _literal_502s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
 
 def _literal_503s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
     return tuple(_json_response(503, {"error": "busy"}) for _ in range(count))
+
+
+@pytest.mark.parametrize("with_other_provider", [False, True])
+def test_model_group_skips_same_provider_pair_after_shared_url_exhaustion(
+    monkeypatch,
+    with_other_provider: bool,
+) -> None:
+    async def scenario() -> None:
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        first_pair = {"provider": "row-a", "credential_uuid": first_uuid}
+        second_pair = {"provider": "row-a", "credential_uuid": second_uuid}
+        first_origin = "https://first.example/v1"
+        second_origin = "https://second.example/v1"
+        candidates: list[Any] = [first_pair, second_pair]
+        providers: dict[str, Any] = {
+            "row-a": {
+                "provider": "openai",
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "api_keys": [
+                    {"uuid": first_uuid, "id": "first", "key": "key-first"},
+                    {"uuid": second_uuid, "id": "second", "key": "key-second"},
+                ],
+                "current_api_key": "first",
+                "auto_rotate_credentials": False,
+                "base_urls": [first_origin],
+                "current_base_url": first_origin,
+            }
+        }
+        if with_other_provider:
+            providers["row-b"] = {
+                "provider": "openai",
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+                "api_keys": [
+                    {
+                        "uuid": "00000000-0000-4000-8000-000000000003",
+                        "id": "primary",
+                        "key": "key-other",
+                    }
+                ],
+                "current_api_key": "primary",
+                "auto_rotate_credentials": True,
+                "base_urls": [second_origin],
+                "current_base_url": second_origin,
+            }
+            candidates.append("row-b")
+        config = GatewayConfig(
+            {
+                "providers": providers,
+                "model_groups": {
+                    "models": {
+                        "provider": candidates,
+                        "type": "llm",
+                        "models": {"gpt-5.6-terra": {}},
+                    }
+                },
+                "server": {
+                    "admin_password": "test-admin-password",
+                    "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+                },
+            }
+        )
+        ring = config.model_group_rings["models"]
+        writes: list[Any] = []
+
+        async def record(_group: str, candidate: Any) -> None:
+            writes.append(candidate)
+
+        ring.bind_recorder(record)
+        client = _RoutingClient()
+        client.add(
+            f"{first_origin}/responses",
+            *_literal_502s(5),
+            _json_response(502, {"error": "last-real"}),
+        )
+        if with_other_provider:
+            client.add(
+                f"{second_origin}/responses",
+                _json_response(200, {"ok": True}),
+            )
+        transport = _transport(monkeypatch, client)
+
+        async def handle(_route, provider, *_args: Any, **_kwargs: Any):
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "gpt-5.6-terra"
+            )
+            return Response(
+                result.raw_content,
+                status_code=result.status_code,
+                content_type="application/json",
+            ), {
+                **(
+                    {
+                        "upstream_provider_failure": True,
+                        "provider_failure_origin": (
+                            "rosetta_local" if result.synthetic else "upstream_response"
+                        ),
+                    }
+                    if result.status_code == 502
+                    else {}
+                )
+            }
+
+        monkeypatch.setattr(app_module, "handle_non_streaming", handle)
+        request = MagicMock()
+        request.headers = {}
+        request.json.return_value = {"model": "gpt-5.6-terra", "input": []}
+        request.app.metadata_store = MagicMock()
+        request.app.codex_tool_store = MagicMock()
+        request.app.transport = transport
+        request.app.metrics = None
+        request.app.request_log = None
+        request.app.persistence = None
+        request.app.profiler_state = None
+        request.app.gateway_config = config
+
+        principal_token = api_key_principal_var.set("test")
+        try:
+            response = await app_module._proxy_handler(request, "openai_responses")
+        finally:
+            api_key_principal_var.reset(principal_token)
+
+        assert client.calls.count(f"{first_origin}/responses") == 6
+        assert config.providers["row-a"].base_url_statuses() == (
+            (first_origin, "cooling"),
+        )
+        assert config.providers["row-a"].credential_statuses() == (
+            ("first", "available"),
+            ("second", "available"),
+        )
+        assert ring.status_snapshot()[0][1] == "cooling"
+        assert ring.status_snapshot()[1][1] == "available"
+        if with_other_provider:
+            assert response.status_code == 200
+            assert client.calls == [f"{first_origin}/responses"] * 6 + [
+                f"{second_origin}/responses"
+            ]
+            assert writes == ["row-b"]
+            assert ring.current == "row-b"
+        else:
+            assert response.status_code == 502
+            assert isinstance(response, Response)
+            assert response.body == b'{"error": "last-real"}'
+            assert client.calls == [f"{first_origin}/responses"] * 6
+            assert writes == []
+            assert ring.current.credential_uuid == first_uuid
+
+    asyncio.run(scenario())
 
 
 def test_retry_policy_is_status_neutral_and_stops_on_caller_result() -> None:
@@ -1354,6 +1578,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                         },
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": [first, second],
                     "current_base_url": first,
                 },
@@ -1369,6 +1594,7 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
                         }
                     ],
                     "current_api_key": "primary",
+                    "auto_rotate_credentials": True,
                     "base_urls": [other],
                     "current_base_url": other,
                 },
@@ -1399,6 +1625,68 @@ def test_app_bound_recorder_persists_only_the_selected_configured_row(
         assert saved["providers"]["row-a"]["current_api_key"] == "secondary"
         assert saved["providers"]["row-b"]["current_base_url"] == other
         assert saved["providers"]["row-b"]["current_api_key"] == "primary"
+
+    asyncio.run(scenario())
+
+
+def test_app_bound_model_group_recorder_persists_exact_pair_before_publish(
+    tmp_path,
+) -> None:
+    async def scenario() -> None:
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        first_pair = {"provider": "row-a", "credential_uuid": first_uuid}
+        second_pair = {"provider": "row-a", "credential_uuid": second_uuid}
+        document = {
+            "providers": {
+                "row-a": {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "request_encoding": "passthrough",
+                    "api_keys": [
+                        {"uuid": first_uuid, "id": "first", "key": "key-first"},
+                        {
+                            "uuid": second_uuid,
+                            "id": "renamed-second",
+                            "key": "key-second",
+                        },
+                    ],
+                    "current_api_key": "first",
+                    "auto_rotate_credentials": False,
+                    "base_urls": ["https://upstream.example/v1"],
+                    "current_base_url": "https://upstream.example/v1",
+                }
+            },
+            "model_groups": {
+                "models": {
+                    "provider": [first_pair, second_pair],
+                    "type": "llm",
+                    "models": {"gpt-5.6-terra": {}},
+                }
+            },
+            "server": {
+                "admin_password": "test-admin-password",
+                "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+            },
+        }
+        config_path = tmp_path / "config.jsonc"
+        config_path.write_text(json.dumps(document))
+        config = GatewayConfig(document)
+        _bind_provider_current_recorders(config, str(config_path))
+        ring = config.model_group_rings["models"]
+
+        observation = ring.observe()
+        leader, _waited = await ring.claim_observation(observation)
+        assert leader is True
+        await ring.select(ring.candidates[1])
+        await ring.publish()
+
+        saved = json.loads(config_path.read_text())
+        assert saved["model_groups"]["models"]["provider"] == [
+            second_pair,
+            first_pair,
+        ]
+        assert config.providers["row-a"].current_credential_id == "first"
 
     asyncio.run(scenario())
 
@@ -2112,6 +2400,128 @@ def test_same_provider_concurrent_503s_publish_one_credential_change(
         assert [item["Authorization"] for item in client.headers].count(
             "Bearer key-second"
         ) == 2
+
+    asyncio.run(scenario())
+
+
+def test_fixed_credential_waiter_cools_its_fresh_failed_key_globally(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        third_uuid = "00000000-0000-4000-8000-000000000003"
+
+        def pair(credential_uuid: str) -> dict[str, str]:
+            return {"provider": "row-a", "credential_uuid": credential_uuid}
+
+        config = GatewayConfig(
+            {
+                "providers": {
+                    "row-a": {
+                        "provider": "openai",
+                        "api_type": "responses",
+                        "request_encoding": "passthrough",
+                        "api_keys": [
+                            {
+                                "uuid": first_uuid,
+                                "id": "first",
+                                "key": "key-first",
+                            },
+                            {
+                                "uuid": second_uuid,
+                                "id": "second",
+                                "key": "key-second",
+                            },
+                            {
+                                "uuid": third_uuid,
+                                "id": "third",
+                                "key": "key-third",
+                            },
+                        ],
+                        "current_api_key": "first",
+                        "auto_rotate_credentials": False,
+                        "base_urls": [origin],
+                        "current_base_url": origin,
+                    }
+                },
+                "model_groups": {
+                    "first-group": {
+                        "provider": [pair(first_uuid)],
+                        "type": "llm",
+                        "models": {"model-first": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                    "second-group": {
+                        "provider": [pair(second_uuid)],
+                        "type": "llm",
+                        "models": {"model-second": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                    "third-group": {
+                        "provider": [pair(third_uuid)],
+                        "type": "llm",
+                        "models": {"model-third": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                },
+                "server": {
+                    "admin_password": "test-admin-password",
+                    "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+                },
+            }
+        )
+        _route, first_view = config.resolve("openai_responses", "model-first")
+        _route, second_view = config.resolve("openai_responses", "model-second")
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            _json_response(503, {"error": "first-busy"}),
+            _json_response(200, {"ok": True}),
+            _json_response(503, {"error": "second-final"}),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        leader = asyncio.create_task(
+            transport.send_request(first_view, "openai_responses", {}, "model-first")
+        )
+        await retry_started.wait()
+        waiter = asyncio.create_task(
+            transport.send_request(second_view, "openai_responses", {}, "model-second")
+        )
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first"
+        ]
+        release_retry.set()
+        leader_result, waiter_result = await asyncio.gather(leader, waiter)
+
+        assert leader_result.status_code == 200
+        assert waiter_result.status_code == 503
+        assert waiter_result.raw_content == b'{"error": "second-final"}'
+        assert sleeps == [1.0]
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+        assert config.providers["row-a"].current_credential_id == "first"
+        assert config.providers["row-a"].credential_statuses() == (
+            ("first", "available"),
+            ("second", "cooling"),
+            ("third", "available"),
+        )
+        assert config.available_model_group_candidates("second-group") == ()
+        assert len(config.available_model_group_candidates("first-group")) == 1
+        assert len(config.available_model_group_candidates("third-group")) == 1
 
     asyncio.run(scenario())
 

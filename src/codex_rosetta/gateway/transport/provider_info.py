@@ -13,6 +13,7 @@ Higher-level factory logic (shim resolution, config parsing) stays in
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Awaitable, Callable, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
@@ -26,6 +27,26 @@ from ..provider_profiles import (
 AuthHeaderFn = Callable[[str], dict[str, str]]
 CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
 CurrentCredentialRecorder = Callable[[str, str], Awaitable[None]]
+
+
+def _normalize_credential_uuid_mapping(
+    value: Sequence[tuple[str, str]] | None,
+    credential_ids: tuple[str, ...],
+) -> dict[str, str]:
+    """Validate the optional stable-UUID to editable-ID mapping."""
+    entries = tuple(value or ())
+    if any(
+        not isinstance(credential_uuid, str)
+        or not credential_uuid
+        or credential_id not in credential_ids
+        for credential_uuid, credential_id in entries
+    ):
+        raise ValueError("Provider credential UUID mapping is invalid")
+    if len({item[0] for item in entries}) != len(entries):
+        raise ValueError("Provider credential UUIDs must be unique")
+    if entries and {item[1] for item in entries} != set(credential_ids):
+        raise ValueError("Provider credential UUID mapping must cover api_keys")
+    return dict(entries)
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +68,9 @@ class ProviderInfo:
         configured_id: str | None = None,
         api_key: str | None = None,
         api_keys: Sequence[tuple[str, str]] | None = None,
+        credential_uuids: Sequence[tuple[str, str]] | None = None,
         current_api_key: str | None = None,
+        auto_rotate_credentials: bool = True,
         base_url: str | None = None,
         base_urls: Sequence[str] | None = None,
         current_base_url: str | None = None,
@@ -106,6 +129,14 @@ class ProviderInfo:
         if selected_credential not in credential_ids:
             raise ValueError("current_api_key must be a member of api_keys")
         self._credentials = dict(normalized_credentials)
+        if not isinstance(auto_rotate_credentials, bool):
+            raise ValueError("auto_rotate_credentials must be a boolean")
+        self.auto_rotate_credentials = auto_rotate_credentials
+        self._credential_ids_by_uuid = _normalize_credential_uuid_mapping(
+            credential_uuids, credential_ids
+        )
+        self._fixed_credential_id: str | None = None
+        self._model_group_candidate_identity: object | None = None
         self._credential_ring = OrderedFailoverCoordinator(
             credential_ids, selected_credential
         )
@@ -210,7 +241,12 @@ class ProviderInfo:
     @property
     def current_credential_id(self) -> str:
         """Return the selected credential identifier without its secret."""
-        return self._credential_ring.current
+        return self._fixed_credential_id or self._credential_ring.current
+
+    @property
+    def model_group_candidate_identity(self) -> object | None:
+        """Return the request-local model-group candidate identity, if any."""
+        return self._model_group_candidate_identity
 
     def bind_current_credential_recorder(
         self, recorder: CurrentCredentialRecorder | None
@@ -222,13 +258,18 @@ class ProviderInfo:
         return await self._credential_ring.wait()
 
     def observe_credential_rotation(self) -> tuple[str, int]:
-        return self._credential_ring.observe()
+        _current, generation = self._credential_ring.observe()
+        return self.current_credential_id, generation
 
     def available_credentials(self) -> tuple[str, ...]:
-        return self._credential_ring.available()
+        available = self._credential_ring.available()
+        if self.auto_rotate_credentials and self._fixed_credential_id is None:
+            return available
+        current = self.current_credential_id
+        return (current,) if current in available else ()
 
     def has_available_credential(self) -> bool:
-        return bool(self._credential_ring.available())
+        return bool(self.available_credentials())
 
     async def claim_credential_rotation(self, observed: str) -> bool:
         return await self._credential_ring.claim(observed)
@@ -236,7 +277,10 @@ class ProviderInfo:
     async def claim_credential_rotation_observation(
         self, observation: tuple[str, int]
     ) -> tuple[bool, bool]:
-        return await self._credential_ring.claim_observation_with_waited(observation)
+        _credential_id, generation = observation
+        return await self._credential_ring.claim_observation_with_waited(
+            (self._credential_ring.current, generation)
+        )
 
     def mark_credential_failed(self, credential_id: str) -> None:
         self._credential_ring.mark_failed(credential_id)
@@ -283,6 +327,8 @@ class ProviderInfo:
         self._credential_ring.set_current(credential_id)
 
     def next_available_credential(self, failed: str) -> str | None:
+        if not self.auto_rotate_credentials or self._fixed_credential_id is not None:
+            return None
         return self._credential_ring.next_available_after(failed)
 
     async def publish_credential_rotation(self) -> None:
@@ -292,6 +338,40 @@ class ProviderInfo:
     def credential_values(self) -> tuple[str, ...]:
         """Return wire credentials in configured order as a read-only view."""
         return tuple(self._credentials[item] for item in self.credential_ids)
+
+    def credential_id_for_uuid(self, credential_uuid: str) -> str:
+        """Resolve one stable credential UUID to its current editable ID."""
+        try:
+            return self._credential_ids_by_uuid[credential_uuid]
+        except KeyError:
+            raise ValueError("credential UUID must belong to this Provider") from None
+
+    def credential_uuid_is_available(self, credential_uuid: str) -> bool:
+        """Return whether one configured credential UUID is globally available."""
+        credential_id = self.credential_id_for_uuid(credential_uuid)
+        return credential_id in self._credential_ring.available()
+
+    def clear_credential_uuid_cooldown(self, credential_uuid: str) -> None:
+        """Clear the global cooldown for one stable credential UUID."""
+        self._credential_ring.clear_cooldown(
+            self.credential_id_for_uuid(credential_uuid)
+        )
+
+    def for_model_group_candidate(
+        self,
+        candidate_identity: object,
+        *,
+        credential_uuid: str | None = None,
+    ) -> ProviderInfo:
+        """Return a request view sharing this Provider's authoritative state."""
+        view = copy.copy(self)
+        view._model_group_candidate_identity = candidate_identity
+        view._fixed_credential_id = (
+            self.credential_id_for_uuid(credential_uuid)
+            if credential_uuid is not None
+            else None
+        )
+        return view
 
     # -- public helpers used by the proxy -----------------------------------
 

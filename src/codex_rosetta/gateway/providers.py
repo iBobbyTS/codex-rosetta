@@ -112,6 +112,13 @@ def normalize_provider_api_key(value: Any) -> str:
     return values[0] if values else ""
 
 
+def _provider_auto_rotate_credentials(cfg: dict[str, Any]) -> bool:
+    value = cfg.get("auto_rotate_credentials")
+    if not isinstance(value, bool):
+        raise ValueError("config: provider auto_rotate_credentials must be a boolean")
+    return value
+
+
 def build_provider_info(
     provider_type: str,
     cfg: dict[str, Any],
@@ -194,6 +201,7 @@ def build_provider_info(
     force_rosetta_compaction = cfg.get("force_rosetta_compaction", False)
     if not isinstance(force_rosetta_compaction, bool):
         raise ValueError("config: provider force_rosetta_compaction must be a boolean")
+    auto_rotate_credentials = _provider_auto_rotate_credentials(cfg)
     request_encoding = resolve_request_encoding(
         "responses" if base_type in {"openai_responses", "open_responses"} else "other",
         *([cfg["request_encoding"]] if "request_encoding" in cfg else []),
@@ -212,12 +220,21 @@ def build_provider_info(
         and isinstance(item.get("id"), str)
         and isinstance(item.get("key"), str)
     )
+    credential_uuids = tuple(
+        (item["uuid"], item["id"])
+        for item in raw_credentials
+        if isinstance(item, dict)
+        and isinstance(item.get("uuid"), str)
+        and isinstance(item.get("id"), str)
+    )
 
     return ProviderInfo(
         name=provider_type,
         configured_id=configured_id,
         api_keys=credential_entries,
+        credential_uuids=credential_uuids,
         current_api_key=cfg.get("current_api_key"),
+        auto_rotate_credentials=auto_rotate_credentials,
         **(
             {
                 "base_urls": cfg["base_urls"],

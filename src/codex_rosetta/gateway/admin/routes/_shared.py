@@ -552,6 +552,7 @@ def _build_provider_entry(
     entry: dict[str, Any] = {
         "api_keys": api_keys,
         "current_api_key": current_api_key,
+        "auto_rotate_credentials": body["auto_rotate_credentials"],
         "base_urls": base_urls,
         "current_base_url": current_base_url,
     }
@@ -615,7 +616,18 @@ def _handle_provider_rename(
             provider_names = group_val.get("provider")
             if isinstance(provider_names, list):
                 group_val["provider"] = [
-                    name if item == rename_from else item for item in provider_names
+                    (
+                        name
+                        if item == rename_from
+                        else {
+                            **item,
+                            "provider": name,
+                        }
+                        if isinstance(item, dict)
+                        and item.get("provider") == rename_from
+                        else item
+                    )
+                    for item in provider_names
                 ]
     server = data.get("server")
     web_search = server.get("web_search") if isinstance(server, dict) else None
