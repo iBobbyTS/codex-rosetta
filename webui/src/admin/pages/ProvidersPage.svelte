@@ -161,7 +161,7 @@
       {#snippet header()}<th>{t('col.baseUrl')}</th><th>{t('col.status')}</th>{/snippet}
       {#snippet children(row,index)}<td><input aria-label={t('aria.baseUrl',{index:index+1})} value={row.value} oninput={(event)=>setUrl(row.id,event.currentTarget.value)} placeholder={t('placeholder.baseUrl')} /></td><td class="provider-sortable-status">{#if row.status}<span class:available={row.status==='available'} class:cooling={row.status==='cooling'}>{t(`provider.url.${row.status}`)}</span>{/if}</td>{/snippet}
     </SortableTableEnhanced>
-    <button type="button" class="btn btn-sm" onclick={addUrl}>{t('btn.addBaseUrl')}</button>
+    <div class="provider-key-actions"><button type="button" class="btn btn-sm" onclick={addUrl}>{t('btn.addBaseUrl')}</button></div>
   </div>
   <div class="form-group">
     <div class="form-label">{t('label.providerCredentials')}</div>
@@ -173,7 +173,7 @@
   </div>
   {#if apiType==='responses'}<div class="form-group"><div class="form-label form-label-with-hint"><label for="provRequestEncoding">{t('label.requestEncoding')}</label><span class="hint-icon">?<span class="hint-popup">{t('provider.requestEncodingDescription')}</span></span></div><div class="request-encoding-row"><Dropdown id="provRequestEncoding" value={requestEncoding} options={['passthrough','identity','zstd'].map((value)=>({value,label:t(`provider.requestEncoding.${value}`)}))} fitViewport={true} fitContent={true} menuAlign="left" onChange={(value:DropdownValue)=>{requestEncoding=String(value) as RequestEncoding;}} /><input aria-label={t('label.requestEncodingDetectionModel')} bind:value={detectionModel} placeholder={t('placeholder.requestEncodingDetectionModel')} /><button type="button" class="btn btn-sm" disabled={detectingEncoding} onclick={()=>void detectRequestEncoding()}>{detectingEncoding?t('btn.detectingRequestEncoding'):t('btn.detectRequestEncoding')}</button></div>{#if detectionError}<pre class="request-encoding-error" role="alert">{detectionError}</pre>{/if}</div>{/if}
   {#if apiType==='responses'}<div class="form-group"><div class="checkbox-group"><label><input type="checkbox" bind:checked={forceRosettaCompaction} /><span>{t('label.forceRosettaCompaction')}</span></label><span class="hint-icon">?<span class="hint-popup">{t('provider.forceRosettaCompactionDescription')}</span></span></div></div>{/if}
-  {#if apiType==='responses'}<div class="provider-options-divider" role="separator"></div>{/if}
+  <div class="provider-options-divider" role="separator"></div>
   <div class="form-group"><label for="provProxy">{t('label.proxyUrl')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label><input id="provProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} /></div>
   <div class="form-group checkbox-group"><label><input type="checkbox" bind:checked={allowRedirects} /><span>{t('label.allowRedirects')}</span></label></div>
   {#if apiType==='chat'}<div class="form-group"><div class="checkbox-group"><label><input type="checkbox" bind:checked={softInterrupt} /><span>{t('label.softInterrupt')}</span></label></div><p class="provider-option-description">{t('provider.softInterruptDescription')}</p></div>{/if}

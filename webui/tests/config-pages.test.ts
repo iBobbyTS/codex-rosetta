@@ -376,6 +376,7 @@ describe('ProvidersPage', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
     expect(dialog.getByRole('button', { name: 'Remove https://one.example/v1' })).toBeDisabled();
     expect(dialog.getByRole('button', { name: 'Remove credential primary' })).toBeDisabled();
+    expect(dialog.getByRole('button', { name: '+ Add Base URL' }).parentElement).toHaveClass('provider-key-actions');
 
     await fireEvent.click(dialog.getByRole('button', { name: '+ Add Base URL' }));
     expect(dialog.getByRole('button', { name: 'Remove Base URL' })).not.toBeDisabled();
@@ -741,6 +742,7 @@ describe('ProvidersPage', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
     await selectDropdown(dialog.getByLabelText('Protocol'), 'OpenAI Chat Completions');
     expect(dialog.queryByRole('button', { name: 'Auto-detect' })).not.toBeInTheDocument();
+    expect(dialog.getByRole('separator').compareDocumentPosition(dialog.getByPlaceholderText('e.g. http://127.0.0.1:7890')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(dialog.queryByLabelText('Detection model')).not.toBeInTheDocument();
   });
 });
