@@ -257,6 +257,10 @@ code.copyable:hover { background: var(--bg-hover); }
 .model-group-dropdown-field .suu-dropdown__option { white-space:normal;overflow-wrap:anywhere; }
 .model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu),
 .model-group-modal:has(.model-group-dropdown-field .suu-dropdown__menu) .modal-body { overflow:visible; }
+.model-group-modal:has(.model-group-provider-table .suu-dropdown__menu),
+.model-group-modal:has(.model-group-provider-table .suu-dropdown__menu) .modal-body,
+.model-group-provider-table:has(.suu-dropdown__menu),
+.model-group-provider-table:has(.suu-dropdown__menu) .suu-sortable-table-wrap { overflow:visible; }
 .model-info-modal { display:none;width:min(820px,calc(100vw - 560px)); }
 .model-info-modal.open { display:flex; }
 .model-info-field-modified { border-color:var(--orange)!important;border-radius:var(--radius);box-shadow:0 0 0 1px var(--orange); }
