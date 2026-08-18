@@ -146,7 +146,7 @@ def _create_initial_config(config_path: str) -> None:
     """Create the standard secure gateway configuration at *config_path*."""
     template = {
         "providers": {
-            "openai_chat": {
+            "openai_custom": {
                 "provider": "openai",
                 "api_keys": [
                     {
@@ -156,53 +156,73 @@ def _create_initial_config(config_path: str) -> None:
                     }
                 ],
                 "current_api_key": "primary",
-                "base_urls": ["https://api.openai.com/v1"],
-                "current_base_url": "https://api.openai.com/v1",
+                "base_urls": ["https://api.example.test/v1"],
+                "current_base_url": "https://api.example.test/v1",
+                "api_type": "responses",
+                "request_encoding": "passthrough",
+            },
+            "opencode_go": {
+                "provider": "opencode_go",
+                "api_keys": [
+                    {
+                        "uuid": str(uuid.uuid4()),
+                        "id": "primary",
+                        "key": "${OPENCODE_API_KEY}",
+                    }
+                ],
+                "current_api_key": "primary",
+                "base_urls": ["https://opencode.ai/zen/go/v1"],
+                "current_base_url": "https://opencode.ai/zen/go/v1",
                 "api_type": "chat",
             },
-            "anthropic": {
-                "provider": "anthropic",
+            "glm": {
+                "provider": "zhipu",
                 "api_keys": [
                     {
                         "uuid": str(uuid.uuid4()),
                         "id": "primary",
-                        "key": "${ANTHROPIC_API_KEY}",
+                        "key": "${ZHIPU_API_KEY}",
                     }
                 ],
                 "current_api_key": "primary",
-                "base_urls": ["https://api.anthropic.com"],
-                "current_base_url": "https://api.anthropic.com",
-                "api_type": "anthropic",
+                "base_urls": ["https://open.bigmodel.cn/api/paas/v4"],
+                "current_base_url": "https://open.bigmodel.cn/api/paas/v4",
+                "api_type": "chat",
             },
-            "google": {
-                "provider": "google",
+            "deepseek": {
+                "provider": "deepseek",
                 "api_keys": [
                     {
                         "uuid": str(uuid.uuid4()),
                         "id": "primary",
-                        "key": "${GOOGLE_API_KEY}",
+                        "key": "${DEEPSEEK_API_KEY}",
                     }
                 ],
                 "current_api_key": "primary",
-                "base_urls": ["https://generativelanguage.googleapis.com"],
-                "current_base_url": "https://generativelanguage.googleapis.com",
-                "api_type": "google",
+                "base_urls": ["https://api.deepseek.com"],
+                "current_base_url": "https://api.deepseek.com",
+                "api_type": "chat",
             },
         },
         "model_groups": {
             "OpenAI": {
-                "provider": ["openai_chat"],
+                "provider": ["openai_custom"],
                 "type": "llm",
-                "tool_profile": "builtin",
+                "tool_profile": "passthrough",
                 "models": {"gpt-5.6-terra": {}},
             },
-            "Anthropic": {
-                "provider": ["anthropic"],
+            "OpenCode Go": {
+                "provider": ["opencode_go"],
                 "type": "llm",
                 "models": {},
             },
-            "Google": {
-                "provider": ["google"],
+            "GLM": {
+                "provider": ["glm"],
+                "type": "llm",
+                "models": {},
+            },
+            "DeepSeek": {
+                "provider": ["deepseek"],
                 "type": "llm",
                 "models": {},
             },

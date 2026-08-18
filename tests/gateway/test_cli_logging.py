@@ -131,11 +131,61 @@ def test_main_initializes_missing_config_and_continues_startup(
     provider_uuids = [
         entry["api_keys"][0]["uuid"] for entry in generated["providers"].values()
     ]
-    assert len(set(provider_uuids)) == 3
+    assert len(set(provider_uuids)) == 4
     assert all(UUID(value).version == 4 for value in provider_uuids)
-    assert generated["model_groups"]["OpenAI"]["tool_profile"] == "builtin"
-    assert "tool_profile" not in generated["model_groups"]["Anthropic"]
-    assert "tool_profile" not in generated["model_groups"]["Google"]
+    assert list(generated["providers"]) == [
+        "openai_custom",
+        "opencode_go",
+        "glm",
+        "deepseek",
+    ]
+    assert {
+        name: {
+            "provider": entry["provider"],
+            "api_type": entry["api_type"],
+            "base_urls": entry["base_urls"],
+            "api_key": entry["api_keys"][0]["key"],
+        }
+        for name, entry in generated["providers"].items()
+    } == {
+        "openai_custom": {
+            "provider": "openai",
+            "api_type": "responses",
+            "base_urls": ["https://api.example.test/v1"],
+            "api_key": "${OPENAI_API_KEY}",
+        },
+        "opencode_go": {
+            "provider": "opencode_go",
+            "api_type": "chat",
+            "base_urls": ["https://opencode.ai/zen/go/v1"],
+            "api_key": "${OPENCODE_API_KEY}",
+        },
+        "glm": {
+            "provider": "zhipu",
+            "api_type": "chat",
+            "base_urls": ["https://open.bigmodel.cn/api/paas/v4"],
+            "api_key": "${ZHIPU_API_KEY}",
+        },
+        "deepseek": {
+            "provider": "deepseek",
+            "api_type": "chat",
+            "base_urls": ["https://api.deepseek.com"],
+            "api_key": "${DEEPSEEK_API_KEY}",
+        },
+    }
+    assert generated["providers"]["openai_custom"]["request_encoding"] == (
+        "passthrough"
+    )
+    assert list(generated["model_groups"]) == [
+        "OpenAI",
+        "OpenCode Go",
+        "GLM",
+        "DeepSeek",
+    ]
+    assert generated["model_groups"]["OpenAI"]["tool_profile"] == "passthrough"
+    assert "tool_profile" not in generated["model_groups"]["OpenCode Go"]
+    assert "tool_profile" not in generated["model_groups"]["GLM"]
+    assert "tool_profile" not in generated["model_groups"]["DeepSeek"]
     assert started == [("127.0.0.1", 8765)]
 
 
