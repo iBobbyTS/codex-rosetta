@@ -25,6 +25,7 @@
   let sub2apiAuth = $state('');
   let sub2apiBusy = $state(false);
   let deleteAccount = $state<Account | null>(null);
+  let refreshingAccountId = $state('');
 
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
 
@@ -158,6 +159,17 @@
     } catch (cause) { error = message(cause); }
   }
 
+  async function refreshAccount(account: Account): Promise<void> {
+    refreshingAccountId = account.id;
+    error = '';
+    try {
+      await api.post(`/admin/api/accounts/${encodeURIComponent(account.id)}/refresh`);
+      notice = t('accounts.refreshed');
+      await load();
+    } catch (cause) { error = message(cause); }
+    finally { refreshingAccountId = ''; }
+  }
+
   onMount(() => {
     const controller = new AbortController();
     void load(controller.signal);
@@ -182,7 +194,7 @@
       <tbody>
         {#each accounts.filter((account) => account.provider === 'chatgpt') as account}
           {@const plan = getCodexPlanPresentation(account.subscription_type)}
-          <tr><td>{account.name ?? ''}</td><td>{account.email ?? ''}</td><td>{account.workspace ?? ''}</td><td>{plan.label}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
+          <tr><td>{account.name ?? ''}</td><td>{account.email ?? ''}</td><td>{account.workspace ?? (plan.label === 'Free' ? 'Personal' : '')}</td><td>{plan.label}</td><td><button class="btn btn-sm" disabled={refreshingAccountId === account.id} onclick={() => void refreshAccount(account)}>{refreshingAccountId === account.id ? t('accounts.refreshing') : t('accounts.refresh')}</button> <button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
         {:else}<tr><td colspan="5" class="empty">{t('empty.accounts')}</td></tr>{/each}
       </tbody>
     </table></div>

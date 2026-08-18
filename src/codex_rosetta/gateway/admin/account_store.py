@@ -8,6 +8,7 @@ material; token columns are only read while completing a provider flow.
 from __future__ import annotations
 
 import json
+import base64
 import os
 import sqlite3
 import threading
@@ -80,7 +81,7 @@ class AccountStore:
 
     def list_public(self, provider: str | None = None) -> list[dict[str, Any]]:
         """Return account metadata without credential fields."""
-        query = "SELECT id, provider, metadata_json FROM accounts"
+        query = "SELECT id, provider, metadata_json, credentials_json FROM accounts"
         params: tuple[str, ...] = ()
         if provider:
             query += " WHERE provider = ?"
@@ -97,6 +98,8 @@ class AccountStore:
             metadata = json.loads(row["metadata_json"])
             if row["provider"] == "sub2api":
                 metadata = {"email": metadata.get("email", "")}
+            elif row["provider"] == "chatgpt":
+                metadata = _correct_chatgpt_workspace(metadata, row["credentials_json"])
             result.append({"id": row["id"], "provider": row["provider"], **metadata})
         return result
 
@@ -153,6 +156,44 @@ class AccountStore:
             finally:
                 self._close(connection)
 
+    def get_private(self, account_id: str) -> dict[str, Any] | None:
+        """Return one account's private metadata and credentials internally."""
+        with self._lock:
+            connection = self._connect()
+            try:
+                row = connection.execute(
+                    "SELECT id, provider, identity, metadata_json, credentials_json FROM accounts WHERE id = ?",
+                    (account_id,),
+                ).fetchone()
+            finally:
+                self._close(connection)
+        if row is None:
+            return None
+        return {
+            "id": row["id"],
+            "provider": row["provider"],
+            "identity": row["identity"],
+            "metadata": json.loads(row["metadata_json"]),
+            "credentials": json.loads(row["credentials_json"]),
+        }
+
+    def update_metadata(self, account_id: str, metadata: dict[str, Any]) -> bool:
+        """Update one account's public metadata without changing credentials."""
+        with self._lock:
+            connection = self._connect()
+            try:
+                cursor = connection.execute(
+                    "UPDATE accounts SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+                        account_id,
+                    ),
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+            finally:
+                self._close(connection)
+
 
 def get_account_store(app: Any) -> AccountStore:
     """Return the app-owned account store, creating it exactly once.
@@ -166,3 +207,71 @@ def get_account_store(app: Any) -> AccountStore:
         store = AccountStore(getattr(app, "config_path", None))
         setattr(app, "account_store", store)
     return store
+
+
+def _decode_jwt_payload(token: str) -> dict[str, Any]:
+    try:
+        segment = token.split(".")[1]
+        segment += "=" * (-len(segment) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(segment.encode()))
+    except IndexError, ValueError, TypeError, json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _correct_chatgpt_workspace(
+    metadata: dict[str, Any], credentials_json: str
+) -> dict[str, Any]:
+    """Correct legacy workspace projections from locally saved token claims."""
+    corrected = dict(metadata)
+    try:
+        credentials = json.loads(credentials_json)
+    except TypeError, ValueError, json.JSONDecodeError:
+        credentials = {}
+    access = _decode_jwt_payload(credentials.get("access_token", ""))
+    identity = _decode_jwt_payload(credentials.get("id_token", ""))
+    auth = access.get("https://api.openai.com/auth")
+    identity_auth = identity.get("https://api.openai.com/auth")
+    if not isinstance(auth, dict):
+        auth = identity_auth if isinstance(identity_auth, dict) else {}
+    if not isinstance(identity_auth, dict):
+        identity_auth = {}
+    organizations = auth.get("organizations") or identity_auth.get("organizations")
+    poid = auth.get("poid") or identity_auth.get("poid")
+    claim_plan = auth.get("chatgpt_plan_type") or identity_auth.get("chatgpt_plan_type")
+    if isinstance(claim_plan, str) and claim_plan.strip().lower() == "free":
+        corrected["subscription_type"] = "free"
+        corrected["workspace"] = "Personal"
+    selected = None
+    if isinstance(organizations, list):
+        selected = next(
+            (
+                item
+                for item in organizations
+                if isinstance(item, dict) and poid and item.get("id") == poid
+            ),
+            next((item for item in organizations if isinstance(item, dict)), None),
+        )
+    if isinstance(selected, dict):
+        title = next(
+            (
+                selected.get(key).strip()
+                for key in ("title", "name", "display_name", "organization_name")
+                if isinstance(selected.get(key), str) and selected.get(key).strip()
+            ),
+            "",
+        )
+        existing_workspace = str(corrected.get("workspace", "")).strip().lower()
+        if title and existing_workspace in {
+            "",
+            "personal",
+            "team",
+            "workspace",
+            "personal workspace",
+        }:
+            corrected["workspace"] = title
+    if not corrected.get("workspace"):
+        plan = str(corrected.get("subscription_type", "")).strip().lower()
+        if "free" in plan:
+            corrected["workspace"] = "Personal"
+    return corrected

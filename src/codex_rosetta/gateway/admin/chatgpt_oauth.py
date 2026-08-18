@@ -279,8 +279,17 @@ def _metadata_from_claims(access_token: str, id_token: str) -> dict[str, str]:
     }
 
 
-def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
-    headers = {"Authorization": f"Bearer {access_token}", "Accept": "application/json"}
+def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:  # noqa: C901
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Accept": "application/json",
+        "Referer": "https://chatgpt.com/",
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/147.0.0.0 Safari/537.36"
+        ),
+    }
     if account_id:
         headers["ChatGPT-Account-Id"] = account_id
     request = urllib.request.Request(METADATA_ENDPOINT, headers=headers)
@@ -296,7 +305,11 @@ def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
 
     records = data.get("accounts")
     if isinstance(records, dict):
-        records = list(records.values())
+        records = [
+            {**record, "_account_key": key}
+            for key, record in records.items()
+            if isinstance(record, dict)
+        ]
     if not isinstance(records, list):
         records = []
     records = [record for record in records if isinstance(record, dict)]
@@ -305,19 +318,25 @@ def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
 
     selected = records[0]
     if account_id:
+        matched = False
         for record in records:
             account = record.get("account")
             if not isinstance(account, dict):
                 continue
             candidates = (
+                record.get("_account_key"),
                 account.get("account_id"),
                 account.get("id"),
                 account.get("chatgpt_account_id"),
                 account.get("workspace_id"),
+                account.get("organization_id"),
             )
             if account_id in candidates:
                 selected = record
+                matched = True
                 break
+        if not matched:
+            return {}
 
     account = selected.get("account")
     entitlement = selected.get("entitlement")
@@ -325,6 +344,14 @@ def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
         return {}
     if not isinstance(entitlement, dict):
         entitlement = {}
+    plan = _first_string(
+        entitlement.get("subscription_plan"),
+        account.get("plan_type"),
+        account.get("planType"),
+    )
+    active = entitlement.get("has_active_subscription")
+    if active is False:
+        plan = "free"
     return {
         "name": _first_string(
             account.get("name"),
@@ -336,19 +363,23 @@ def _metadata_request(access_token: str, account_id: str) -> dict[str, str]:
         ),
         "email": _first_string(account.get("email")),
         "workspace": _first_string(
-            account.get("structure"),
-            account.get("account_structure"),
-            account.get("kind"),
-            account.get("type"),
-            account.get("account_type"),
             account.get("workspace_name"),
             account.get("organization_name"),
+            account.get("name"),
+            account.get("display_name"),
+            account.get("title"),
+        )
+        or (
+            "Personal"
+            if _first_string(
+                entitlement.get("subscription_plan"),
+                account.get("plan_type"),
+                account.get("planType"),
+            ).lower()
+            == "free"
+            else ""
         ),
-        "subscription_type": _first_string(
-            entitlement.get("subscription_plan"),
-            account.get("plan_type"),
-            account.get("planType"),
-        ),
+        "subscription_type": plan,
         "workspace_key": _first_string(
             account.get("workspace_id"),
             account.get("organization_id"),
@@ -494,12 +525,13 @@ async def chatgpt_callback(request: Any) -> Response:
         )
         metadata = _metadata_from_claims(tokens["access_token"], tokens["id_token"])
         fetched = await asyncio.to_thread(
-            _metadata_request, tokens["access_token"], metadata.get("account_id", "")
+            _metadata_request,
+            tokens["access_token"],
+            metadata.get("workspace_key") or metadata.get("account_id", ""),
         )
-        metadata = {
-            **metadata,
-            **{key: value for key, value in fetched.items() if value},
-        }
+        for key, value in fetched.items():
+            if value and (not metadata.get(key) or key == "subscription_type"):
+                metadata[key] = value
         account_id = metadata.get("account_id", "") or metadata.get("email", "")
         workspace_key = metadata.pop("workspace_key", "") or metadata.get(
             "workspace", ""

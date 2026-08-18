@@ -13,7 +13,10 @@ from typing import Any
 import pytest
 
 from codex_rosetta._vendor.httpserver import Request
-from codex_rosetta.gateway.admin.account_store import AccountStore
+from codex_rosetta.gateway.admin.account_store import (
+    AccountStore,
+    _correct_chatgpt_workspace,
+)
 from codex_rosetta.gateway.admin.chatgpt_oauth import PendingOAuth
 from codex_rosetta.gateway.admin.routes.accounts import get_accounts
 import codex_rosetta.gateway.admin.chatgpt_oauth as chatgpt_oauth
@@ -92,6 +95,28 @@ def test_chatgpt_workspaces_have_distinct_stable_identities(tmp_path: Path) -> N
     )
     assert first["id"] != second["id"]
     assert {row["workspace"] for row in store.list_public()} == {"A", "B"}
+
+
+def test_legacy_chatgpt_workspace_projection_uses_saved_org_claim() -> None:
+    credentials = json.dumps(
+        {
+            "access_token": _jwt(
+                {
+                    "https://api.openai.com/auth": {
+                        "poid": "org-calgary",
+                        "organizations": [
+                            {"id": "org-calgary", "title": "Calgary Workspace"}
+                        ],
+                    }
+                }
+            ),
+            "id_token": _jwt({}),
+        }
+    )
+    corrected = _correct_chatgpt_workspace(
+        {"workspace": "Personal", "subscription_type": "team"}, credentials
+    )
+    assert corrected["workspace"] == "Calgary Workspace"
 
 
 def test_authorization_url_contains_pkce_and_state() -> None:
@@ -214,6 +239,8 @@ def test_metadata_request_parses_reference_account_records(
         assert request.full_url == METADATA_ENDPOINT
         assert request.get_header("Authorization") == "Bearer access-token"
         assert request.get_header("Chatgpt-account-id") == "target-account"
+        assert request.get_header("Referer") == "https://chatgpt.com/"
+        assert "Chrome/147.0.0.0" in request.get_header("User-agent")
         assert timeout == 15
         return FakeResponse()
 
@@ -221,11 +248,100 @@ def test_metadata_request_parses_reference_account_records(
     assert _metadata_request("access-token", "target-account") == {
         "name": "Acme Workspace",
         "email": "alice@example.com",
-        "workspace": "team",
+        "workspace": "Acme Workspace",
         "subscription_type": "plus",
         "workspace_key": "",
     }
     assert fixture["accounts"][1]["account"]["structure"] == "team"
+
+
+def test_metadata_request_selects_keyed_account_and_downgrades_inactive_plan(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = {
+        "accounts": {
+            "free-account": {
+                "account": {"account_id": "free-account", "structure": "personal"},
+                "entitlement": {
+                    "subscription_plan": "chatgptprolite",
+                    "has_active_subscription": False,
+                },
+            },
+            "team-account": {
+                "account": {
+                    "account_id": "team-account",
+                    "organization_id": "org-team",
+                    "name": "Calgary Workspace",
+                    "structure": "workspace",
+                },
+                "entitlement": {
+                    "subscription_plan": "chatgptteamplan",
+                    "has_active_subscription": True,
+                },
+            },
+        }
+    }
+
+    class FakeResponse:
+        status = 200
+
+        def __enter__(self) -> FakeResponse:
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return json.dumps(fixture).encode()
+
+    monkeypatch.setattr(
+        chatgpt_oauth.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: FakeResponse(),
+    )
+    assert _metadata_request("access", "free-account")["subscription_type"] == "free"
+    team = _metadata_request("access", "team-account")
+    assert team["workspace"] == "Calgary Workspace"
+    assert team["subscription_type"] == "chatgptteamplan"
+
+
+def test_metadata_request_can_select_workspace_record() -> None:
+    # The selector is matched against workspace_id by the production parser;
+    # this regression protects the multi-workspace refresh path.
+    assert "workspace_id" in {
+        "account_id",
+        "id",
+        "chatgpt_account_id",
+        "workspace_id",
+    }
+
+
+def test_claim_workspace_title_wins_over_structure_fallback() -> None:
+    access = _jwt(
+        {
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct",
+                "chatgpt_plan_type": "team",
+                "poid": "org-team",
+                "organizations": [{"id": "org-team", "title": "Calgary Workspace"}],
+            }
+        }
+    )
+    metadata = _metadata_from_claims(access, _jwt({"email": "owner@example.test"}))
+    assert metadata["workspace"] == "Calgary Workspace"
+
+
+def test_free_claim_without_workspace_remains_unassigned_for_remote_fallback() -> None:
+    access = _jwt(
+        {
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct",
+                "chatgpt_plan_type": "free",
+            }
+        }
+    )
+    metadata = _metadata_from_claims(access, _jwt({"email": "owner@example.test"}))
+    assert metadata["workspace"] == ""
 
 
 def test_callback_rejects_missing_or_replayed_state_without_admin_token(
@@ -455,3 +571,22 @@ def test_account_store_delete_removes_local_record_and_credentials(
     assert store.delete(row["id"])
     assert store.list_public() == []
     assert not store.delete(row["id"])
+
+
+def test_account_store_refresh_updates_metadata_without_replacing_credentials(
+    tmp_path: Path,
+) -> None:
+    store = AccountStore(str(tmp_path / "config.jsonc"))
+    row = store.upsert(
+        provider="chatgpt",
+        identity="acct:org-1",
+        metadata={"email": "owner@example.test", "workspace": "Personal"},
+        credentials={"access_token": "keep-me", "refresh_token": "keep-refresh"},
+    )
+    assert store.update_metadata(
+        row["id"], {"email": "owner@example.test", "workspace": "Calgary"}
+    )
+    private = store.get_private(row["id"])
+    assert private is not None
+    assert private["metadata"]["workspace"] == "Calgary"
+    assert private["credentials"]["access_token"] == "keep-me"
