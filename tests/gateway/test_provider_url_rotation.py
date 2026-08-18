@@ -2404,6 +2404,128 @@ def test_same_provider_concurrent_503s_publish_one_credential_change(
     asyncio.run(scenario())
 
 
+def test_fixed_credential_waiter_cools_its_fresh_failed_key_globally(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        first_uuid = "00000000-0000-4000-8000-000000000001"
+        second_uuid = "00000000-0000-4000-8000-000000000002"
+        third_uuid = "00000000-0000-4000-8000-000000000003"
+
+        def pair(credential_uuid: str) -> dict[str, str]:
+            return {"provider": "row-a", "credential_uuid": credential_uuid}
+
+        config = GatewayConfig(
+            {
+                "providers": {
+                    "row-a": {
+                        "provider": "openai",
+                        "api_type": "responses",
+                        "request_encoding": "passthrough",
+                        "api_keys": [
+                            {
+                                "uuid": first_uuid,
+                                "id": "first",
+                                "key": "key-first",
+                            },
+                            {
+                                "uuid": second_uuid,
+                                "id": "second",
+                                "key": "key-second",
+                            },
+                            {
+                                "uuid": third_uuid,
+                                "id": "third",
+                                "key": "key-third",
+                            },
+                        ],
+                        "current_api_key": "first",
+                        "auto_rotate_credentials": False,
+                        "base_urls": [origin],
+                        "current_base_url": origin,
+                    }
+                },
+                "model_groups": {
+                    "first-group": {
+                        "provider": [pair(first_uuid)],
+                        "type": "llm",
+                        "models": {"model-first": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                    "second-group": {
+                        "provider": [pair(second_uuid)],
+                        "type": "llm",
+                        "models": {"model-second": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                    "third-group": {
+                        "provider": [pair(third_uuid)],
+                        "type": "llm",
+                        "models": {"model-third": {"upstream_model": "gpt-5.6-sol"}},
+                    },
+                },
+                "server": {
+                    "admin_password": "test-admin-password",
+                    "api_keys": [{"id": "test", "label": "Test", "key": "test-key"}],
+                },
+            }
+        )
+        _route, first_view = config.resolve("openai_responses", "model-first")
+        _route, second_view = config.resolve("openai_responses", "model-second")
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            _json_response(503, {"error": "first-busy"}),
+            _json_response(200, {"ok": True}),
+            _json_response(503, {"error": "second-final"}),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+        leader = asyncio.create_task(
+            transport.send_request(first_view, "openai_responses", {}, "model-first")
+        )
+        await retry_started.wait()
+        waiter = asyncio.create_task(
+            transport.send_request(second_view, "openai_responses", {}, "model-second")
+        )
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first"
+        ]
+        release_retry.set()
+        leader_result, waiter_result = await asyncio.gather(leader, waiter)
+
+        assert leader_result.status_code == 200
+        assert waiter_result.status_code == 503
+        assert waiter_result.raw_content == b'{"error": "second-final"}'
+        assert sleeps == [1.0]
+        assert [item["Authorization"] for item in client.headers] == [
+            "Bearer key-first",
+            "Bearer key-first",
+            "Bearer key-second",
+        ]
+        assert config.providers["row-a"].current_credential_id == "first"
+        assert config.providers["row-a"].credential_statuses() == (
+            ("first", "available"),
+            ("second", "cooling"),
+            ("third", "available"),
+        )
+        assert config.available_model_group_candidates("second-group") == ()
+        assert len(config.available_model_group_candidates("first-group")) == 1
+        assert len(config.available_model_group_candidates("third-group")) == 1
+
+    asyncio.run(scenario())
+
+
 def test_raw_stream_uses_its_observed_wire_credential_during_rotation(
     monkeypatch,
 ) -> None:

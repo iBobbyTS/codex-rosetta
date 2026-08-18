@@ -670,6 +670,22 @@ class HttpTransport:
         self._close_timeout = close_timeout
         self._retry_sleep = retry_sleep
 
+    @staticmethod
+    def _mark_unrotated_credential_failure(
+        provider_info: ProviderInfo,
+        result: _CredentialResultT,
+        is_503: Callable[[_CredentialResultT], bool],
+        credential_observation_of: Callable[[_CredentialResultT], tuple[str, int]],
+    ) -> bool:
+        """Cool a failed fixed/current credential when no rotation is allowed."""
+        if not is_503(result):
+            return False
+        failed_credential = credential_observation_of(result)[0]
+        if provider_info.next_available_credential(failed_credential) is not None:
+            return False
+        provider_info.mark_credential_failed(failed_credential)
+        return True
+
     async def _retry_before_credential_rotation(
         self,
         provider_info: ProviderInfo,
@@ -683,7 +699,14 @@ class HttpTransport:
     ) -> tuple[_CredentialResultT, bool]:
         """Resolve literal 503s under one credential gate at a time."""
         result = initial_result
-        if single_attempt or not is_503(result):
+        if single_attempt:
+            return result, self._mark_unrotated_credential_failure(
+                provider_info,
+                result,
+                is_503,
+                credential_observation_of,
+            )
+        if not is_503(result):
             return result, False
         leader, waited = await provider_info.claim_credential_rotation_observation(
             observation
@@ -691,7 +714,13 @@ class HttpTransport:
         if not leader or waited:
             if leader:
                 await provider_info.publish_credential_rotation()
-            return await operation(), False
+            result = await operation()
+            return result, self._mark_unrotated_credential_failure(
+                provider_info,
+                result,
+                is_503,
+                credential_observation_of,
+            )
         try:
             while is_503(result):
                 result = await _FAILOVER_RETRY_POLICY.run(
