@@ -27,6 +27,7 @@ from codex_rosetta.gateway import cli
 def test_main_passes_selected_log_level_to_logging_setup(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     log_level_args: list[str],
     expected_level: str,
 ) -> None:
@@ -94,6 +95,7 @@ def test_main_passes_selected_log_level_to_logging_setup(
     assert app_kwargs[0]["codex_home"] == str(codex_home)
     assert app_kwargs[0]["gateway_port"] == 8765
     assert cli.os.environ["CODEX_HOME"] == str(codex_home)
+    assert capsys.readouterr().out == f"\nCodex Rosetta Gateway v{cli.__version__}\n\n"
 
 
 @pytest.mark.parametrize("explicit_config", [False, True])

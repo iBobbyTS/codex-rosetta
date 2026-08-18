@@ -667,6 +667,10 @@ def main() -> None:
     if _dispatch_command(args, add_parser, local_mode_parser):
         return
 
+    print()
+    print(f"Codex Rosetta Gateway v{__version__}")
+    print()
+
     try:
         codex_home = resolve_codex_home(args.codex_home)
     except ValueError as exc:
