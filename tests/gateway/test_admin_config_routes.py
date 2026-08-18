@@ -2919,7 +2919,7 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
     assert config_path.read_bytes() == original
     assert request.app.gateway_config is initial_runtime
 
-    body["confirm_credential_deletion"] = True
+    body["confirm_credential_deletion"] = ["Promote", "Empty"]
     confirmed = _run(put_provider(request))
 
     assert confirmed.status_code == 200
@@ -2938,6 +2938,69 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
         == _SECONDARY_CREDENTIAL_UUID
     )
     assert "Empty" not in request.app.gateway_config.model_group_rings
+
+
+def test_put_provider_rejects_stale_credential_reference_confirmation(tmp_path):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    pair = {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    data["model_groups"] = {
+        "Original": {
+            "provider": [pair],
+            "type": "llm",
+            "models": {"original-model": {"upstream_model": "gpt-5.6-terra"}},
+        }
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][1]]
+    body["current_api_key"] = "secondary"
+    request = _provider_admin_request(config_path, data, "openai", body)
+    initial_runtime = request.app.gateway_config
+
+    preview = _run(put_provider(request))
+
+    preview_payload = json.loads(preview.body)
+    assert preview.status_code == 409
+    assert preview_payload["affected_model_groups"] == ["Original"]
+    assert "sk-primary" not in preview.body.decode()
+
+    changed = json.loads(config_path.read_text(encoding="utf-8"))
+    changed["model_groups"]["Added"] = {
+        "provider": [pair],
+        "type": "llm",
+        "models": {"added-model": {"upstream_model": "gpt-5.6-terra"}},
+    }
+    changed_bytes = json.dumps(changed).encode()
+    config_path.write_bytes(changed_bytes)
+    body["confirm_credential_deletion"] = preview_payload["affected_model_groups"]
+
+    stale = _run(put_provider(request))
+
+    stale_payload = json.loads(stale.body)
+    assert stale.status_code == 409
+    assert stale_payload["affected_model_groups"] == ["Original", "Added"]
+    assert "sk-primary" not in stale.body.decode()
+    assert config_path.read_bytes() == changed_bytes
+    assert request.app.gateway_config is initial_runtime
+
+    body["confirm_credential_deletion"] = stale_payload["affected_model_groups"]
+    confirmed = _run(put_provider(request))
+
+    assert confirmed.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["Original"]["provider"] == []
+    assert saved["model_groups"]["Added"]["provider"] == []
+    assert request.app.gateway_config is not initial_runtime
 
 
 def test_delete_provider_recognizes_uuid_pair_reference(tmp_path):
@@ -3314,6 +3377,52 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     assert rows[5]["status"] == "disabled"
     assert rows[5]["current"] is False
     assert "duplicated" in rows[5]["error"]
+
+
+def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    pair = {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    config["model_groups"]["OpenAI"]["provider"] = [pair]
+    config["model_groups"]["Shared"] = {
+        "provider": [pair],
+        "type": "llm",
+        "models": {"shared-model": {"upstream_model": "gpt-5.6-terra"}},
+    }
+    runtime_config = GatewayConfig(config)
+    runtime_config.providers["openai"].mark_credential_failed("primary")
+    assert runtime_config.model_group_provider_statuses("OpenAI") == (
+        ("openai", "available"),
+    )
+    assert runtime_config.model_group_provider_statuses("Shared") == (
+        ("openai", "available"),
+    )
+    assert runtime_config.available_model_group_candidates("OpenAI") == ()
+    assert runtime_config.available_model_group_candidates("Shared") == ()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path),
+            gateway_config=runtime_config,
+        )
+    )
+
+    response = _run(get_config(request))
+
+    assert response.status_code == 200
+    groups = json.loads(response.body)["model_groups"]
+    for group_name in ("OpenAI", "Shared"):
+        assert groups[group_name]["providers"][0] == {
+            "name": "openai",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+            "credential_id": "primary",
+            "auto_rotate_credentials": False,
+            "current": True,
+            "enabled": True,
+            "status": "cooling",
+            "error": None,
+        }
 
 
 def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_path):

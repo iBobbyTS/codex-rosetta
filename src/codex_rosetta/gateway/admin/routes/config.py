@@ -489,6 +489,18 @@ def _model_group_provider_rows_for_admin(
                 f"'{provider_api_types[index]}'; expected '{group_api_type}'"
             )
         seen_candidates.add(candidate)
+        runtime_status = runtime_statuses.get(candidate, "available")
+        runtime_provider = runtime_config.providers.get(provider_name)
+        if (
+            row_error is None
+            and runtime_status == "available"
+            and candidate.credential_uuid is not None
+            and runtime_provider is not None
+            and not runtime_provider.credential_uuid_is_available(
+                candidate.credential_uuid
+            )
+        ):
+            runtime_status = "cooling"
         provider_rows.append(
             {
                 "name": provider_name,
@@ -501,11 +513,7 @@ def _model_group_provider_rows_for_admin(
                 ),
                 "current": index == current_index,
                 "enabled": enabled,
-                "status": (
-                    "disabled"
-                    if row_error is not None
-                    else runtime_statuses.get(candidate, "available")
-                ),
+                "status": ("disabled" if row_error is not None else runtime_status),
                 "error": row_error,
             }
         )
@@ -1067,6 +1075,25 @@ def _referencing_model_groups_for_credentials(
     return affected
 
 
+def _credential_reference_conflict_response(
+    affected_model_groups: list[str],
+) -> Response:
+    """Return the secret-free credential-reference confirmation challenge."""
+    return JSONResponse(
+        {
+            "error": (
+                f"Credentials are referenced by model groups: {affected_model_groups}"
+            ),
+            "code": (
+                _CREDENTIAL_REFERENCE_CODE_PREFIX
+                + json.dumps(affected_model_groups, separators=(",", ":"))
+            ),
+            "affected_model_groups": affected_model_groups,
+        },
+        status_code=409,
+    )
+
+
 def _rewrite_provider_candidate_mode(
     data: dict[str, Any],
     provider_name: str,
@@ -1154,7 +1181,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     current_base_url = body.get("current_base_url")
     provider = body.get("provider")
     auto_rotate_credentials = body.get("auto_rotate_credentials")
-    confirm_credential_deletion = body.get("confirm_credential_deletion", False)
+    confirm_credential_deletion = body.get("confirm_credential_deletion")
 
     try:
         data = load_config_raw(config_path)
@@ -1188,7 +1215,18 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         or not isinstance(provider, str)
         or not provider.strip()
         or not isinstance(auto_rotate_credentials, bool)
-        or not isinstance(confirm_credential_deletion, bool)
+        or (
+            "confirm_credential_deletion" in body
+            and (
+                not isinstance(confirm_credential_deletion, list)
+                or any(
+                    not isinstance(group_name, str) or not group_name
+                    for group_name in confirm_credential_deletion
+                )
+                or len(set(confirm_credential_deletion))
+                != len(confirm_credential_deletion)
+            )
+        )
     ):
         return JSONResponse(
             {
@@ -1213,21 +1251,14 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     affected_model_groups = _referencing_model_groups_for_credentials(
         data, resolve_name, deleted_credential_uuids
     )
-    if affected_model_groups and not confirm_credential_deletion:
-        return JSONResponse(
-            {
-                "error": (
-                    "Credentials are referenced by model groups: "
-                    f"{affected_model_groups}"
-                ),
-                "code": (
-                    _CREDENTIAL_REFERENCE_CODE_PREFIX
-                    + json.dumps(affected_model_groups, separators=(",", ":"))
-                ),
-                "affected_model_groups": affected_model_groups,
-            },
-            status_code=409,
-        )
+    confirmed_affected_model_groups = cast(
+        list[str] | None, confirm_credential_deletion
+    )
+    if confirmed_affected_model_groups is None:
+        if affected_model_groups:
+            return _credential_reference_conflict_response(affected_model_groups)
+    elif set(confirmed_affected_model_groups) != set(affected_model_groups):
+        return _credential_reference_conflict_response(affected_model_groups)
 
     provider_entry = _build_provider_entry(
         body,

@@ -100,8 +100,16 @@ describe('ProvidersPage', () => {
       },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
     });
+    let confirmationAttempts = 0;
     apiMock.put.mockImplementation((_path: string, body: Record<string, unknown>) => {
-      if (body.confirm_credential_deletion === true) return Promise.resolve({ ok: true });
+      if (Array.isArray(body.confirm_credential_deletion)) {
+        confirmationAttempts += 1;
+        if (confirmationAttempts === 1) return Promise.reject({
+          message: 'Credential references changed',
+          code: 'provider_credential_references:["Group A","Group C"]',
+        });
+        return Promise.resolve({ ok: true });
+      }
       return Promise.reject({
         message: 'Credentials are referenced',
         code: 'provider_credential_references:["Group A","Group B"]',
@@ -126,11 +134,19 @@ describe('ProvidersPage', () => {
       '/admin/api/config/providers/relay',
       expect.objectContaining({
         auto_rotate_credentials: false,
-        confirm_credential_deletion: true,
+        confirm_credential_deletion: ['Group A', 'Group B'],
         current_api_key: 'secondary',
         api_keys: [{ uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret' }],
       }),
     ));
+    const refreshed = within(await screen.findByRole('dialog', { name: 'Delete referenced credentials' }));
+    expect(refreshed.getByText(/Group A, Group C/)).toBeInTheDocument();
+    await fireEvent.click(refreshed.getByRole('button', { name: 'Delete' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenLastCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({ confirm_credential_deletion: ['Group A', 'Group C'] }),
+    ));
+    expect(apiMock.put).toHaveBeenCalledTimes(4);
   });
 
   it('round-trips an untouched canonical credential mask', async () => {
