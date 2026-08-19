@@ -53,7 +53,7 @@ const FALLBACK_UUID = '00000000-0000-4000-8000-000000000005';
 const providerCatalog = {
   api_types: ['responses', 'chat', 'anthropic', 'google'],
   providers: {
-    openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, custom: { endpoints: {} } } },
+    openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, sub2api: { endpoints: {} }, new_api: { endpoints: {} }, custom: { endpoints: {} } } },
     moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
     deepseek: { label_key: 'provider.deepseek', soft_interrupt_default: true, recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
     custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
@@ -74,12 +74,87 @@ beforeEach(() => {
 });
 
 describe('ProvidersPage', () => {
+  it('orders OpenAI variants and persists ordered New API groups with rates', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'new_api', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://new-api.example/v1'], current_base_url: 'https://new-api.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret', new_api_group: 'vip' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    }, [{ id: 'account-a', provider: 'sub2api', name: 'Sub2 account' }]);
+    apiMock.post.mockResolvedValue({ group_ratio: { default: 1, vip: 0.75, premium: 2 } });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const variant = dialog.getByLabelText('Provider variant');
+    await fireEvent.click(variant);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['official', 'sub2api', 'new_api', 'custom']);
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'New API' }));
+
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay/new-api-pricing',
+      { base_url: 'https://new-api.example/v1', bearer_key: 'prov***cret' },
+      expect.any(AbortSignal),
+    ));
+    const group = await dialog.findByRole('button', { name: 'New API group for credential primary' });
+    expect(group).toHaveAttribute('data-value', 'vip');
+    await fireEvent.click(group);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['default', 'vip', 'premium']);
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'premium' }));
+    expect(group.closest('tr')).toHaveTextContent('2x');
+    expect(dialog.queryByLabelText('Bind a logged-in account')).not.toBeInTheDocument();
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      openai_variant: 'new_api',
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret', new_api_group: 'premium' }],
+    })));
+  });
+
+  it('preserves the New API draft across pricing failure, retries, and fences stale responses on variant change', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'new_api', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://new-api.example/v1'], current_base_url: 'https://new-api.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret', new_api_group: 'vip' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    const stale = deferred<{ group_ratio: Record<string, number> }>();
+    apiMock.post.mockRejectedValueOnce(new Error('pricing offline')).mockReturnValueOnce(stale.promise);
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    let dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent('pricing offline'));
+    expect(dialog.getByDisplayValue('https://new-api.example/v1')).toBeInTheDocument();
+    expect(dialog.getByRole('textbox', { name: 'Credential key primary' })).toHaveValue('prov***cret');
+    await fireEvent.click(dialog.getByRole('button', { name: 'Load / retry pricing' }));
+    expect(apiMock.post).toHaveBeenCalledTimes(2);
+
+    await selectDropdown(dialog.getByLabelText('Provider variant'), 'Official');
+    stale.resolve({ group_ratio: { stale: 9 } });
+    await tick();
+    expect(dialog.queryByLabelText('New API group for credential primary')).not.toBeInTheDocument();
+    expect(dialog.queryByText('9x')).not.toBeInTheDocument();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+
+    apiMock.post.mockResolvedValueOnce({ group_ratio: { vip: 0.75 } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'new_api');
+    expect(dialog.getByDisplayValue('https://new-api.example/v1')).toBeInTheDocument();
+    await waitFor(() => expect(dialog.getByLabelText('New API group for credential primary')).toHaveAttribute('data-value', 'vip'));
+  });
+
   it('loads only Sub2API accounts and orders the exact binding selector without exposing it for new or cloned providers', async () => {
     localStorage.setItem('codex-rosetta-lang', 'zh');
     setLanguage('zh');
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough',
         base_urls: ['https://match.example/v1'], current_base_url: 'https://match.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
       } },
@@ -122,7 +197,7 @@ describe('ProvidersPage', () => {
   it('clears rows only after explicit binding success and fills unique immutable item rows with rate and blank concurrency', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
       } },
@@ -193,7 +268,7 @@ describe('ProvidersPage', () => {
   it('fetches exactly once on each bound edit open, reconciles matches, and retains missing items as unavailable', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: FIRST_UUID, id: 'alpha', key: 'alph***cret' }, { uuid: SECOND_UUID, id: 'removed', key: 'remo***cret' }], current_api_key: 'removed',
       } },
@@ -225,7 +300,7 @@ describe('ProvidersPage', () => {
   it('preserves the current binding and rows on switch failure, then restores manual editing and omits the binding on save', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
       } },
@@ -261,7 +336,7 @@ describe('ProvidersPage', () => {
   it('cancels a pending switch when the committed account is reselected and fences Save until cancellation', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
       } },
@@ -312,7 +387,7 @@ describe('ProvidersPage', () => {
   it('reports an internal timeout AbortError for bound keys while preserving the committed draft', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
       } },
@@ -337,7 +412,7 @@ describe('ProvidersPage', () => {
   it('reports an internal timeout AbortError from the account-list load', async () => {
     const config = {
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
       } },
@@ -362,7 +437,7 @@ describe('ProvidersPage', () => {
   it('ignores stale account results after a newer selection and preserves a deleted bound account on failed reopen', async () => {
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
       } },
@@ -397,7 +472,7 @@ describe('ProvidersPage', () => {
     staleView.unmount();
     mockProviderPage({
       providers: { relay: {
-        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'deleted-account',
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'deleted-account',
         base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
         api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
       } },
@@ -701,6 +776,7 @@ describe('ProvidersPage', () => {
     const body = apiMock.put.mock.calls[0][1];
     expect(body).toEqual({
       provider: 'openai',
+      openai_variant: 'official',
       base_urls: ['https://api.openai.com/v1', 'https://backup.example/v1'],
       current_base_url: 'https://api.openai.com/v1',
       proxy: 'http://proxy.example:8080',
@@ -1001,6 +1077,7 @@ describe('ProvidersPage', () => {
 
     const expectedBody = {
       provider: 'openai',
+      openai_variant: 'official',
       api_type: 'responses',
       request_encoding: 'passthrough',
       base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
