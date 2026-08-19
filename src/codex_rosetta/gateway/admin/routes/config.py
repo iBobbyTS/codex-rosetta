@@ -1115,10 +1115,13 @@ async def get_config(request: Any) -> Response:
 
 
 def _provider_credential_uuid_for_id(
-    api_keys: list[dict[str, str]], credential_id: str
+    api_keys: list[dict[str, str]], credential_id: str | None
 ) -> str:
-    """Return the stable UUID for one validated credential ID."""
-    return next(item["uuid"] for item in api_keys if item["id"] == credential_id)
+    """Return a member credential UUID, defaulting to the first configured row."""
+    return next(
+        (item["uuid"] for item in api_keys if item["id"] == credential_id),
+        api_keys[0]["uuid"],
+    )
 
 
 def _referencing_model_groups_for_credentials(
@@ -1332,9 +1335,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     is_new_provider = name not in existing_providers
 
     existing_provider = existing_providers.get(resolve_name, {})
-    if api_keys is None and existing_provider:
-        api_keys = existing_provider.get("api_keys")
-        current_api_key = current_api_key or existing_provider.get("current_api_key")
+    api_keys = existing_provider.get("api_keys") if api_keys is None else api_keys
     try:
         _normalize_sub2api_account_id(body)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
@@ -1345,8 +1346,13 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         not merged_keys
         or any(not entry["key"] for entry in merged_keys)
         or len({entry["id"] for entry in merged_keys}) != len(merged_keys)
-        or not isinstance(current_api_key, str)
-        or current_api_key not in {entry["id"] for entry in merged_keys}
+        or (
+            auto_rotate_credentials is True
+            and (
+                not isinstance(current_api_key, str)
+                or current_api_key not in {entry["id"] for entry in merged_keys}
+            )
+        )
         or not isinstance(base_urls, list)
         or not base_urls
         or any(not isinstance(value, str) or not value for value in base_urls)
@@ -1371,7 +1377,8 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         return JSONResponse(
             {
                 "error": (
-                    "non-empty unique 'api_keys', member 'current_api_key', "
+                    "non-empty unique 'api_keys', member 'current_api_key' when "
+                    "automatic rotation is enabled, "
                     "non-empty 'base_urls', member 'current_base_url', and "
                     "'provider' plus boolean 'auto_rotate_credentials' are required"
                 )
@@ -1379,6 +1386,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             status_code=400,
         )
     body["provider"] = provider.strip()
+    persisted_current_api_key = (
+        cast(str, current_api_key) if auto_rotate_credentials else None
+    )
 
     existing_credential_uuids = {
         item.get("uuid")
@@ -1403,7 +1413,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     provider_entry = _build_provider_entry(
         body,
         merged_keys,
-        current_api_key,
+        persisted_current_api_key,
         base_urls,
         current_base_url,
         existing_providers,
@@ -1418,17 +1428,29 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         if rename_err is not None:
             return rename_err
 
-    data.setdefault("providers", {})[name] = provider_entry
     if isinstance(existing_provider, dict) and existing_provider:
-        _rewrite_provider_candidate_mode(
-            data,
-            name,
-            previous_auto_rotate=existing_provider["auto_rotate_credentials"],
-            auto_rotate=auto_rotate_credentials,
-            current_credential_uuid=_provider_credential_uuid_for_id(
-                merged_keys, current_api_key
-            ),
-        )
+        previous_auto_rotate = existing_provider["auto_rotate_credentials"]
+        if previous_auto_rotate != auto_rotate_credentials:
+            transition_keys = (
+                cast(list[dict[str, str]], existing_provider["api_keys"])
+                if previous_auto_rotate
+                else merged_keys
+            )
+            transition_current = (
+                cast(str | None, existing_provider.get("current_api_key"))
+                if previous_auto_rotate
+                else cast(str, current_api_key)
+            )
+            _rewrite_provider_candidate_mode(
+                data,
+                name,
+                previous_auto_rotate=previous_auto_rotate,
+                auto_rotate=auto_rotate_credentials,
+                current_credential_uuid=_provider_credential_uuid_for_id(
+                    transition_keys, transition_current
+                ),
+            )
+    data.setdefault("providers", {})[name] = provider_entry
     _remove_credential_candidate_references(
         data,
         name,

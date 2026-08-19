@@ -432,6 +432,49 @@ describe('ProvidersPage', () => {
     ));
   });
 
+  it('hides only credential current radios in fixed mode and omits current_api_key', async () => {
+    mockProviderPage({
+      providers: {
+        relay: {
+          provider: 'openai', api_type: 'chat', auto_rotate_credentials: false,
+          base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+          api_keys: [
+            { uuid: FIRST_UUID, id: 'first', key: 'firs***cret' },
+            { uuid: SECOND_UUID, id: 'second', key: 'seco***cret' },
+          ],
+          current_api_key: 'second',
+        },
+      },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    let dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const automatic = dialog.getByRole('checkbox', { name: 'Automatic rotation' });
+    expect(automatic).not.toBeChecked();
+    expect(dialog.getByRole('radio', { name: 'Make https://relay.example/v1 current' })).toBeChecked();
+    expect(dialog.queryByRole('radio', { name: /Make credential/ })).not.toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: 'Drag credential first' })).toBeInTheDocument();
+    expect(dialog.getByRole('button', { name: 'Remove credential first' })).toBeInTheDocument();
+
+    await fireEvent.click(automatic);
+    expect(dialog.getByRole('radio', { name: 'Make credential second current' })).toBeChecked();
+    await fireEvent.click(automatic);
+    expect(dialog.queryByRole('radio', { name: /Make credential/ })).not.toBeInTheDocument();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({ auto_rotate_credentials: false }),
+    ));
+    expect(apiMock.put.mock.calls[0][1]).not.toHaveProperty('current_api_key');
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.queryByRole('radio', { name: /Make credential/ })).not.toBeInTheDocument();
+  });
+
   it('confirms referenced credential deletion with every affected model group', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
@@ -478,10 +521,10 @@ describe('ProvidersPage', () => {
       expect.objectContaining({
         auto_rotate_credentials: false,
         confirm_credential_deletion: ['Group A', 'Group B'],
-        current_api_key: 'secondary',
         api_keys: [{ uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret' }],
       }),
     ));
+    expect(apiMock.put.mock.calls.at(-1)?.[1]).not.toHaveProperty('current_api_key');
     const refreshed = within(await screen.findByRole('dialog', { name: 'Delete referenced credentials' }));
     expect(refreshed.getByText(/Group A, Group C/)).toBeInTheDocument();
     await fireEvent.click(refreshed.getByRole('button', { name: 'Delete' }));

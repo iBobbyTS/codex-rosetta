@@ -542,7 +542,7 @@ def _sync_persistence_redaction(app: Any, config: GatewayConfig) -> None:
 def _build_provider_entry(
     body: dict[str, Any],
     api_keys: list[dict[str, str]],
-    current_api_key: str,
+    current_api_key: str | None,
     base_urls: list[str],
     current_base_url: str,
     existing_providers: dict[str, Any],
@@ -551,11 +551,12 @@ def _build_provider_entry(
     """Build one canonical provider entry from validated Admin input."""
     entry: dict[str, Any] = {
         "api_keys": api_keys,
-        "current_api_key": current_api_key,
         "auto_rotate_credentials": body["auto_rotate_credentials"],
         "base_urls": base_urls,
         "current_base_url": current_base_url,
     }
+    if current_api_key is not None:
+        entry["current_api_key"] = current_api_key
 
     provider = body.get("provider")
     if provider:
