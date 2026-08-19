@@ -1262,7 +1262,6 @@ def _normalize_current_after_candidate_mutation(
     if not candidates:
         group.pop("current_provider", None)
         return
-    current_value: Any = _MISSING_MODEL_GROUP_CURRENT
     if "current_provider" in group:
         try:
             parsed_current = _model_group_provider_candidates(
@@ -1272,7 +1271,7 @@ def _normalize_current_after_candidate_mutation(
         except ValueError:
             parsed_current = None
         if parsed_current in candidates:
-            current_value = group["current_provider"]
+            return
     provider_map = providers if isinstance(providers, dict) else {}
     eligible = [
         candidate
@@ -1281,7 +1280,7 @@ def _normalize_current_after_candidate_mutation(
         and provider_map[candidate.provider_name].get("enabled", True) is not False
     ]
     current = _model_group_current_candidate(
-        current_value,
+        _MISSING_MODEL_GROUP_CURRENT,
         candidates,
         field="model_groups.*.current_provider",
         eligible_candidates=eligible,

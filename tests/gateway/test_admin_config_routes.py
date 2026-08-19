@@ -3024,6 +3024,58 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
     assert "Empty" not in request.app.gateway_config.model_group_rings
 
 
+def test_put_provider_preserves_disabled_current_when_deleting_other_credential(
+    tmp_path,
+):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    data["providers"]["disabled"] = {
+        **json.loads(json.dumps(provider)),
+        "enabled": False,
+        "auto_rotate_credentials": True,
+        "base_urls": ["https://disabled.example.test"],
+        "current_base_url": "https://disabled.example.test",
+    }
+    primary = {
+        "provider": "openai",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+    }
+    secondary = {
+        "provider": "openai",
+        "credential_uuid": _SECONDARY_CREDENTIAL_UUID,
+    }
+    data["model_groups"]["OpenAI"]["provider"] = [
+        "disabled",
+        primary,
+        secondary,
+    ]
+    data["model_groups"]["OpenAI"]["current_provider"] = "disabled"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][0]]
+    body["confirm_credential_deletion"] = ["OpenAI"]
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["disabled", primary]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == "disabled"
+    current = request.app.gateway_config.model_group_rings["OpenAI"].current
+    assert current.provider_name == "openai"
+    assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
+
+
 def test_put_provider_rejects_stale_credential_reference_confirmation(tmp_path):
     data = _config_data()
     provider = data["providers"]["openai"]
