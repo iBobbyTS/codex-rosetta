@@ -405,6 +405,7 @@
           <SortableTableEnhanced
             items={rows}
             disabled={saving}
+            verticalSeparators={true}
             onReorder={reorderRows}
             onRemove={(item) => removeRow(item.id)}
             allowRemoveLast={true}
