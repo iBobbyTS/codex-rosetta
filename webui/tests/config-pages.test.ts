@@ -194,7 +194,7 @@ describe('ProvidersPage', () => {
     expect(within(screen.getByRole('dialog', { name: '添加服务方' })).queryByLabelText('绑定已登录的账号')).not.toBeInTheDocument();
   });
 
-  it('clears rows only after explicit binding success and fills unique immutable item rows with rate and blank concurrency', async () => {
+  it('clears rows only after explicit binding success and fills unique immutable item rows with rate and unavailable concurrency', async () => {
     mockProviderPage({
       providers: { relay: {
         provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough',
@@ -203,7 +203,7 @@ describe('ProvidersPage', () => {
       } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
     }, [{ id: 'account-a', provider: 'sub2api', name: 'https://account.example', base_url: 'https://account.example' }]);
-    const selection = deferred<{ items: Array<{ id: number; name: string; key: string; rate_multiplier: number | null }> }>();
+    const selection = deferred<{ items: Array<{ id: number; name: string; key: string; group_id: number; rate_multiplier: number | null }> }>();
     apiMock.post.mockReturnValue(selection.promise);
     render(ProvidersPage);
 
@@ -221,8 +221,8 @@ describe('ProvidersPage', () => {
     );
 
     selection.resolve({ items: [
-      { id: 1, name: 'alpha', key: 'secret-alpha-1234', rate_multiplier: 1.5 },
-      { id: 2, name: 'beta', key: 'secret-beta-5678', rate_multiplier: null },
+      { id: 1, name: 'alpha', key: 'secret-alpha-1234', group_id: 10, rate_multiplier: 1.5 },
+      { id: 2, name: 'beta', key: 'secret-beta-5678', group_id: 20, rate_multiplier: null },
     ] });
     await waitFor(() => expect(binding).toHaveAttribute('data-value', 'account-a'));
     expect(dialog.queryByLabelText('Credential ID primary')).not.toBeInTheDocument();
@@ -243,7 +243,7 @@ describe('ProvidersPage', () => {
     expect(within(alphaRow).getByRole('textbox', { name: 'Credential key alpha' })).toHaveAttribute('readonly');
     expect(alphaRow).not.toHaveTextContent('secret-alpha-1234');
     expect(alphaRow).toHaveTextContent('1.5x');
-    expect(within(alphaRow).getByLabelText('Available concurrency')).toBeEmptyDOMElement();
+    expect(within(alphaRow).getByLabelText('Available concurrency')).toHaveTextContent('—');
 
     await fireEvent.click(dialog.getByRole('button', { name: '+ Add credential' }));
     itemSelects = dialog.getAllByRole('button', { name: /Credential ID/ });
@@ -265,7 +265,7 @@ describe('ProvidersPage', () => {
     })));
   });
 
-  it('fetches exactly once on each bound edit open, reconciles matches, and retains missing items as unavailable', async () => {
+  it('fetches keys and capacity on each bound edit open, reconciles matches, and clears the window snapshot on close', async () => {
     mockProviderPage({
       providers: { relay: {
         provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
@@ -274,16 +274,19 @@ describe('ProvidersPage', () => {
       } },
       known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
     }, [{ id: 'account-a', provider: 'sub2api', name: 'https://account.example' }]);
-    apiMock.post.mockResolvedValue({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', rate_multiplier: 2 }] });
+    apiMock.post.mockImplementation((path: string) => Promise.resolve(path.endsWith('/sub2api-capacity')
+      ? { items: [{ group_id: 10, concurrency_used: 4, concurrency_max: 12 }] }
+      : { items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', group_id: 10, rate_multiplier: 2 }] }));
     render(ProvidersPage);
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     let dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
-    await waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(1));
-    expect(apiMock.post).toHaveBeenLastCalledWith('/admin/api/config/providers/relay/sub2api-keys', { account_id: 'account-a' }, expect.any(AbortSignal));
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/sub2api-capacity', { account_id: 'account-a' }, expect.any(AbortSignal)));
+    expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/sub2api-keys', { account_id: 'account-a' }, expect.any(AbortSignal));
     const alphaRow = dialog.getByRole('button', { name: 'Credential ID alpha' }).closest('tr')!;
     const missingRow = dialog.getByRole('button', { name: 'Credential ID removed' }).closest('tr')!;
     expect(alphaRow).toHaveTextContent('2x');
+    expect(within(alphaRow).getByLabelText('Available concurrency')).toHaveTextContent('8/12');
     expect(within(alphaRow).getByRole('textbox', { name: 'Credential key alpha' })).toHaveValue('alph***cret');
     expect(missingRow).toHaveClass('suu-sortable-table-enhanced__row--red');
     expect(missingRow).toHaveTextContent('removed (unavailable)');
@@ -293,8 +296,67 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
     dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
-    await waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(4));
     expect(dialog.getByRole('button', { name: 'Credential ID removed' })).toBeInTheDocument();
+    expect(within(dialog.getByRole('button', { name: 'Credential ID alpha' }).closest('tr')!).getByLabelText('Available concurrency')).toHaveTextContent('8/12');
+  });
+
+  it('refreshes capacity every 30 seconds, retains the last success on failure, and reuses it for a newly added key', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'sub2api', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: FIRST_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    }, [{ id: 'account-a', provider: 'sub2api', name: 'https://account.example' }]);
+    vi.useFakeTimers();
+    let capacityCalls = 0;
+    apiMock.post.mockImplementation((path: string) => {
+      if (path.endsWith('/sub2api-keys')) return Promise.resolve({ items: [
+        { id: 1, name: 'alpha', key: 'secret-alpha-1234', group_id: 10, rate_multiplier: 1 },
+        { id: 2, name: 'beta', key: 'secret-beta-5678', group_id: 20, rate_multiplier: 1 },
+      ] });
+      capacityCalls += 1;
+      if (capacityCalls === 2) return Promise.reject(new Error('temporary capacity failure'));
+      return Promise.resolve({ items: capacityCalls === 1
+        ? [{ group_id: 10, concurrency_used: 2, concurrency_max: 10 }, { group_id: 20, concurrency_used: 5, concurrency_max: 20 }]
+        : [{ group_id: 10, concurrency_used: 3, concurrency_max: 10 }, { group_id: 20, concurrency_used: 7, concurrency_max: 20 }] });
+    });
+
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    let dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const alphaRow = dialog.getByRole('button', { name: 'Credential ID alpha' }).closest('tr')!;
+    await waitFor(() => expect(within(alphaRow).getByLabelText('Available concurrency')).toHaveTextContent('8/10'));
+    expect(capacityCalls).toBe(1);
+
+    await fireEvent.click(dialog.getByRole('button', { name: '+ Add credential' }));
+    const emptySelect = dialog.getAllByRole('button', { name: /Credential ID/ }).find((control) => control.getAttribute('data-value') === '')!;
+    await selectDropdown(emptySelect, 'beta');
+    const betaRow = dialog.getByRole('button', { name: 'Credential ID beta' }).closest('tr')!;
+    expect(within(betaRow).getByLabelText('Available concurrency')).toHaveTextContent('15/20');
+    expect(capacityCalls).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent('temporary capacity failure'));
+    expect(within(alphaRow).getByLabelText('Available concurrency')).toHaveTextContent('8/10');
+    expect(within(betaRow).getByLabelText('Available concurrency')).toHaveTextContent('15/20');
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitFor(() => expect(within(alphaRow).getByLabelText('Available concurrency')).toHaveTextContent('7/10'));
+    expect(within(betaRow).getByLabelText('Available concurrency')).toHaveTextContent('13/20');
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    vi.advanceTimersByTime(30_000);
+    await tick();
+    expect(capacityCalls).toBe(3);
+
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await waitFor(() => expect(capacityCalls).toBe(4));
+    expect(within(dialog.getByRole('button', { name: 'Credential ID alpha' }).closest('tr')!).getByLabelText('Available concurrency')).toHaveTextContent('7/10');
+    vi.useRealTimers();
   });
 
   it('preserves the current binding and rows on switch failure, then restores manual editing and omits the binding on save', async () => {
@@ -309,7 +371,7 @@ describe('ProvidersPage', () => {
       { id: 'account-a', provider: 'sub2api', name: 'https://account-a.example' },
       { id: 'account-b', provider: 'sub2api', name: 'https://account-b.example' },
     ]);
-    apiMock.post.mockResolvedValueOnce({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', rate_multiplier: 1 }] }).mockResolvedValueOnce({ items: 'invalid' });
+    apiMock.post.mockResolvedValueOnce({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', group_id: 10, rate_multiplier: 1 }] }).mockResolvedValueOnce({ items: 'invalid' });
     render(ProvidersPage);
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
@@ -317,7 +379,7 @@ describe('ProvidersPage', () => {
     const binding = dialog.getByRole('button', { name: 'Bind a logged-in account' });
     await waitFor(() => expect(binding).toHaveAttribute('data-value', 'account-a'));
     await selectDropdown(binding, 'https://account-b.example');
-    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent('The account keys response is invalid.'));
+    await waitFor(() => expect(dialog.getByText('Unable to load account keys: The account keys response is invalid.')).toBeInTheDocument());
     expect(binding).toHaveAttribute('data-value', 'account-a');
     expect(dialog.getByRole('button', { name: 'Credential ID alpha' })).toBeInTheDocument();
     expect(dialog.getByRole('radio', { name: 'Make credential alpha current' })).toBeChecked();
@@ -345,10 +407,10 @@ describe('ProvidersPage', () => {
       { id: 'account-a', provider: 'sub2api', name: 'https://account-a.example' },
       { id: 'account-b', provider: 'sub2api', name: 'https://account-b.example' },
     ]);
-    const accountB = deferred<{ items: Array<{ id: number; name: string; key: string; rate_multiplier: number }> }>();
+    const accountB = deferred<{ items: Array<{ id: number; name: string; key: string; group_id: number; rate_multiplier: number }> }>();
     let accountBSignal: AbortSignal | undefined;
     apiMock.post.mockImplementation((_path: string, body: { account_id: string }, signal: AbortSignal) => {
-      if (body.account_id === 'account-a') return Promise.resolve({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', rate_multiplier: 1 }] });
+      if (body.account_id === 'account-a') return Promise.resolve({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', group_id: 10, rate_multiplier: 1 }] });
       accountBSignal = signal;
       return accountB.promise;
     });
@@ -357,7 +419,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
     const binding = dialog.getByRole('button', { name: 'Bind a logged-in account' });
-    await waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/config/providers/relay/sub2api-keys', { account_id: 'account-a' }, expect.any(AbortSignal)));
     await selectDropdown(binding, 'https://account-b.example');
 
     const saveButton = dialog.getByRole('button', { name: 'Save' });
@@ -369,7 +431,7 @@ describe('ProvidersPage', () => {
     await selectDropdown(binding, 'https://account-a.example');
     expect(accountBSignal?.aborted).toBe(true);
     expect(saveButton).toBeEnabled();
-    accountB.resolve({ items: [{ id: 2, name: 'beta', key: 'secret-beta-5678', rate_multiplier: 2 }] });
+    accountB.resolve({ items: [{ id: 2, name: 'beta', key: 'secret-beta-5678', group_id: 20, rate_multiplier: 2 }] });
     await accountB.promise;
     await tick();
     expect(binding).toHaveAttribute('data-value', 'account-a');
@@ -446,8 +508,8 @@ describe('ProvidersPage', () => {
       { id: 'account-a', provider: 'sub2api', name: 'https://account-a.example' },
       { id: 'account-b', provider: 'sub2api', name: 'https://account-b.example' },
     ]);
-    const accountA = deferred<{ items: Array<{ id: number; name: string; key: string; rate_multiplier: number }> }>();
-    const accountB = deferred<{ items: Array<{ id: number; name: string; key: string; rate_multiplier: number }> }>();
+    const accountA = deferred<{ items: Array<{ id: number; name: string; key: string; group_id: number; rate_multiplier: number }> }>();
+    const accountB = deferred<{ items: Array<{ id: number; name: string; key: string; group_id: number; rate_multiplier: number }> }>();
     apiMock.post.mockImplementation((_path: string, body: { account_id: string }) => body.account_id === 'account-a' ? accountA.promise : accountB.promise);
     const staleView = render(ProvidersPage);
 
@@ -457,9 +519,9 @@ describe('ProvidersPage', () => {
     await selectDropdown(binding, 'https://account-a.example');
     await selectDropdown(binding, 'https://account-b.example');
     expect(apiMock.post).toHaveBeenCalledTimes(2);
-    accountB.resolve({ items: [{ id: 2, name: 'beta', key: 'secret-beta-5678', rate_multiplier: 3 }] });
+    accountB.resolve({ items: [{ id: 2, name: 'beta', key: 'secret-beta-5678', group_id: 20, rate_multiplier: 3 }] });
     await waitFor(() => expect(binding).toHaveAttribute('data-value', 'account-b'));
-    accountA.resolve({ items: [{ id: 1, name: 'alpha', key: 'secret-alpha-1234', rate_multiplier: 9 }] });
+    accountA.resolve({ items: [{ id: 1, name: 'alpha', key: 'secret-alpha-1234', group_id: 10, rate_multiplier: 9 }] });
     await accountA.promise;
     await tick();
     expect(binding).toHaveAttribute('data-value', 'account-b');

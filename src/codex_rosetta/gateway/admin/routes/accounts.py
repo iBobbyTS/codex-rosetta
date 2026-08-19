@@ -25,6 +25,7 @@ from ._shared import _parse_json_object
 _SUB2API_KEYS_ENDPOINT = (
     "/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc"
 )
+_SUB2API_CAPACITY_ENDPOINT = "/api/v1/channel-monitors/capacity-summary"
 
 
 def _store(request: Any) -> AccountStore:
@@ -130,11 +131,57 @@ def _project_sub2api_key_items(payload: Any) -> list[dict[str, Any]]:
                 "id": item_id,
                 "name": name,
                 "key": key,
+                "group_id": group_id,
                 "rate_multiplier": rate_multiplier,
                 # Sub2API does not expose the editor's available metric yet.
                 # Keep the response shape explicit without projecting upstream
                 # fields that are not part of the Admin contract.
                 "current_concurrency": None,
+            }
+        )
+    return projected
+
+
+def _project_sub2api_capacity_items(payload: Any) -> list[dict[str, int]]:
+    """Return the minimal Provider-editor projection from a capacity response."""
+    if not isinstance(payload, dict):
+        raise ValueError("Sub2API capacity response is invalid")
+    success_code = payload.get("code")
+    if (
+        isinstance(success_code, bool)
+        or not isinstance(success_code, int)
+        or success_code != 0
+    ):
+        raise ValueError("Sub2API capacity response is invalid")
+    data = payload.get("data")
+    items = data.get("items") if isinstance(data, dict) else None
+    if not isinstance(items, list):
+        raise ValueError("Sub2API capacity response is invalid")
+
+    projected: list[dict[str, int]] = []
+    group_ids: set[int] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("Sub2API capacity response is invalid")
+        group_id = item.get("group_id")
+        concurrency_used = item.get("concurrency_used")
+        concurrency_max = item.get("concurrency_max")
+        if (
+            isinstance(group_id, bool)
+            or not isinstance(group_id, int)
+            or isinstance(concurrency_used, bool)
+            or not isinstance(concurrency_used, int)
+            or isinstance(concurrency_max, bool)
+            or not isinstance(concurrency_max, int)
+            or group_id in group_ids
+        ):
+            raise ValueError("Sub2API capacity response is invalid")
+        group_ids.add(group_id)
+        projected.append(
+            {
+                "group_id": group_id,
+                "concurrency_used": concurrency_used,
+                "concurrency_max": concurrency_max,
             }
         )
     return projected
@@ -299,6 +346,59 @@ async def get_sub2api_keys(request: Any, **kwargs: Any) -> Response:
     return JSONResponse({"items": items})
 
 
+async def get_sub2api_capacity(request: Any, **kwargs: Any) -> Response:
+    """Fetch one bound account's capacity summary through its runtime Provider."""
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    account_id = body.get("account_id")
+    if not isinstance(account_id, str) or not account_id.strip():
+        return JSONResponse(
+            {"error": "'account_id' must be a non-empty string"}, status_code=400
+        )
+    account_id = account_id.strip()
+
+    provider_name = request.path_params["name"]
+    runtime_provider = request.app.gateway_config.providers.get(provider_name)
+    if runtime_provider is None:
+        return JSONResponse({"error": "Provider not found"}, status_code=404)
+
+    store = _store(request)
+    account = store.get_private(account_id)
+    if account is None:
+        return JSONResponse({"error": "Sub2API account not found"}, status_code=404)
+    if account["provider"] != "sub2api":
+        return JSONResponse(
+            {"error": "Account is not a Sub2API account"}, status_code=400
+        )
+
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        runtime_provider.base_urls,
+        current_base_url=runtime_provider.base_url,
+        provider_id=provider_name,
+        persist_current_url=lambda _provider_id, url: runtime_provider.select_base_url(
+            url
+        ),
+    )
+    try:
+        response = await client.request(
+            _SUB2API_CAPACITY_ENDPOINT,
+            user_agent=request.headers.get("user-agent"),
+        )
+        if response.status_code != 200:
+            return JSONResponse(
+                {"error": "Unable to fetch Sub2API capacity"}, status_code=502
+            )
+        items = _project_sub2api_capacity_items(response.json())
+    except Exception:
+        return JSONResponse(
+            {"error": "Unable to fetch Sub2API capacity"}, status_code=502
+        )
+    return JSONResponse({"items": items})
+
+
 async def delete_account(request: Any, account_id: str) -> Response:
     """Delete one local account and never call the upstream provider."""
     if not _store(request).delete(account_id):
@@ -348,6 +448,7 @@ __all__ = [
     "delete_account",
     "get_accounts",
     "get_new_api_pricing",
+    "get_sub2api_capacity",
     "get_sub2api_keys",
     "refresh_account",
     "start_chatgpt",

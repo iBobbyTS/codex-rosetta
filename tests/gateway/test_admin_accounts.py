@@ -20,10 +20,12 @@ from codex_rosetta.gateway.admin.account_store import (
 )
 from codex_rosetta.gateway.admin.chatgpt_oauth import PendingOAuth
 from codex_rosetta.gateway.admin.routes.accounts import (
+    _project_sub2api_capacity_items,
     _project_sub2api_key_items,
     delete_account,
     get_accounts,
     get_new_api_pricing,
+    get_sub2api_capacity,
     get_sub2api_keys,
 )
 import codex_rosetta.gateway.admin.chatgpt_oauth as chatgpt_oauth
@@ -156,6 +158,17 @@ def _sub2api_keys_request(
     return request
 
 
+def _sub2api_capacity_request(
+    app: Any,
+    account_id: str,
+    *,
+    provider_name: str = "bound-provider",
+) -> Request:
+    request = _sub2api_keys_request(app, account_id, provider_name=provider_name)
+    request.path = f"/admin/api/config/providers/{provider_name}/sub2api-capacity"
+    return request
+
+
 def test_account_store_upsert_deduplicates_and_hides_credentials(
     tmp_path: Path,
 ) -> None:
@@ -250,6 +263,7 @@ def test_sub2api_keys_projection_keeps_only_editor_fields() -> None:
             "id": 17,
             "name": "Primary key",
             "key": "provider-item-secret",
+            "group_id": 3,
             "rate_multiplier": 1.5,
             "current_concurrency": None,
         },
@@ -257,6 +271,7 @@ def test_sub2api_keys_projection_keeps_only_editor_fields() -> None:
             "id": 18,
             "name": "No matching route",
             "key": "second-provider-secret",
+            "group_id": 5,
             "rate_multiplier": None,
             "current_concurrency": None,
         },
@@ -300,6 +315,97 @@ def test_sub2api_keys_route_uses_exact_provider_url_and_user_agent(
     ]
     assert json.loads(response.body) == {
         "items": _project_sub2api_key_items(_keys_payload())
+    }
+
+
+def _capacity_payload() -> dict[str, Any]:
+    return {
+        "code": 0,
+        "message": "success",
+        "data": {
+            "items": [
+                {
+                    "group_id": 3,
+                    "group_name": "OpenAI",
+                    "concurrency_used": 4,
+                    "concurrency_max": 12,
+                    "sessions_used": 99,
+                },
+                {
+                    "group_id": 5,
+                    "group_name": "Fallback",
+                    "concurrency_used": 0,
+                    "concurrency_max": 0,
+                },
+            ],
+            "total": {"concurrency_used": 4, "concurrency_max": 12},
+        },
+    }
+
+
+def test_sub2api_capacity_projection_keeps_only_group_concurrency_fields() -> None:
+    assert _project_sub2api_capacity_items(_capacity_payload()) == [
+        {"group_id": 3, "concurrency_used": 4, "concurrency_max": 12},
+        {"group_id": 5, "concurrency_used": 0, "concurrency_max": 0},
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"code": False, "data": {"items": []}},
+        {
+            "code": 0,
+            "data": {
+                "items": [
+                    {"group_id": True, "concurrency_used": 0, "concurrency_max": 1}
+                ]
+            },
+        },
+        {
+            "code": 0,
+            "data": {
+                "items": [
+                    {"group_id": 1, "concurrency_used": "0", "concurrency_max": 1}
+                ]
+            },
+        },
+        {
+            "code": 0,
+            "data": {
+                "items": [
+                    {"group_id": 1, "concurrency_used": 0, "concurrency_max": 1},
+                    {"group_id": 1, "concurrency_used": 1, "concurrency_max": 2},
+                ]
+            },
+        },
+    ],
+)
+def test_sub2api_capacity_projection_rejects_invalid_items(payload: Any) -> None:
+    with pytest.raises(ValueError, match="capacity response is invalid"):
+        _project_sub2api_capacity_items(payload)
+
+
+def test_sub2api_capacity_route_uses_provider_client_and_minimal_projection(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    calls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        calls.append(url)
+        return _FakeSub2APIResponse(200, _capacity_payload())
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(
+        get_sub2api_capacity(_sub2api_capacity_request(app, account_id))
+    )
+
+    assert response.status_code == 200
+    assert calls == ["https://first.example/api/v1/channel-monitors/capacity-summary"]
+    assert json.loads(response.body) == {
+        "items": _project_sub2api_capacity_items(_capacity_payload())
     }
 
 
