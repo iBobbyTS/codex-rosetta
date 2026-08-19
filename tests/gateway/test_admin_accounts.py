@@ -432,6 +432,28 @@ def test_sub2api_keys_route_returns_bounded_redacted_errors(
     assert "login-refresh-secret" not in response.body.decode()
 
 
+def test_sub2api_keys_route_rejects_boolean_success_code(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    payload = _keys_payload()
+    payload["code"] = False
+    payload["message"] = "login-refresh-secret"
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        return _FakeSub2APIResponse(200, payload)
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(get_sub2api_keys(_sub2api_keys_request(app, account_id)))
+
+    assert response.status_code == 502
+    assert json.loads(response.body) == {"error": "Unable to fetch Sub2API keys"}
+    assert "provider-item-secret" not in response.body.decode()
+    assert "login-access-secret" not in response.body.decode()
+    assert "login-refresh-secret" not in response.body.decode()
+
+
 def test_sub2api_keys_route_is_registered_and_requires_admin_auth(
     monkeypatch, tmp_path: Path
 ) -> None:

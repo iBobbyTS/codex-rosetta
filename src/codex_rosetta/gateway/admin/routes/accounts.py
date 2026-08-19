@@ -64,7 +64,14 @@ async def add_sub2api(request: Any) -> Response:
 
 def _project_sub2api_key_items(payload: Any) -> list[dict[str, Any]]:
     """Return the minimal Provider-editor projection from one keys response."""
-    if not isinstance(payload, dict) or payload.get("code") != 0:
+    if not isinstance(payload, dict):
+        raise ValueError("Sub2API keys response is invalid")
+    success_code = payload.get("code")
+    if (
+        isinstance(success_code, bool)
+        or not isinstance(success_code, int)
+        or success_code != 0
+    ):
         raise ValueError("Sub2API keys response is invalid")
     data = payload.get("data")
     items = data.get("items") if isinstance(data, dict) else None
