@@ -2893,6 +2893,98 @@ def test_put_provider_disables_rotation_and_uses_previous_effective_uuid(tmp_pat
     assert current.credential_uuid == _SECONDARY_CREDENTIAL_UUID
 
 
+def test_put_provider_disables_rotation_after_deleting_previous_current(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    data["providers"]["openai"]["current_api_key"] = "secondary"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][0]]
+    body.pop("current_api_key")
+    body["auto_rotate_credentials"] = False
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    expected = {
+        "provider": "openai",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+    }
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["openai"]["api_keys"] == body["api_keys"]
+    assert "current_api_key" not in saved["providers"]["openai"]
+    assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
+    current = request.app.gateway_config.model_group_rings["OpenAI"].current
+    assert current.provider_name == "openai"
+    assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
+
+
+@pytest.mark.parametrize(
+    ("credential_ids", "expected_uuid"),
+    [
+        (("imported", "primary"), _SECONDARY_CREDENTIAL_UUID),
+        (("imported", "backup"), _PRIMARY_CREDENTIAL_UUID),
+    ],
+)
+def test_put_provider_disables_rotation_from_environment_fallback(
+    tmp_path,
+    monkeypatch,
+    credential_ids: tuple[str, str],
+    expected_uuid: str,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-provider-key")
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider.pop("api_keys")
+    provider.pop("current_api_key")
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = {
+        "provider": "openai",
+        "api_type": "chat",
+        "base_urls": ["https://api.example.com"],
+        "current_base_url": "https://api.example.com",
+        "api_keys": [
+            {
+                "uuid": credential_uuid,
+                "id": credential_id,
+                "key": f"saved-{credential_id}",
+            }
+            for credential_uuid, credential_id in zip(
+                (_PRIMARY_CREDENTIAL_UUID, _SECONDARY_CREDENTIAL_UUID),
+                credential_ids,
+                strict=True,
+            )
+        ],
+        "auto_rotate_credentials": False,
+    }
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["openai"]["api_keys"] == body["api_keys"]
+    assert "current_api_key" not in saved["providers"]["openai"]
+    assert saved["model_groups"]["OpenAI"]["provider"] == [
+        {
+            "provider": "openai",
+            "credential_uuid": expected_uuid,
+        }
+    ]
+    current = request.app.gateway_config.model_group_rings["OpenAI"].current
+    assert current.provider_name == "openai"
+    assert current.credential_uuid == expected_uuid
+
+
 def test_put_provider_disables_rotation_falls_back_to_previous_first_uuid(tmp_path):
     data = _config_data()
     data["providers"]["openai"]["api_keys"].append(

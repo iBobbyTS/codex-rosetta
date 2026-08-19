@@ -1124,6 +1124,40 @@ def _provider_credential_uuid_for_id(
     )
 
 
+def _provider_transition_credential_uuid(
+    existing_provider: Mapping[str, Any],
+    retained_keys: list[dict[str, str]],
+    runtime_provider: ProviderInfo | None,
+) -> str:
+    """Return the retained UUID that owns an automatic-to-fixed transition."""
+    existing_keys_value = existing_provider.get("api_keys")
+    existing_keys = (
+        [
+            entry
+            for entry in existing_keys_value
+            if isinstance(entry, dict)
+            and isinstance(entry.get("uuid"), str)
+            and isinstance(entry.get("id"), str)
+        ]
+        if isinstance(existing_keys_value, list)
+        else []
+    )
+    if existing_keys:
+        current_id = existing_provider.get("current_api_key")
+        previous_uuid = _provider_credential_uuid_for_id(
+            cast(list[dict[str, str]], existing_keys),
+            current_id if isinstance(current_id, str) else None,
+        )
+        if previous_uuid in {entry["uuid"] for entry in retained_keys}:
+            return previous_uuid
+        return retained_keys[0]["uuid"]
+
+    runtime_current_id = (
+        runtime_provider.current_credential_id if runtime_provider is not None else None
+    )
+    return _provider_credential_uuid_for_id(retained_keys, runtime_current_id)
+
+
 def _referencing_model_groups_for_credentials(
     data: dict[str, Any], provider_name: str, credential_uuids: set[str]
 ) -> list[str]:
@@ -1431,24 +1465,24 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     if isinstance(existing_provider, dict) and existing_provider:
         previous_auto_rotate = existing_provider["auto_rotate_credentials"]
         if previous_auto_rotate != auto_rotate_credentials:
-            transition_keys = (
-                cast(list[dict[str, str]], existing_provider["api_keys"])
+            runtime_provider = request.app.gateway_config.providers.get(resolve_name)
+            transition_credential_uuid = (
+                _provider_transition_credential_uuid(
+                    existing_provider,
+                    merged_keys,
+                    runtime_provider,
+                )
                 if previous_auto_rotate
-                else merged_keys
-            )
-            transition_current = (
-                cast(str | None, existing_provider.get("current_api_key"))
-                if previous_auto_rotate
-                else cast(str, current_api_key)
+                else _provider_credential_uuid_for_id(
+                    merged_keys, cast(str, current_api_key)
+                )
             )
             _rewrite_provider_candidate_mode(
                 data,
                 name,
                 previous_auto_rotate=previous_auto_rotate,
                 auto_rotate=auto_rotate_credentials,
-                current_credential_uuid=_provider_credential_uuid_for_id(
-                    transition_keys, transition_current
-                ),
+                current_credential_uuid=transition_credential_uuid,
             )
     data.setdefault("providers", {})[name] = provider_entry
     _remove_credential_candidate_references(
