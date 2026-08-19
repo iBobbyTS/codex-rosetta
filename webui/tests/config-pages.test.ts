@@ -247,6 +247,107 @@ describe('ProvidersPage', () => {
     expect(body).toMatchObject({ api_keys: [{ uuid: PRIMARY_UUID, id: 'manual-alpha', key: 'alph***cret' }], current_api_key: 'manual-alpha' });
   });
 
+  it('cancels a pending switch when the committed account is reselected and fences Save until cancellation', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    }, [
+      { id: 'account-a', provider: 'sub2api', name: 'https://account-a.example' },
+      { id: 'account-b', provider: 'sub2api', name: 'https://account-b.example' },
+    ]);
+    const accountB = deferred<{ items: Array<{ id: number; name: string; key: string; rate_multiplier: number }> }>();
+    let accountBSignal: AbortSignal | undefined;
+    apiMock.post.mockImplementation((_path: string, body: { account_id: string }, signal: AbortSignal) => {
+      if (body.account_id === 'account-a') return Promise.resolve({ items: [{ id: 1, name: 'alpha', key: 'fresh-alpha-secret', rate_multiplier: 1 }] });
+      accountBSignal = signal;
+      return accountB.promise;
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const binding = dialog.getByRole('button', { name: 'Bind a logged-in account' });
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledTimes(1));
+    await selectDropdown(binding, 'https://account-b.example');
+
+    const saveButton = dialog.getByRole('button', { name: 'Save' });
+    expect(saveButton).toBeDisabled();
+    saveButton.removeAttribute('disabled');
+    await fireEvent.click(saveButton);
+    expect(apiMock.put).not.toHaveBeenCalled();
+
+    await selectDropdown(binding, 'https://account-a.example');
+    expect(accountBSignal?.aborted).toBe(true);
+    expect(saveButton).toBeEnabled();
+    accountB.resolve({ items: [{ id: 2, name: 'beta', key: 'secret-beta-5678', rate_multiplier: 2 }] });
+    await accountB.promise;
+    await tick();
+    expect(binding).toHaveAttribute('data-value', 'account-a');
+    expect(dialog.getByRole('button', { name: 'Credential ID alpha' })).toBeInTheDocument();
+    expect(dialog.queryByRole('button', { name: 'Credential ID beta' })).not.toBeInTheDocument();
+
+    await fireEvent.click(saveButton);
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
+      sub2api_account_id: 'account-a',
+      api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }],
+      current_api_key: 'alpha',
+    })));
+  });
+
+  it('reports an internal timeout AbortError for bound keys while preserving the committed draft', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough', sub2api_account_id: 'account-a',
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'alpha', key: 'alph***cret' }], current_api_key: 'alpha',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    }, [{ id: 'account-a', provider: 'sub2api', name: 'https://account-a.example' }]);
+    let callerSignal: AbortSignal | undefined;
+    apiMock.post.mockImplementation((_path: string, _body: unknown, signal: AbortSignal) => {
+      callerSignal = signal;
+      return Promise.reject(new DOMException('Request timed out', 'AbortError'));
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await waitFor(() => expect(dialog.getByRole('alert')).toHaveTextContent('Unable to load account keys: AbortError: Request timed out'));
+    expect(callerSignal?.aborted).toBe(false);
+    expect(dialog.getByRole('button', { name: 'Bind a logged-in account' })).toHaveAttribute('data-value', 'account-a');
+    expect(dialog.getByRole('button', { name: 'Credential ID alpha' })).toBeInTheDocument();
+    expect(dialog.getByRole('radio', { name: 'Make credential alpha current' })).toBeChecked();
+  });
+
+  it('reports an internal timeout AbortError from the account-list load', async () => {
+    const config = {
+      providers: { relay: {
+        provider: 'openai', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    };
+    let callerSignal: AbortSignal | undefined;
+    apiMock.get.mockImplementation((path: string, signal: AbortSignal) => {
+      if (path === '/admin/api/accounts') {
+        callerSignal = signal;
+        return Promise.reject(new DOMException('Request timed out', 'AbortError'));
+      }
+      return Promise.resolve(config);
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('alert')).toHaveTextContent('Unable to load logged-in accounts: AbortError: Request timed out');
+    expect(callerSignal?.aborted).toBe(false);
+  });
+
   it('ignores stale account results after a newer selection and preserves a deleted bound account on failed reopen', async () => {
     mockProviderPage({
       providers: { relay: {
