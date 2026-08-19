@@ -96,6 +96,10 @@ describe('ProvidersPage', () => {
     let dialog = within(screen.getByRole('dialog', { name: '编辑服务方' }));
     const binding = dialog.getByRole('button', { name: '绑定已登录的账号' });
     await fireEvent.click(binding);
+    expect(binding.closest('.provider-binding-dropdown')).not.toBeNull();
+    expect(screen.getByRole('listbox').parentElement).toHaveClass('suu-dropdown__menu--portal');
+    expect(screen.getByRole('listbox').parentElement).toHaveClass('suu-dropdown__menu--fit-content');
+    expect(screen.getByRole('listbox').parentElement?.parentElement).toBe(document.body);
     expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => [option.getAttribute('data-value'), option.textContent?.trim()])).toEqual([
       ['', '手动管理秘钥'],
       ['matched', 'HTTPS://MATCH.EXAMPLE/v1/'],
@@ -150,7 +154,14 @@ describe('ProvidersPage', () => {
 
     await fireEvent.click(dialog.getByRole('button', { name: '+ Add credential' }));
     let itemSelects = dialog.getAllByRole('button', { name: /Credential ID/ });
-    await selectDropdown(itemSelects[0], 'alpha');
+    await fireEvent.click(itemSelects[0]);
+    expect(itemSelects[0].closest('.provider-bound-item-dropdown')).not.toBeNull();
+    const portalMenu = screen.getByRole('listbox').parentElement!;
+    expect(portalMenu).toHaveClass('suu-dropdown__menu--portal');
+    expect(portalMenu).toHaveClass('suu-dropdown__menu--fit-content');
+    expect(portalMenu.parentElement).toBe(document.body);
+    expect(portalMenu.closest('.suu-sortable-table-wrap')).toBeNull();
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'alpha' }));
     const alphaSelect = dialog.getByRole('button', { name: 'Credential ID alpha' });
     const alphaRow = alphaSelect.closest('tr')!;
     expect(within(alphaRow).getByRole('textbox', { name: 'Credential key alpha' })).toHaveValue('secr•••1234');
