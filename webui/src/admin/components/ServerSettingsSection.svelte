@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { api } from '../lib/api';
   import { t } from '../../shared/i18n.svelte';
+  import Hint from './Hint.svelte';
   import { Dropdown, type DropdownValue } from '@ibobbyts/svelte-ui-utils/dropdown';
 
   type Dict = Record<string, unknown>;
@@ -64,7 +65,7 @@
   <div class="provider-card" style="max-width:480px">
     {#if error}<div class="alert error" role="alert">{error}</div>{/if}
     <div class="form-group" style="margin-bottom:0">
-      <label for="globalProxy">{t('label.globalProxy')}<span class="hint-icon">?<span class="hint-popup">{t('hint.docker')}</span></span></label>
+      <label for="globalProxy">{t('label.globalProxy')}<Hint content={t('hint.docker')} /></label>
       <div style="display:flex;gap:8px"><input id="globalProxy" bind:value={proxy} placeholder={t('placeholder.proxyExample')} style="flex:1" /><button class="btn btn-primary btn-sm" disabled={busy} onclick={() => void save()}>{t('btn.save')}</button></div>
       <div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.globalProxy.hint')}</div>
       <div style="margin-top:14px"><label for="requestBodyLimitMb">{t('label.requestBodyLimit')}</label><Dropdown id="requestBodyLimitMb" value={bodyLimit} options={bodyLimitOptions} fitViewport={true} onChange={(value: DropdownValue) => { bodyLimit = value; }} /><div style="font-size:11px;color:var(--text-dim);margin-top:6px">{t('label.requestBodyLimitHint')}</div></div>
