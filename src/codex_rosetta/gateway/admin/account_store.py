@@ -97,7 +97,15 @@ class AccountStore:
         for row in rows:
             metadata = json.loads(row["metadata_json"])
             if row["provider"] == "sub2api":
-                metadata = {"email": metadata.get("email", "")}
+                # Keep the account label public, but never expose the auth
+                # export.  The label is the normalized Base URL entered by
+                # the user when the account was added.
+                base_url = metadata.get("base_url") or metadata.get("name") or ""
+                metadata = {
+                    "name": base_url,
+                    "email": metadata.get("email", ""),
+                    "base_url": base_url,
+                }
             elif row["provider"] == "chatgpt":
                 metadata = _correct_chatgpt_workspace(metadata, row["credentials_json"])
             result.append({"id": row["id"], "provider": row["provider"], **metadata})
@@ -186,6 +194,27 @@ class AccountStore:
                     "UPDATE accounts SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (
                         json.dumps(metadata, ensure_ascii=True, separators=(",", ":")),
+                        account_id,
+                    ),
+                )
+                connection.commit()
+                return cursor.rowcount > 0
+            finally:
+                self._close(connection)
+
+    def update_credentials(self, account_id: str, credentials: dict[str, str]) -> bool:
+        """Replace private credentials for an existing account atomically."""
+        if not credentials:
+            raise ValueError("account credentials are required")
+        with self._lock:
+            connection = self._connect()
+            try:
+                cursor = connection.execute(
+                    "UPDATE accounts SET credentials_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (
+                        json.dumps(
+                            credentials, ensure_ascii=True, separators=(",", ":")
+                        ),
                         account_id,
                     ),
                 )

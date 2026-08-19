@@ -20,6 +20,7 @@ from codex_rosetta.gateway.admin.account_store import (
 from codex_rosetta.gateway.admin.chatgpt_oauth import PendingOAuth
 from codex_rosetta.gateway.admin.routes.accounts import get_accounts
 import codex_rosetta.gateway.admin.chatgpt_oauth as chatgpt_oauth
+import codex_rosetta.gateway.admin.sub2api_client as sub2api_client
 from codex_rosetta.gateway.admin.chatgpt_oauth import (
     CALLBACK_PATH,
     METADATA_ENDPOINT,
@@ -29,6 +30,10 @@ from codex_rosetta.gateway.admin.chatgpt_oauth import (
     start_chatgpt_login,
 )
 from codex_rosetta.gateway.admin.sub2api import parse_sub2api_credentials
+from codex_rosetta.gateway.admin.sub2api_client import (
+    DEFAULT_USER_AGENT,
+    Sub2APIProviderClient,
+)
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
 
@@ -77,6 +82,391 @@ def test_account_store_upsert_deduplicates_and_hides_credentials(
     assert len(rows) == 1
     assert rows[0]["name"] == "Alice Updated"
     assert "access_token" not in rows[0]
+
+
+class _FakeSub2APIResponse:
+    def __init__(
+        self,
+        status_code: int,
+        payload: dict[str, Any] | None = None,
+        content: bytes | None = None,
+    ):
+        self.status_code = status_code
+        self._payload = payload
+        self.content = (
+            content if content is not None else json.dumps(payload or {}).encode()
+        )
+
+    def json(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise json.JSONDecodeError("invalid", "", 0)
+        return self._payload
+
+
+def _sub2api_store(
+    tmp_path: Path, *, expires_at: str = "4102444800000"
+) -> tuple[AccountStore, str]:
+    store = AccountStore(str(tmp_path / "config.jsonc"))
+    account = store.upsert(
+        provider="sub2api",
+        identity="user@example.test",
+        metadata={"name": "https://stored.example", "email": "user@example.test"},
+        credentials={
+            "base_url": "https://stored.example",
+            "access_token": "old-access",
+            "refresh_token": "old-refresh",
+            "expires_at": expires_at,
+        },
+    )
+    return store, account["id"]
+
+
+def test_sub2api_provider_refreshes_expired_token_and_sets_headers(
+    monkeypatch, tmp_path: Path
+) -> None:
+    store, account_id = _sub2api_store(tmp_path, expires_at="1")
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        calls.append((url, dict(headers or {})))
+        if url.endswith("/auth/refresh"):
+            return _FakeSub2APIResponse(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 3600,
+                    },
+                },
+            )
+        return _FakeSub2APIResponse(200, {"data": {"ok": True}})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(
+        Sub2APIProviderClient(
+            store,
+            account_id,
+            ["https://api.example"],
+            persist_current_url=_noop_record,
+        ).request("/api/v1/auth/me", user_agent="client/test")
+    )
+    assert response.status_code == 200
+    assert calls[0][0].endswith("/api/v1/auth/refresh")
+    assert calls[1][1]["Authorization"] == "Bearer new-access"
+    assert calls[1][1]["User-Agent"] == "client/test"
+    assert (
+        store.get_private(account_id)["credentials"]["refresh_token"] == "new-refresh"
+    )
+
+
+def test_sub2api_defaults_user_agent_and_retries_401_once(
+    monkeypatch, tmp_path: Path
+) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+    calls: list[dict[str, str]] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        if url.endswith("/auth/refresh"):
+            return _FakeSub2APIResponse(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 3600,
+                    },
+                },
+            )
+        calls.append(dict(headers or {}))
+        return _FakeSub2APIResponse(401 if len(calls) == 1 else 200, {"ok": True})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(
+        Sub2APIProviderClient(
+            store,
+            account_id,
+            ["https://api.example"],
+            persist_current_url=_noop_record,
+        ).request(
+            "/api/v1/keys", headers={"authorization": "caller-token", "x-test": "1"}
+        )
+    )
+    assert response.status_code == 200
+    assert len(calls) == 2
+    assert calls[0]["Authorization"] == "Bearer old-access"
+    assert calls[1]["Authorization"] == "Bearer new-access"
+    assert calls[0]["User-Agent"] == DEFAULT_USER_AGENT
+    assert calls[0]["x-test"] == "1"
+
+
+def test_sub2api_second_401_is_returned_without_third_attempt(
+    monkeypatch, tmp_path: Path
+) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+    request_calls = 0
+    captured_kwargs: list[dict[str, Any]] = []
+    captured_urls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        nonlocal request_calls
+        if url.endswith("/auth/refresh"):
+            return _FakeSub2APIResponse(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 3600,
+                    },
+                },
+            )
+        request_calls += 1
+        captured_urls.append(url)
+        captured_kwargs.append(kwargs)
+        return _FakeSub2APIResponse(401, {"error": "unauthorized"})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://api.example"],
+        persist_current_url=_noop_record,
+    )
+    response = asyncio.run(
+        client.request(
+            "/api/v1/keys?page=1&page_size=100",
+            method="POST",
+            json={"filter": "active"},
+        )
+    )
+    assert response.status_code == 401
+    assert request_calls == 2
+    assert captured_kwargs == [
+        {"json": {"filter": "active"}},
+        {"json": {"filter": "active"}},
+    ]
+    assert captured_urls == [
+        "https://api.example/api/v1/keys?page=1&page_size=100",
+        "https://api.example/api/v1/keys?page=1&page_size=100",
+    ]
+
+
+def test_sub2api_502_rotates_and_persists_url_but_503_does_not(
+    monkeypatch, tmp_path: Path
+) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+    requested: list[str] = []
+    persisted: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        if url.startswith("https://first.example"):
+            requested.append(url)
+            return _FakeSub2APIResponse(502)
+        requested.append(url)
+        return _FakeSub2APIResponse(200, {"ok": True})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://first.example", "https://second.example"],
+        persist_current_url=lambda _provider_id, url: _record(persisted, url),
+    )
+    response = asyncio.run(client.request("/api/v1/auth/me"))
+    assert response.status_code == 200
+    assert requested == [
+        "https://first.example/api/v1/auth/me",
+        "https://second.example/api/v1/auth/me",
+    ]
+    assert persisted == ["https://second.example"]
+    assert client.current_base_url == "https://second.example"
+
+
+def test_sub2api_503_is_returned_without_rotation(monkeypatch, tmp_path: Path) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+    calls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        calls.append(url)
+        return _FakeSub2APIResponse(
+            503, content="网站请求超时 回源请求被中断 >502<".encode()
+        )
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://first.example", "https://second.example"],
+        persist_current_url=_noop_record,
+    )
+    response = asyncio.run(client.request("/api/v1/auth/me"))
+    assert response.status_code == 503
+    assert calls == ["https://first.example/api/v1/auth/me"]
+    assert client.current_base_url == "https://first.example"
+
+
+def test_sub2api_cdn_marker_rotates_like_502(monkeypatch, tmp_path: Path) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+    calls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        calls.append(url)
+        if url.startswith("https://first.example"):
+            return _FakeSub2APIResponse(
+                200, content="网站请求超时 回源请求被中断 >502<".encode()
+            )
+        return _FakeSub2APIResponse(200, {"ok": True})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://first.example", "https://second.example"],
+        persist_current_url=_noop_record,
+    )
+    response = asyncio.run(client.request("/api/v1/auth/me"))
+    assert response.status_code == 200
+    assert calls == [
+        "https://first.example/api/v1/auth/me",
+        "https://second.example/api/v1/auth/me",
+    ]
+
+
+def test_sub2api_single_cdn_marker_does_not_rotate(monkeypatch, tmp_path: Path) -> None:
+    store, account_id = _sub2api_store(tmp_path)
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        return _FakeSub2APIResponse(200, content="网站请求超时".encode())
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://first.example", "https://second.example"],
+        persist_current_url=_noop_record,
+    )
+    response = asyncio.run(client.request("/api/v1/auth/me"))
+    assert response.content == "网站请求超时".encode()
+    assert client.current_base_url == "https://first.example"
+
+
+def test_sub2api_refresh_failure_does_not_mutate_credentials(
+    monkeypatch, tmp_path: Path
+) -> None:
+    store, account_id = _sub2api_store(tmp_path, expires_at="1")
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        return _FakeSub2APIResponse(401, {"error": "refresh expired"})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    with pytest.raises(sub2api_client.Sub2APIRefreshError):
+        asyncio.run(
+            Sub2APIProviderClient(
+                store,
+                account_id,
+                ["https://api.example"],
+                persist_current_url=_noop_record,
+            ).request("/api/v1/auth/me")
+        )
+    credentials = store.get_private(account_id)["credentials"]
+    assert credentials["access_token"] == "old-access"
+    assert credentials["refresh_token"] == "old-refresh"
+
+
+def test_sub2api_refresh_502_rotates_to_next_url(monkeypatch, tmp_path: Path) -> None:
+    store, account_id = _sub2api_store(tmp_path, expires_at="1")
+    refresh_urls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        if url.endswith("/auth/refresh"):
+            refresh_urls.append(url)
+            if url.startswith("https://first.example"):
+                return _FakeSub2APIResponse(502)
+            return _FakeSub2APIResponse(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 3600,
+                    },
+                },
+            )
+        return _FakeSub2APIResponse(200, {"ok": True})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://first.example", "https://second.example"],
+        persist_current_url=_noop_record,
+    )
+    response = asyncio.run(client.request("/api/v1/auth/me"))
+    assert response.status_code == 200
+    assert refresh_urls == [
+        "https://first.example/api/v1/auth/refresh",
+        "https://second.example/api/v1/auth/refresh",
+    ]
+
+
+def test_sub2api_concurrent_expiry_refreshes_once(monkeypatch, tmp_path: Path) -> None:
+    store, account_id = _sub2api_store(tmp_path, expires_at="1")
+    refresh_calls = 0
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        nonlocal refresh_calls
+        if url.endswith("/auth/refresh"):
+            refresh_calls += 1
+            await asyncio.sleep(0)
+            return _FakeSub2APIResponse(
+                200,
+                {
+                    "code": 0,
+                    "data": {
+                        "access_token": "new-access",
+                        "refresh_token": "new-refresh",
+                        "expires_in": 3600,
+                    },
+                },
+            )
+        return _FakeSub2APIResponse(200, {"ok": True})
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    first_client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://api.example"],
+        persist_current_url=_noop_record,
+    )
+    second_client = Sub2APIProviderClient(
+        store,
+        account_id,
+        ["https://api.example"],
+        persist_current_url=_noop_record,
+    )
+
+    async def run_both():
+        return await asyncio.gather(
+            first_client.request("/api/v1/auth/me"),
+            second_client.request("/api/v1/keys"),
+        )
+
+    responses = asyncio.run(run_both())
+    assert [response.status_code for response in responses] == [200, 200]
+    assert refresh_calls == 1
+
+
+async def _record(values: list[str], value: str) -> None:
+    values.append(value)
+
+
+async def _noop_record(_provider_id: str, _value: str) -> None:
+    return None
 
 
 def test_chatgpt_workspaces_have_distinct_stable_identities(tmp_path: Path) -> None:
@@ -543,7 +933,11 @@ def test_sub2api_credentials_require_email_claim() -> None:
         "ai-pixel.online",
     )
     assert identity == "owner@example.test"
-    assert metadata == {"email": "Owner@Example.test"}
+    assert metadata == {
+        "name": "https://ai-pixel.online",
+        "email": "Owner@Example.test",
+        "base_url": "https://ai-pixel.online",
+    }
     assert credentials["base_url"] == "https://ai-pixel.online"
 
 
@@ -566,7 +960,13 @@ def test_account_store_delete_removes_local_record_and_credentials(
         credentials={"access_token": "secret", "refresh_token": "refresh"},
     )
     assert store.list_public() == [
-        {"id": row["id"], "provider": "sub2api", "email": "owner@example.test"}
+        {
+            "id": row["id"],
+            "provider": "sub2api",
+            "name": "https://ai-pixel.online",
+            "email": "owner@example.test",
+            "base_url": "https://ai-pixel.online",
+        }
     ]
     assert store.delete(row["id"])
     assert store.list_public() == []

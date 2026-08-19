@@ -13,6 +13,7 @@
     email?: string;
     workspace?: string;
     subscription_type?: string;
+    base_url?: string;
   };
 
   let accounts = $state<Account[]>([]);
@@ -200,11 +201,11 @@
     </table></div>
     <h3>{t('accounts.sub2apiSection')}</h3>
     <div class="table-scroll"><table>
-      <thead><tr><th>{t('accounts.email')}</th><th>{t('accounts.actions')}</th></tr></thead>
+      <thead><tr><th>{t('accounts.name')}</th><th>{t('accounts.email')}</th><th>{t('accounts.actions')}</th></tr></thead>
       <tbody>
         {#each accounts.filter((account) => account.provider === 'sub2api') as account}
-          <tr><td>{account.email ?? ''}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
-        {:else}<tr><td colspan="2" class="empty">{t('empty.accounts')}</td></tr>{/each}
+          <tr><td>{account.name ?? account.base_url ?? ''}</td><td>{account.email ?? ''}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
+        {:else}<tr><td colspan="3" class="empty">{t('empty.accounts')}</td></tr>{/each}
       </tbody>
     </table></div>
   {/if}

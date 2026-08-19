@@ -52,4 +52,13 @@ def parse_sub2api_credentials(
         "refresh_token": refresh_token.strip(),
         "expires_at": str(expires_at).strip(),
     }
-    return email.strip().lower(), {"email": email.strip()}, credentials
+    normalized_email = email.strip()
+    return (
+        normalized_email.lower(),
+        {
+            "name": normalized_url,
+            "email": normalized_email,
+            "base_url": normalized_url,
+        },
+        credentials,
+    )

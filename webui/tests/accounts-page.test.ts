@@ -1,5 +1,5 @@
 // @vitest-environment-options { "customExportConditions": ["browser"] }
-import { fireEvent, render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import AccountsPage from '../src/admin/pages/AccountsPage.svelte';
 import { isSupportedOAuthHost } from '../src/admin/lib/oauth-host';
@@ -189,5 +189,20 @@ describe('AccountsPage Sub2API dialog', () => {
     expect(screen.getByRole('button', { name: 'Copy browser script' })).toBeInTheDocument();
     expect(screen.getByLabelText('Base URL')).toHaveAttribute('placeholder', 'ai-pixel.online');
     expect(screen.getByLabelText('Authentication JSON').tagName).toBe('TEXTAREA');
+  });
+
+  it('shows the saved Base URL as the first account column', async () => {
+    apiMock.get.mockResolvedValue({ accounts: [{
+      id: 'sub2api-1',
+      provider: 'sub2api',
+      name: 'https://ai-pixel.online',
+      base_url: 'https://ai-pixel.online',
+      email: 'owner@example.test',
+    }] });
+    render(AccountsPage);
+    await vi.runAllTicks();
+
+    await waitFor(() => expect(screen.getByText('https://ai-pixel.online')).toBeInTheDocument());
+    expect(screen.getByText('owner@example.test')).toBeInTheDocument();
   });
 });
