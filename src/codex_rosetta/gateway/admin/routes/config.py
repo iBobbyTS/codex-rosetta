@@ -1163,6 +1163,16 @@ def _remove_credential_candidate_references(
         ]
 
 
+def _normalize_sub2api_account_id(body: dict[str, Any]) -> None:
+    """Validate and normalize the optional persisted Sub2API account binding."""
+    if "sub2api_account_id" not in body:
+        return
+    value = body["sub2api_account_id"]
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("'sub2api_account_id' must be a non-empty string")
+    body["sub2api_account_id"] = value.strip()
+
+
 async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
@@ -1197,6 +1207,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         api_keys = existing_provider.get("api_keys")
         current_api_key = current_api_key or existing_provider.get("current_api_key")
     try:
+        _normalize_sub2api_account_id(body)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)

@@ -1320,6 +1320,13 @@ class GatewayConfig:
     @staticmethod
     def _validate_provider_credentials(name: str, cfg: dict[str, Any]) -> None:
         """Validate canonical credentials for enabled and disabled rows."""
+        sub2api_account_id = cfg.get("sub2api_account_id")
+        if "sub2api_account_id" in cfg and (
+            not isinstance(sub2api_account_id, str) or not sub2api_account_id.strip()
+        ):
+            raise ValueError(
+                f"config: provider '{name}' sub2api_account_id must be a non-empty string"
+            )
         if not isinstance(cfg.get("auto_rotate_credentials"), bool):
             raise ValueError(
                 f"config: provider '{name}' auto_rotate_credentials must be a boolean"

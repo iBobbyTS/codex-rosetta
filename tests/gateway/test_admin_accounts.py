@@ -16,9 +16,15 @@ from codex_rosetta._vendor.httpserver import Request
 from codex_rosetta.gateway.admin.account_store import (
     AccountStore,
     _correct_chatgpt_workspace,
+    get_account_store,
 )
 from codex_rosetta.gateway.admin.chatgpt_oauth import PendingOAuth
-from codex_rosetta.gateway.admin.routes.accounts import get_accounts
+from codex_rosetta.gateway.admin.routes.accounts import (
+    _project_sub2api_key_items,
+    delete_account,
+    get_accounts,
+    get_sub2api_keys,
+)
 import codex_rosetta.gateway.admin.chatgpt_oauth as chatgpt_oauth
 import codex_rosetta.gateway.admin.sub2api_client as sub2api_client
 from codex_rosetta.gateway.admin.chatgpt_oauth import (
@@ -61,6 +67,76 @@ def _app(tmp_path: Path):
     return create_app(GatewayConfig(config), config_path=str(path))
 
 
+def _provider_app(tmp_path: Path):
+    config = {
+        "providers": {
+            "bound-provider": {
+                "provider": "custom",
+                "api_type": "chat",
+                "base_urls": [
+                    "https://first.example/v1",
+                    "https://second.example/v1",
+                ],
+                "current_base_url": "https://first.example/v1",
+                "api_keys": [
+                    {
+                        "uuid": "76f4b77c-e567-44f4-8f00-7986a36dcfe1",
+                        "id": "primary",
+                        "key": "provider-secret",
+                    }
+                ],
+                "current_api_key": "primary",
+                "auto_rotate_credentials": True,
+            }
+        },
+        "model_groups": {},
+        "server": {
+            "admin_password": "secret",
+            "api_keys": [{"id": "test", "key": "gateway-key", "label": "test"}],
+        },
+    }
+    path = tmp_path / "config.jsonc"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return create_app(GatewayConfig(config), config_path=str(path)), path
+
+
+def _bound_account(app: Any, *, provider: str = "sub2api") -> str:
+    row = get_account_store(app).upsert(
+        provider=provider,
+        identity=f"{provider}-owner@example.test",
+        metadata={"email": "owner@example.test"},
+        credentials={
+            "access_token": "login-access-secret",
+            "refresh_token": "login-refresh-secret",
+            "expires_at": "4102444800000",
+        },
+    )
+    return row["id"]
+
+
+def _sub2api_keys_request(
+    app: Any,
+    account_id: str,
+    *,
+    provider_name: str = "bound-provider",
+    user_agent: str | None = None,
+) -> Request:
+    headers = {"content-type": "application/json"}
+    if user_agent is not None:
+        headers["user-agent"] = user_agent
+    request = Request(
+        method="POST",
+        path=f"/admin/api/config/providers/{provider_name}/sub2api-keys",
+        query_string="",
+        headers=headers,
+        body=json.dumps({"account_id": account_id}).encode(),
+        client_addr=("127.0.0.1", 1),
+        app=app,
+    )
+    request.path_params = {"name": provider_name}
+    return request
+
+
 def test_account_store_upsert_deduplicates_and_hides_credentials(
     tmp_path: Path,
 ) -> None:
@@ -101,6 +177,282 @@ class _FakeSub2APIResponse:
         if self._payload is None:
             raise json.JSONDecodeError("invalid", "", 0)
         return self._payload
+
+
+def _keys_payload() -> dict[str, Any]:
+    return {
+        "code": 0,
+        "message": "ok",
+        "data": {
+            "items": [
+                {
+                    "id": 17,
+                    "name": "Primary key",
+                    "key": "provider-item-secret",
+                    "group_id": 3,
+                    "group_routes": [
+                        {
+                            "enabled": False,
+                            "group": {"id": 3, "rate_multiplier": 99},
+                        },
+                        {
+                            "enabled": True,
+                            "group": {"id": 4, "rate_multiplier": 8},
+                        },
+                        {
+                            "enabled": True,
+                            "group": {"id": 3, "rate_multiplier": 1.5},
+                        },
+                    ],
+                    "current_concurrency": 12,
+                    "unrelated": "must-not-be-returned",
+                },
+                {
+                    "id": 18,
+                    "name": "No matching route",
+                    "key": "second-provider-secret",
+                    "group_id": 5,
+                    "group_routes": [
+                        {
+                            "enabled": True,
+                            "group": {"id": 6, "rate_multiplier": 2},
+                        }
+                    ],
+                },
+            ]
+        },
+    }
+
+
+def test_sub2api_keys_projection_keeps_only_editor_fields() -> None:
+    assert _project_sub2api_key_items(_keys_payload()) == [
+        {
+            "id": 17,
+            "name": "Primary key",
+            "key": "provider-item-secret",
+            "rate_multiplier": 1.5,
+        },
+        {
+            "id": 18,
+            "name": "No matching route",
+            "key": "second-provider-secret",
+            "rate_multiplier": None,
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("user_agent", "expected_user_agent"),
+    [("admin-browser/1.0", "admin-browser/1.0"), (None, DEFAULT_USER_AGENT)],
+)
+def test_sub2api_keys_route_uses_exact_provider_url_and_user_agent(
+    monkeypatch,
+    tmp_path: Path,
+    user_agent: str | None,
+    expected_user_agent: str,
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    calls: list[tuple[str, str, dict[str, str]]] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        calls.append((method, url, dict(headers or {})))
+        return _FakeSub2APIResponse(200, _keys_payload())
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(
+        get_sub2api_keys(_sub2api_keys_request(app, account_id, user_agent=user_agent))
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        (
+            "GET",
+            "https://first.example/v1/api/v1/keys?"
+            "page=1&page_size=100&sort_by=created_at&sort_order=desc",
+            {
+                "Authorization": "Bearer login-access-secret",
+                "User-Agent": expected_user_agent,
+            },
+        )
+    ]
+    assert json.loads(response.body) == {
+        "items": _project_sub2api_key_items(_keys_payload())
+    }
+
+
+def test_sub2api_keys_route_persists_provider_url_rotation(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app, config_path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    urls: list[str] = []
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        urls.append(url)
+        if url.startswith("https://first.example"):
+            return _FakeSub2APIResponse(502)
+        return _FakeSub2APIResponse(200, _keys_payload())
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(get_sub2api_keys(_sub2api_keys_request(app, account_id)))
+
+    assert response.status_code == 200
+    assert urls == [
+        "https://first.example/v1/api/v1/keys?"
+        "page=1&page_size=100&sort_by=created_at&sort_order=desc",
+        "https://second.example/v1/api/v1/keys?"
+        "page=1&page_size=100&sort_by=created_at&sort_order=desc",
+    ]
+    assert app.gateway_config.providers["bound-provider"].base_url == (
+        "https://second.example/v1"
+    )
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["bound-provider"]["current_base_url"] == (
+        "https://second.example/v1"
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "expected_status"),
+    [
+        ("missing-provider", 404),
+        ("missing-account", 404),
+        ("wrong-account", 400),
+    ],
+)
+def test_sub2api_keys_route_rejects_invalid_binding_without_upstream_io(
+    monkeypatch, tmp_path: Path, case: str, expected_status: int
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = (
+        _bound_account(app, provider="chatgpt")
+        if case == "wrong-account"
+        else "missing-account"
+    )
+
+    async def fail_request(*args, **kwargs):
+        pytest.fail("upstream request must not run")
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fail_request)
+    request = _sub2api_keys_request(
+        app,
+        account_id,
+        provider_name="missing-provider"
+        if case == "missing-provider"
+        else "bound-provider",
+    )
+    response = asyncio.run(get_sub2api_keys(request))
+
+    assert response.status_code == expected_status
+    assert "login-access-secret" not in response.body.decode()
+    assert "login-refresh-secret" not in response.body.decode()
+
+
+def test_deleting_bound_account_does_not_change_provider_binding(
+    tmp_path: Path,
+) -> None:
+    app, config_path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    saved["providers"]["bound-provider"]["sub2api_account_id"] = account_id
+    config_path.write_text(json.dumps(saved), encoding="utf-8")
+    request = _sub2api_keys_request(app, account_id)
+
+    response = asyncio.run(delete_account(request, account_id))
+
+    assert response.status_code == 200
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["providers"]["bound-provider"]["sub2api_account_id"] == account_id
+    missing = asyncio.run(get_sub2api_keys(request))
+    assert missing.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "response_or_error",
+    [
+        _FakeSub2APIResponse(500, {"error": "login-access-secret"}),
+        _FakeSub2APIResponse(
+            200, {"code": 1, "message": "login-refresh-secret", "data": {}}
+        ),
+        _FakeSub2APIResponse(200, None, content=b"login-access-secret"),
+        _FakeSub2APIResponse(
+            200,
+            {
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "missing key",
+                            "group_id": 1,
+                            "group_routes": [],
+                        }
+                    ]
+                },
+            },
+        ),
+        _FakeSub2APIResponse(
+            200,
+            {
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "malformed route",
+                            "key": "provider-item-secret",
+                            "group_id": 1,
+                            "group_routes": [None],
+                        }
+                    ]
+                },
+            },
+        ),
+        RuntimeError("login-refresh-secret"),
+    ],
+)
+def test_sub2api_keys_route_returns_bounded_redacted_errors(
+    monkeypatch, tmp_path: Path, response_or_error: Any
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        if isinstance(response_or_error, Exception):
+            raise response_or_error
+        return response_or_error
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    response = asyncio.run(get_sub2api_keys(_sub2api_keys_request(app, account_id)))
+
+    assert response.status_code == 502
+    assert json.loads(response.body) == {"error": "Unable to fetch Sub2API keys"}
+    assert "login-access-secret" not in response.body.decode()
+    assert "login-refresh-secret" not in response.body.decode()
+
+
+def test_sub2api_keys_route_is_registered_and_requires_admin_auth(
+    monkeypatch, tmp_path: Path
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    account_id = _bound_account(app)
+    request = _sub2api_keys_request(app, account_id)
+
+    unauthenticated = asyncio.run(app._dispatch(request))
+
+    assert unauthenticated.status_code == 401
+
+    async def fake_request(client, method, url, *, headers=None, **kwargs):
+        return _FakeSub2APIResponse(200, _keys_payload())
+
+    monkeypatch.setattr(sub2api_client, "request_bounded_response", fake_request)
+    request = _sub2api_keys_request(app, account_id)
+    request.headers["x-admin-token"] = app.auth_state.admin_token
+    authenticated = asyncio.run(app._dispatch(request))
+
+    assert authenticated.status_code == 200
+    assert json.loads(authenticated.body)["items"][0]["id"] == 17
 
 
 def _sub2api_store(

@@ -1512,6 +1512,63 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
     assert app.gateway_config.providers["DeepSeek"].soft_interrupt is False
 
 
+def test_provider_binding_round_trips_through_rename_and_can_be_removed(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body.update(
+        {
+            "rename_from": "openai",
+            "sub2api_account_id": "  account-123  ",
+        }
+    )
+    request = _provider_admin_request(config_path, data, "renamed", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "openai" not in saved["providers"]
+    assert saved["providers"]["renamed"]["sub2api_account_id"] == "account-123"
+    projected = json.loads(_run(get_config(request)).body)
+    assert projected["providers"]["renamed"]["sub2api_account_id"] == "account-123"
+    assert "sk-test" not in json.dumps(projected)
+
+    remove_body = _provider_put_body(saved, "renamed")
+    remove_request = _provider_admin_request(config_path, saved, "renamed", remove_body)
+    removed = _run(put_provider(remove_request))
+
+    assert removed.status_code == 200
+    reloaded = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "sub2api_account_id" not in reloaded["providers"]["renamed"]
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", 17, True, []])
+def test_gateway_config_rejects_invalid_provider_binding(value: Any) -> None:
+    data = _config_data()
+    data["providers"]["openai"]["sub2api_account_id"] = value
+
+    with pytest.raises(ValueError, match="sub2api_account_id"):
+        GatewayConfig(data)
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", 17, True, []])
+def test_put_provider_rejects_invalid_binding_without_write(tmp_path, value: Any):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["sub2api_account_id"] = value
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_get_config_exposes_runtime_url_status_without_credentials(tmp_path):
     data = _config_data()
     data["providers"]["openai"]["base_urls"] = [
