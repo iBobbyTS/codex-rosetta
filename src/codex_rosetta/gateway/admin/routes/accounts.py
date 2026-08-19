@@ -163,9 +163,10 @@ def _project_new_api_pricing(payload: Any) -> dict[str, int | float]:
 def _pricing_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
     """Build a transport descriptor for one draft New API pricing request."""
     sentinel = "__codex_rosetta_no_bearer__"
+    has_bearer = bool(bearer_key)
 
     def auth_header(token: str) -> dict[str, str]:
-        if token == sentinel:
+        if not has_bearer:
             return {}
         return {"Authorization": f"Bearer {token}"}
 

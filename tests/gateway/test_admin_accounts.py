@@ -344,6 +344,32 @@ def test_new_api_pricing_route_preserves_group_ratio_order(
     }
 
 
+def test_new_api_pricing_route_preserves_sentinel_shaped_bearer_key(
+    tmp_path: Path,
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    bearer_key = "__codex_rosetta_no_bearer__"
+    transport = _FakePricingTransport(
+        _FakeSub2APIResponse(200, {"group_ratio": {"standard": 1}})
+    )
+    app.transport = transport
+
+    response = asyncio.run(
+        get_new_api_pricing(
+            _pricing_request(
+                app,
+                {"base_url": "https://new.example", "bearer_key": bearer_key},
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    descriptor = transport.calls[0][0]
+    assert descriptor._auth_header_fn(bearer_key) == {
+        "Authorization": f"Bearer {bearer_key}"
+    }
+
+
 @pytest.mark.parametrize(
     "payload",
     [
