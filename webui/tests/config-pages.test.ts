@@ -1077,7 +1077,7 @@ describe('ProvidersPage', () => {
 
     const expectedBody = {
       provider: 'openai',
-      openai_variant: 'official',
+      openai_variant: 'custom',
       api_type: 'responses',
       request_encoding: 'passthrough',
       base_urls: ['https://relay.example/v1', 'https://backup.example/v1'],
