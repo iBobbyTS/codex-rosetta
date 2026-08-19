@@ -346,7 +346,13 @@ def test_new_api_pricing_route_preserves_group_ratio_order(
 
 @pytest.mark.parametrize(
     "payload",
-    [None, {}, {"group_ratio": {}}, {"group_ratio": {"bad": "ratio"}}],
+    [
+        None,
+        {},
+        {"group_ratio": {}},
+        {"group_ratio": {"bad": "ratio"}},
+        {"group_ratio": {"bad": 10**1000}},
+    ],
 )
 def test_new_api_pricing_route_rejects_malformed_response(
     tmp_path: Path, payload: Any

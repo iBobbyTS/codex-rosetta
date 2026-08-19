@@ -221,7 +221,7 @@ async def get_new_api_pricing(request: Any, **kwargs: Any) -> Response:
         )
     try:
         group_ratio = _project_new_api_pricing(response.body)
-    except TypeError, ValueError:
+    except OverflowError, TypeError, ValueError:
         return JSONResponse(
             {"error": "New API pricing response is invalid"}, status_code=502
         )
