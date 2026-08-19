@@ -23,6 +23,7 @@ from codex_rosetta.gateway.admin.routes.accounts import (
     _project_sub2api_key_items,
     delete_account,
     get_accounts,
+    get_new_api_pricing,
     get_sub2api_keys,
 )
 import codex_rosetta.gateway.admin.chatgpt_oauth as chatgpt_oauth
@@ -169,6 +170,7 @@ class _FakeSub2APIResponse:
     ):
         self.status_code = status_code
         self._payload = payload
+        self.body = payload
         self.content = (
             content if content is not None else json.dumps(payload or {}).encode()
         )
@@ -231,12 +233,14 @@ def test_sub2api_keys_projection_keeps_only_editor_fields() -> None:
             "name": "Primary key",
             "key": "provider-item-secret",
             "rate_multiplier": 1.5,
+            "current_concurrency": None,
         },
         {
             "id": 18,
             "name": "No matching route",
             "key": "second-provider-secret",
             "rate_multiplier": None,
+            "current_concurrency": None,
         },
     ]
 
@@ -279,6 +283,94 @@ def test_sub2api_keys_route_uses_exact_provider_url_and_user_agent(
     assert json.loads(response.body) == {
         "items": _project_sub2api_key_items(_keys_payload())
     }
+
+
+def _pricing_request(app: Any, body: dict[str, Any]) -> Request:
+    request = Request(
+        method="POST",
+        path="/admin/api/config/providers/new-api/new-api-pricing",
+        query_string="",
+        headers={"content-type": "application/json"},
+        body=json.dumps(body).encode(),
+        client_addr=("127.0.0.1", 1),
+        app=app,
+    )
+    request.path_params = {"name": "new-api"}
+    return request
+
+
+class _FakePricingTransport:
+    def __init__(self, response: Any = None, error: Exception | None = None):
+        self.response = response
+        self.error = error
+        self.calls: list[
+            tuple[Any, str, dict[str, Any], dict[str, str] | None, str]
+        ] = []
+
+    async def send_passthrough(
+        self, provider_info, url, body, *, method="POST", extra_headers=None
+    ):
+        self.calls.append((provider_info, url, body, extra_headers, method))
+        if self.error:
+            raise self.error
+        return self.response
+
+
+@pytest.mark.parametrize("bearer_field", ["bearer_key", "api_key"])
+def test_new_api_pricing_route_preserves_group_ratio_order(
+    tmp_path: Path, bearer_field: str
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    transport = _FakePricingTransport(
+        _FakeSub2APIResponse(200, {"group_ratio": {"standard": 1, "pro": 1.5}})
+    )
+    app.transport = transport
+    response = asyncio.run(
+        get_new_api_pricing(
+            _pricing_request(
+                app,
+                {"base_url": "https://new.example/", bearer_field: "draft-secret"},
+            )
+        )
+    )
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"group_ratio": {"standard": 1, "pro": 1.5}}
+    descriptor, url, body, _headers, method = transport.calls[0]
+    assert url == "https://new.example/api/pricing"
+    assert body == {}
+    assert method == "GET"
+    assert descriptor._auth_header_fn("draft-secret") == {
+        "Authorization": "Bearer draft-secret"
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [None, {}, {"group_ratio": {}}, {"group_ratio": {"bad": "ratio"}}],
+)
+def test_new_api_pricing_route_rejects_malformed_response(
+    tmp_path: Path, payload: Any
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    app.transport = _FakePricingTransport(_FakeSub2APIResponse(200, payload))
+    response = asyncio.run(
+        get_new_api_pricing(_pricing_request(app, {"base_url": "https://new.example"}))
+    )
+    assert response.status_code == 502
+    assert json.loads(response.body)["error"] == "New API pricing response is invalid"
+
+
+@pytest.mark.parametrize("status_code", [401, 502])
+def test_new_api_pricing_route_maps_upstream_failures(
+    tmp_path: Path, status_code: int
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    app.transport = _FakePricingTransport(_FakeSub2APIResponse(status_code))
+    response = asyncio.run(
+        get_new_api_pricing(_pricing_request(app, {"base_url": "https://new.example"}))
+    )
+    assert response.status_code == 502
+    assert f"HTTP {status_code}" in json.loads(response.body)["error"]
 
 
 def test_sub2api_keys_route_persists_provider_url_rotation(

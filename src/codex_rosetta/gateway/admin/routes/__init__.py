@@ -37,6 +37,7 @@ from .accounts import (
     chatgpt_callback,
     delete_account,
     get_accounts,
+    get_new_api_pricing,
     get_sub2api_keys,
     refresh_account,
     start_chatgpt,
@@ -143,6 +144,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>", methods=["PUT"])(put_provider)
     app.route("/admin/api/config/providers/<name>/sub2api-keys", methods=["POST"])(
         get_sub2api_keys
+    )
+    app.route("/admin/api/config/providers/<name>/new-api-pricing", methods=["POST"])(
+        get_new_api_pricing
     )
     app.route("/admin/api/config/providers/<name>", methods=["DELETE"])(delete_provider)
     app.route("/admin/api/config/providers/<name>/toggle", methods=["POST"])(

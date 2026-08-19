@@ -17,6 +17,7 @@ from ..chatgpt_oauth import (
 )
 from ..sub2api import parse_sub2api_credentials
 from ..sub2api_client import Sub2APIProviderClient
+from ...transport.provider_info import ProviderInfo
 from ._shared import _parse_json_object
 
 
@@ -129,9 +130,102 @@ def _project_sub2api_key_items(payload: Any) -> list[dict[str, Any]]:
                 "name": name,
                 "key": key,
                 "rate_multiplier": rate_multiplier,
+                # Sub2API does not expose the editor's available metric yet.
+                # Keep the response shape explicit without projecting upstream
+                # fields that are not part of the Admin contract.
+                "current_concurrency": None,
             }
         )
     return projected
+
+
+def _project_new_api_pricing(payload: Any) -> dict[str, int | float]:
+    """Validate and preserve the ordered New API ``group_ratio`` mapping."""
+    if not isinstance(payload, dict):
+        raise ValueError("New API pricing response is invalid")
+    ratios = payload.get("group_ratio")
+    if not isinstance(ratios, dict) or not ratios:
+        raise ValueError("New API pricing response is invalid")
+    projected: dict[str, int | float] = {}
+    for group, ratio in ratios.items():
+        if (
+            not isinstance(group, str)
+            or not group.strip()
+            or isinstance(ratio, bool)
+            or not isinstance(ratio, int | float)
+            or not math.isfinite(ratio)
+        ):
+            raise ValueError("New API pricing response is invalid")
+        projected[group] = ratio
+    return projected
+
+
+def _pricing_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
+    """Build a transport descriptor for one draft New API pricing request."""
+    sentinel = "__codex_rosetta_no_bearer__"
+
+    def auth_header(token: str) -> dict[str, str]:
+        if token == sentinel:
+            return {}
+        return {"Authorization": f"Bearer {token}"}
+
+    return ProviderInfo(
+        name="new_api_pricing",
+        api_key=bearer_key or sentinel,
+        base_url=base_url,
+        auth_header_fn=auth_header,
+        url_template="{base_url}/",
+        auto_rotate_credentials=False,
+    )
+
+
+async def get_new_api_pricing(request: Any, **kwargs: Any) -> Response:
+    """Fetch ordered pricing groups from a draft New API base URL."""
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    base_url = body.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        return JSONResponse(
+            {"error": "'base_url' must be a non-empty string"}, status_code=400
+        )
+    base_url = base_url.strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        return JSONResponse(
+            {"error": "'base_url' must be an http(s) URL"}, status_code=400
+        )
+    bearer_key = body.get("bearer_key", body.get("api_key", ""))
+    if not isinstance(bearer_key, str):
+        return JSONResponse({"error": "'bearer_key' must be a string"}, status_code=400)
+
+    transport = getattr(request.app, "transport", None)
+    if transport is None:
+        return JSONResponse(
+            {"error": "Pricing transport is unavailable"}, status_code=502
+        )
+    try:
+        response = await transport.send_passthrough(
+            _pricing_provider_info(base_url, bearer_key.strip()),
+            f"{base_url}/api/pricing",
+            {},
+            method="GET",
+        )
+    except Exception:
+        return JSONResponse(
+            {"error": "Unable to fetch New API pricing"}, status_code=502
+        )
+    if not 200 <= response.status_code < 300:
+        return JSONResponse(
+            {"error": f"New API pricing request failed (HTTP {response.status_code})"},
+            status_code=502,
+        )
+    try:
+        group_ratio = _project_new_api_pricing(response.body)
+    except TypeError, ValueError:
+        return JSONResponse(
+            {"error": "New API pricing response is invalid"}, status_code=502
+        )
+    return JSONResponse({"group_ratio": group_ratio})
 
 
 async def get_sub2api_keys(request: Any, **kwargs: Any) -> Response:
@@ -233,6 +327,7 @@ __all__ = [
     "chatgpt_callback",
     "delete_account",
     "get_accounts",
+    "get_new_api_pricing",
     "get_sub2api_keys",
     "refresh_account",
     "start_chatgpt",
