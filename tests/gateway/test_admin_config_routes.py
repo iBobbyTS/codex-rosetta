@@ -2813,6 +2813,97 @@ def test_put_provider_masked_key_preserves_existing_key_with_api_type(tmp_path):
     assert "type" not in saved["providers"]["DeepSeek"]
 
 
+def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "new_api"
+    body["api_keys"][0]["new_api_group"] = "team"
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["openai"]["openai_variant"] == "new_api"
+    assert saved["providers"]["openai"]["api_keys"][0]["new_api_group"] == "team"
+
+    get_request = SimpleNamespace(
+        app=request.app,
+        json=lambda: {},
+    )
+    masked_response = _run(get_config(get_request))
+    masked = json.loads(masked_response.body)
+    credential = masked["providers"]["openai"]["api_keys"][0]
+    assert credential["key"] == "***"
+    assert credential["new_api_group"] == "team"
+
+
+def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "unknown"
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_resolve_draft_provider_api_keys_preserves_optional_group_metadata():
+    existing = {
+        "api_keys": [
+            {
+                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                "id": "primary",
+                "key": "sk-secret",
+                "new_api_group": "old",
+            }
+        ]
+    }
+
+    merged = config_routes._resolve_draft_provider_api_keys(
+        [
+            {
+                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                "id": "renamed",
+                "key": "sk-s***cret",
+                "new_api_group": "new",
+            }
+        ],
+        existing,
+    )
+
+    assert merged == [
+        {
+            "uuid": _PRIMARY_CREDENTIAL_UUID,
+            "id": "renamed",
+            "key": "sk-secret",
+            "new_api_group": "new",
+        }
+    ]
+
+
+def test_resolve_draft_provider_api_keys_rejects_non_string_group():
+    with pytest.raises(ValueError, match="new_api_group.*string or null"):
+        config_routes._resolve_draft_provider_api_keys(
+            [
+                {
+                    "uuid": _PRIMARY_CREDENTIAL_UUID,
+                    "id": "primary",
+                    "key": "sk-secret",
+                    "new_api_group": 1,
+                }
+            ],
+            {"api_keys": []},
+        )
+
+
 def test_put_provider_requires_explicit_auto_rotation_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"

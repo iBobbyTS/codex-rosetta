@@ -36,6 +36,12 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
     assert {"argo", "volcengine", "xai"}.isdisjoint(providers)
 
 
+def test_openai_variants_have_stable_admin_order() -> None:
+    variants = provider_catalog_for_admin()["providers"]["openai"]["variants"]
+
+    assert list(variants) == ["official", "sub2api", "new_api", "custom"]
+
+
 def test_soft_interrupt_defaults_are_protocol_scoped_and_overridable() -> None:
     assert resolve_soft_interrupt("deepseek", "chat") is True
     assert resolve_soft_interrupt("deepseek", "chat", False) is False

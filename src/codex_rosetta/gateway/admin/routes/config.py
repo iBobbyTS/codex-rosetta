@@ -81,6 +81,7 @@ import logging
 logger = logging.getLogger("codex-rosetta-gateway")
 _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 _CREDENTIAL_REFERENCE_CODE_PREFIX = "provider_credential_references:"
+_OPENAI_VARIANTS = frozenset({"official", "sub2api", "new_api", "custom"})
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -964,6 +965,12 @@ async def get_config(request: Any) -> Response:
                     "uuid": entry["uuid"],
                     "id": entry["id"],
                     "key": _mask_api_key(entry["key"]),
+                    **(
+                        {"new_api_group": entry["new_api_group"]}
+                        if isinstance(entry.get("new_api_group"), str)
+                        and entry["new_api_group"]
+                        else {}
+                    ),
                 }
                 for entry in masked["api_keys"]
             ]
@@ -1339,6 +1346,17 @@ def _normalize_sub2api_account_id(body: dict[str, Any]) -> None:
     body["sub2api_account_id"] = value.strip()
 
 
+def _normalize_openai_variant(body: dict[str, Any]) -> None:
+    """Validate the optional explicit OpenAI Admin variant metadata."""
+    if "openai_variant" not in body:
+        return
+    value = body["openai_variant"]
+    if not isinstance(value, str) or value not in _OPENAI_VARIANTS:
+        raise ValueError(
+            "'openai_variant' must be one of official, sub2api, new_api, custom"
+        )
+
+
 async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
@@ -1372,6 +1390,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     api_keys = existing_provider.get("api_keys") if api_keys is None else api_keys
     try:
         _normalize_sub2api_account_id(body)
+        _normalize_openai_variant(body)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
@@ -1518,7 +1537,7 @@ def _resolve_draft_provider_api_keys(
     resolved_provider: Mapping[str, Any] | None = None,
     *,
     resolve_saved_credentials: bool = False,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     """Resolve canonical draft credentials, matching saved masks by UUID."""
     existing_keys = {
         entry.get("uuid"): entry.get("key")
@@ -1532,7 +1551,7 @@ def _resolve_draft_provider_api_keys(
     }
     if not isinstance(api_keys, list):
         raise ValueError("'api_keys' must be a list")
-    merged_keys: list[dict[str, str]] = []
+    merged_keys: list[dict[str, Any]] = []
     for index, entry in enumerate(api_keys):
         credential_id_value = entry.get("id") if isinstance(entry, dict) else None
         credential_uuid_value = entry.get("uuid") if isinstance(entry, dict) else None
@@ -1578,7 +1597,20 @@ def _resolve_draft_provider_api_keys(
                 key = resolved_key
             else:
                 key = cast(str, saved_key)
-        merged_keys.append({"uuid": credential_uuid, "id": credential_id, "key": key})
+        merged_entry: dict[str, Any] = {
+            "uuid": credential_uuid,
+            "id": credential_id,
+            "key": key,
+        }
+        new_api_group = entry.get("new_api_group")
+        if new_api_group is not None:
+            if not isinstance(new_api_group, str):
+                raise ValueError(
+                    f"'api_keys[{index}].new_api_group' must be a string or null"
+                )
+            if new_api_group:
+                merged_entry["new_api_group"] = new_api_group
+        merged_keys.append(merged_entry)
     if len({entry["uuid"] for entry in merged_keys}) != len(merged_keys):
         raise ValueError("'api_keys[].uuid' values must be unique")
     return merged_keys

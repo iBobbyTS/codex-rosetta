@@ -541,7 +541,7 @@ def _sync_persistence_redaction(app: Any, config: GatewayConfig) -> None:
 
 def _build_provider_entry(
     body: dict[str, Any],
-    api_keys: list[dict[str, str]],
+    api_keys: list[dict[str, Any]],
     current_api_key: str | None,
     base_urls: list[str],
     current_base_url: str,
@@ -561,6 +561,9 @@ def _build_provider_entry(
     provider = body.get("provider")
     if provider:
         entry["provider"] = provider
+
+    if "openai_variant" in body:
+        entry["openai_variant"] = body["openai_variant"]
 
     api_type = body.get("api_type")
     if api_type:
