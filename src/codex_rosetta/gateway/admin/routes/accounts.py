@@ -17,6 +17,7 @@ from ..chatgpt_oauth import (
 )
 from ..sub2api import parse_sub2api_credentials
 from ..sub2api_client import Sub2APIProviderClient
+from ..nonmodel_url import strip_terminal_nonmodel_version
 from ...transport.provider_info import ProviderInfo
 from ._shared import _parse_json_object
 
@@ -160,8 +161,8 @@ def _project_new_api_pricing(payload: Any) -> dict[str, int | float]:
     return projected
 
 
-def _pricing_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
-    """Build a transport descriptor for one draft New API pricing request."""
+def _new_api_nonmodel_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
+    """Build a transport descriptor for one draft New API non-model request."""
     sentinel = "__codex_rosetta_no_bearer__"
     has_bearer = bool(bearer_key)
 
@@ -171,12 +172,30 @@ def _pricing_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
         return {"Authorization": f"Bearer {token}"}
 
     return ProviderInfo(
-        name="new_api_pricing",
+        name="new_api_nonmodel",
         api_key=bearer_key or sentinel,
         base_url=base_url,
         auth_header_fn=auth_header,
         url_template="{base_url}/",
         auto_rotate_credentials=False,
+    )
+
+
+async def _request_new_api_nonmodel(
+    transport: Any,
+    base_url: str,
+    endpoint: str,
+    bearer_key: str,
+    *,
+    method: str = "GET",
+) -> Any:
+    """Send one New API non-model request through its provider-specific entry."""
+    normalized_base_url = strip_terminal_nonmodel_version(base_url).rstrip("/")
+    return await transport.send_passthrough(
+        _new_api_nonmodel_provider_info(normalized_base_url, bearer_key),
+        f"{normalized_base_url}/{endpoint.lstrip('/')}",
+        {},
+        method=method,
     )
 
 
@@ -205,11 +224,11 @@ async def get_new_api_pricing(request: Any, **kwargs: Any) -> Response:
             {"error": "Pricing transport is unavailable"}, status_code=502
         )
     try:
-        response = await transport.send_passthrough(
-            _pricing_provider_info(base_url, bearer_key.strip()),
-            f"{base_url}/api/pricing",
-            {},
-            method="GET",
+        response = await _request_new_api_nonmodel(
+            transport,
+            base_url,
+            "/api/pricing",
+            bearer_key.strip(),
         )
     except Exception:
         return JSONResponse(

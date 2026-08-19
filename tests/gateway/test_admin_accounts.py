@@ -36,6 +36,7 @@ from codex_rosetta.gateway.admin.chatgpt_oauth import (
     _metadata_request,
     start_chatgpt_login,
 )
+from codex_rosetta.gateway.admin.nonmodel_url import strip_terminal_nonmodel_version
 from codex_rosetta.gateway.admin.sub2api import parse_sub2api_credentials
 from codex_rosetta.gateway.admin.sub2api_client import (
     DEFAULT_USER_AGENT,
@@ -52,6 +53,23 @@ def _jwt(payload: dict[str, Any]) -> str:
         )
 
     return f"{encode({'alg': 'none'})}.{encode(payload)}.signature"
+
+
+@pytest.mark.parametrize(
+    ("base_url", "expected"),
+    [
+        ("https://api.mooko.ai/v1", "https://api.mooko.ai"),
+        ("https://api.mooko.ai/v2/", "https://api.mooko.ai"),
+        ("https://host/V1", "https://host"),
+        ("https://host/foo/v3", "https://host/foo"),
+        ("https://host/v1/v2/", "https://host/v1"),
+        ("https://host/foo", "https://host/foo"),
+        ("https://host/v10", "https://host/v10"),
+        ("https://host/v1beta", "https://host/v1beta"),
+    ],
+)
+def test_strip_terminal_nonmodel_version(base_url: str, expected: str) -> None:
+    assert strip_terminal_nonmodel_version(base_url) == expected
 
 
 def _app(tmp_path: Path):
@@ -272,7 +290,7 @@ def test_sub2api_keys_route_uses_exact_provider_url_and_user_agent(
     assert calls == [
         (
             "GET",
-            "https://first.example/v1/api/v1/keys?"
+            "https://first.example/api/v1/keys?"
             "page=1&page_size=100&sort_by=created_at&sort_order=desc",
             {
                 "Authorization": "Bearer login-access-secret",
@@ -317,8 +335,17 @@ class _FakePricingTransport:
 
 
 @pytest.mark.parametrize("bearer_field", ["bearer_key", "api_key"])
+@pytest.mark.parametrize(
+    "base_url",
+    [
+        "https://new.example/",
+        "https://new.example/v1",
+        "https://new.example/v2/",
+        "https://new.example/V1",
+    ],
+)
 def test_new_api_pricing_route_preserves_group_ratio_order(
-    tmp_path: Path, bearer_field: str
+    tmp_path: Path, bearer_field: str, base_url: str
 ) -> None:
     app, _path = _provider_app(tmp_path)
     transport = _FakePricingTransport(
@@ -329,7 +356,7 @@ def test_new_api_pricing_route_preserves_group_ratio_order(
         get_new_api_pricing(
             _pricing_request(
                 app,
-                {"base_url": "https://new.example/", bearer_field: "draft-secret"},
+                {"base_url": base_url, bearer_field: "draft-secret"},
             )
         )
     )
@@ -339,6 +366,7 @@ def test_new_api_pricing_route_preserves_group_ratio_order(
     assert url == "https://new.example/api/pricing"
     assert body == {}
     assert method == "GET"
+    assert descriptor.base_url == "https://new.example"
     assert descriptor._auth_header_fn("draft-secret") == {
         "Authorization": "Bearer draft-secret"
     }
@@ -423,9 +451,9 @@ def test_sub2api_keys_route_persists_provider_url_rotation(
 
     assert response.status_code == 200
     assert urls == [
-        "https://first.example/v1/api/v1/keys?"
+        "https://first.example/api/v1/keys?"
         "page=1&page_size=100&sort_by=created_at&sort_order=desc",
-        "https://second.example/v1/api/v1/keys?"
+        "https://second.example/api/v1/keys?"
         "page=1&page_size=100&sort_by=created_at&sort_order=desc",
     ]
     assert app.gateway_config.providers["bound-provider"].base_url == (
@@ -646,12 +674,13 @@ def test_sub2api_provider_refreshes_expired_token_and_sets_headers(
         Sub2APIProviderClient(
             store,
             account_id,
-            ["https://api.example"],
+            ["https://api.example/v1"],
             persist_current_url=_noop_record,
         ).request("/api/v1/auth/me", user_agent="client/test")
     )
     assert response.status_code == 200
-    assert calls[0][0].endswith("/api/v1/auth/refresh")
+    assert calls[0][0] == "https://api.example/api/v1/auth/refresh"
+    assert calls[1][0] == "https://api.example/api/v1/auth/me"
     assert calls[1][1]["Authorization"] == "Bearer new-access"
     assert calls[1][1]["User-Agent"] == "client/test"
     assert (
@@ -664,6 +693,7 @@ def test_sub2api_defaults_user_agent_and_retries_401_once(
 ) -> None:
     store, account_id = _sub2api_store(tmp_path)
     calls: list[dict[str, str]] = []
+    request_urls: list[str] = []
 
     async def fake_request(client, method, url, *, headers=None, **kwargs):
         if url.endswith("/auth/refresh"):
@@ -678,6 +708,7 @@ def test_sub2api_defaults_user_agent_and_retries_401_once(
                     },
                 },
             )
+        request_urls.append(url)
         calls.append(dict(headers or {}))
         return _FakeSub2APIResponse(401 if len(calls) == 1 else 200, {"ok": True})
 
@@ -686,7 +717,7 @@ def test_sub2api_defaults_user_agent_and_retries_401_once(
         Sub2APIProviderClient(
             store,
             account_id,
-            ["https://api.example"],
+            ["https://api.example/V1"],
             persist_current_url=_noop_record,
         ).request(
             "/api/v1/keys", headers={"authorization": "caller-token", "x-test": "1"}
@@ -698,6 +729,10 @@ def test_sub2api_defaults_user_agent_and_retries_401_once(
     assert calls[1]["Authorization"] == "Bearer new-access"
     assert calls[0]["User-Agent"] == DEFAULT_USER_AGENT
     assert calls[0]["x-test"] == "1"
+    assert request_urls == [
+        "https://api.example/api/v1/keys",
+        "https://api.example/api/v1/keys",
+    ]
 
 
 def test_sub2api_second_401_is_returned_without_third_attempt(
@@ -771,7 +806,7 @@ def test_sub2api_502_rotates_and_persists_url_but_503_does_not(
     client = Sub2APIProviderClient(
         store,
         account_id,
-        ["https://first.example", "https://second.example"],
+        ["https://first.example/v1", "https://second.example/v2/"],
         persist_current_url=lambda _provider_id, url: _record(persisted, url),
     )
     response = asyncio.run(client.request("/api/v1/auth/me"))
@@ -780,8 +815,8 @@ def test_sub2api_502_rotates_and_persists_url_but_503_does_not(
         "https://first.example/api/v1/auth/me",
         "https://second.example/api/v1/auth/me",
     ]
-    assert persisted == ["https://second.example"]
-    assert client.current_base_url == "https://second.example"
+    assert persisted == ["https://second.example/v2"]
+    assert client.current_base_url == "https://second.example/v2"
 
 
 def test_sub2api_503_is_returned_without_rotation(monkeypatch, tmp_path: Path) -> None:
@@ -798,13 +833,13 @@ def test_sub2api_503_is_returned_without_rotation(monkeypatch, tmp_path: Path) -
     client = Sub2APIProviderClient(
         store,
         account_id,
-        ["https://first.example", "https://second.example"],
+        ["https://first.example/v1", "https://second.example/v2"],
         persist_current_url=_noop_record,
     )
     response = asyncio.run(client.request("/api/v1/auth/me"))
     assert response.status_code == 503
     assert calls == ["https://first.example/api/v1/auth/me"]
-    assert client.current_base_url == "https://first.example"
+    assert client.current_base_url == "https://first.example/v1"
 
 
 def test_sub2api_cdn_marker_rotates_like_502(monkeypatch, tmp_path: Path) -> None:
@@ -901,7 +936,7 @@ def test_sub2api_refresh_502_rotates_to_next_url(monkeypatch, tmp_path: Path) ->
     client = Sub2APIProviderClient(
         store,
         account_id,
-        ["https://first.example", "https://second.example"],
+        ["https://first.example/v1", "https://second.example/v2"],
         persist_current_url=_noop_record,
     )
     response = asyncio.run(client.request("/api/v1/auth/me"))

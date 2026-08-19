@@ -15,6 +15,7 @@ from codex_rosetta._vendor.httpclient import AsyncClient
 from .._ordered_failover import OrderedFailoverCoordinator
 from ..transport.http.transport import request_bounded_response
 from .account_store import AccountStore
+from .nonmodel_url import strip_terminal_nonmodel_version
 
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -63,15 +64,28 @@ class Sub2APIAccountClient:
         if account is None or account["provider"] != "sub2api":
             raise ValueError("Sub2API account not found")
         credentials = dict(account["credentials"])
+        request_base_url = strip_terminal_nonmodel_version(base_url)
         if _expires_at_is_past(credentials.get("expires_at")):
-            credentials = await self._refresh(base_url, credentials, user_agent)
+            credentials = await self._refresh(request_base_url, credentials, user_agent)
         response = await self._send(
-            base_url, endpoint, method, credentials, headers, user_agent, kwargs
+            request_base_url,
+            endpoint,
+            method,
+            credentials,
+            headers,
+            user_agent,
+            kwargs,
         )
         if response.status_code == 401:
-            credentials = await self._refresh(base_url, credentials, user_agent)
+            credentials = await self._refresh(request_base_url, credentials, user_agent)
             response = await self._send(
-                base_url, endpoint, method, credentials, headers, user_agent, kwargs
+                request_base_url,
+                endpoint,
+                method,
+                credentials,
+                headers,
+                user_agent,
+                kwargs,
             )
         return response
 
