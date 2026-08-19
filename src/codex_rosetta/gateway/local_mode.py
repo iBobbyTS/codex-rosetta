@@ -14,6 +14,7 @@ from importlib import resources
 from typing import Any
 
 from .config import (
+    _MISSING_MODEL_GROUP_CURRENT,
     _atomic_write_bytes,
     active_model_group_provider,
     normalize_codex_settings,
@@ -616,6 +617,21 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
                 provider_name = active_model_group_provider(
                     group.get("provider"),
                     field=f"model_groups.{group_name}.provider",
+                    current_provider=(
+                        group["current_provider"]
+                        if "current_provider" in group
+                        else _MISSING_MODEL_GROUP_CURRENT
+                    ),
+                    eligible_provider_names=(
+                        {
+                            provider_name
+                            for provider_name, provider_config in providers.items()
+                            if isinstance(provider_config, dict)
+                            and provider_config.get("enabled", True) is not False
+                        }
+                        if isinstance(providers, dict) and providers
+                        else None
+                    ),
                 )
             except ValueError:
                 continue

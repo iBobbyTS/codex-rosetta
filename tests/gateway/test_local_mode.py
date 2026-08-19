@@ -87,6 +87,26 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
             assert custom[key] == value
 
 
+def test_catalog_uses_independent_current_provider_without_reordering() -> None:
+    raw = {
+        "providers": {
+            "first": {"provider": "openai"},
+            "second": {"provider": "anthropic"},
+        },
+        "model_groups": {
+            "llm": {
+                "provider": ["first", "second"],
+                "current_provider": "second",
+                "type": "llm",
+                "models": {"alpha-model": {"upstream_model": "gpt-5.6-terra"}},
+            }
+        },
+    }
+
+    assert _configured_model_specs(raw)["alpha-model"]["provider_id"] == "anthropic"
+    assert raw["model_groups"]["llm"]["provider"] == ["first", "second"]
+
+
 def test_catalog_emits_legacy_summary_capability_for_codex_0144_clients() -> None:
     bundled = {model["slug"]: model for model in build_model_catalog({})["models"]}
     assert all(

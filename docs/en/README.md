@@ -84,6 +84,14 @@ Provider with different credentials, and rejects duplicate exact pairs. All
 candidates in a model group must still use the same `api_type`; heterogeneous
 model groups are unsupported.
 
+Model-group candidate order and active selection are stored independently.
+The ordered `provider` list always preserves the order chosen in the Admin UI,
+while optional `current_provider` uses the same Provider-name or
+`{provider, credential_uuid}` shape to identify the active row. It may point to
+any list member. Configurations without `current_provider` use the first
+eligible ordered candidate, and an unavailable saved selection falls back to
+the first eligible candidate without rewriting the list.
+
 Changing a Provider from automatic to model-group-managed rotation binds its
 existing model-group rows to the then-current credential UUID. Changing it back
 collapses that Provider's pairs at their first occurrence. Removing a referenced

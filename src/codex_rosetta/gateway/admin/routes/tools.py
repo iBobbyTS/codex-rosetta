@@ -7,6 +7,7 @@ from typing import Any
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
 from ...config import (
+    _MISSING_MODEL_GROUP_CURRENT,
     active_model_group_provider,
     default_tool_profile_for_provider,
     load_config_raw,
@@ -60,6 +61,17 @@ def _tool_profile_references(data: dict[str, Any]) -> dict[str, list[str]]:
             provider_name = active_model_group_provider(
                 group.get("provider"),
                 field=f"model_groups.{group_name}.provider",
+                current_provider=(
+                    group["current_provider"]
+                    if "current_provider" in group
+                    else _MISSING_MODEL_GROUP_CURRENT
+                ),
+                eligible_provider_names={
+                    provider_name
+                    for provider_name, provider_config in providers.items()
+                    if isinstance(provider_config, dict)
+                    and provider_config.get("enabled", True) is not False
+                },
             )
         except ValueError:
             continue

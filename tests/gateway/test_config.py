@@ -1477,6 +1477,53 @@ class TestModelGroups:
         )
         assert ring.next_available("test") == "secondary"
 
+    def test_explicit_current_provider_is_independent_from_candidate_order(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        group = raw["model_groups"]["test-llm"]
+        group["provider"] = ["test", "secondary"]
+        group["current_provider"] = "secondary"
+
+        config = GatewayConfig(raw)
+
+        assert config.model_group_candidates["test-llm"] == (
+            "test",
+            "secondary",
+        )
+        assert config.model_group_rings["test-llm"].current == "secondary"
+        assert config.models == {"gpt-test": "secondary"}
+        assert config.resolve("openai_responses", "gpt-test")[0].provider_name == (
+            "secondary"
+        )
+
+    def test_unavailable_explicit_current_falls_back_without_reordering(self):
+        raw = _minimal_raw()
+        raw["providers"]["disabled"] = {
+            **raw["providers"]["test"],
+            "enabled": False,
+        }
+        group = raw["model_groups"]["test-llm"]
+        group["provider"] = ["test", "disabled"]
+        group["current_provider"] = "disabled"
+
+        config = GatewayConfig(raw)
+
+        assert config.model_group_candidates["test-llm"] == ("test", "disabled")
+        assert config.model_group_rings["test-llm"].current == "test"
+        assert raw["model_groups"]["test-llm"]["provider"] == ["test", "disabled"]
+        assert raw["model_groups"]["test-llm"]["current_provider"] == "disabled"
+
+    def test_explicit_current_provider_must_be_an_exact_candidate_member(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["current_provider"] = "secondary"
+
+        with pytest.raises(ValueError, match="current_provider.*member"):
+            GatewayConfig(raw)
+
     def test_provider_statuses_preserve_disabled_configured_candidates(self):
         raw = _minimal_raw()
         raw["providers"]["disabled"] = {
@@ -1532,6 +1579,39 @@ class TestModelGroups:
         assert [
             gateway_config._model_group_candidate_raw(item) for item in ring.candidates
         ] == [first_candidate, second_candidate]
+
+    def test_fixed_credential_current_round_trips_independently(self):
+        raw = _minimal_raw()
+        secondary_uuid = "00000000-0000-4000-8000-000000000002"
+        raw["providers"]["test"].update(
+            auto_rotate_credentials=False,
+            api_keys=[
+                *raw["providers"]["test"]["api_keys"],
+                {
+                    "uuid": secondary_uuid,
+                    "id": "secondary",
+                    "key": "sk-secondary",
+                },
+            ],
+        )
+        first = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        }
+        second = {"provider": "test", "credential_uuid": secondary_uuid}
+        group = raw["model_groups"]["test-llm"]
+        group["provider"] = [first, second]
+        group["current_provider"] = second
+
+        config = GatewayConfig(raw)
+        ring = config.model_group_rings["test-llm"]
+        _route, provider = config.resolve("openai_responses", "gpt-test")
+
+        assert [
+            gateway_config._model_group_candidate_raw(item) for item in ring.candidates
+        ] == [first, second]
+        assert gateway_config._model_group_candidate_raw(ring.current) == second
+        assert provider.auth_headers()["Authorization"] == "Bearer sk-secondary"
 
     @pytest.mark.parametrize(
         ("auto_rotate", "candidate", "message"),

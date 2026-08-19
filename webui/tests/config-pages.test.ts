@@ -1303,6 +1303,7 @@ describe('ModelsPage', () => {
         { provider: 'fixed', credential_uuid: FIRST_UUID },
         { provider: 'fixed', credential_uuid: SECOND_UUID },
       ],
+      current_provider: { provider: 'fixed', credential_uuid: FIRST_UUID },
       type: 'llm', models: { 'demo-model': {} },
     }));
   });
@@ -1336,7 +1337,7 @@ describe('ModelsPage', () => {
     await fireEvent.input(screen.getByLabelText('Model Group Name'), { target: { value: 'Main' } });
     await fireEvent.input(screen.getByLabelText('Exposed model'), { target: { value: 'demo-model' } });
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { providers: ['upstream'], type: 'llm', models: { 'demo-model': {} } }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { providers: ['upstream'], current_provider: 'upstream', type: 'llm', models: { 'demo-model': {} } }));
   });
 
   it('preserves provider rows, renders status, and saves add/remove/reorder exactly', async () => {
@@ -1368,7 +1369,7 @@ describe('ModelsPage', () => {
 
     expect(providerRow('first')).toHaveClass('suu-sortable-table-enhanced__row--green');
     expect(providerRow('first')).toHaveTextContent('Available');
-    expect(providerRow('first')).toHaveTextContent('Current');
+    expect(providerRow('first')).not.toHaveTextContent('Current');
     expect(providerRow('second')).toHaveClass('suu-sortable-table-enhanced__row--yellow');
     expect(providerRow('second')).toHaveTextContent('Cooling');
     expect(providerRow('missing')).toHaveClass('suu-sortable-table-enhanced__row--red');
@@ -1391,13 +1392,101 @@ describe('ModelsPage', () => {
     Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
     await dragAt(target, 'dragover', dataTransfer, 25);
     await dragAt(target, 'drop', dataTransfer, 25);
-    expect(providerRow('first')).toHaveTextContent('Current');
-    expect(providerRow('third')).not.toHaveTextContent('Current');
+    expect(within(providerRow('first')).getByRole('radio', { name: 'Current provider first' })).toBeChecked();
+    expect(within(providerRow('third')).getByRole('radio', { name: 'Current provider third' })).not.toBeChecked();
 
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
       '/admin/api/config/model-groups/Main',
-      { providers: ['third', 'first', 'second'], type: 'llm', models: { 'demo-model': {} } },
+      { providers: ['third', 'first', 'second'], current_provider: 'first', type: 'llm', models: { 'demo-model': {} } },
+    ));
+  });
+
+  it('persists a non-first current provider through the ordered provider contract', async () => {
+    const initial = {
+      providers: {
+        first: { api_type: 'chat' },
+        second: { api_type: 'chat' },
+        third: { api_type: 'chat' },
+      },
+      model_groups: {
+        Main: {
+          provider: 'first',
+          providers: [
+            { name: 'first', current: true, enabled: true, status: 'available', error: null },
+            { name: 'second', current: false, enabled: true, status: 'available', error: null },
+            { name: 'third', current: false, enabled: true, status: 'available', error: null },
+          ],
+          type: 'llm',
+          models: { 'demo-model': {} },
+        },
+      },
+      tool_profile_presets: [],
+    };
+    const saved = {
+      ...initial,
+      model_groups: {
+        Main: {
+          ...initial.model_groups.Main,
+          provider: 'second',
+          current_provider: 'second',
+          providers: [
+            { name: 'first', current: false, enabled: true, status: 'available', error: null },
+            { name: 'second', current: true, enabled: true, status: 'available', error: null },
+            { name: 'third', current: false, enabled: true, status: 'available', error: null },
+          ],
+        },
+      },
+    };
+    apiMock.get.mockResolvedValueOnce(initial).mockResolvedValueOnce(saved);
+    render(ModelsPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    let dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    await fireEvent.click(dialog.getByRole('radio', { name: 'Current provider second' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      { providers: ['first', 'second', 'third'], current_provider: 'second', type: 'llm', models: { 'demo-model': {} } },
+    ));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    expect(dialog.getByRole('radio', { name: 'Current provider second' })).toBeChecked();
+  });
+
+  it('selects the first eligible remaining row when the current row is removed', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {
+        first: { api_type: 'chat' },
+        second: { api_type: 'chat' },
+        third: { api_type: 'chat' },
+      },
+      model_groups: {
+        Main: {
+          provider: 'second',
+          providers: [
+            { name: 'first', current: false, enabled: true, status: 'available', error: null },
+            { name: 'second', current: true, enabled: true, status: 'available', error: null },
+            { name: 'third', current: false, enabled: true, status: 'available', error: null },
+          ],
+          type: 'llm',
+          models: { 'demo-model': {} },
+        },
+      },
+      tool_profile_presets: [],
+    });
+    render(ModelsPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Remove provider second' }));
+
+    expect(dialog.getByRole('radio', { name: 'Current provider first' })).toBeChecked();
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      { providers: ['first', 'third'], current_provider: 'first', type: 'llm', models: { 'demo-model': {} } },
     ));
   });
 
@@ -1488,6 +1577,7 @@ describe('ModelsPage', () => {
       '/admin/api/config/model-groups/Main',
       {
         providers: ['upstream'],
+        current_provider: 'upstream',
         type: 'llm',
         tool_profile: 'passthrough',
         models: { 'demo-model': {} },
@@ -1519,7 +1609,7 @@ describe('ModelsPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      providers: ['upstream'], type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed', effective_context_window_percent: 95, auto_compact_token_limit: 51200 } } },
+      providers: ['upstream'], current_provider: 'upstream', type: 'llm', models: { 'gpt-demo': { model_info: { ...preset, display_name: 'Changed', effective_context_window_percent: 95, auto_compact_token_limit: 51200 } } },
     }));
   });
 
@@ -1592,7 +1682,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      providers: ['upstream'], type: 'llm', models: { 'gpt-demo': {} },
+      providers: ['upstream'], current_provider: 'upstream', type: 'llm', models: { 'gpt-demo': {} },
     }));
   });
 
@@ -1620,7 +1710,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      providers: ['opencode'], type: 'llm', models: { 'qwen3.7-plus': {} },
+      providers: ['opencode'], current_provider: 'opencode', type: 'llm', models: { 'qwen3.7-plus': {} },
     }));
   });
 
@@ -1647,7 +1737,7 @@ describe('ModelsPage', () => {
 
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      providers: ['opencode'], type: 'llm', models: { 'glm-5.2': {} },
+      providers: ['opencode'], current_provider: 'opencode', type: 'llm', models: { 'glm-5.2': {} },
     }));
   });
 
@@ -1682,7 +1772,7 @@ describe('ModelsPage', () => {
     await fireEvent.click(screen.getByRole('button', { name: 'Apply Changes' }));
     await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
-      providers: ['opencode'], type: 'llm', models: { 'glm-5.2': { runtime_capabilities: { temperature: 0.4 } } },
+      providers: ['opencode'], current_provider: 'opencode', type: 'llm', models: { 'glm-5.2': { runtime_capabilities: { temperature: 0.4 } } },
     }));
   });
 

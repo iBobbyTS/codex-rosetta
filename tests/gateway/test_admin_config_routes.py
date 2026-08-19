@@ -2853,6 +2853,7 @@ def test_put_provider_disables_rotation_and_activates_current_uuid_pairs(tmp_pat
     }
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == expected
     assert (
         request.app.gateway_config.providers["openai"].auto_rotate_credentials is False
     )
@@ -2884,6 +2885,10 @@ def test_put_provider_enables_rotation_and_collapses_pairs_at_first_occurrence(
         "secondary",
         {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID},
     ]
+    data["model_groups"]["OpenAI"]["current_provider"] = {
+        "provider": "openai",
+        "credential_uuid": _SECONDARY_CREDENTIAL_UUID,
+    }
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     body = _provider_put_body(data, "openai")
@@ -2895,6 +2900,7 @@ def test_put_provider_enables_rotation_and_collapses_pairs_at_first_occurrence(
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"]["provider"] == ["openai", "secondary"]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == "openai"
 
 
 def test_provider_rename_updates_string_and_uuid_pair_candidates():
@@ -2909,7 +2915,11 @@ def test_provider_rename_updates_string_and_uuid_pair_candidates():
                         "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
                     },
                     "other",
-                ]
+                ],
+                "current_provider": {
+                    "provider": "old",
+                    "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+                },
             }
         },
     }
@@ -2925,6 +2935,10 @@ def test_provider_rename_updates_string_and_uuid_pair_candidates():
         },
         "other",
     ]
+    assert data["model_groups"]["mixed"]["current_provider"] == {
+        "provider": "renamed",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+    }
 
 
 def test_put_provider_previews_then_confirms_referenced_credential_deletion(
@@ -2946,6 +2960,10 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
                 {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID},
                 {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID},
             ],
+            "current_provider": {
+                "provider": "openai",
+                "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+            },
             "type": "llm",
             "models": {"promote-model": {"upstream_model": "gpt-5.6-terra"}},
         },
@@ -2953,6 +2971,10 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
             "provider": [
                 {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
             ],
+            "current_provider": {
+                "provider": "openai",
+                "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+            },
             "type": "llm",
             "models": {"empty-model": {"upstream_model": "gpt-5.6-terra"}},
         },
@@ -2984,7 +3006,12 @@ def test_put_provider_previews_then_confirms_referenced_credential_deletion(
     assert saved["model_groups"]["Promote"]["provider"] == [
         {"provider": "openai", "credential_uuid": _SECONDARY_CREDENTIAL_UUID}
     ]
+    assert saved["model_groups"]["Promote"]["current_provider"] == {
+        "provider": "openai",
+        "credential_uuid": _SECONDARY_CREDENTIAL_UUID,
+    }
     assert saved["model_groups"]["Empty"]["provider"] == []
+    assert "current_provider" not in saved["model_groups"]["Empty"]
     assert saved["providers"]["openai"]["api_keys"][0] == {
         "uuid": _SECONDARY_CREDENTIAL_UUID,
         "id": "renamed-secondary",
@@ -3294,6 +3321,7 @@ def test_put_model_group_persists_and_reloads_runtime_config(tmp_path):
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"] == {
         "provider": ["openai"],
+        "current_provider": "openai",
         "type": "llm",
         "tool_profile": "builtin",
         "models": {
@@ -3329,6 +3357,7 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
     assert response.status_code == 200
     group = json.loads(response.body)["model_groups"]["OpenAI"]
     assert group["provider"] == "openai"
+    assert group["current_provider"] == "openai"
     assert group["providers"] == [
         {
             "name": "openai",
@@ -3524,6 +3553,79 @@ def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_p
     )
 
 
+def test_put_and_get_model_group_preserve_order_with_non_first_current(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+        stream_trace_state=StreamTraceState(GatewayConfig(config).stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": ["openai", "secondary"],
+            "current_provider": "secondary",
+            "type": "llm",
+            "tool_profile": "builtin",
+            "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == [
+        "openai",
+        "secondary",
+    ]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == "secondary"
+    assert app.gateway_config.model_group_rings["OpenAI"].current == "secondary"
+
+    projected = json.loads(_run(get_config(SimpleNamespace(app=app))).body)
+    group = projected["model_groups"]["OpenAI"]
+    assert group["provider"] == "secondary"
+    assert group["current_provider"] == "secondary"
+    assert [row["name"] for row in group["providers"]] == ["openai", "secondary"]
+    assert [row["current"] for row in group["providers"]] == [False, True]
+
+
+def test_put_model_group_rejects_nonmember_current_without_write(tmp_path):
+    config = _config_data()
+    original = json.dumps(config)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(original, encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            config_path=str(config_path), gateway_config=initial_config
+        ),
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": ["openai"],
+            "current_provider": "missing",
+            "type": "llm",
+            "models": {"gpt-test": {}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert b"current_provider" in response.body
+    assert config_path.read_text(encoding="utf-8") == original
+    assert request.app.gateway_config is initial_config
+
+
 def test_put_model_group_accepts_distinct_same_provider_uuid_pairs(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["auto_rotate_credentials"] = False
@@ -3559,6 +3661,7 @@ def test_put_model_group_accepts_distinct_same_provider_uuid_pairs(tmp_path):
         path_params={"name": "OpenAI"},
         json=lambda: {
             "providers": candidates,
+            "current_provider": candidates[1],
             "type": "llm",
             "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
         },
@@ -3572,7 +3675,7 @@ def test_put_model_group_accepts_distinct_same_provider_uuid_pairs(tmp_path):
         == candidates
     )
     assert app.gateway_config.model_group_rings["OpenAI"].current.credential_uuid == (
-        _SECONDARY_CREDENTIAL_UUID
+        _PRIMARY_CREDENTIAL_UUID
     )
     assert app.gateway_config.providers["openai"].credential_uuid_is_available(
         _SECONDARY_CREDENTIAL_UUID
@@ -3585,7 +3688,8 @@ def test_put_model_group_accepts_distinct_same_provider_uuid_pairs(tmp_path):
     ]
     assert rows[0]["credential_uuid"] == _SECONDARY_CREDENTIAL_UUID
     assert rows[0]["auto_rotate_credentials"] is False
-    assert rows[0]["current"] is True
+    assert rows[0]["current"] is False
+    assert rows[1]["current"] is True
 
 
 @pytest.mark.parametrize(

@@ -595,6 +595,15 @@ def _build_provider_entry(
     return entry
 
 
+def _renamed_model_group_candidate(value: Any, old_name: str, new_name: str) -> Any:
+    """Rewrite one model-group candidate for a Provider rename."""
+    if value == old_name:
+        return new_name
+    if isinstance(value, dict) and value.get("provider") == old_name:
+        return {**value, "provider": new_name}
+    return value
+
+
 def _handle_provider_rename(
     data: dict[str, Any], rename_from: str, name: str
 ) -> Response | None:
@@ -619,19 +628,13 @@ def _handle_provider_rename(
             provider_names = group_val.get("provider")
             if isinstance(provider_names, list):
                 group_val["provider"] = [
-                    (
-                        name
-                        if item == rename_from
-                        else {
-                            **item,
-                            "provider": name,
-                        }
-                        if isinstance(item, dict)
-                        and item.get("provider") == rename_from
-                        else item
-                    )
+                    _renamed_model_group_candidate(item, rename_from, name)
                     for item in provider_names
                 ]
+            if "current_provider" in group_val:
+                group_val["current_provider"] = _renamed_model_group_candidate(
+                    group_val["current_provider"], rename_from, name
+                )
     server = data.get("server")
     web_search = server.get("web_search") if isinstance(server, dict) else None
     if isinstance(web_search, dict):

@@ -18,8 +18,10 @@ from ...config import (
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
     SELF_HOSTED_WEB_SEARCH_PROVIDERS,
+    _MISSING_MODEL_GROUP_CURRENT,
     _ModelGroupProviderCandidate,
     _model_group_candidate_raw,
+    _model_group_current_candidate,
     _model_group_provider_candidates,
     _substitute_env_vars,
     _validate_provider_credential_uuid,
@@ -563,7 +565,15 @@ def _normalize_model_groups_for_admin(
             provider_value,
             field=f"model_groups.{group_name}.provider",
         )
-        provider = candidates[0].provider_name if candidates else ""
+        runtime_ring = runtime_config.model_group_rings.get(group_name)
+        runtime_current = runtime_ring.current if runtime_ring is not None else None
+        provider = (
+            runtime_current.provider_name
+            if runtime_current is not None
+            else candidates[0].provider_name
+            if candidates
+            else ""
+        )
 
         provider_rows = _model_group_provider_rows_for_admin(
             group_name,
@@ -590,6 +600,10 @@ def _normalize_model_groups_for_admin(
             "type": group_type,
             "models": models,
         }
+        if runtime_current is not None:
+            normalized_group["current_provider"] = _model_group_candidate_raw(
+                runtime_current
+            )
         if group_provider_error:
             normalized_group["validation_error"] = group_provider_error
         provider_error = provider_errors.get(provider)
@@ -756,6 +770,54 @@ def _requested_model_group_providers(
     if not isinstance(provider, str) or not provider.strip():
         return JSONResponse({"error": "'provider' is required"}, status_code=400)
     return [_ModelGroupProviderCandidate(provider.strip())], False
+
+
+def _requested_model_group_current_candidate(
+    body: dict[str, Any],
+    candidates: list[_ModelGroupProviderCandidate],
+    providers: dict[str, Any],
+) -> _ModelGroupProviderCandidate | None | Response:
+    """Validate and resolve the requested current candidate independently."""
+    eligible = [
+        candidate
+        for candidate in candidates
+        if isinstance(providers.get(candidate.provider_name), dict)
+        and providers[candidate.provider_name].get("enabled", True) is not False
+    ]
+    try:
+        return _model_group_current_candidate(
+            (
+                body["current_provider"]
+                if "current_provider" in body
+                else _MISSING_MODEL_GROUP_CURRENT
+            ),
+            candidates,
+            field="'current_provider'",
+            eligible_candidates=eligible,
+        )
+    except ValueError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=400)
+
+
+def _validate_requested_model_group_selection(
+    body: dict[str, Any],
+    candidates: list[_ModelGroupProviderCandidate],
+    providers: dict[str, Any],
+) -> _ModelGroupProviderCandidate | None | Response:
+    """Validate candidates and their independent requested current identity."""
+    provider_error = _validate_requested_model_group_providers(candidates, providers)
+    if provider_error is not None:
+        return provider_error
+    return _requested_model_group_current_candidate(body, candidates, providers)
+
+
+def _serialized_model_group_current(
+    candidate: _ModelGroupProviderCandidate | None,
+) -> dict[str, Any]:
+    """Return the optional serialized current-candidate field."""
+    if candidate is None:
+        return {}
+    return {"current_provider": _model_group_candidate_raw(candidate)}
 
 
 def _validate_requested_model_group_providers(
@@ -958,7 +1020,14 @@ async def get_config(request: Any) -> Response:
     # ``models`` is an effective read-only runtime view. ``model_groups`` is
     # the sole persisted management view.
     raw_model_groups = raw.get("model_groups", {}) or {}
-    expanded_raw_models = GatewayConfig._expand_model_groups(raw_model_groups)
+    expanded_raw_models = GatewayConfig._expand_model_groups(
+        raw_model_groups,
+        eligible_provider_names={
+            name
+            for name, provider in providers.items()
+            if isinstance(provider, dict) and provider.get("enabled", True) is not False
+        },
+    )
     models_normalized = _normalize_models_for_admin(expanded_raw_models)
     model_groups = _normalize_model_groups_for_admin(
         raw_model_groups,
@@ -1111,6 +1180,14 @@ def _rewrite_provider_candidate_mode(
     for group in model_groups.values():
         if not isinstance(group, dict) or not isinstance(group.get("provider"), list):
             continue
+        current_value = group.get("current_provider")
+        current_provider = (
+            current_value
+            if isinstance(current_value, str)
+            else current_value.get("provider")
+            if isinstance(current_value, dict)
+            else None
+        )
         rewritten: list[Any] = []
         provider_added = False
         for item in group["provider"]:
@@ -1138,6 +1215,16 @@ def _rewrite_provider_candidate_mode(
             else:
                 rewritten.append(item)
         group["provider"] = rewritten
+        if current_provider == provider_name:
+            group["current_provider"] = (
+                provider_name
+                if auto_rotate
+                else {
+                    "provider": provider_name,
+                    "credential_uuid": current_credential_uuid,
+                }
+            )
+        _normalize_current_after_candidate_mutation(group, data.get("providers", {}))
 
 
 def _remove_credential_candidate_references(
@@ -1161,6 +1248,48 @@ def _remove_credential_candidate_references(
                 and item.get("credential_uuid") in credential_uuids
             )
         ]
+        _normalize_current_after_candidate_mutation(group, data.get("providers", {}))
+
+
+def _normalize_current_after_candidate_mutation(
+    group: dict[str, Any], providers: Any
+) -> None:
+    """Keep current identity valid after an existing candidate-list mutation."""
+    candidates = _model_group_provider_candidates(
+        group.get("provider"),
+        field="model_groups.*.provider",
+    )
+    if not candidates:
+        group.pop("current_provider", None)
+        return
+    current_value: Any = _MISSING_MODEL_GROUP_CURRENT
+    if "current_provider" in group:
+        try:
+            parsed_current = _model_group_provider_candidates(
+                [group["current_provider"]],
+                field="model_groups.*.current_provider",
+            )[0]
+        except ValueError:
+            parsed_current = None
+        if parsed_current in candidates:
+            current_value = group["current_provider"]
+    provider_map = providers if isinstance(providers, dict) else {}
+    eligible = [
+        candidate
+        for candidate in candidates
+        if isinstance(provider_map.get(candidate.provider_name), dict)
+        and provider_map[candidate.provider_name].get("enabled", True) is not False
+    ]
+    current = _model_group_current_candidate(
+        current_value,
+        candidates,
+        field="model_groups.*.current_provider",
+        eligible_candidates=eligible,
+    )
+    if current is None:
+        group.pop("current_provider", None)
+    else:
+        group["current_provider"] = _model_group_candidate_raw(current)
 
 
 def _normalize_sub2api_account_id(body: dict[str, Any]) -> None:
@@ -1700,8 +1829,6 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
     if isinstance(provider_result, Response):
         return provider_result
     candidates, exact_provider_list = provider_result
-    provider_names = [candidate.provider_name for candidate in candidates]
-    provider = provider_names[0]
 
     group_type = body.get("type")
     if group_type != "llm":
@@ -1717,9 +1844,15 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
         return JSONResponse({"error": f"Failed to read config: {exc}"}, status_code=500)
 
     providers = data.get("providers", {})
-    provider_error = _validate_requested_model_group_providers(candidates, providers)
-    if provider_error is not None:
-        return provider_error
+    current_result = _validate_requested_model_group_selection(
+        body,
+        candidates,
+        providers,
+    )
+    if isinstance(current_result, Response):
+        return current_result
+    current_candidate = current_result
+    provider = (current_candidate or candidates[0]).provider_name
 
     model_groups = data.setdefault("model_groups", {})
     if not isinstance(model_groups, dict):
@@ -1767,6 +1900,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
             if exact_provider_list
             else _updated_model_group_providers(model_groups, name, provider)
         ),
+        **_serialized_model_group_current(current_candidate),
         "type": group_type,
         **({"tool_profile": tool_profile} if tool_profile is not None else {}),
         "models": cleaned_models,
@@ -1785,6 +1919,7 @@ async def put_model_group(request: Any, **kwargs: Any) -> Response:
             "providers": [
                 _model_group_candidate_raw(candidate) for candidate in candidates
             ],
+            **_serialized_model_group_current(current_candidate),
             "type": group_type,
             "models": dict(new_config.models),
         }

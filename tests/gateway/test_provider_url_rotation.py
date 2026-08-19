@@ -15,7 +15,7 @@ import codex_rosetta.gateway.app as app_module
 from codex_rosetta._vendor.httpserver import Response
 from codex_rosetta.gateway.app import _bind_provider_current_recorders
 from codex_rosetta.gateway.auth import api_key_principal_var
-from codex_rosetta.gateway.config import GatewayConfig
+from codex_rosetta.gateway.config import GatewayConfig, _model_group_candidate_raw
 from codex_rosetta.gateway.search_provider_candidates import (
     ConfiguredResponsesSearchProviderCandidate,
     SelfHostedSearchProviderCandidate,
@@ -1683,10 +1683,20 @@ def test_app_bound_model_group_recorder_persists_exact_pair_before_publish(
 
         saved = json.loads(config_path.read_text())
         assert saved["model_groups"]["models"]["provider"] == [
-            second_pair,
             first_pair,
+            second_pair,
         ]
+        assert saved["model_groups"]["models"]["current_provider"] == second_pair
         assert config.providers["row-a"].current_credential_id == "first"
+        reloaded = GatewayConfig(saved)
+        assert [
+            _model_group_candidate_raw(item)
+            for item in reloaded.model_group_rings["models"].candidates
+        ] == [first_pair, second_pair]
+        assert (
+            _model_group_candidate_raw(reloaded.model_group_rings["models"].current)
+            == second_pair
+        )
 
     asyncio.run(scenario())
 

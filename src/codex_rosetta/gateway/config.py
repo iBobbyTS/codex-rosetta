@@ -10,7 +10,7 @@ import re
 import sys
 import tempfile
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, Literal, TypedDict, cast
 from urllib.parse import urlsplit
@@ -82,6 +82,7 @@ class _ModelGroupProviderCandidate:
 
 ModelGroupProviderRecorder = Callable[[str, _ModelGroupProviderCandidate], Any]
 ModelGroupCandidateCooldownClearer = Callable[[_ModelGroupProviderCandidate], None]
+_MISSING_MODEL_GROUP_CURRENT = object()
 
 
 class ModelGroupConfigurationUnavailable(RuntimeError):
@@ -258,6 +259,30 @@ def _model_group_candidate_raw(candidate: _ModelGroupProviderCandidate) -> Any:
     }
 
 
+def _model_group_current_candidate(
+    current_value: Any,
+    candidates: list[_ModelGroupProviderCandidate],
+    *,
+    field: str,
+    eligible_candidates: Collection[_ModelGroupProviderCandidate] | None = None,
+) -> _ModelGroupProviderCandidate | None:
+    """Resolve an independent current candidate without changing list order."""
+    explicit: _ModelGroupProviderCandidate | None = None
+    if current_value is not _MISSING_MODEL_GROUP_CURRENT:
+        parsed = _model_group_provider_candidates(
+            [current_value],
+            field=field,
+        )
+        explicit = parsed[0]
+        if explicit not in candidates:
+            raise ValueError(f"config: {field} must be a member of provider")
+
+    eligible = candidates if eligible_candidates is None else eligible_candidates
+    if explicit is not None and explicit in eligible:
+        return explicit
+    return next((candidate for candidate in candidates if candidate in eligible), None)
+
+
 logger = logging.getLogger("codex-rosetta-gateway")
 
 # ---------------------------------------------------------------------------
@@ -391,12 +416,33 @@ def model_group_provider_names(value: Any, *, field: str) -> list[str]:
     ]
 
 
-def active_model_group_provider(value: Any, *, field: str) -> str:
-    """Return the active provider from a model group's ordered provider list."""
-    names = model_group_provider_names(value, field=field)
-    if not names:
+def active_model_group_provider(
+    value: Any,
+    *,
+    field: str,
+    current_provider: Any = _MISSING_MODEL_GROUP_CURRENT,
+    eligible_provider_names: Collection[str] | None = None,
+) -> str:
+    """Return the effective provider while preserving configured candidate order."""
+    candidates = _model_group_provider_candidates(value, field=field)
+    eligible = (
+        candidates
+        if eligible_provider_names is None
+        else [
+            candidate
+            for candidate in candidates
+            if candidate.provider_name in eligible_provider_names
+        ]
+    )
+    current = _model_group_current_candidate(
+        current_provider,
+        candidates,
+        field=field.rsplit(".provider", 1)[0] + ".current_provider",
+        eligible_candidates=eligible,
+    )
+    if current is None:
         raise ValueError(f"config: {field} must contain an active provider")
-    return names[0]
+    return current.provider_name
 
 
 def normalize_local_mode_settings(server: Any) -> tuple[bool, bool]:
@@ -785,7 +831,23 @@ def resolve_model_tool_profile_names(
         )
         if not candidates:
             continue
-        provider_name = candidates[0].provider_name
+        current = _model_group_current_candidate(
+            (
+                group["current_provider"]
+                if "current_provider" in group
+                else _MISSING_MODEL_GROUP_CURRENT
+            ),
+            candidates,
+            field=f"model_groups.{group_name}.current_provider",
+            eligible_candidates=[
+                candidate
+                for candidate in candidates
+                if candidate.provider_name in raw_providers
+            ],
+        )
+        if current is None:
+            continue
+        provider_name = current.provider_name
         provider_config = raw_providers.get(provider_name)
         if not isinstance(provider_config, dict):
             continue
@@ -1098,7 +1160,8 @@ class GatewayConfig:
         # Top-level ``models`` is intentionally ignored. Model groups are the
         # only persisted routing definition; this flat mapping is runtime-only.
         self._expanded_raw_models = self._expand_model_groups(
-            raw.get("model_groups", {})
+            raw.get("model_groups", {}),
+            eligible_provider_names=self._raw_providers,
         )
         self.model_group_candidates: dict[
             str, tuple[_ModelGroupProviderCandidate, ...]
@@ -1502,6 +1565,8 @@ class GatewayConfig:
     def _expand_model_groups(
         cls,
         raw_model_groups: dict[str, Any],
+        *,
+        eligible_provider_names: Collection[str] | None = None,
     ) -> dict[str, Any]:
         """Expand the only supported routing definition into a runtime table."""
         expanded: dict[str, Any] = {}
@@ -1529,9 +1594,27 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: model group '{group_name}' models must be an object"
                 )
+            current = _model_group_current_candidate(
+                (
+                    group_value["current_provider"]
+                    if "current_provider" in group_value
+                    else _MISSING_MODEL_GROUP_CURRENT
+                ),
+                candidates,
+                field=f"model_groups.{group_name}.current_provider",
+                eligible_candidates=(
+                    candidates
+                    if eligible_provider_names is None
+                    else [
+                        candidate
+                        for candidate in candidates
+                        if candidate.provider_name in eligible_provider_names
+                    ]
+                ),
+            )
             if not candidates:
                 continue
-            provider_name = candidates[0].provider_name
+            provider_name = (current or candidates[0]).provider_name
 
             for model_name, model_value in group_models.items():
                 if model_name in expanded:
@@ -1581,7 +1664,18 @@ class GatewayConfig:
                 if candidate.provider_name in self._raw_providers
             ]
             if enabled:
-                ring = ModelGroupProviderRing(group_name, enabled, enabled[0])
+                current = _model_group_current_candidate(
+                    (
+                        group_value["current_provider"]
+                        if "current_provider" in group_value
+                        else _MISSING_MODEL_GROUP_CURRENT
+                    ),
+                    candidates,
+                    field=f"model_groups.{group_name}.current_provider",
+                    eligible_candidates=enabled,
+                )
+                assert current is not None
+                ring = ModelGroupProviderRing(group_name, enabled, current)
                 self.model_group_rings[group_name] = ring
                 self.model_group_provider_names[group_name] = tuple(
                     candidate.provider_name for candidate in candidates
@@ -1589,9 +1683,9 @@ class GatewayConfig:
                 group_models = group_value.get("models", {})
                 if isinstance(group_models, dict):
                     for model_name in group_models:
-                        self._expanded_raw_models[model_name]["provider"] = enabled[
-                            0
-                        ].provider_name
+                        self._expanded_raw_models[model_name]["provider"] = (
+                            current.provider_name
+                        )
             else:
                 self.model_group_provider_names[group_name] = tuple(
                     candidate.provider_name for candidate in candidates

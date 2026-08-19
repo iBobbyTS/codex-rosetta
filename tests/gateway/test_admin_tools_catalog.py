@@ -8,6 +8,7 @@ import json
 
 from codex_rosetta._vendor.httpserver import Request
 from codex_rosetta.gateway.admin.tool_catalog import load_tool_catalog
+from codex_rosetta.gateway.admin.routes.tools import _tool_profile_references
 from codex_rosetta.gateway.app import create_app
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
@@ -240,6 +241,27 @@ def _request(app, method: str = "GET") -> Request:
         client_addr=("127.0.0.1", 12345),
         app=app,
     )
+
+
+def test_tool_profile_references_use_independent_current_provider() -> None:
+    data = {
+        "providers": {
+            "first": {"provider": "anthropic", "api_type": "anthropic"},
+            "second": {"provider": "openai", "api_type": "chat"},
+        },
+        "model_groups": {
+            "models": {
+                "provider": ["first", "second"],
+                "current_provider": "second",
+                "type": "llm",
+                "tool_profile": "builtin",
+                "models": {"gpt-test": {}},
+            }
+        },
+    }
+
+    assert _tool_profile_references(data) == {"builtin": ["models"]}
+    assert data["model_groups"]["models"]["provider"] == ["first", "second"]
 
 
 def _api_request(app, method: str, path: str, body: dict | None = None) -> Request:

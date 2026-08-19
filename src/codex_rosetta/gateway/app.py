@@ -1313,14 +1313,7 @@ def _bind_provider_current_recorders(  # noqa: C901
                 )
                 if provider_name not in candidates:
                     raise ValueError
-                group["provider"] = [
-                    _model_group_candidate_raw(provider_name),
-                    *[
-                        _model_group_candidate_raw(item)
-                        for item in candidates
-                        if item != provider_name
-                    ],
-                ]
+                group["current_provider"] = _model_group_candidate_raw(provider_name)
                 write_config(config_path, document)
             except asyncio.CancelledError:
                 raise
