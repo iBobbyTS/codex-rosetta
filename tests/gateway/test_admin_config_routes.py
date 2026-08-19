@@ -55,6 +55,23 @@ _PRIMARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000001"
 _SECONDARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000002"
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("", ""),
+        ("a", "*"),
+        ("abcd", "****"),
+        ("abcde", "a**de"),
+        ("abcdef", "a***ef"),
+        ("abcdefg", "ab***fg"),
+        ("abcdefgh", "abcd***efgh"),
+        ("${API_KEY}", "${API_KEY}"),
+    ],
+)
+def test_mask_api_key_uses_length_appropriate_redaction(value, expected):
+    assert _shared._mask_api_key(value) == expected
+
+
 def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 

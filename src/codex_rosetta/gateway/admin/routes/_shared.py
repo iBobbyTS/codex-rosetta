@@ -79,8 +79,19 @@ def _mask_api_key(value: str) -> str:
     """Mask a literal API key, leaving env-var placeholders intact."""
     if _ENV_VAR_RE.match(value):
         return value
-    if len(value) <= 8:
-        return "***"
+    length = len(value)
+    if length <= 4:
+        return "*" * length
+    if length < 8:
+        hidden_length = length // 2
+        visible_length = length - hidden_length
+        prefix_length = visible_length // 2
+        suffix_length = visible_length - prefix_length
+        return (
+            value[:prefix_length]
+            + "*" * hidden_length
+            + value[length - suffix_length :]
+        )
     return value[:4] + "***" + value[-4:]
 
 
