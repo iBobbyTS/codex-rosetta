@@ -2853,7 +2853,7 @@ def test_put_provider_disables_rotation_and_activates_current_uuid_pairs(tmp_pat
     }
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
-    assert saved["model_groups"]["OpenAI"]["current_provider"] == expected
+    assert "current_provider" not in saved["model_groups"]["OpenAI"]
     assert (
         request.app.gateway_config.providers["openai"].auto_rotate_credentials is False
     )
@@ -3071,6 +3071,48 @@ def test_put_provider_preserves_disabled_current_when_deleting_other_credential(
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"]["provider"] == ["disabled", primary]
     assert saved["model_groups"]["OpenAI"]["current_provider"] == "disabled"
+    current = request.app.gateway_config.model_group_rings["OpenAI"].current
+    assert current.provider_name == "openai"
+    assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
+
+
+def test_put_provider_preserves_missing_current_on_unrelated_credential_deletion(
+    tmp_path,
+):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    data["providers"]["disabled"] = {
+        **json.loads(json.dumps(provider)),
+        "enabled": False,
+        "auto_rotate_credentials": True,
+        "base_urls": ["https://disabled.example.test"],
+        "current_base_url": "https://disabled.example.test",
+    }
+    primary = {
+        "provider": "openai",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+    }
+    data["model_groups"]["OpenAI"]["provider"] = ["disabled", primary]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"] = [body["api_keys"][0]]
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == ["disabled", primary]
+    assert "current_provider" not in saved["model_groups"]["OpenAI"]
     current = request.app.gateway_config.model_group_rings["OpenAI"].current
     assert current.provider_name == "openai"
     assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
