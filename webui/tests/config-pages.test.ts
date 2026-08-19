@@ -95,7 +95,7 @@ describe('ProvidersPage', () => {
 
     await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
       '/admin/api/config/providers/relay/new-api-pricing',
-      { base_url: 'https://new-api.example/v1', bearer_key: 'prov***cret' },
+      { base_url: 'https://new-api.example/v1', bearer_key: '' },
       expect.any(AbortSignal),
     ));
     const group = await dialog.findByRole('button', { name: 'New API group for credential primary' });
