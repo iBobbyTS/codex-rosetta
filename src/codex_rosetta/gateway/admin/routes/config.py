@@ -1515,37 +1515,64 @@ async def _populate_automatic_rate_multipliers(  # noqa: C901
     merged_keys: list[dict[str, Any]],
     base_urls: Any,
     current_base_url: Any,
-) -> None:
+) -> list[dict[str, Any]]:
     """Query and overwrite automatic multipliers for one special Provider save."""
+    diagnostics: list[dict[str, Any]] = []
+
+    def record(entry: Mapping[str, Any], stage: str, **extra: Any) -> None:
+        diagnostics.append(
+            {"credential_id": entry.get("id", ""), "stage": stage, **extra}
+        )
+
+    def error_detail(exc: BaseException) -> str:
+        # Do not echo transport URLs, bearer keys, or upstream response bodies.
+        return type(exc).__name__
+
     variant = body.get("openai_variant")
     if variant not in {"sub2api", "new_api"}:
         for entry in merged_keys:
             entry.pop("rate_multiplier_adjustment", None)
             entry.pop("automatic_rate_multiplier", None)
-        return
+        return diagnostics
     if variant == "new_api":
         transport = getattr(request.app, "transport", None)
         if transport is None or not isinstance(current_base_url, str):
             for entry in merged_keys:
                 entry["automatic_rate_multiplier"] = None
-            return
+                record(entry, "transport_unavailable")
+            return diagnostics
         for entry in merged_keys:
             value: int | float | None = None
             group = entry.get("new_api_group")
-            if isinstance(group, str) and group:
-                try:
-                    response = await _request_new_api_nonmodel(
-                        transport,
-                        current_base_url,
-                        "/api/pricing",
-                        entry["key"],
-                    )
-                    if 200 <= response.status_code < 300:
-                        value = _project_new_api_pricing(response.body).get(group)
-                except Exception:
-                    value = None
+            if not isinstance(group, str) or not group:
+                record(entry, "group_missing")
+                entry["automatic_rate_multiplier"] = None
+                continue
+            try:
+                response = await _request_new_api_nonmodel(
+                    transport,
+                    current_base_url,
+                    "/api/pricing",
+                    entry["key"],
+                )
+            except Exception as exc:
+                record(entry, "request_error", error=error_detail(exc))
+            else:
+                if not 200 <= response.status_code < 300:
+                    record(entry, "http_error", status_code=response.status_code)
+                else:
+                    try:
+                        pricing = _project_new_api_pricing(response.body)
+                    except Exception as exc:
+                        record(entry, "response_parse_error", error=error_detail(exc))
+                    else:
+                        if group not in pricing:
+                            record(entry, "group_not_found", group=group)
+                        else:
+                            value = pricing[group]
+                            record(entry, "ok", group=group)
             entry["automatic_rate_multiplier"] = value
-        return
+        return diagnostics
     account_id = body.get("sub2api_account_id")
     if (
         not isinstance(account_id, str)
@@ -1555,8 +1582,10 @@ async def _populate_automatic_rate_multipliers(  # noqa: C901
     ):
         for entry in merged_keys:
             entry["automatic_rate_multiplier"] = None
-        return
+            record(entry, "sub2api_configuration_missing")
+        return diagnostics
     by_name: dict[str, int | float | None] = {}
+    request_error: dict[str, Any] | None = None
     try:
 
         async def ignore_draft_url_selection(_provider_id: str, _url: str) -> None:
@@ -1574,18 +1603,38 @@ async def _populate_automatic_rate_multipliers(  # noqa: C901
             _SUB2API_KEYS_ENDPOINT,
             user_agent=request.headers.get("user-agent"),
         )
-        if response.status_code == 200:
-            by_name = {
-                item["name"]: item["rate_multiplier"]
-                for item in _project_sub2api_key_items(response.json())
-            }
-    except Exception:
+    except Exception as exc:
         by_name = {}
+        request_error = {"stage": "request_error", "error": error_detail(exc)}
+    else:
+        if response.status_code != 200:
+            request_error = {"stage": "http_error", "status_code": response.status_code}
+        else:
+            try:
+                projected = _project_sub2api_key_items(response.json())
+            except Exception as exc:
+                request_error = {
+                    "stage": "response_parse_error",
+                    "error": error_detail(exc),
+                }
+            else:
+                by_name = {item["name"]: item["rate_multiplier"] for item in projected}
     for entry in merged_keys:
         entry["automatic_rate_multiplier"] = by_name.get(entry["id"])
+        if request_error is not None:
+            record(
+                entry,
+                request_error["stage"],
+                **{k: v for k, v in request_error.items() if k != "stage"},
+            )
+        elif entry["id"] in by_name:
+            record(entry, "ok")
+        else:
+            record(entry, "credential_not_found")
+    return diagnostics
 
 
-async def put_provider(request: Any, **kwargs: Any) -> Response:
+async def put_provider(request: Any, **kwargs: Any) -> Response:  # noqa: C901
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
     if not config_path:
@@ -1673,7 +1722,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             status_code=400,
         )
     body["provider"] = provider.strip()
-    await _populate_automatic_rate_multipliers(
+    automatic_rate_diagnostics = await _populate_automatic_rate_multipliers(
         request, body, merged_keys, base_urls, current_base_url
     )
     persisted_current_api_key = (
@@ -1759,13 +1808,16 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         return commit_error
     assert new_config is not None
 
-    return JSONResponse(
-        {
-            "ok": True,
-            "provider": name,
-            "providers": list(new_config.providers.keys()),
-        }
-    )
+    response_body: dict[str, Any] = {
+        "ok": True,
+        "provider": name,
+        "providers": list(new_config.providers.keys()),
+    }
+    if automatic_rate_diagnostics:
+        response_body["automatic_rate_multiplier_diagnostics"] = (
+            automatic_rate_diagnostics
+        )
+    return JSONResponse(response_body)
 
 
 def _resolve_draft_provider_api_keys(  # noqa: C901 — canonical credential merge boundary

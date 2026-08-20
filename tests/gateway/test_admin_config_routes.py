@@ -3202,6 +3202,69 @@ def test_sub2api_save_projects_automatic_multiplier(monkeypatch):
     assert credentials[0]["automatic_rate_multiplier"] == 0.08
 
 
+def test_new_api_save_reports_diagnostic_stage_without_secret(monkeypatch):
+    class FailingTransport:
+        async def send_passthrough(self, *_args, **_kwargs):
+            raise RuntimeError("bearer sk-secret must never be returned")
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(transport=FailingTransport()),
+        path_params={"name": "mooka"},
+        headers={},
+    )
+    credentials = [{"id": "primary", "key": "sk-secret", "new_api_group": "GPT福利"}]
+
+    diagnostics = _run(
+        config_routes._populate_automatic_rate_multipliers(
+            request,
+            {"openai_variant": "new_api"},
+            credentials,
+            ["https://new-api.example.com"],
+            "https://new-api.example.com",
+        )
+    )
+
+    assert credentials[0]["automatic_rate_multiplier"] is None
+    assert diagnostics == [
+        {"credential_id": "primary", "stage": "request_error", "error": "RuntimeError"}
+    ]
+    assert "sk-secret" not in json.dumps(diagnostics)
+
+
+def test_sub2api_save_reports_missing_credential_diagnostic(monkeypatch):
+    class FakeClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def request(self, _endpoint, **_kwargs):
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: {"code": 0, "data": {"items": []}},
+            )
+
+    monkeypatch.setattr(config_routes, "Sub2APIProviderClient", FakeClient)
+    monkeypatch.setattr(config_routes, "get_account_store", lambda _app: object())
+    request = SimpleNamespace(
+        app=SimpleNamespace(), path_params={"name": "pixel"}, headers={}
+    )
+    credentials = [{"id": "primary", "key": "sk-secret"}]
+
+    diagnostics = _run(
+        config_routes._populate_automatic_rate_multipliers(
+            request,
+            {"openai_variant": "sub2api", "sub2api_account_id": "account-1"},
+            credentials,
+            ["https://sub2api.example.com"],
+            "https://sub2api.example.com",
+        )
+    )
+
+    assert credentials[0]["automatic_rate_multiplier"] is None
+    assert diagnostics == [
+        {"credential_id": "primary", "stage": "credential_not_found"}
+    ]
+
+
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"
