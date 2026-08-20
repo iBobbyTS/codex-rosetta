@@ -82,6 +82,8 @@ logger = logging.getLogger("codex-rosetta-gateway")
 _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 _CREDENTIAL_REFERENCE_CODE_PREFIX = "provider_credential_references:"
 _OPENAI_VARIANTS = frozenset({"official", "sub2api", "new_api", "custom"})
+_NEW_API_AGGREGATION_BINS = frozenset({"1m", "5m", "1h"})
+_SUB2API_AGGREGATION_BINS = frozenset({"30s", "1m", "5m", "10m"})
 
 
 def _mask_web_search_config(value: Any) -> dict[str, Any]:
@@ -1363,6 +1365,25 @@ def _normalize_openai_variant(body: dict[str, Any]) -> None:
         )
 
 
+def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
+    """Validate the optional New API aggregation-bin preference."""
+    if "new_api_aggregation_bin" not in body:
+        return
+    value = body["new_api_aggregation_bin"]
+    variant = body.get("openai_variant")
+    allowed = (
+        _NEW_API_AGGREGATION_BINS
+        if variant == "new_api"
+        else _SUB2API_AGGREGATION_BINS
+        if variant == "sub2api"
+        else frozenset()
+    )
+    if value not in allowed:
+        raise ValueError(
+            "'new_api_aggregation_bin' is invalid for the selected OpenAI variant"
+        )
+
+
 async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
@@ -1397,6 +1418,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     try:
         _normalize_sub2api_account_id(body)
         _normalize_openai_variant(body)
+        _normalize_new_api_aggregation_bin(body)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)

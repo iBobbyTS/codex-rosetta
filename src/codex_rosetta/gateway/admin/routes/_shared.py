@@ -576,6 +576,9 @@ def _build_provider_entry(
     if "openai_variant" in body:
         entry["openai_variant"] = body["openai_variant"]
 
+    if "new_api_aggregation_bin" in body:
+        entry["new_api_aggregation_bin"] = body["new_api_aggregation_bin"]
+
     api_type = body.get("api_type")
     if api_type:
         entry["api_type"] = api_type

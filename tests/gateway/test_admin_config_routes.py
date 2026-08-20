@@ -2836,6 +2836,7 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     config_path.write_text(json.dumps(data), encoding="utf-8")
     body = _provider_put_body(data, "openai")
     body["openai_variant"] = "new_api"
+    body["new_api_aggregation_bin"] = "5m"
     body["api_keys"][0]["new_api_group"] = "team"
     body["api_keys"][0]["new_api_model"] = "gpt-4.1-mini"
     request = _provider_admin_request(config_path, data, "openai", body)
@@ -2845,8 +2846,11 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["openai"]["openai_variant"] == "new_api"
+    assert saved["providers"]["openai"]["new_api_aggregation_bin"] == "5m"
     assert saved["providers"]["openai"]["api_keys"][0]["new_api_group"] == "team"
-    assert saved["providers"]["openai"]["api_keys"][0]["new_api_model"] == "gpt-4.1-mini"
+    assert (
+        saved["providers"]["openai"]["api_keys"][0]["new_api_model"] == "gpt-4.1-mini"
+    )
 
     get_request = SimpleNamespace(
         app=request.app,
@@ -2855,11 +2859,61 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     masked_response = _run(get_config(get_request))
     masked = json.loads(masked_response.body)
     credential = masked["providers"]["openai"]["api_keys"][0]
+    assert masked["providers"]["openai"]["new_api_aggregation_bin"] == "5m"
     assert credential["key"] == config_routes._mask_api_key(
         saved["providers"]["openai"]["api_keys"][0]["key"]
     )
     assert credential["new_api_group"] == "team"
     assert credential["new_api_model"] == "gpt-4.1-mini"
+
+
+def test_put_provider_removes_new_api_aggregation_bin_when_leaving_new_api(tmp_path):
+    data = _config_data()
+    data["providers"]["openai"]["openai_variant"] = "new_api"
+    data["providers"]["openai"]["new_api_aggregation_bin"] = "1m"
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "official"
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "new_api_aggregation_bin" not in saved["providers"]["openai"]
+
+
+def test_put_provider_rejects_unknown_new_api_aggregation_bin_without_write(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "new_api"
+    body["new_api_aggregation_bin"] = "30s"
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_put_provider_round_trips_sub2api_aggregation_bin(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "sub2api"
+    body["new_api_aggregation_bin"] = "30s"
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["openai"]["new_api_aggregation_bin"] == "30s"
 
 
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
