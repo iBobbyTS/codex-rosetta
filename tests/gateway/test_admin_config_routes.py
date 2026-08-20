@@ -1517,6 +1517,7 @@ def test_put_provider_persists_provider_url_and_api_type(tmp_path):
             "https://api.deepseek.example/v1",
         ],
         "current_base_url": "https://api.deepseek.example/v1",
+        "rate_multiplier": 1,
         "provider": "deepseek",
         "api_type": "chat",
         "allow_redirects": True,
@@ -2918,9 +2919,14 @@ def test_put_provider_round_trips_sub2api_aggregation_bin(tmp_path):
 
 def test_put_provider_round_trips_manual_credential_rate_multiplier(tmp_path):
     data = _config_data()
+    data["providers"]["openai"]["auto_rotate_credentials"] = False
+    data["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     body = _provider_put_body(data, "openai")
+    body.pop("current_api_key")
     body["openai_variant"] = "official"
     body["api_keys"][0]["rate_multiplier"] = 0.25
     request = _provider_admin_request(config_path, data, "openai", body)
@@ -2935,6 +2941,104 @@ def test_put_provider_round_trips_manual_credential_rate_multiplier(tmp_path):
         _run(get_config(SimpleNamespace(app=request.app, json=lambda: {}))).body
     )
     assert masked["providers"]["openai"]["api_keys"][0]["rate_multiplier"] == 0.25
+
+
+def test_put_provider_enabling_rotation_persists_only_provider_rate(tmp_path):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["auto_rotate_credentials"] = False
+    provider["api_keys"][0]["rate_multiplier"] = 0.25
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+            "rate_multiplier": 0.5,
+        }
+    )
+    body = _provider_put_body(data, "openai")
+    config_path = tmp_path / "config.jsonc"
+    provider.pop("current_api_key", None)
+    data["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    data["model_groups"]["OpenAI"].pop("current_provider", None)
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body.update(
+        auto_rotate_credentials=True,
+        current_api_key="secondary",
+        rate_multiplier=0.5,
+    )
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert saved["rate_multiplier"] == 0.5
+    assert all("rate_multiplier" not in item for item in saved["api_keys"])
+
+
+def test_put_provider_disabling_rotation_resets_every_credential_rate(tmp_path):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["rate_multiplier"] = 0.4
+    provider["api_keys"][0]["rate_multiplier"] = 9
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+            "rate_multiplier": 8,
+        }
+    )
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body.update(auto_rotate_credentials=False, rate_multiplier=7)
+    body.pop("current_api_key")
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert "rate_multiplier" not in saved
+    assert [item["rate_multiplier"] for item in saved["api_keys"]] == [1, 1]
+
+
+def test_put_provider_legacy_auto_rate_falls_back_and_strips_nested_rates(tmp_path):
+    data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["api_keys"][0]["rate_multiplier"] = 0
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert saved["rate_multiplier"] == 0
+    assert "rate_multiplier" not in saved["api_keys"][0]
+
+
+@pytest.mark.parametrize("value", [True, -1, float("nan"), float("inf")])
+def test_put_provider_rejects_invalid_provider_rate_without_write(tmp_path, value):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["rate_multiplier"] = value
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert b"'rate_multiplier' must be a finite number >= 0" in response.body
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_put_provider_round_trips_special_rate_adjustment_and_automatic_value(tmp_path):
@@ -3165,7 +3269,9 @@ def test_put_provider_disables_rotation_and_uses_previous_effective_uuid(tmp_pat
         "credential_uuid": _SECONDARY_CREDENTIAL_UUID,
     }
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["openai"]["api_keys"] == body["api_keys"]
+    assert saved["providers"]["openai"]["api_keys"] == [
+        {**entry, "rate_multiplier": 1} for entry in body["api_keys"]
+    ]
     assert "current_api_key" not in saved["providers"]["openai"]
     assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
     assert "current_provider" not in saved["model_groups"]["OpenAI"]
@@ -3203,7 +3309,9 @@ def test_put_provider_disables_rotation_after_deleting_previous_current(tmp_path
         "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
     }
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["openai"]["api_keys"] == body["api_keys"]
+    assert saved["providers"]["openai"]["api_keys"] == [
+        {**entry, "rate_multiplier": 1} for entry in body["api_keys"]
+    ]
     assert "current_api_key" not in saved["providers"]["openai"]
     assert saved["model_groups"]["OpenAI"]["provider"] == [expected]
     current = request.app.gateway_config.model_group_rings["OpenAI"].current
@@ -3256,7 +3364,9 @@ def test_put_provider_disables_rotation_from_environment_fallback(
 
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["providers"]["openai"]["api_keys"] == body["api_keys"]
+    assert saved["providers"]["openai"]["api_keys"] == [
+        {**entry, "rate_multiplier": 1} for entry in body["api_keys"]
+    ]
     assert "current_api_key" not in saved["providers"]["openai"]
     assert saved["model_groups"]["OpenAI"]["provider"] == [
         {

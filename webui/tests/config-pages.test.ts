@@ -565,7 +565,167 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
       '/admin/api/config/providers/new-provider',
-      expect.objectContaining({ auto_rotate_credentials: true }),
+      expect.objectContaining({ auto_rotate_credentials: true, rate_multiplier: 1 }),
+    ));
+  });
+
+  it('uses the current credential rate for a legacy automatic Provider and saves only the Provider rate', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 2 },
+          { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret', rate_multiplier: 3 },
+        ],
+        current_api_key: 'current',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const providerRate = dialog.getByRole('spinbutton', { name: 'Provider rate multiplier' });
+    expect(providerRate).toHaveValue(3);
+    expect(providerRate.parentElement).toHaveTextContent('x');
+    expect(dialog.queryByRole('columnheader', { name: 'Rate' })).not.toBeInTheDocument();
+    expect(dialog.queryByRole('spinbutton', { name: 'Rate multiplier for credential first' })).not.toBeInTheDocument();
+
+    await fireEvent.input(providerRate, { target: { value: '0' } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({
+        rate_multiplier: 0,
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret' },
+          { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' },
+        ],
+      }),
+    ));
+  });
+
+  it.each([
+    ['the first credential rate', { rate_multiplier: 4 }, 4],
+    ['one', {}, 1],
+  ])('falls back to %s when an automatic Provider has no top-level rate', async (_label, credential, expected) => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: FIRST_UUID, id: 'first', key: 'firs***cret', ...credential }],
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    expect(within(screen.getByRole('dialog', { name: 'Edit Provider' })).getByRole('spinbutton', { name: 'Provider rate multiplier' })).toHaveValue(expected);
+  });
+
+  it('keeps manual credential rates when automatic rotation is toggled on and back off before save', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: false,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 0.2 },
+          { uuid: SECOND_UUID, id: 'second', key: 'seco***cret', rate_multiplier: 0.4 },
+        ],
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const automatic = dialog.getByRole('checkbox', { name: 'Automatic rotation' });
+    expect(dialog.queryByRole('spinbutton', { name: 'Provider rate multiplier' })).not.toBeInTheDocument();
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential first' })).toHaveValue(0.2);
+
+    await fireEvent.click(automatic);
+    expect(dialog.getByRole('spinbutton', { name: 'Provider rate multiplier' })).toHaveValue(0.2);
+    expect(dialog.queryByRole('columnheader', { name: 'Rate' })).not.toBeInTheDocument();
+    await fireEvent.click(automatic);
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential first' })).toHaveValue(0.2);
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential second' })).toHaveValue(0.4);
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({
+        auto_rotate_credentials: false,
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 0.2 },
+          { uuid: SECOND_UUID, id: 'second', key: 'seco***cret', rate_multiplier: 0.4 },
+        ],
+      }),
+    ));
+    expect(apiMock.put.mock.calls[0][1]).not.toHaveProperty('rate_multiplier');
+  });
+
+  it('resets credential rate drafts when disabling a persisted automatic Provider and cancel does not save', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true, rate_multiplier: 0.3,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 8 },
+          { uuid: SECOND_UUID, id: 'second', key: 'seco***cret', rate_multiplier: 9 },
+        ],
+        current_api_key: 'first',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await fireEvent.click(dialog.getByRole('checkbox', { name: 'Automatic rotation' }));
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential first' })).toHaveValue(1);
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential second' })).toHaveValue(1);
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+
+    expect(apiMock.put).not.toHaveBeenCalled();
+  });
+
+  it('preserves the persisted Provider rate when automatic rotation is toggled off and back on before save', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true, rate_multiplier: 0.3,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 8 },
+          { uuid: SECOND_UUID, id: 'second', key: 'seco***cret', rate_multiplier: 9 },
+        ],
+        current_api_key: 'first',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const automatic = dialog.getByRole('checkbox', { name: 'Automatic rotation' });
+    await fireEvent.click(automatic);
+    expect(dialog.getByRole('spinbutton', { name: 'Rate multiplier for credential first' })).toHaveValue(1);
+    await fireEvent.click(automatic);
+    expect(dialog.getByRole('spinbutton', { name: 'Provider rate multiplier' })).toHaveValue(0.3);
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({
+        auto_rotate_credentials: true,
+        rate_multiplier: 0.3,
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret' },
+          { uuid: SECOND_UUID, id: 'second', key: 'seco***cret' },
+        ],
+      }),
     ));
   });
 
@@ -658,7 +818,7 @@ describe('ProvidersPage', () => {
       expect.objectContaining({
         auto_rotate_credentials: false,
         confirm_credential_deletion: ['Group A', 'Group B'],
-        api_keys: [{ uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret' }],
+        api_keys: [{ uuid: SECOND_UUID, id: 'secondary', key: 'seco***cret', rate_multiplier: 1 }],
       }),
     ));
     expect(apiMock.put.mock.calls.at(-1)?.[1]).not.toHaveProperty('current_api_key');
@@ -849,6 +1009,7 @@ describe('ProvidersPage', () => {
       api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
       current_api_key: 'primary',
       auto_rotate_credentials: true,
+      rate_multiplier: 1,
     });
     expect(body).not.toHaveProperty('preset');
     expect(body).not.toHaveProperty('base');
@@ -1150,6 +1311,7 @@ describe('ProvidersPage', () => {
       ],
       current_api_key: 'fallback',
       auto_rotate_credentials: true,
+      rate_multiplier: 1,
       proxy: 'http://proxy.example:8080',
       allow_redirects: false,
       force_rosetta_compaction: false,

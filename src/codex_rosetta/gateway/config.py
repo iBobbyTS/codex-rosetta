@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import hashlib
 import logging
+import math
 import os
 import re
 import sys
@@ -1393,6 +1394,20 @@ class GatewayConfig:
         if not isinstance(cfg.get("auto_rotate_credentials"), bool):
             raise ValueError(
                 f"config: provider '{name}' auto_rotate_credentials must be a boolean"
+            )
+        provider_rate_multiplier = cfg.get("rate_multiplier")
+        if (
+            cfg.get("openai_variant") not in {"sub2api", "new_api"}
+            and "rate_multiplier" in cfg
+            and (
+                isinstance(provider_rate_multiplier, bool)
+                or not isinstance(provider_rate_multiplier, (int, float))
+                or not math.isfinite(provider_rate_multiplier)
+                or provider_rate_multiplier < 0
+            )
+        ):
+            raise ValueError(
+                f"config: provider '{name}' rate_multiplier must be a finite number >= 0"
             )
         if "api_key" in cfg:
             raise ValueError(

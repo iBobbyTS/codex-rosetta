@@ -1433,6 +1433,48 @@ def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
         )
 
 
+def _normalize_ordinary_provider_rate_multiplier(
+    body: dict[str, Any],
+    merged_keys: list[dict[str, Any]],
+    existing_provider: Mapping[str, Any],
+) -> None:
+    """Keep only the multiplier representation selected for an ordinary Provider."""
+    if body.get("openai_variant") in {"sub2api", "new_api"}:
+        body.pop("rate_multiplier", None)
+        return
+
+    auto_rotate = body.get("auto_rotate_credentials")
+    if auto_rotate is True:
+        value = body.get("rate_multiplier")
+        if value is None:
+            current_id = body.get("current_api_key")
+            current = next(
+                (entry for entry in merged_keys if entry["id"] == current_id), None
+            )
+            value = (current or (merged_keys[0] if merged_keys else {})).get(
+                "rate_multiplier", 1
+            )
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError("'rate_multiplier' must be a finite number >= 0")
+        body["rate_multiplier"] = value
+        for entry in merged_keys:
+            entry.pop("rate_multiplier", None)
+        return
+
+    body.pop("rate_multiplier", None)
+    if (
+        isinstance(existing_provider, Mapping)
+        and existing_provider.get("auto_rotate_credentials") is True
+    ):
+        for entry in merged_keys:
+            entry["rate_multiplier"] = 1
+
+
 async def _populate_automatic_rate_multipliers(  # noqa: C901
     request: Any,
     body: Mapping[str, Any],
@@ -1545,6 +1587,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         _normalize_openai_variant(body)
         _normalize_new_api_aggregation_bin(body)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
+        _normalize_ordinary_provider_rate_multiplier(
+            body, merged_keys, existing_provider
+        )
     except ValueError as exc:
         return JSONResponse({"error": str(exc)}, status_code=400)
 
