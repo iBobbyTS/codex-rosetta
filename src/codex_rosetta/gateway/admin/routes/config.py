@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -968,6 +969,12 @@ async def get_config(request: Any) -> Response:
                     "id": entry["id"],
                     "key": _mask_api_key(entry["key"]),
                     **(
+                        {"rate_multiplier": entry["rate_multiplier"]}
+                        if isinstance(entry.get("rate_multiplier"), (int, float))
+                        and not isinstance(entry.get("rate_multiplier"), bool)
+                        else {}
+                    ),
+                    **(
                         {"new_api_group": entry["new_api_group"]}
                         if isinstance(entry.get("new_api_group"), str)
                         and entry["new_api_group"]
@@ -1630,6 +1637,18 @@ def _resolve_draft_provider_api_keys(
             "id": credential_id,
             "key": key,
         }
+        rate_multiplier = entry.get("rate_multiplier")
+        if rate_multiplier is not None:
+            if (
+                isinstance(rate_multiplier, bool)
+                or not isinstance(rate_multiplier, (int, float))
+                or not math.isfinite(rate_multiplier)
+                or rate_multiplier < 0
+            ):
+                raise ValueError(
+                    f"'api_keys[{index}].rate_multiplier' must be a finite number >= 0"
+                )
+            merged_entry["rate_multiplier"] = rate_multiplier
         new_api_group = entry.get("new_api_group")
         if new_api_group is not None:
             if not isinstance(new_api_group, str):

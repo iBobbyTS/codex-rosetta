@@ -2916,6 +2916,27 @@ def test_put_provider_round_trips_sub2api_aggregation_bin(tmp_path):
     assert saved["providers"]["openai"]["new_api_aggregation_bin"] == "30s"
 
 
+def test_put_provider_round_trips_manual_credential_rate_multiplier(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "official"
+    body["api_keys"][0]["rate_multiplier"] = 0.25
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["openai"]["api_keys"][0]["rate_multiplier"] == 0.25
+
+    masked = json.loads(
+        _run(get_config(SimpleNamespace(app=request.app, json=lambda: {}))).body
+    )
+    assert masked["providers"]["openai"]["api_keys"][0]["rate_multiplier"] == 0.25
+
+
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"
