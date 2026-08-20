@@ -26,6 +26,7 @@ from .admin.restart_notice import (
     reset_codex_restart_required,
 )
 from .admin_session import load_or_create_admin_session_secret
+from .admin.provider_refresh import ProviderRefreshCoordinator
 from .auth import (
     AuthState,
     api_key_label_var,
@@ -736,6 +737,13 @@ async def _proxy_handler(  # noqa: C901
     codex_tool_store: CodexToolLocalizationStore = request.app.codex_tool_store
     request_log = getattr(request.app, "request_log", None)
     persistence = getattr(request.app, "persistence", None)
+
+    # Refresh special-provider availability before route resolution.  The
+    # coordinator records this group as active and shares one refresh task
+    # among concurrent requests for the same Provider.
+    provider_refresh = getattr(request.app, "provider_refresh_coordinator", None)
+    if provider_refresh is not None:
+        await provider_refresh.before_request(group_name)
 
     _mark_stream_active(request, is_stream=is_stream)
     t0 = time.monotonic()
@@ -1478,6 +1486,9 @@ def create_app(
     app.body_log_state = body_log_state  # type: ignore
 
     setup_admin(app, config, config_path)
+    app.provider_refresh_coordinator = ProviderRefreshCoordinator(  # type: ignore
+        app, config, config_path
+    )
     app.search_provider_coordinator = SearchProviderChainCoordinator(  # type: ignore
         persistence=app.persistence,  # type: ignore
         tavily_usage_state=tavily_usage_state,
@@ -1497,6 +1508,9 @@ async def run_gateway(
     tool_cache_cleanup_task = asyncio.create_task(
         _periodic_tool_call_mapping_cleanup(app)
     )
+    provider_refresh = getattr(app, "provider_refresh_coordinator", None)
+    if provider_refresh is not None:
+        await provider_refresh.start()
     try:
         await app._serve(host, port, socket=socket)
     finally:
@@ -1506,6 +1520,8 @@ async def run_gateway(
                 await task
             except asyncio.CancelledError:
                 pass
+        if provider_refresh is not None:
+            await provider_refresh.close()
         admin_runtime_state = getattr(app, "admin_runtime_state", None)
         if admin_runtime_state is not None:
             await admin_runtime_state.aclose()
