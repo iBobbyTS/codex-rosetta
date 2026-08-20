@@ -64,7 +64,7 @@
   const message = (value: unknown) => value instanceof Error ? value.message : String(value);
   const isIntentionalAbort = (value:unknown,signal?:AbortSignal):boolean => value instanceof DOMException&&value.name==='AbortError'&&signal?.aborted===true;
   const normalizeUrl = (value: string) => value.trim().replace(/\/+$/, '');
-  const defaultAggregationBin = (variant: string): NewApiAggregationBin => variant === 'sub2api' ? '30s' : '1h';
+  const defaultAggregationBin = (variant: string): NewApiAggregationBin => variant === 'sub2api' ? '5m' : '1h';
   const normalizeAggregationBin = (value: unknown, variant: string): NewApiAggregationBin => {
     if (variant === 'sub2api' && (value === '30s' || value === '1m' || value === '5m' || value === '10m')) return value;
     if (variant === 'new_api' && (value === '1m' || value === '5m' || value === '1h')) return value;
