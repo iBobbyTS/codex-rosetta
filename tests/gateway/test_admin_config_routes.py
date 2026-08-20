@@ -3024,7 +3024,22 @@ def test_put_provider_legacy_auto_rate_falls_back_and_strips_nested_rates(tmp_pa
     assert "rate_multiplier" not in saved["api_keys"][0]
 
 
-@pytest.mark.parametrize("value", [True, -1, float("nan"), float("inf")])
+def test_put_provider_accepts_unbounded_integer_provider_rate(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["rate_multiplier"] = 10**400
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert saved["rate_multiplier"] == 10**400
+
+
+@pytest.mark.parametrize("value", [None, True, -1, float("nan"), float("inf")])
 def test_put_provider_rejects_invalid_provider_rate_without_write(tmp_path, value):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"

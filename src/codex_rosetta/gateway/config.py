@@ -1382,6 +1382,15 @@ class GatewayConfig:
                 )
 
     @staticmethod
+    def _is_valid_provider_rate_multiplier(value: Any) -> bool:
+        """Return whether one Provider multiplier is numeric and non-negative."""
+        if isinstance(value, bool):
+            return False
+        if isinstance(value, int):
+            return value >= 0
+        return isinstance(value, float) and math.isfinite(value) and value >= 0
+
+    @staticmethod
     def _validate_provider_credentials(name: str, cfg: dict[str, Any]) -> None:
         """Validate canonical credentials for enabled and disabled rows."""
         sub2api_account_id = cfg.get("sub2api_account_id")
@@ -1399,11 +1408,8 @@ class GatewayConfig:
         if (
             cfg.get("openai_variant") not in {"sub2api", "new_api"}
             and "rate_multiplier" in cfg
-            and (
-                isinstance(provider_rate_multiplier, bool)
-                or not isinstance(provider_rate_multiplier, (int, float))
-                or not math.isfinite(provider_rate_multiplier)
-                or provider_rate_multiplier < 0
+            and not GatewayConfig._is_valid_provider_rate_multiplier(
+                provider_rate_multiplier
             )
         ):
             raise ValueError(

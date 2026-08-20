@@ -1433,6 +1433,15 @@ def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
         )
 
 
+def _is_valid_provider_rate_multiplier(value: Any) -> bool:
+    """Return whether one Provider multiplier is numeric and non-negative."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return value >= 0
+    return isinstance(value, float) and math.isfinite(value) and value >= 0
+
+
 def _normalize_ordinary_provider_rate_multiplier(
     body: dict[str, Any],
     merged_keys: list[dict[str, Any]],
@@ -1445,8 +1454,7 @@ def _normalize_ordinary_provider_rate_multiplier(
 
     auto_rotate = body.get("auto_rotate_credentials")
     if auto_rotate is True:
-        value = body.get("rate_multiplier")
-        if value is None:
+        if "rate_multiplier" not in body:
             current_id = body.get("current_api_key")
             current = next(
                 (entry for entry in merged_keys if entry["id"] == current_id), None
@@ -1454,12 +1462,9 @@ def _normalize_ordinary_provider_rate_multiplier(
             value = (current or (merged_keys[0] if merged_keys else {})).get(
                 "rate_multiplier", 1
             )
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or value < 0
-        ):
+        else:
+            value = body["rate_multiplier"]
+        if not _is_valid_provider_rate_multiplier(value):
             raise ValueError("'rate_multiplier' must be a finite number >= 0")
         body["rate_multiplier"] = value
         for entry in merged_keys:

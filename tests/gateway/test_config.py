@@ -119,7 +119,7 @@ def test_provider_auto_rotate_credentials_is_required_boolean(value) -> None:
         GatewayConfig(raw)
 
 
-@pytest.mark.parametrize("value", [0, 1, 10_000])
+@pytest.mark.parametrize("value", [0, 1, 10_000, 10**400])
 def test_provider_rate_multiplier_accepts_finite_nonnegative_numbers(value) -> None:
     raw = _minimal_raw()
     raw["providers"]["test"]["rate_multiplier"] = value
@@ -129,7 +129,7 @@ def test_provider_rate_multiplier_accepts_finite_nonnegative_numbers(value) -> N
     assert config._all_raw_providers["test"]["rate_multiplier"] == value
 
 
-@pytest.mark.parametrize("value", [True, -1, float("nan"), float("inf")])
+@pytest.mark.parametrize("value", [None, True, -1, float("nan"), float("inf")])
 def test_provider_rate_multiplier_rejects_invalid_values(value) -> None:
     raw = _minimal_raw()
     raw["providers"]["test"]["rate_multiplier"] = value
