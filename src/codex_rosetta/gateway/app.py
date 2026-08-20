@@ -9,7 +9,10 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from .config import _ModelGroupProviderCandidate
 
 from codex_rosetta._vendor.httpserver import (
     App,
@@ -775,7 +778,9 @@ async def _proxy_handler(  # noqa: C901
                 if not failover_leader and hasattr(
                     config, "preferred_model_group_candidate"
                 ):
-                    preferred = config.preferred_model_group_candidate(group_name)
+                    preferred = config.preferred_model_group_candidate(
+                        cast(str, group_name)
+                    )
                     if preferred is not None and preferred != ring.current:
                         failover_leader, _waited = await ring.claim_observation(
                             observation
@@ -952,7 +957,7 @@ async def _proxy_handler(  # noqa: C901
                 next_provider = (
                     config.preferred_model_group_candidate(
                         group_name,
-                        failed=(failed_provider,),
+                        failed=(cast("_ModelGroupProviderCandidate", failed_provider),),
                         after_503=True,
                     )
                     if hasattr(config, "preferred_model_group_candidate")

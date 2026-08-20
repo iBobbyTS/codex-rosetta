@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 
@@ -42,7 +43,7 @@ def test_bucket_alignment_is_utc_unix_based() -> None:
 @pytest.mark.asyncio
 async def test_concurrent_provider_refreshes_share_one_task() -> None:
     provider = {"openai_variant": "new_api"}
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider}, model_group_candidates={}
     )
     coordinator = ProviderRefreshCoordinator(SimpleNamespace(), config, None)
@@ -58,7 +59,7 @@ async def test_concurrent_provider_refreshes_share_one_task() -> None:
         await release.wait()
         return True
 
-    coordinator._refresh = refresh  # type: ignore[method-assign]
+    coordinator._refresh = refresh  # ty: ignore[invalid-assignment]
     first = asyncio.create_task(coordinator.refresh_provider("new"))
     await started.wait()
     second = asyncio.create_task(coordinator.refresh_provider("new"))
@@ -71,7 +72,7 @@ async def test_concurrent_provider_refreshes_share_one_task() -> None:
 @pytest.mark.asyncio
 async def test_cancelling_one_waiter_does_not_cancel_shared_refresh() -> None:
     provider = {"openai_variant": "new_api"}
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider}, model_group_candidates={}
     )
     coordinator = ProviderRefreshCoordinator(SimpleNamespace(), config, None)
@@ -84,7 +85,7 @@ async def test_cancelling_one_waiter_does_not_cancel_shared_refresh() -> None:
         await release.wait()
         return True
 
-    coordinator._refresh = refresh  # type: ignore[method-assign]
+    coordinator._refresh = refresh  # ty: ignore[invalid-assignment]
     cancelled_waiter = asyncio.create_task(coordinator.refresh_provider("new"))
     await started.wait()
     surviving_waiter = asyncio.create_task(coordinator.refresh_provider("new"))
@@ -114,7 +115,7 @@ async def test_new_api_refresh_accepts_late_target_bucket_and_retains_stale_on_m
             }
         ],
     }
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider}, model_group_candidates={}
     )
 
@@ -142,13 +143,15 @@ async def test_new_api_refresh_accepts_late_target_bucket_and_retains_stale_on_m
         sleep=lambda _delay: asyncio.sleep(0),
     )
     assert await coordinator._refresh_new_api("new", provider)
-    assert coordinator.snapshot_for("new", "u1")["value"] == 88
-    assert coordinator.snapshot_for("new", "u1")["timestamp"] == 3660
+    assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 88
+    assert (
+        cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["timestamp"] == 3660
+    )
 
     provider["new_api_aggregation_bin"] = "5m"
     coordinator._snapshots["new"]["credentials"]["u1"]["value"] = 77
     assert not await coordinator._refresh_new_api("new", provider)
-    assert coordinator.snapshot_for("new", "u1")["value"] == 77
+    assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 77
 
 
 @pytest.mark.asyncio
@@ -178,7 +181,7 @@ async def test_new_api_retry_count_is_after_initial_attempt(
             calls += 1
             return SimpleNamespace(status_code=200, body={"data": {"groups": []}})
 
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider}, model_group_candidates={}
     )
     coordinator = ProviderRefreshCoordinator(
@@ -226,7 +229,7 @@ async def test_new_api_can_succeed_on_final_retry(bin_name: str, retries: int) -
                 body={"data": {"groups": [{"group": "cheap", "series": series}]}},
             )
 
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider}, model_group_candidates={}
     )
     coordinator = ProviderRefreshCoordinator(
@@ -249,7 +252,7 @@ async def test_scheduler_cancels_previous_round_at_next_monotonic_deadline() -> 
         "new_api_aggregation_bin": "30s",
     }
     candidate = SimpleNamespace(provider_name="sub")
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"sub": provider},
         model_group_candidates={"group": (candidate,)},
     )
@@ -287,7 +290,7 @@ async def test_scheduler_cancels_previous_round_at_next_monotonic_deadline() -> 
         sleep=sleep,
     )
     coordinator._activity["group"] = 0.0
-    coordinator._refresh = refresh  # type: ignore[method-assign]
+    coordinator._refresh = refresh  # ty: ignore[invalid-assignment]
     loop = asyncio.create_task(coordinator._provider_loop("sub"))
     await first_started.wait()
     await first_cancelled.wait()
@@ -306,7 +309,7 @@ async def test_request_catches_up_a_refresh_skipped_for_inactivity() -> None:
         "new_api_aggregation_bin": "5m",
     }
     candidate = SimpleNamespace(provider_name="sub")
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"sub": provider},
         model_group_candidates={"group": (candidate,)},
     )
@@ -329,7 +332,7 @@ async def test_request_catches_up_a_refresh_skipped_for_inactivity() -> None:
         refreshed += 1
         return True
 
-    coordinator._refresh = refresh  # type: ignore[method-assign]
+    coordinator._refresh = refresh  # ty: ignore[invalid-assignment]
     loop = asyncio.create_task(coordinator._provider_loop("sub"))
     while "sub" not in coordinator._overdue:
         await asyncio.sleep(0)
@@ -346,7 +349,7 @@ async def test_sync_config_reconciles_scheduler_and_snapshots() -> None:
         "new_api_aggregation_bin": "1m",
         "availability_snapshot": {"updated_at": 1, "credentials": {}},
     }
-    old_config = SimpleNamespace(
+    old_config: Any = SimpleNamespace(
         _all_raw_providers={"old": old_provider}, model_group_candidates={}
     )
     coordinator = ProviderRefreshCoordinator(SimpleNamespace(), old_config, None)
@@ -355,11 +358,11 @@ async def test_sync_config_reconciles_scheduler_and_snapshots() -> None:
     async def provider_loop(_name: str) -> None:
         await blocker.wait()
 
-    coordinator._provider_loop = provider_loop  # type: ignore[method-assign]
+    coordinator._provider_loop = provider_loop  # ty: ignore[invalid-assignment]
     await coordinator.start()
     old_task = coordinator._tasks["old"]
     new_snapshot = {"updated_at": 2, "credentials": {"u1": {"value": 9}}}
-    new_config = SimpleNamespace(
+    new_config: Any = SimpleNamespace(
         _all_raw_providers={
             "old": {
                 "openai_variant": "new_api",
@@ -378,7 +381,7 @@ async def test_sync_config_reconciles_scheduler_and_snapshots() -> None:
     assert set(coordinator._tasks) == {"old", "added"}
     assert coordinator.snapshots == {"old": new_snapshot}
 
-    removed_config = SimpleNamespace(
+    removed_config: Any = SimpleNamespace(
         _all_raw_providers={"added": new_config._all_raw_providers["added"]},
         model_group_candidates={},
     )
@@ -404,7 +407,7 @@ async def test_persistence_failure_is_nonblocking_and_retains_old_snapshot(
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"providers": {"new": provider}}))
     candidate = SimpleNamespace(provider_name="new")
-    config = SimpleNamespace(
+    config: Any = SimpleNamespace(
         _all_raw_providers={"new": provider},
         model_group_candidates={"group": (candidate,)},
     )
@@ -422,9 +425,9 @@ async def test_persistence_failure_is_nonblocking_and_retains_old_snapshot(
         await coordinator._persist("new", {"u1": {"value": 99, "timestamp": 60}})
         return True
 
-    coordinator._refresh = refresh  # type: ignore[method-assign]
+    coordinator._refresh = refresh  # ty: ignore[invalid-assignment]
     await coordinator.before_request("group")
-    assert coordinator.snapshot_for("new", "u1")["value"] == 40
+    assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 40
 
 
 @pytest.mark.asyncio

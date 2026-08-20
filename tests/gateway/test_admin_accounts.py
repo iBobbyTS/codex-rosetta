@@ -8,7 +8,7 @@ import json
 import socket
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -887,7 +887,10 @@ def test_sub2api_provider_refreshes_expired_token_and_sets_headers(
     assert calls[1][1]["Authorization"] == "Bearer new-access"
     assert calls[1][1]["User-Agent"] == "client/test"
     assert (
-        store.get_private(account_id)["credentials"]["refresh_token"] == "new-refresh"
+        cast(dict[str, Any], store.get_private(account_id))["credentials"][
+            "refresh_token"
+        ]
+        == "new-refresh"
     )
 
 
@@ -1108,7 +1111,7 @@ def test_sub2api_refresh_failure_does_not_mutate_credentials(
                 persist_current_url=_noop_record,
             ).request("/api/v1/auth/me")
         )
-    credentials = store.get_private(account_id)["credentials"]
+    credentials = cast(dict[str, Any], store.get_private(account_id))["credentials"]
     assert credentials["access_token"] == "old-access"
     assert credentials["refresh_token"] == "old-refresh"
 

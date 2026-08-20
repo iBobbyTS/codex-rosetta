@@ -1854,6 +1854,7 @@ def _resolve_draft_provider_api_keys(  # noqa: C901 — canonical credential mer
             raise ValueError(
                 f"'api_keys[{index}]' must contain string 'uuid', 'id', and 'key'"
             )
+        entry = cast(Mapping[str, Any], entry)
         credential_uuid = _validate_provider_credential_uuid(
             credential_uuid_value,
             field=f"'api_keys[{index}].uuid'",

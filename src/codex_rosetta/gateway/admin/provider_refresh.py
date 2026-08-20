@@ -11,7 +11,7 @@ import asyncio
 import math
 import time
 from collections.abc import Callable, Mapping
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlencode
 
 from .account_store import get_account_store
@@ -303,6 +303,7 @@ class ProviderRefreshCoordinator:
         provider = self.config._all_raw_providers.get(name)
         if _variant(provider or {}) is None:
             return False
+        provider = cast(Mapping[str, Any], provider)
         lock = self._locks.setdefault(name, asyncio.Lock())
         async with lock:
             task = self._inflight.get(name)

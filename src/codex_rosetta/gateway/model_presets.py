@@ -6,7 +6,7 @@ import copy
 import json
 from functools import lru_cache
 from importlib import resources
-from typing import Any
+from typing import Any, cast
 
 PRESET_RESOURCE = "codex_model_presets.json"
 MODEL_CATALOG_RESOURCE = "codex_models.json"
@@ -73,6 +73,7 @@ def normalize_context_window_presets(value: Any, *, field: str) -> list[dict[str
         item_field = f"{field}[{index}]"
         if not isinstance(item, dict) or set(item) != required:
             raise ValueError(f"{item_field} must contain exactly {sorted(required)}")
+        item = cast(dict[str, Any], item)
         label = item["label"]
         context_window = item["context_window"]
         percent = item["effective_context_window_percent"]

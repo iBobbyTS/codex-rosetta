@@ -1460,6 +1460,7 @@ class GatewayConfig:
             raise ValueError(f"config: provider '{name}' api_keys IDs must be unique")
         threshold_maximum = 100.0 if cfg.get("openai_variant") == "new_api" else None
         for index, item in enumerate(raw_api_keys):
+            item = cast(dict[str, Any], item)
             for field in (
                 "availability_threshold_primary",
                 "availability_threshold_secondary",
