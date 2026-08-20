@@ -326,6 +326,9 @@ def _activate_gateway_config(
         app.admin_cors_origins = activation.admin_cors_origins
         app.max_body_size = activation.max_body_size
         app.gateway_config = new_config
+        provider_refresh = getattr(app, "provider_refresh_coordinator", None)
+        if provider_refresh is not None:
+            provider_refresh.sync_config(new_config)
         web_run_health_state = getattr(app, "web_run_health_state", None)
         if web_run_health_state is not None:
             web_run_health_state.invalidate()
@@ -364,6 +367,9 @@ def _rollback_gateway_activation(
     app.admin_cors_origins = rollback.admin_cors_origins
     app.max_body_size = rollback.max_body_size
     app.gateway_config = rollback.gateway_config
+    provider_refresh = getattr(app, "provider_refresh_coordinator", None)
+    if provider_refresh is not None:
+        provider_refresh.sync_config(rollback.gateway_config)
     web_run_health_state = getattr(app, "web_run_health_state", None)
     if web_run_health_state is not None:
         web_run_health_state.invalidate()

@@ -1078,18 +1078,40 @@ async def handle_openai_chat(request: Any) -> Response | StreamingResponse:
     return await _proxy_handler(request, source_provider="openai_chat")
 
 
+async def _before_auxiliary_provider_resolution(
+    request: Any, config: GatewayConfig
+) -> None:
+    """Apply the provider refresh barrier before auxiliary route resolution."""
+    try:
+        body = request.json()
+        model = (
+            extract_model("openai_responses", body) if isinstance(body, dict) else None
+        )
+    except TypeError, ValueError:
+        model = None
+    group_name = (
+        getattr(config, "model_group_names_by_model", {}).get(model) if model else None
+    )
+    provider_refresh = getattr(request.app, "provider_refresh_coordinator", None)
+    if provider_refresh is not None:
+        await provider_refresh.before_request(group_name)
+
+
 async def handle_codex_search(request: Any) -> Response:
     config: GatewayConfig = request.app.gateway_config
+    await _before_auxiliary_provider_resolution(request, config)
     return await _handle_codex_auxiliary(request, config, "alpha/search")
 
 
 async def handle_image_generation(request: Any) -> Response:
     config: GatewayConfig = request.app.gateway_config
+    await _before_auxiliary_provider_resolution(request, config)
     return await _handle_codex_auxiliary(request, config, "images/generations")
 
 
 async def handle_image_edit(request: Any) -> Response:
     config: GatewayConfig = request.app.gateway_config
+    await _before_auxiliary_provider_resolution(request, config)
     return await _handle_codex_auxiliary(request, config, "images/edits")
 
 
