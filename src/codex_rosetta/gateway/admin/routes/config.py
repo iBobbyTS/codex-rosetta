@@ -76,6 +76,14 @@ from ._shared import (
     _reload_gateway_config,
 )
 from ..request_encoding_detection import detect_responses_request_encoding
+from ..account_store import get_account_store
+from ..sub2api_client import Sub2APIProviderClient
+from .accounts import (
+    _SUB2API_KEYS_ENDPOINT,
+    _project_new_api_pricing,
+    _project_sub2api_key_items,
+    _request_new_api_nonmodel,
+)
 
 import logging
 
@@ -975,6 +983,40 @@ async def get_config(request: Any) -> Response:
                         else {}
                     ),
                     **(
+                        {
+                            "rate_multiplier_adjustment": entry[
+                                "rate_multiplier_adjustment"
+                            ]
+                        }
+                        if isinstance(
+                            entry.get("rate_multiplier_adjustment"), (int, float)
+                        )
+                        and not isinstance(
+                            entry.get("rate_multiplier_adjustment"), bool
+                        )
+                        else {}
+                    ),
+                    **(
+                        {
+                            "automatic_rate_multiplier": entry[
+                                "automatic_rate_multiplier"
+                            ]
+                        }
+                        if "automatic_rate_multiplier" in entry
+                        and (
+                            entry.get("automatic_rate_multiplier") is None
+                            or (
+                                isinstance(
+                                    entry.get("automatic_rate_multiplier"), (int, float)
+                                )
+                                and not isinstance(
+                                    entry.get("automatic_rate_multiplier"), bool
+                                )
+                            )
+                        )
+                        else {}
+                    ),
+                    **(
                         {"new_api_group": entry["new_api_group"]}
                         if isinstance(entry.get("new_api_group"), str)
                         and entry["new_api_group"]
@@ -1391,6 +1433,82 @@ def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
         )
 
 
+async def _populate_automatic_rate_multipliers(  # noqa: C901
+    request: Any,
+    body: Mapping[str, Any],
+    merged_keys: list[dict[str, Any]],
+    base_urls: Any,
+    current_base_url: Any,
+) -> None:
+    """Query and overwrite automatic multipliers for one special Provider save."""
+    variant = body.get("openai_variant")
+    if variant not in {"sub2api", "new_api"}:
+        for entry in merged_keys:
+            entry.pop("rate_multiplier_adjustment", None)
+            entry.pop("automatic_rate_multiplier", None)
+        return
+    if variant == "new_api":
+        transport = getattr(request.app, "transport", None)
+        if transport is None or not isinstance(current_base_url, str):
+            for entry in merged_keys:
+                entry["automatic_rate_multiplier"] = None
+            return
+        for entry in merged_keys:
+            value: int | float | None = None
+            group = entry.get("new_api_group")
+            if isinstance(group, str) and group:
+                try:
+                    response = await _request_new_api_nonmodel(
+                        transport,
+                        current_base_url,
+                        "/api/pricing",
+                        entry["key"],
+                    )
+                    if 200 <= response.status_code < 300:
+                        value = _project_new_api_pricing(response.body).get(group)
+                except Exception:
+                    value = None
+            entry["automatic_rate_multiplier"] = value
+        return
+    account_id = body.get("sub2api_account_id")
+    if (
+        not isinstance(account_id, str)
+        or not account_id
+        or not isinstance(base_urls, list)
+        or not isinstance(current_base_url, str)
+    ):
+        for entry in merged_keys:
+            entry["automatic_rate_multiplier"] = None
+        return
+    by_name: dict[str, int | float | None] = {}
+    try:
+
+        async def ignore_draft_url_selection(_provider_id: str, _url: str) -> None:
+            return None
+
+        client = Sub2APIProviderClient(
+            get_account_store(request.app),
+            account_id,
+            base_urls,
+            current_base_url=current_base_url,
+            provider_id=request.path_params["name"],
+            persist_current_url=ignore_draft_url_selection,
+        )
+        response = await client.request(
+            _SUB2API_KEYS_ENDPOINT,
+            user_agent=request.headers.get("user-agent"),
+        )
+        if response.status_code == 200:
+            by_name = {
+                item["name"]: item["rate_multiplier"]
+                for item in _project_sub2api_key_items(response.json())
+            }
+    except Exception:
+        by_name = {}
+    for entry in merged_keys:
+        entry["automatic_rate_multiplier"] = by_name.get(entry["id"])
+
+
 async def put_provider(request: Any, **kwargs: Any) -> Response:
     """Add or update a provider entry."""
     config_path = _get_config_path(request)
@@ -1474,6 +1592,9 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
             status_code=400,
         )
     body["provider"] = provider.strip()
+    await _populate_automatic_rate_multipliers(
+        request, body, merged_keys, base_urls, current_base_url
+    )
     persisted_current_api_key = (
         cast(str, current_api_key) if auto_rotate_credentials else None
     )
@@ -1566,7 +1687,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
     )
 
 
-def _resolve_draft_provider_api_keys(
+def _resolve_draft_provider_api_keys(  # noqa: C901 — canonical credential merge boundary
     api_keys: Any,
     existing_provider: Mapping[str, Any],
     resolved_provider: Mapping[str, Any] | None = None,
@@ -1649,6 +1770,7 @@ def _resolve_draft_provider_api_keys(
                     f"'api_keys[{index}].rate_multiplier' must be a finite number >= 0"
                 )
             merged_entry["rate_multiplier"] = rate_multiplier
+        _merge_credential_multiplier_fields(entry, merged_entry, index)
         new_api_group = entry.get("new_api_group")
         if new_api_group is not None:
             if not isinstance(new_api_group, str):
@@ -1669,6 +1791,30 @@ def _resolve_draft_provider_api_keys(
     if len({entry["uuid"] for entry in merged_keys}) != len(merged_keys):
         raise ValueError("'api_keys[].uuid' values must be unique")
     return merged_keys
+
+
+def _merge_credential_multiplier_fields(
+    entry: Mapping[str, Any], merged_entry: dict[str, Any], index: int
+) -> None:
+    """Validate and preserve special-provider multiplier metadata."""
+    for field in ("rate_multiplier_adjustment", "automatic_rate_multiplier"):
+        if field not in entry:
+            continue
+        value = entry[field]
+        if value is None:
+            if field == "automatic_rate_multiplier":
+                merged_entry[field] = None
+            continue
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"'api_keys[{index}].{field}' must be a finite number >= 0 or null"
+            )
+        merged_entry[field] = value
 
 
 async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Response:

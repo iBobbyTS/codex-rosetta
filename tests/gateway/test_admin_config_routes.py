@@ -2937,6 +2937,85 @@ def test_put_provider_round_trips_manual_credential_rate_multiplier(tmp_path):
     assert masked["providers"]["openai"]["api_keys"][0]["rate_multiplier"] == 0.25
 
 
+def test_put_provider_round_trips_special_rate_adjustment_and_automatic_value(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["openai_variant"] = "new_api"
+    body["api_keys"][0].update(
+        rate_multiplier_adjustment=0,
+        automatic_rate_multiplier=0.08,
+        new_api_group="team",
+    )
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    credential = saved["providers"]["openai"]["api_keys"][0]
+    assert credential["rate_multiplier_adjustment"] == 0
+    assert credential["automatic_rate_multiplier"] is None
+    masked = json.loads(
+        _run(get_config(SimpleNamespace(app=request.app, json=lambda: {}))).body
+    )
+    assert (
+        masked["providers"]["openai"]["api_keys"][0]["automatic_rate_multiplier"]
+        is None
+    )
+
+
+def test_sub2api_save_projects_automatic_multiplier(monkeypatch):
+    captured: dict[str, Any] = {}
+
+    class FakeClient:
+        def __init__(self, *_args, **kwargs):
+            captured.update(kwargs)
+
+        async def request(self, _endpoint, **_kwargs):
+            payload = {
+                "code": 0,
+                "data": {
+                    "items": [
+                        {
+                            "id": 1,
+                            "name": "primary",
+                            "key": "sk-test",
+                            "group_id": 3,
+                            "group_routes": [
+                                {
+                                    "enabled": True,
+                                    "group": {"id": 3, "rate_multiplier": 0.08},
+                                }
+                            ],
+                        }
+                    ]
+                },
+            }
+            return SimpleNamespace(status_code=200, json=lambda: payload)
+
+    monkeypatch.setattr(config_routes, "Sub2APIProviderClient", FakeClient)
+    monkeypatch.setattr(config_routes, "get_account_store", lambda _app: object())
+    request = SimpleNamespace(
+        app=SimpleNamespace(), path_params={"name": "openai"}, headers={}
+    )
+    credentials = [{"id": "primary", "key": "sk-test"}]
+
+    _run(
+        config_routes._populate_automatic_rate_multipliers(
+            request,
+            {"openai_variant": "sub2api", "sub2api_account_id": "account-1"},
+            credentials,
+            ["https://sub2api.example.com"],
+            "https://sub2api.example.com",
+        )
+    )
+
+    assert callable(captured["persist_current_url"])
+    assert credentials[0]["automatic_rate_multiplier"] == 0.08
+
+
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"

@@ -380,6 +380,51 @@ def test_local_mode_defaults_to_enabled_and_unconfirmed() -> None:
     assert config.local_mode_confirmed is False
 
 
+def test_special_provider_candidate_uses_automatic_times_adjustment() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        provider="openai",
+        openai_variant="sub2api",
+        api_keys=[
+            {
+                "uuid": _PRIMARY_CREDENTIAL_UUID,
+                "id": "primary",
+                "key": "sk-test",
+                "automatic_rate_multiplier": 0.8,
+                "rate_multiplier_adjustment": 1,
+            }
+        ],
+    )
+    raw["providers"]["cheap"] = {
+        "provider": "openai",
+        "openai_variant": "new_api",
+        "api_keys": [
+            {
+                "uuid": "00000000-0000-4000-8000-000000000002",
+                "id": "primary",
+                "key": "sk-cheap",
+                "automatic_rate_multiplier": 0.2,
+                "rate_multiplier_adjustment": 1,
+            }
+        ],
+        "current_api_key": "primary",
+        "auto_rotate_credentials": True,
+        "base_urls": ["https://cheap.example.com"],
+        "current_base_url": "https://cheap.example.com",
+        "api_type": "chat",
+    }
+    raw["model_groups"]["test-llm"]["provider"] = ["test", "cheap"]
+
+    config = GatewayConfig(raw)
+    assert config.providers["test"].credential_multiplier() == pytest.approx(0.8)
+    assert config.providers["cheap"].credential_multiplier() == pytest.approx(0.2)
+    route, provider = config.resolve("openai_responses", "gpt-test")
+
+    assert route.provider_name == "cheap"
+    assert provider.configured_id == "cheap"
+    assert provider.credential_multiplier() == 0.2
+
+
 def test_codex_task_model_settings_are_normalized() -> None:
     raw = _minimal_raw()
     raw["codex"] = {

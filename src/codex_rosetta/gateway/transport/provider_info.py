@@ -14,7 +14,7 @@ Higher-level factory logic (shim resolution, config parsing) stays in
 from __future__ import annotations
 
 import copy
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 
 from .._ordered_failover import OrderedFailoverCoordinator
@@ -69,6 +69,7 @@ class ProviderInfo:
         api_key: str | None = None,
         api_keys: Sequence[tuple[str, str]] | None = None,
         credential_uuids: Sequence[tuple[str, str]] | None = None,
+        credential_multipliers: Mapping[str, float] | None = None,
         current_api_key: str | None = None,
         auto_rotate_credentials: bool = True,
         base_url: str | None = None,
@@ -129,6 +130,11 @@ class ProviderInfo:
         if selected_credential not in credential_ids:
             raise ValueError("current_api_key must be a member of api_keys")
         self._credentials = dict(normalized_credentials)
+        self._credential_multipliers = {
+            credential_id: float(value)
+            for credential_id, value in (credential_multipliers or {}).items()
+            if credential_id in self._credentials
+        }
         if not isinstance(auto_rotate_credentials, bool):
             raise ValueError("auto_rotate_credentials must be a boolean")
         self.auto_rotate_credentials = auto_rotate_credentials
@@ -345,6 +351,16 @@ class ProviderInfo:
             return self._credential_ids_by_uuid[credential_uuid]
         except KeyError:
             raise ValueError("credential UUID must belong to this Provider") from None
+
+    def credential_multiplier(self, credential_id: str | None = None) -> float:
+        """Return the persisted effective multiplier for one credential."""
+        selected = credential_id or self.current_credential_id
+        value = self._credential_multipliers.get(selected)
+        return value if value is not None else 1.0
+
+    def credential_multiplier_for_uuid(self, credential_uuid: str) -> float:
+        """Return the effective multiplier for a fixed model-group credential."""
+        return self.credential_multiplier(self.credential_id_for_uuid(credential_uuid))
 
     def credential_uuid_is_available(self, credential_uuid: str) -> bool:
         """Return whether one configured credential UUID is globally available."""

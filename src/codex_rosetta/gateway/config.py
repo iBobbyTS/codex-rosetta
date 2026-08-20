@@ -1846,6 +1846,38 @@ class GatewayConfig:
             if self._model_group_candidate_available(candidate)
         )
 
+    def model_group_candidate_multiplier(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> float:
+        """Return one candidate's persisted effective credential multiplier."""
+        provider = self.providers.get(candidate.provider_name)
+        if provider is None:
+            return 1.0
+        if candidate.credential_uuid is not None:
+            return provider.credential_multiplier_for_uuid(candidate.credential_uuid)
+        return provider.credential_multiplier()
+
+    def cheapest_model_group_candidate(
+        self, group_name: str
+    ) -> _ModelGroupProviderCandidate | None:
+        """Select the available candidate with the lowest effective multiplier."""
+        available = self.available_model_group_candidates(group_name)
+        if all(
+            self.model_group_candidate_multiplier(candidate) == 1.0
+            for candidate in available
+        ):
+            ring = self.model_group_rings.get(group_name)
+            if ring is not None and ring.current in available:
+                return ring.current
+        return min(
+            available,
+            key=lambda candidate: (
+                self.model_group_candidate_multiplier(candidate),
+                self.model_group_candidates[group_name].index(candidate),
+            ),
+            default=None,
+        )
+
     def _model_profile_for_candidate(
         self,
         model: str,
@@ -1909,7 +1941,7 @@ class GatewayConfig:
                     f"Model group '{group_name}' configuration unavailable: "
                     "all enabled providers are cooling"
                 )
-            selected_candidate = ring.current
+            selected_candidate = self.cheapest_model_group_candidate(group_name)
             # A disabled/cooling candidate must never become a fresh route.
             if selected_candidate not in available:
                 selected_candidate = next(

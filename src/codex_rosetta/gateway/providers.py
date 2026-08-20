@@ -119,6 +119,41 @@ def _provider_auto_rotate_credentials(cfg: dict[str, Any]) -> bool:
     return value
 
 
+def _credential_multipliers(
+    raw_credentials: list[Any], variant: Any
+) -> dict[str, float]:
+    """Project persisted credential pricing into runtime effective multipliers."""
+    result: dict[str, float] = {}
+    for item in raw_credentials:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        if variant in {"sub2api", "new_api"}:
+            automatic = item.get("automatic_rate_multiplier")
+            adjustment = item.get("rate_multiplier_adjustment", 1)
+            automatic_value = (
+                automatic
+                if isinstance(automatic, (int, float))
+                and not isinstance(automatic, bool)
+                else 1
+            )
+            adjustment_value = (
+                adjustment
+                if isinstance(adjustment, (int, float))
+                and not isinstance(adjustment, bool)
+                else 1
+            )
+            result[item["id"]] = max(0.0, float(automatic_value)) * max(
+                0.0, float(adjustment_value)
+            )
+        else:
+            multiplier = item.get("rate_multiplier", 1)
+            if isinstance(multiplier, (int, float)) and not isinstance(
+                multiplier, bool
+            ):
+                result[item["id"]] = max(0.0, float(multiplier))
+    return result
+
+
 def build_provider_info(
     provider_type: str,
     cfg: dict[str, Any],
@@ -220,6 +255,9 @@ def build_provider_info(
         and isinstance(item.get("id"), str)
         and isinstance(item.get("key"), str)
     )
+    credential_multipliers = _credential_multipliers(
+        raw_credentials, cfg.get("openai_variant")
+    )
     credential_uuids = tuple(
         (item["uuid"], item["id"])
         for item in raw_credentials
@@ -233,6 +271,7 @@ def build_provider_info(
         configured_id=configured_id,
         api_keys=credential_entries,
         credential_uuids=credential_uuids,
+        credential_multipliers=credential_multipliers,
         current_api_key=cfg.get("current_api_key"),
         auto_rotate_credentials=auto_rotate_credentials,
         **(
