@@ -169,7 +169,8 @@ def _legacy_override_base(
     if "context_window_presets" in override:
         expanded = copy.deepcopy(override)
         context_presets = normalize_context_window_presets(
-            expanded["context_window_presets"], field="model_info.context_window_presets"
+            expanded["context_window_presets"],
+            field="model_info.context_window_presets",
         )
         selected = context_presets[0]
         expanded["context_window_presets"] = context_presets

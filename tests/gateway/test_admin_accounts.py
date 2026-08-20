@@ -604,12 +604,18 @@ def test_new_api_success_rate_route_projects_latest_matching_group(
     assert descriptor.base_url == "https://new.example"
 
 
-def test_new_api_success_rate_route_returns_null_for_missing_group(tmp_path: Path) -> None:
+def test_new_api_success_rate_route_returns_null_for_missing_group(
+    tmp_path: Path,
+) -> None:
     app, _path = _provider_app(tmp_path)
     app.transport = _FakePricingTransport(
         _FakeSub2APIResponse(
             200,
-            {"data": {"groups": [{"group": "other", "success_rate": 88, "series": []}]}},
+            {
+                "data": {
+                    "groups": [{"group": "other", "success_rate": 88, "series": []}]
+                }
+            },
         )
     )
 

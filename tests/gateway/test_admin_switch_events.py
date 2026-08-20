@@ -64,7 +64,10 @@ def _config() -> GatewayConfig:
                     "models": {"gpt-5.6-terra": {}},
                 }
             },
-            "server": {"admin_password": "test", "api_keys": [{"id": "client", "key": "client-key"}]},
+            "server": {
+                "admin_password": "test",
+                "api_keys": [{"id": "client", "key": "client-key"}],
+            },
         }
     )
 
@@ -101,7 +104,10 @@ def test_automatic_switch_store_exposes_only_events_after_cursor() -> None:
         }
     ]
     request.query_params = {"cursor": ["1"]}
-    assert json.loads(asyncio.run(get_model_group_switch_events(request)).body)["events"] == []
+    assert (
+        json.loads(asyncio.run(get_model_group_switch_events(request)).body)["events"]
+        == []
+    )
 
 
 def test_initial_cursor_does_not_replay_existing_switches() -> None:

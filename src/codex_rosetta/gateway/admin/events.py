@@ -42,7 +42,9 @@ def _candidate_dict(
         provider = config.providers.get(candidate.provider_name)
         if provider is not None:
             try:
-                credential_id = provider.credential_id_for_uuid(candidate.credential_uuid)
+                credential_id = provider.credential_id_for_uuid(
+                    candidate.credential_uuid
+                )
             except ValueError:
                 credential_id = None
     return {
@@ -101,7 +103,7 @@ async def get_model_group_switch_events(request: Any) -> Response:
         return JSONResponse({"cursor": store.cursor, "events": []})
     try:
         cursor = max(0, int(raw_cursor))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return JSONResponse({"error": "cursor must be an integer"}, status_code=400)
     group = _qp(request, "group", "").strip() or None
     return JSONResponse({"cursor": store.cursor, "events": store.after(cursor, group)})

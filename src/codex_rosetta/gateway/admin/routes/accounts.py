@@ -367,8 +367,7 @@ async def get_new_api_success_rate(request: Any, **kwargs: Any) -> Response:
         return JSONResponse(
             {
                 "error": (
-                    "New API success-rate request failed "
-                    f"(HTTP {response.status_code})"
+                    f"New API success-rate request failed (HTTP {response.status_code})"
                 )
             },
             status_code=502,
