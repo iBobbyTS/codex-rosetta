@@ -1725,6 +1725,47 @@ describe('ModelsPage', () => {
     ));
   });
 
+  it('serializes delayed switch-event polls and advances the cursor once', async () => {
+    vi.useFakeTimers();
+    const created = vi.fn();
+    class NotificationMock {
+      static permission: NotificationPermission = 'granted';
+      static requestPermission = vi.fn();
+      constructor(title: string, options?: NotificationOptions) { created(title, options); }
+    }
+    vi.stubGlobal('Notification', NotificationMock);
+    let resolveFirstPoll!: (value: { cursor: number; events: unknown[] }) => void;
+    const firstPoll = new Promise<{ cursor: number; events: unknown[] }>((resolve) => { resolveFirstPoll = resolve; });
+    const eventPaths: string[] = [];
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve({ providers: {}, model_groups: {}, tool_profile_presets: [] });
+      eventPaths.push(path);
+      if (eventPaths.length === 1) return firstPoll;
+      return Promise.resolve({ cursor: 8, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(eventPaths).toEqual(['/admin/api/model-group-switch-events']);
+
+      await vi.advanceTimersByTimeAsync(4000);
+      expect(eventPaths).toHaveLength(1);
+
+      resolveFirstPoll({ cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_uuid: null }, new_candidate: { provider: 'new', credential_uuid: null }, old_rate: 0.4, new_rate: 0.2 }] });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(created).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(eventPaths).toEqual([
+        '/admin/api/model-group-switch-events',
+        '/admin/api/model-group-switch-events?cursor=8',
+      ]);
+      expect(created).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders a full Provider selector until a false-mode Provider needs a key pair', async () => {
     apiMock.get.mockResolvedValue({
       providers: {
