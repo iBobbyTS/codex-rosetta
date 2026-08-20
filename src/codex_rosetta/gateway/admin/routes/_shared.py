@@ -550,17 +550,6 @@ def _sync_persistence_redaction(app: Any, config: GatewayConfig) -> None:
         persistence.update_token_values(_runtime_token_values(app, config))
 
 
-def _ordinary_provider_rate_multiplier_entry(body: dict[str, Any]) -> dict[str, Any]:
-    """Project the active ordinary Provider-level multiplier, if any."""
-    if (
-        body["auto_rotate_credentials"] is True
-        and body.get("openai_variant") not in {"sub2api", "new_api"}
-        and "rate_multiplier" in body
-    ):
-        return {"rate_multiplier": body["rate_multiplier"]}
-    return {}
-
-
 def _build_provider_entry(
     body: dict[str, Any],
     api_keys: list[dict[str, Any]],
@@ -576,11 +565,14 @@ def _build_provider_entry(
         "auto_rotate_credentials": body["auto_rotate_credentials"],
         "base_urls": base_urls,
         "current_base_url": current_base_url,
-        **_ordinary_provider_rate_multiplier_entry(body),
+        **({"current_api_key": current_api_key} if current_api_key is not None else {}),
     }
-    if current_api_key is not None:
-        entry["current_api_key"] = current_api_key
-
+    if (
+        body["auto_rotate_credentials"] is True
+        and body.get("openai_variant") not in {"sub2api", "new_api"}
+        and "rate_multiplier" in body
+    ):
+        entry["rate_multiplier"] = body["rate_multiplier"]
     provider = body.get("provider")
     if provider:
         entry["provider"] = provider

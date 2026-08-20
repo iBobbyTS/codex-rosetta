@@ -39,7 +39,7 @@
   let rowSequence = 0;
   function nextRowId(prefix:string):string{return `${prefix}-${++rowSequence}`;}
   function urlRow(value:string,status?:ProviderRowStatus):UrlRow{return{id:nextRowId('url'),value,status};}
-  function credentialRow(value:Credential,status?:ProviderRowStatus):CredentialRow{return{rowId:nextRowId('credential'),...value,rate_multiplier:value.rate_multiplier??1,status,concurrencyThresholdPrimary:500,concurrencyThresholdSecondary:100,availabilityThresholdPrimary:70,availabilityThresholdSecondary:40};}
+  function credentialRow(value:Credential,status?:ProviderRowStatus):CredentialRow{return{rowId:nextRowId('credential'),...value,status,concurrencyThresholdPrimary:500,concurrencyThresholdSecondary:100,availabilityThresholdPrimary:70,availabilityThresholdSecondary:40};}
   const initialUrlRow = urlRow('');
   const initialCredentialRow = credentialRow({uuid:crypto.randomUUID(),id:'primary',key:''});
   let name = $state(''); let urlRows = $state<UrlRow[]>([initialUrlRow]); let currentUrlRowId = $state(initialUrlRow.id); let proxy = $state(''); let apiType = $state(''); let requestEncoding = $state<RequestEncoding>('passthrough'); let detectionModel = $state(''); let detectingEncoding = $state(false); let detectionError = $state(''); let allowRedirects = $state(false); let autoRotateCredentials = $state(true); let initialAutoRotateCredentials = true; let providerRateMultiplier = $state(1); let softInterrupt = $state(false); let forceRosettaCompaction = $state(false);
@@ -142,7 +142,7 @@
   function updateCredentialRateMultiplier(rowId:string,value:number):void{credentialRows=credentialRows.map((item)=>item.rowId===rowId?{...item,rate_multiplier:Number.isFinite(value)?Math.max(0,value):1}:item);}
   function updateProviderRateMultiplier(value:number):void{providerRateMultiplier=Number.isFinite(value)?Math.max(0,value):1;}
   function validRate(value:unknown):value is number{return typeof value==='number'&&Number.isFinite(value)&&value>=0;}
-  function providerRateFallback():number{const current=credentialRows.find((row)=>row.rowId===currentCredentialRowId);const value=current?.rate_multiplier??credentialRows[0]?.rate_multiplier??1;return Number.isFinite(value)&&value>=0?value:1;}
+  function providerRateFallback():number{const current=credentialRows.find((row)=>row.rowId===currentCredentialRowId);if(validRate(current?.rate_multiplier))return current.rate_multiplier;const first=credentialRows[0]?.rate_multiplier;return validRate(first)?first:1;}
   function updateAutoRotateCredentials(event:Event):void{const next=(event.currentTarget as HTMLInputElement).checked;if(next&&!autoRotateCredentials&&!initialAutoRotateCredentials)providerRateMultiplier=providerRateFallback();if(!next&&initialAutoRotateCredentials)credentialRows=credentialRows.map((row)=>({...row,rate_multiplier:1}));autoRotateCredentials=next;}
   function updateCredentialRateAdjustment(rowId:string,value:number):void{credentialRows=credentialRows.map((item)=>item.rowId===rowId?{...item,rate_multiplier_adjustment:Number.isFinite(value)?Math.max(0,value):1}:item);}
   function updateConcurrencyThreshold(rowId:string,field:'concurrencyThresholdPrimary'|'concurrencyThresholdSecondary',value:number):void{credentialRows=credentialRows.map((item)=>item.rowId===rowId?{...item,[field]:Number.isFinite(value)?Math.max(0,value):0}:item);}

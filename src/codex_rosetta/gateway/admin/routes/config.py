@@ -24,6 +24,7 @@ from ...config import (
     _model_group_candidate_raw,
     _model_group_current_candidate,
     _model_group_provider_candidates,
+    _is_valid_provider_rate_multiplier,
     _substitute_env_vars,
     _validate_provider_credential_uuid,
     default_tool_profile_for_provider,
@@ -1433,13 +1434,26 @@ def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
         )
 
 
-def _is_valid_provider_rate_multiplier(value: Any) -> bool:
-    """Return whether one Provider multiplier is numeric and non-negative."""
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, int):
-        return value >= 0
-    return isinstance(value, float) and math.isfinite(value) and value >= 0
+def _ordinary_auto_api_keys_for_validation(
+    body: Mapping[str, Any], api_keys: Any
+) -> Any:
+    """Remove inactive nested rates before validating an explicit Provider rate."""
+    if (
+        body.get("openai_variant") in {"sub2api", "new_api"}
+        or body.get("auto_rotate_credentials") is not True
+        or "rate_multiplier" not in body
+    ):
+        return api_keys
+    if not _is_valid_provider_rate_multiplier(body["rate_multiplier"]):
+        raise ValueError("'rate_multiplier' must be a finite number >= 0")
+    if not isinstance(api_keys, list):
+        return api_keys
+    return [
+        {key: value for key, value in entry.items() if key != "rate_multiplier"}
+        if isinstance(entry, dict)
+        else entry
+        for entry in api_keys
+    ]
 
 
 def _normalize_ordinary_provider_rate_multiplier(
@@ -1459,8 +1473,14 @@ def _normalize_ordinary_provider_rate_multiplier(
             current = next(
                 (entry for entry in merged_keys if entry["id"] == current_id), None
             )
-            value = (current or (merged_keys[0] if merged_keys else {})).get(
-                "rate_multiplier", 1
+            current_value = current.get("rate_multiplier") if current else None
+            first_value = merged_keys[0].get("rate_multiplier") if merged_keys else None
+            value = (
+                current_value
+                if _is_valid_provider_rate_multiplier(current_value)
+                else first_value
+                if _is_valid_provider_rate_multiplier(first_value)
+                else 1
             )
         else:
             value = body["rate_multiplier"]
@@ -1591,6 +1611,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         _normalize_sub2api_account_id(body)
         _normalize_openai_variant(body)
         _normalize_new_api_aggregation_bin(body)
+        api_keys = _ordinary_auto_api_keys_for_validation(body, api_keys)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
         _normalize_ordinary_provider_rate_multiplier(
             body, merged_keys, existing_provider
@@ -1810,12 +1831,7 @@ def _resolve_draft_provider_api_keys(  # noqa: C901 — canonical credential mer
         }
         rate_multiplier = entry.get("rate_multiplier")
         if rate_multiplier is not None:
-            if (
-                isinstance(rate_multiplier, bool)
-                or not isinstance(rate_multiplier, (int, float))
-                or not math.isfinite(rate_multiplier)
-                or rate_multiplier < 0
-            ):
+            if not _is_valid_provider_rate_multiplier(rate_multiplier):
                 raise ValueError(
                     f"'api_keys[{index}].rate_multiplier' must be a finite number >= 0"
                 )

@@ -607,6 +607,62 @@ describe('ProvidersPage', () => {
     ));
   });
 
+  it('falls back from a current credential without a rate to the first credential rate', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret', rate_multiplier: 4 },
+          { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' },
+        ],
+        current_api_key: 'current',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByRole('spinbutton', { name: 'Provider rate multiplier' })).toHaveValue(4);
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({
+        rate_multiplier: 4,
+        api_keys: [
+          { uuid: FIRST_UUID, id: 'first', key: 'firs***cret' },
+          { uuid: CURRENT_UUID, id: 'current', key: 'curr***cret' },
+        ],
+      }),
+    ));
+  });
+
+  it.each([0.001, 10])('round-trips the guaranteed Provider rate boundary %s', async (value) => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'official', api_type: 'chat', auto_rotate_credentials: true, rate_multiplier: 1,
+        base_urls: ['https://relay.example/v1'], current_base_url: 'https://relay.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret' }],
+        current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const rate = dialog.getByRole('spinbutton', { name: 'Provider rate multiplier' });
+    await fireEvent.input(rate, { target: { value: String(value) } });
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay',
+      expect.objectContaining({ rate_multiplier: value }),
+    ));
+  });
+
   it.each([
     ['the first credential rate', { rate_multiplier: 4 }, 4],
     ['one', {}, 1],

@@ -3024,22 +3024,85 @@ def test_put_provider_legacy_auto_rate_falls_back_and_strips_nested_rates(tmp_pa
     assert "rate_multiplier" not in saved["api_keys"][0]
 
 
-def test_put_provider_accepts_unbounded_integer_provider_rate(tmp_path):
+def test_put_provider_legacy_auto_rate_falls_back_to_first_when_current_missing(
+    tmp_path,
+):
     data = _config_data()
+    provider = data["providers"]["openai"]
+    provider["api_keys"][0]["rate_multiplier"] = 4
+    provider["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    provider["current_api_key"] = "secondary"
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(data), encoding="utf-8")
     body = _provider_put_body(data, "openai")
-    body["rate_multiplier"] = 10**400
     request = _provider_admin_request(config_path, data, "openai", body)
 
     response = _run(put_provider(request))
 
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
-    assert saved["rate_multiplier"] == 10**400
+    assert saved["rate_multiplier"] == 4
+    assert all("rate_multiplier" not in entry for entry in saved["api_keys"])
 
 
-@pytest.mark.parametrize("value", [None, True, -1, float("nan"), float("inf")])
+@pytest.mark.parametrize("value", [0.001, 10, 10_000])
+def test_put_provider_accepts_browser_finite_provider_rate(tmp_path, value):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["rate_multiplier"] = value
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert saved["rate_multiplier"] == value
+
+
+def test_put_provider_strips_inactive_nested_rate_before_validation(tmp_path):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["rate_multiplier"] = 0.3
+    body["api_keys"][0]["rate_multiplier"] = 10**400
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))["providers"]["openai"]
+    assert saved["rate_multiplier"] == 0.3
+    assert "rate_multiplier" not in saved["api_keys"][0]
+
+
+def test_put_provider_rejects_unrepresentable_active_nested_rate_without_write(
+    tmp_path,
+):
+    data = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "openai")
+    body["api_keys"][0]["rate_multiplier"] = 10**400
+    request = _provider_admin_request(config_path, data, "openai", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert b"api_keys[0].rate_multiplier" in response.body
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("value", [None, True, -1, float("nan"), float("inf"), 10**400])
 def test_put_provider_rejects_invalid_provider_rate_without_write(tmp_path, value):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"

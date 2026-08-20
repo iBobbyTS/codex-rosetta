@@ -209,6 +209,17 @@ def _validate_provider_credential_uuid(value: Any, *, field: str) -> str:
     return value
 
 
+def _is_valid_provider_rate_multiplier(value: Any) -> bool:
+    """Return whether a multiplier is a browser-representable non-negative number."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        browser_value = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(browser_value) and value >= 0
+
+
 def _model_group_provider_candidates(
     value: Any,
     *,
@@ -1382,15 +1393,6 @@ class GatewayConfig:
                 )
 
     @staticmethod
-    def _is_valid_provider_rate_multiplier(value: Any) -> bool:
-        """Return whether one Provider multiplier is numeric and non-negative."""
-        if isinstance(value, bool):
-            return False
-        if isinstance(value, int):
-            return value >= 0
-        return isinstance(value, float) and math.isfinite(value) and value >= 0
-
-    @staticmethod
     def _validate_provider_credentials(name: str, cfg: dict[str, Any]) -> None:
         """Validate canonical credentials for enabled and disabled rows."""
         sub2api_account_id = cfg.get("sub2api_account_id")
@@ -1408,9 +1410,7 @@ class GatewayConfig:
         if (
             cfg.get("openai_variant") not in {"sub2api", "new_api"}
             and "rate_multiplier" in cfg
-            and not GatewayConfig._is_valid_provider_rate_multiplier(
-                provider_rate_multiplier
-            )
+            and not _is_valid_provider_rate_multiplier(provider_rate_multiplier)
         ):
             raise ValueError(
                 f"config: provider '{name}' rate_multiplier must be a finite number >= 0"
