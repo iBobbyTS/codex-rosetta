@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from typing import Any
+from urllib.parse import urlencode
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
 
@@ -208,6 +209,32 @@ def _project_new_api_pricing(payload: Any) -> dict[str, int | float]:
     return projected
 
 
+def _project_new_api_success_rate(payload: Any, group: str) -> float | None:
+    """Project the latest success rate for one New API group."""
+    if not isinstance(payload, dict):
+        raise ValueError("New API success-rate response is invalid")
+    data = payload.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("groups"), list):
+        raise ValueError("New API success-rate response is invalid")
+    for item in data["groups"]:
+        if not isinstance(item, dict) or item.get("group") != group:
+            continue
+        series = item.get("series")
+        if not isinstance(series, list):
+            raise ValueError("New API success-rate response is invalid")
+        if series:
+            point = series[-1]
+            value = point.get("success_rate") if isinstance(point, dict) else None
+        else:
+            value = item.get("success_rate")
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise ValueError("New API success-rate response is invalid")
+        if not math.isfinite(value):
+            raise ValueError("New API success-rate response is invalid")
+        return float(value)
+    return None
+
+
 def _new_api_nonmodel_provider_info(base_url: str, bearer_key: str) -> ProviderInfo:
     """Build a transport descriptor for one draft New API non-model request."""
     sentinel = "__codex_rosetta_no_bearer__"
@@ -293,6 +320,66 @@ async def get_new_api_pricing(request: Any, **kwargs: Any) -> Response:
             {"error": "New API pricing response is invalid"}, status_code=502
         )
     return JSONResponse({"group_ratio": group_ratio})
+
+
+async def get_new_api_success_rate(request: Any, **kwargs: Any) -> Response:
+    """Fetch one New API group's latest model success rate."""
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+    base_url = body.get("base_url")
+    model = body.get("model")
+    group = body.get("group")
+    if not isinstance(base_url, str) or not base_url.strip():
+        return JSONResponse(
+            {"error": "'base_url' must be a non-empty string"}, status_code=400
+        )
+    if not isinstance(model, str) or not model.strip():
+        return JSONResponse(
+            {"error": "'model' must be a non-empty string"}, status_code=400
+        )
+    if not isinstance(group, str) or not group.strip():
+        return JSONResponse(
+            {"error": "'group' must be a non-empty string"}, status_code=400
+        )
+    bearer_key = body.get("bearer_key", body.get("api_key", ""))
+    if not isinstance(bearer_key, str):
+        return JSONResponse({"error": "'bearer_key' must be a string"}, status_code=400)
+
+    transport = getattr(request.app, "transport", None)
+    if transport is None:
+        return JSONResponse(
+            {"error": "Success-rate transport is unavailable"}, status_code=502
+        )
+    endpoint = f"/api/perf-metrics?{urlencode({'model': model.strip(), 'hours': '24'})}"
+    try:
+        response = await _request_new_api_nonmodel(
+            transport,
+            base_url.strip(),
+            endpoint,
+            bearer_key.strip(),
+        )
+    except Exception:
+        return JSONResponse(
+            {"error": "Unable to fetch New API success rate"}, status_code=502
+        )
+    if not 200 <= response.status_code < 300:
+        return JSONResponse(
+            {
+                "error": (
+                    "New API success-rate request failed "
+                    f"(HTTP {response.status_code})"
+                )
+            },
+            status_code=502,
+        )
+    try:
+        success_rate = _project_new_api_success_rate(response.body, group.strip())
+    except OverflowError, TypeError, ValueError:
+        return JSONResponse(
+            {"error": "New API success-rate response is invalid"}, status_code=502
+        )
+    return JSONResponse({"success_rate": success_rate})
 
 
 async def get_sub2api_keys(request: Any, **kwargs: Any) -> Response:
@@ -448,6 +535,7 @@ __all__ = [
     "delete_account",
     "get_accounts",
     "get_new_api_pricing",
+    "get_new_api_success_rate",
     "get_sub2api_capacity",
     "get_sub2api_keys",
     "refresh_account",

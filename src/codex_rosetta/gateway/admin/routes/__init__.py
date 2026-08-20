@@ -38,6 +38,7 @@ from .accounts import (
     delete_account,
     get_accounts,
     get_new_api_pricing,
+    get_new_api_success_rate,
     get_sub2api_capacity,
     get_sub2api_keys,
     refresh_account,
@@ -152,6 +153,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>/new-api-pricing", methods=["POST"])(
         get_new_api_pricing
     )
+    app.route(
+        "/admin/api/config/providers/<name>/new-api-success-rate", methods=["POST"]
+    )(get_new_api_success_rate)
     app.route("/admin/api/config/providers/<name>", methods=["DELETE"])(delete_provider)
     app.route("/admin/api/config/providers/<name>/toggle", methods=["POST"])(
         toggle_provider

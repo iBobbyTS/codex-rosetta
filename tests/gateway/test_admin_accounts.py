@@ -25,6 +25,7 @@ from codex_rosetta.gateway.admin.routes.accounts import (
     delete_account,
     get_accounts,
     get_new_api_pricing,
+    get_new_api_success_rate,
     get_sub2api_capacity,
     get_sub2api_keys,
 )
@@ -423,6 +424,20 @@ def _pricing_request(app: Any, body: dict[str, Any]) -> Request:
     return request
 
 
+def _success_rate_request(app: Any, body: dict[str, Any]) -> Request:
+    request = Request(
+        method="POST",
+        path="/admin/api/config/providers/new-api/new-api-success-rate",
+        query_string="",
+        headers={"content-type": "application/json"},
+        body=json.dumps(body).encode(),
+        client_addr=("127.0.0.1", 1),
+        app=app,
+    )
+    request.path_params = {"name": "new-api"}
+    return request
+
+
 class _FakePricingTransport:
     def __init__(self, response: Any = None, error: Exception | None = None):
         self.response = response
@@ -537,6 +552,82 @@ def test_new_api_pricing_route_maps_upstream_failures(
     )
     assert response.status_code == 502
     assert f"HTTP {status_code}" in json.loads(response.body)["error"]
+
+
+def test_new_api_success_rate_route_projects_latest_matching_group(
+    tmp_path: Path,
+) -> None:
+    app, _path = _provider_app(tmp_path)
+    transport = _FakePricingTransport(
+        _FakeSub2APIResponse(
+            200,
+            {
+                "success": True,
+                "data": {
+                    "model_name": "gpt-4.1-mini",
+                    "groups": [
+                        {
+                            "group": "standard",
+                            "success_rate": 80,
+                            "series": [
+                                {"ts": 1, "success_rate": 91.5},
+                                {"ts": 2, "success_rate": 96.25},
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+    )
+    app.transport = transport
+
+    response = asyncio.run(
+        get_new_api_success_rate(
+            _success_rate_request(
+                app,
+                {
+                    "base_url": "https://new.example/v1",
+                    "model": "gpt-4.1-mini",
+                    "group": "standard",
+                    "bearer_key": "draft-secret",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"success_rate": 96.25}
+    descriptor, url, body, _headers, method = transport.calls[0]
+    assert url == "https://new.example/api/perf-metrics?model=gpt-4.1-mini&hours=24"
+    assert body == {}
+    assert method == "GET"
+    assert descriptor.base_url == "https://new.example"
+
+
+def test_new_api_success_rate_route_returns_null_for_missing_group(tmp_path: Path) -> None:
+    app, _path = _provider_app(tmp_path)
+    app.transport = _FakePricingTransport(
+        _FakeSub2APIResponse(
+            200,
+            {"data": {"groups": [{"group": "other", "success_rate": 88, "series": []}]}},
+        )
+    )
+
+    response = asyncio.run(
+        get_new_api_success_rate(
+            _success_rate_request(
+                app,
+                {
+                    "base_url": "https://new.example",
+                    "model": "gpt-4.1-mini",
+                    "group": "standard",
+                },
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert json.loads(response.body) == {"success_rate": None}
 
 
 def test_sub2api_keys_route_persists_provider_url_rotation(
