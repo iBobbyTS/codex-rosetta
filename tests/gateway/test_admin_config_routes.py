@@ -53,6 +53,8 @@ from codex_rosetta.observability.request_log import RequestLogEntry
 
 _PRIMARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000001"
 _SECONDARY_CREDENTIAL_UUID = "00000000-0000-4000-8000-000000000002"
+# Test-format value only; this is not a real Tavily credential.
+_TAVILY_TEST_KEY = "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"
 
 
 @pytest.mark.parametrize(
@@ -1030,7 +1032,13 @@ def test_get_config_lists_only_eligible_deepseek_provider_names(tmp_path):
             [],
         ),
         (
-            [{"id": "tavily", "provider": "tavily", "tavily_api_key": "tvly-key"}],
+            [
+                {
+                    "id": "tavily",
+                    "provider": "tavily",
+                    "tavily_api_key": _TAVILY_TEST_KEY,
+                }
+            ],
             "local_query_adapter",
             [
                 "domain_filter",
@@ -1099,7 +1107,11 @@ def test_get_config_derives_search_contract_from_code_owned_provider_contract(
     assert body["server"]["web_search"]["providers"] == [
         {
             **row,
-            **({"tavily_api_key": "***"} if row["provider"] == "tavily" else {}),
+            **(
+                {"tavily_api_key": _shared._mask_api_key(row["tavily_api_key"])}
+                if row["provider"] == "tavily"
+                else {}
+            ),
         }
         for row in rows
     ]

@@ -1014,7 +1014,7 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
     writes: list[tuple[str, _ModelGroupProviderCandidate]] = []
     first_attempts = 0
     second_attempts = 0
-    both_first_started = asyncio.Event()
+    leader_first_started = asyncio.Event()
     release_first_failures = asyncio.Event()
     leader_second_started = asyncio.Event()
     release_leader_success = asyncio.Event()
@@ -1028,11 +1028,10 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
         nonlocal first_attempts, second_attempts
         if route.provider_name == "test-provider":
             first_attempts += 1
-            if first_attempts == 2:
-                both_first_started.set()
-            await both_first_started.wait()
+            if first_attempts == 1:
+                leader_first_started.set()
             await release_first_failures.wait()
-            return JSONResponse({"error": "failed"}, status_code=502), {
+            return JSONResponse({"error": "failed"}, status_code=503), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "upstream_response",
             }
@@ -1051,15 +1050,15 @@ def test_concurrent_provider_failure_blocks_waiter_then_makes_one_fresh_attempt(
         second = asyncio.create_task(
             app_module._proxy_handler(_proxy_request(config), "openai_chat")
         )
-        await both_first_started.wait()
+        await leader_first_started.wait()
         release_first_failures.set()
         await leader_second_started.wait()
         await asyncio.sleep(0)
         assert second_attempts == 1
         release_leader_success.set()
-        return await asyncio.gather(first, second)
+        return await asyncio.wait_for(asyncio.gather(first, second), timeout=1.0)
 
-    responses = asyncio.run(scenario())
+    responses = asyncio.run(asyncio.wait_for(scenario(), timeout=1.0))
 
     assert [response.status_code for response in responses] == [200, 200]
     assert first_attempts == 2
@@ -1078,7 +1077,7 @@ def test_provider_failover_leader_cancellation_hands_gate_to_waiter(
     async def fake_handle(route, *_args: Any, **_kwargs: Any):
         nonlocal second_attempts
         if route.provider_name == "test-provider":
-            return JSONResponse({"error": "failed"}, status_code=502), {
+            return JSONResponse({"error": "failed"}, status_code=503), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "upstream_response",
             }
@@ -1104,7 +1103,7 @@ def test_provider_failover_leader_cancellation_hands_gate_to_waiter(
             await leader
         return await asyncio.wait_for(waiter, timeout=0.2)
 
-    response = asyncio.run(scenario())
+    response = asyncio.run(asyncio.wait_for(scenario(), timeout=1.0))
 
     assert response.status_code == 200
     assert second_attempts == 2
@@ -1122,7 +1121,7 @@ def test_provider_persistence_failure_preserves_state_and_hands_off_gate(
     ring.bind_recorder(fail_record)
 
     async def fake_handle(*_args: Any, **_kwargs: Any):
-        return JSONResponse({"error": "failed"}, status_code=502), {
+        return JSONResponse({"error": "failed"}, status_code=503), {
             "upstream_provider_failure": True,
             "provider_failure_origin": "upstream_response",
         }
@@ -1177,7 +1176,7 @@ def test_provider_attempt_loop_preserves_wire_and_single_ingress_telemetry(
         captured_bodies.append(dict(body))
         body["mutated"] = route.provider_name
         if route.provider_name == "test-provider":
-            return JSONResponse({"error": "failed"}, status_code=502), {
+            return JSONResponse({"error": "failed"}, status_code=503), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "upstream_response",
             }
@@ -1195,14 +1194,14 @@ def test_provider_attempt_loop_preserves_wire_and_single_ingress_telemetry(
     assert request.json.call_count == 1
 
 
-def test_empty_204_provider_failure_rotates_model_group(monkeypatch) -> None:
+def test_provider_failure_status_rotates_model_group(monkeypatch) -> None:
     config = _two_provider_gateway_config()
     attempted_providers: list[str] = []
 
     async def fake_handle(route, *_args: Any, **_kwargs: Any):
         attempted_providers.append(route.provider_name)
         if route.provider_name == "test-provider":
-            return JSONResponse({}, status_code=204), {
+            return JSONResponse({}, status_code=503), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "upstream_response",
             }

@@ -1079,7 +1079,7 @@ def _literal_503s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
 
 
 @pytest.mark.parametrize("with_other_provider", [False, True])
-def test_model_group_skips_same_provider_pair_after_shared_url_exhaustion(
+def test_model_group_does_not_rotate_on_502_after_shared_url_exhaustion(
     monkeypatch,
     with_other_provider: bool,
 ) -> None:
@@ -1208,22 +1208,14 @@ def test_model_group_skips_same_provider_pair_after_shared_url_exhaustion(
             ("first", "available"),
             ("second", "available"),
         )
-        assert ring.status_snapshot()[0][1] == "cooling"
+        assert ring.status_snapshot()[0][1] == "available"
         assert ring.status_snapshot()[1][1] == "available"
-        if with_other_provider:
-            assert response.status_code == 200
-            assert client.calls == [f"{first_origin}/responses"] * 6 + [
-                f"{second_origin}/responses"
-            ]
-            assert writes == ["row-b"]
-            assert ring.current == "row-b"
-        else:
-            assert response.status_code == 502
-            assert isinstance(response, Response)
-            assert response.body == b'{"error": "last-real"}'
-            assert client.calls == [f"{first_origin}/responses"] * 6
-            assert writes == []
-            assert ring.current.credential_uuid == first_uuid
+        assert response.status_code == 502
+        assert isinstance(response, Response)
+        assert response.body == b'{"error": "last-real"}'
+        assert client.calls == [f"{first_origin}/responses"] * 6
+        assert writes == []
+        assert ring.current.credential_uuid == first_uuid
 
     asyncio.run(scenario())
 
