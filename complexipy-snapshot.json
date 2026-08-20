@@ -110,12 +110,46 @@
     ]
   },
   {
+    "path": "src/codex_rosetta/gateway/admin/chatgpt_oauth.py",
+    "file_name": "chatgpt_oauth.py",
+    "functions": [
+      {
+        "name": "chatgpt_callback",
+        "complexity": 27
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/admin/provider_refresh.py",
+    "file_name": "provider_refresh.py",
+    "functions": [
+      {
+        "name": "ProviderRefreshCoordinator::_refresh_new_api",
+        "complexity": 32
+      },
+      {
+        "name": "ProviderRefreshCoordinator::_refresh_sub2api",
+        "complexity": 34
+      }
+    ]
+  },
+  {
     "path": "src/codex_rosetta/gateway/admin/routes/_shared.py",
     "file_name": "_shared.py",
     "functions": [
       {
         "name": "_handle_provider_rename",
-        "complexity": 31
+        "complexity": 36
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/admin/routes/accounts.py",
+    "file_name": "accounts.py",
+    "functions": [
+      {
+        "name": "_project_sub2api_key_items",
+        "complexity": 60
       }
     ]
   },
@@ -128,8 +162,38 @@
         "complexity": 26
       },
       {
+        "name": "_rewrite_provider_candidate_mode",
+        "complexity": 35
+      },
+      {
+        "name": "_normalize_model_groups_for_admin",
+        "complexity": 38
+      },
+      {
+        "name": "_populate_automatic_rate_multipliers",
+        "complexity": 44
+      },
+      {
+        "name": "_resolve_draft_provider_api_keys",
+        "complexity": 56
+      },
+      {
         "name": "put_provider",
-        "complexity": 31
+        "complexity": 62
+      }
+    ]
+  },
+  {
+    "path": "src/codex_rosetta/gateway/app.py",
+    "file_name": "app.py",
+    "functions": [
+      {
+        "name": "_bind_provider_current_recorders",
+        "complexity": 42
+      },
+      {
+        "name": "_proxy_handler",
+        "complexity": 104
       }
     ]
   },
@@ -176,8 +240,16 @@
     "file_name": "config.py",
     "functions": [
       {
+        "name": "GatewayConfig::__init__",
+        "complexity": 26
+      },
+      {
         "name": "GatewayConfig::_validate",
         "complexity": 26
+      },
+      {
+        "name": "GatewayConfig::_initialize_model_group_rings",
+        "complexity": 27
       },
       {
         "name": "_normalize_web_search_provider",
@@ -186,6 +258,10 @@
       {
         "name": "write_config",
         "complexity": 27
+      },
+      {
+        "name": "GatewayConfig::_validate_provider_credentials",
+        "complexity": 32
       }
     ]
   },
@@ -205,7 +281,7 @@
     "functions": [
       {
         "name": "build_provider_info",
-        "complexity": 26
+        "complexity": 27
       }
     ]
   },
@@ -219,7 +295,7 @@
       },
       {
         "name": "handle_streaming",
-        "complexity": 26
+        "complexity": 28
       },
       {
         "name": "_remove_tool_definition",
@@ -270,16 +346,12 @@
     "file_name": "transport.py",
     "functions": [
       {
-        "name": "HttpTransport::send_passthrough",
-        "complexity": 39
+        "name": "HttpTransport::_retry_before_credential_rotation",
+        "complexity": 27
       },
       {
-        "name": "HttpTransport::send_request",
-        "complexity": 39
-      },
-      {
-        "name": "HttpTransport::send_streaming",
-        "complexity": 39
+        "name": "HttpTransport::_send_with_failover",
+        "complexity": 34
       }
     ]
   },
