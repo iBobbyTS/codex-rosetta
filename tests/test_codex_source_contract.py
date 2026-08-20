@@ -8,10 +8,13 @@ import runpy
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from codex_rosetta.gateway.codex_compaction import COMPACT_PROMPT, SUMMARY_PREFIX
 from codex_rosetta.gateway.config import CONFIGURED_RESPONSES_WEB_SEARCH_MODELS
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CODEX_SOURCE_ROOT = REPO_ROOT.parent / "openai-codex-src"
 BASELINE_PATH = (
     REPO_ROOT / "docs" / "dev" / "version-compatibility" / "codex-source-contract.json"
 )
@@ -38,6 +41,13 @@ compare_snapshots = SCRIPT["compare_snapshots"]
 classify_snapshots = SCRIPT["classify_snapshots"]
 render_classification = SCRIPT["render_classification"]
 snapshot_json = SCRIPT["snapshot_json"]
+
+
+def _codex_source_or_skip() -> Path:
+    """Return the optional sibling Codex checkout, or skip without it."""
+    if not CODEX_SOURCE_ROOT.is_dir():
+        pytest.skip("requires the optional sibling checkout at ../openai-codex-src")
+    return CODEX_SOURCE_ROOT
 
 
 def test_tool_registration_inventory_uses_current_registry_owners():
@@ -136,7 +146,7 @@ def _cp26_source_texts(source_root: Path) -> dict[str, Any]:
 
 def test_cp26_snapshot_changes_for_selected_field_and_semantic_owners():
     """Selected CP-26 field/dispatch/log/filter owners affect the snapshot group."""
-    source_root = REPO_ROOT.parent / "openai-codex-src"
+    source_root = _codex_source_or_skip()
     sources = _cp26_source_texts(source_root)
     baseline = _function_call_encrypted_args_contract(**sources)
 
@@ -263,7 +273,7 @@ def test_cp26_snapshot_changes_for_selected_field_and_semantic_owners():
 
 def test_new_tool_registration_owners_each_change_the_snapshot_group():
     """Transitive MCP and model-visible assembly changes must invalidate the snapshot."""
-    source_root = REPO_ROOT.parent / "openai-codex-src"
+    source_root = _codex_source_or_skip()
     spec_plan = (source_root / "codex-rs/core/src/tools/spec_plan.rs").read_text(
         encoding="utf-8"
     )
@@ -567,7 +577,7 @@ def test_checked_in_baseline_uses_canonical_serialization():
 
 
 def test_bundled_remote_compaction_prompts_match_the_reviewed_codex_source():
-    source_root = REPO_ROOT.parent / "openai-codex-src"
+    source_root = _codex_source_or_skip()
     assert COMPACT_PROMPT == (
         source_root / "codex-rs/prompts/templates/compact/prompt.md"
     ).read_text(encoding="utf-8")
