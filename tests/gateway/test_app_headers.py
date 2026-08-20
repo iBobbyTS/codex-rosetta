@@ -772,7 +772,7 @@ def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
     assert json.loads(response.body) == {"ok": True}
 
 
-def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
+def test_proxy_handler_does_not_rotate_model_group_after_502_exhaustion(monkeypatch):
     class _Ring:
         current = "first"
         generation = 0
@@ -850,10 +850,10 @@ def test_proxy_handler_rotates_model_group_after_upstream_failure(monkeypatch):
 
     response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
 
-    assert response.status_code == 200
-    assert calls == 2
-    assert config.calls == ["first", "second"]
-    assert config.ring.current == "second"
+    assert response.status_code == 502
+    assert calls == 1
+    assert config.calls == ["first"]
+    assert config.ring.current == "first"
 
 
 def test_proxy_handler_rotates_fixed_credential_candidate_without_provider_selection(
@@ -899,6 +899,55 @@ def test_proxy_handler_rotates_fixed_credential_candidate_without_provider_selec
     assert attempts == ["primary", "renamed-second"]
     assert config.providers["test-provider"].current_credential_id == "primary"
     assert config.model_group_rings["test"].current.credential_uuid == second_uuid
+
+
+def test_proxy_handler_cools_group_after_every_candidate_exhausts_503(
+    monkeypatch,
+) -> None:
+    first_uuid = "0488ffa0-e7b7-59ed-b1d0-6d43275607f5"
+    second_uuid = "00000000-0000-4000-8000-000000000002"
+    raw = _gateway_config()
+    raw["providers"]["test-provider"].update(
+        auto_rotate_credentials=False,
+        api_keys=[
+            *raw["providers"]["test-provider"]["api_keys"],
+            {
+                "uuid": second_uuid,
+                "id": "second",
+                "key": "sk-second",
+            },
+        ],
+    )
+    raw["model_groups"]["test"]["provider"] = [
+        {"provider": "test-provider", "credential_uuid": first_uuid},
+        {"provider": "test-provider", "credential_uuid": second_uuid},
+    ]
+    config = GatewayConfig(raw)
+    attempts: list[str] = []
+
+    async def fake_handle(_route, provider, *_args: Any, **_kwargs: Any):
+        attempts.append(provider.current_credential_id)
+        return JSONResponse({"error": "unavailable"}, status_code=503), {
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "upstream_response",
+        }
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+    ring = config.model_group_rings["test"]
+
+    assert response.status_code == 503
+    assert attempts == ["primary", "second"]
+    assert tuple(status for _candidate, status in ring.status_snapshot()) == (
+        "cooling",
+        "cooling",
+    )
+
+    asyncio.run(ring.select(ring.current))
+    assert ring.status_snapshot()[1][1] == "available"
 
 
 def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(

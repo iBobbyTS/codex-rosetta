@@ -437,11 +437,113 @@ def test_special_provider_candidate_uses_automatic_times_adjustment() -> None:
     config = GatewayConfig(raw)
     assert config.providers["test"].credential_multiplier() == pytest.approx(0.8)
     assert config.providers["cheap"].credential_multiplier() == pytest.approx(0.2)
-    route, provider = config.resolve("openai_responses", "gpt-test")
+    assert config.model_group_candidate_multiplier(
+        config.model_group_rings["test-llm"].candidates[1]
+    ) == pytest.approx(0.2)
 
-    assert route.provider_name == "cheap"
-    assert provider.configured_id == "cheap"
-    assert provider.credential_multiplier() == 0.2
+
+def test_cost_selection_uses_strict_parallel_thresholds_and_persisted_snapshot() -> (
+    None
+):
+    raw = _minimal_raw()
+    current_uuid = _PRIMARY_CREDENTIAL_UUID
+    cheap_uuid = "00000000-0000-4000-8000-000000000002"
+    raw["providers"]["test"].update(
+        provider="openai",
+        openai_variant="new_api",
+        auto_rotate_credentials=False,
+        api_keys=[
+            {
+                "uuid": current_uuid,
+                "id": "primary",
+                "key": "sk-test",
+                "automatic_rate_multiplier": 1,
+                "rate_multiplier_adjustment": 1,
+            }
+        ],
+    )
+    raw["providers"]["cheap"] = {
+        **raw["providers"]["test"],
+        "api_keys": [
+            {
+                "uuid": cheap_uuid,
+                "id": "cheap",
+                "key": "sk-cheap",
+                "automatic_rate_multiplier": 0.8,
+                "rate_multiplier_adjustment": 1,
+                "availability_threshold_primary": 70,
+                "availability_threshold_secondary": 40,
+            }
+        ],
+        "current_api_key": "cheap",
+        "availability_snapshot": {
+            "updated_at": 1,
+            "credentials": {
+                cheap_uuid: {
+                    "value": 50,
+                    "timestamp": 0,
+                    "kind": "success_rate",
+                }
+            },
+        },
+    }
+    raw["model_groups"]["test-llm"]["provider"] = [
+        {"provider": "test", "credential_uuid": current_uuid},
+        {"provider": "cheap", "credential_uuid": cheap_uuid},
+    ]
+
+    config = GatewayConfig(raw)
+    ring = config.model_group_rings["test-llm"]
+
+    assert config.preferred_model_group_candidate("test-llm") == ring.candidates[1]
+
+    raw["providers"]["cheap"]["availability_snapshot"]["credentials"][cheap_uuid][
+        "value"
+    ] = 40
+    equal_threshold = GatewayConfig(raw)
+    assert equal_threshold.preferred_model_group_candidate("test-llm") == (
+        equal_threshold.model_group_rings["test-llm"].current
+    )
+
+    raw["providers"]["cheap"]["availability_snapshot"]["credentials"][cheap_uuid][
+        "value"
+    ] = 50
+    raw["providers"]["cheap"]["api_keys"][0]["automatic_rate_multiplier"] = 0.9
+    expensive = GatewayConfig(raw)
+    assert expensive.preferred_model_group_candidate("test-llm") == (
+        expensive.model_group_rings["test-llm"].current
+    )
+
+
+def test_503_cost_selection_allows_higher_rate() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"]["rate_multiplier"] = 1
+    raw["providers"]["second"] = {
+        **raw["providers"]["test"],
+        "rate_multiplier": 2,
+        "base_urls": ["https://second.example.com"],
+        "current_base_url": "https://second.example.com",
+    }
+    raw["model_groups"]["test-llm"]["provider"] = ["test", "second"]
+    config = GatewayConfig(raw)
+    ring = config.model_group_rings["test-llm"]
+
+    assert config.preferred_model_group_candidate("test-llm") == ring.current
+    assert (
+        config.preferred_model_group_candidate(
+            "test-llm", failed=(ring.current,), after_503=True
+        )
+        == ring.candidates[1]
+    )
+
+
+def test_new_api_availability_threshold_rejects_out_of_range_percentage() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(provider="openai", openai_variant="new_api")
+    raw["providers"]["test"]["api_keys"][0]["availability_threshold_primary"] = 101
+
+    with pytest.raises(ValueError, match="availability_threshold_primary"):
+        GatewayConfig(raw)
 
 
 def test_codex_task_model_settings_are_normalized() -> None:
@@ -1536,6 +1638,9 @@ class TestModelGroups:
         )
         ring = cfg.model_group_rings["test-llm"]
         ring.mark_failed("test")
+        replacement = cfg.preferred_model_group_candidate("test-llm")
+        assert replacement == "secondary"
+        asyncio.run(ring.select_automatically(replacement))
         assert (
             cfg.resolve("openai_responses", "gpt-test")[0].provider_name == "secondary"
         )

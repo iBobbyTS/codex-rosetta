@@ -696,6 +696,7 @@ class HttpTransport:
         credential_observation_of: Callable[[_CredentialResultT], tuple[str, int]],
         *,
         single_attempt: bool,
+        attempts_per_credential: int | None = None,
     ) -> tuple[_CredentialResultT, bool]:
         """Resolve literal 503s under one credential gate at a time."""
         result = initial_result
@@ -723,12 +724,21 @@ class HttpTransport:
             )
         try:
             while is_503(result):
-                result = await _FAILOVER_RETRY_POLICY.run(
-                    result,
-                    operation,
-                    is_503,
-                    sleep=self._retry_sleep,
-                )
+                if attempts_per_credential is None:
+                    result = await _FAILOVER_RETRY_POLICY.run(
+                        result,
+                        operation,
+                        is_503,
+                        sleep=self._retry_sleep,
+                    )
+                else:
+                    for delay in _FAILOVER_RETRY_POLICY.delays[
+                        : attempts_per_credential - 1
+                    ]:
+                        if not is_503(result):
+                            break
+                        await self._retry_sleep(delay)
+                        result = await operation()
                 if not is_503(result):
                     return result, False
                 failed_credential = credential_observation_of(result)[0]
@@ -796,6 +806,7 @@ class HttpTransport:
                 lambda item: status_of(item) == 503,
                 credential_observation_of,
                 single_attempt=credential_single_attempt,
+                attempts_per_credential=3 if retry_nonstandard_statuses else None,
             )
             if exhausted:
                 return output_of(attempt)
@@ -820,6 +831,7 @@ class HttpTransport:
                     credential_failure,
                     single_attempt=single_attempt,
                     credential_single_attempt=credential_single_attempt,
+                    retry_nonstandard_statuses=retry_nonstandard_statuses,
                 )
             finally:
                 await provider_info.publish_url_rotation()
@@ -839,6 +851,7 @@ class HttpTransport:
         *,
         single_attempt: bool,
         credential_single_attempt: bool,
+        retry_nonstandard_statuses: bool,
     ) -> _FailoverOutputT:
         """Rotate URLs while retaining the established URL-to-credential lock order."""
         attempt = initial_attempt
@@ -858,6 +871,7 @@ class HttpTransport:
                 lambda item: status_of(item) == 503,
                 credential_observation_of,
                 single_attempt=credential_single_attempt,
+                attempts_per_credential=3 if retry_nonstandard_statuses else None,
             )
             if exhausted:
                 return output_of(attempt)

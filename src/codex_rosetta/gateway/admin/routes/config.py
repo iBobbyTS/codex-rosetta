@@ -1029,6 +1029,15 @@ async def get_config(request: Any) -> Response:
                         and entry["new_api_model"]
                         else {}
                     ),
+                    **{
+                        field: entry[field]
+                        for field in (
+                            "availability_threshold_primary",
+                            "availability_threshold_secondary",
+                        )
+                        if isinstance(entry.get(field), (int, float))
+                        and not isinstance(entry.get(field), bool)
+                    },
                 }
                 for entry in masked["api_keys"]
             ]
@@ -1613,6 +1622,7 @@ async def put_provider(request: Any, **kwargs: Any) -> Response:
         _normalize_new_api_aggregation_bin(body)
         api_keys = _ordinary_auto_api_keys_for_validation(body, api_keys)
         merged_keys = _resolve_draft_provider_api_keys(api_keys, existing_provider)
+        _validate_new_api_availability_thresholds(body, merged_keys)
         _normalize_ordinary_provider_rate_multiplier(
             body, merged_keys, existing_provider
         )
@@ -1837,6 +1847,7 @@ def _resolve_draft_provider_api_keys(  # noqa: C901 — canonical credential mer
                 )
             merged_entry["rate_multiplier"] = rate_multiplier
         _merge_credential_multiplier_fields(entry, merged_entry, index)
+        _merge_credential_availability_thresholds(entry, merged_entry, index)
         new_api_group = entry.get("new_api_group")
         if new_api_group is not None:
             if not isinstance(new_api_group, str):
@@ -1881,6 +1892,47 @@ def _merge_credential_multiplier_fields(
                 f"'api_keys[{index}].{field}' must be a finite number >= 0 or null"
             )
         merged_entry[field] = value
+
+
+def _merge_credential_availability_thresholds(
+    entry: Mapping[str, Any], merged_entry: dict[str, Any], index: int
+) -> None:
+    """Validate and preserve the existing per-credential availability thresholds."""
+    for field in (
+        "availability_threshold_primary",
+        "availability_threshold_secondary",
+    ):
+        if field not in entry:
+            continue
+        value = entry[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
+            raise ValueError(
+                f"'api_keys[{index}].{field}' must be a finite number >= 0"
+            )
+        merged_entry[field] = value
+
+
+def _validate_new_api_availability_thresholds(
+    body: Mapping[str, Any], merged_keys: list[dict[str, Any]]
+) -> None:
+    """Constrain New API percentage thresholds to the UI's persisted range."""
+    if body.get("openai_variant") != "new_api":
+        return
+    for index, entry in enumerate(merged_keys):
+        for field in (
+            "availability_threshold_primary",
+            "availability_threshold_secondary",
+        ):
+            value = entry.get(field)
+            if isinstance(value, (int, float)) and value > 100:
+                raise ValueError(
+                    f"'api_keys[{index}].{field}' must be between 0 and 100"
+                )
 
 
 async def detect_provider_request_encoding(request: Any, **kwargs: Any) -> Response:

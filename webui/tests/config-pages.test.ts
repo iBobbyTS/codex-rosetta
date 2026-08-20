@@ -109,7 +109,15 @@ describe('ProvidersPage', () => {
     await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/relay', expect.objectContaining({
       openai_variant: 'new_api',
-      api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'prov***cret', new_api_group: 'premium' }],
+      api_keys: [{
+        uuid: PRIMARY_UUID,
+        id: 'primary',
+        key: 'prov***cret',
+        rate_multiplier_adjustment: 1,
+        availability_threshold_primary: 70,
+        availability_threshold_secondary: 40,
+        new_api_group: 'premium',
+      }],
     })));
   });
 

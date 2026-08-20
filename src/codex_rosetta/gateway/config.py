@@ -1439,6 +1439,27 @@ class GatewayConfig:
             )
         if len({item["id"] for item in raw_api_keys}) != len(raw_api_keys):
             raise ValueError(f"config: provider '{name}' api_keys IDs must be unique")
+        threshold_maximum = 100.0 if cfg.get("openai_variant") == "new_api" else None
+        for index, item in enumerate(raw_api_keys):
+            for field in (
+                "availability_threshold_primary",
+                "availability_threshold_secondary",
+            ):
+                if field not in item:
+                    continue
+                value = item[field]
+                if (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or value < 0
+                    or (threshold_maximum is not None and value > threshold_maximum)
+                ):
+                    suffix = " between 0 and 100" if threshold_maximum else " >= 0"
+                    raise ValueError(
+                        f"config: provider '{name}' api_keys[{index}].{field} "
+                        f"must be a finite number{suffix}"
+                    )
         credential_uuids = [
             _validate_provider_credential_uuid(
                 cast(dict[str, Any], item).get("uuid"),
@@ -1878,26 +1899,129 @@ class GatewayConfig:
             return provider.credential_multiplier_for_uuid(candidate.credential_uuid)
         return provider.credential_multiplier()
 
+    def _model_group_candidate_credential(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> Mapping[str, Any] | None:
+        provider = self._all_raw_providers.get(candidate.provider_name)
+        if not isinstance(provider, Mapping):
+            return None
+        credentials = provider.get("api_keys")
+        if not isinstance(credentials, list):
+            return None
+        if candidate.credential_uuid is not None:
+            return next(
+                (
+                    entry
+                    for entry in credentials
+                    if isinstance(entry, Mapping)
+                    and entry.get("uuid") == candidate.credential_uuid
+                ),
+                None,
+            )
+        current_id = provider.get("current_api_key")
+        return next(
+            (
+                entry
+                for entry in credentials
+                if isinstance(entry, Mapping) and entry.get("id") == current_id
+            ),
+            next((entry for entry in credentials if isinstance(entry, Mapping)), None),
+        )
+
+    def model_group_candidate_availability(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> float | None:
+        """Return persisted availability, or infinity for ordinary Providers."""
+        provider = self._all_raw_providers.get(candidate.provider_name)
+        if not isinstance(provider, Mapping):
+            return None
+        if provider.get("openai_variant") not in {"sub2api", "new_api"}:
+            return math.inf
+        credential = self._model_group_candidate_credential(candidate)
+        credential_uuid = credential.get("uuid") if credential is not None else None
+        snapshot = provider.get("availability_snapshot")
+        values = snapshot.get("credentials") if isinstance(snapshot, Mapping) else None
+        item = values.get(str(credential_uuid)) if isinstance(values, Mapping) else None
+        value = item.get("value") if isinstance(item, Mapping) else None
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            return None
+        return float(value)
+
+    def _model_group_candidate_thresholds(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> tuple[float, float]:
+        provider = self._all_raw_providers.get(candidate.provider_name, {})
+        variant = provider.get("openai_variant")
+        defaults = (70.0, 40.0) if variant == "new_api" else (500.0, 100.0)
+        credential = self._model_group_candidate_credential(candidate)
+        if credential is None:
+            return defaults
+        return (
+            float(credential.get("availability_threshold_primary", defaults[0])),
+            float(credential.get("availability_threshold_secondary", defaults[1])),
+        )
+
+    def preferred_model_group_candidate(
+        self,
+        group_name: str,
+        *,
+        failed: Collection[_ModelGroupProviderCandidate] = (),
+        after_503: bool = False,
+    ) -> _ModelGroupProviderCandidate | None:
+        """Choose a candidate by strict parallel availability thresholds."""
+        ring = self.model_group_rings.get(group_name)
+        if ring is None:
+            return None
+        excluded = set(failed)
+        current = ring.current
+        current_rate = self.model_group_candidate_multiplier(current)
+        available = self.available_model_group_candidates(group_name)
+        if not after_503 and current not in available:
+            return self.preferred_model_group_candidate(
+                group_name,
+                failed=(*excluded, current),
+                after_503=True,
+            )
+        qualified: list[
+            tuple[float, float, str, str, _ModelGroupProviderCandidate]
+        ] = []
+        for candidate in available:
+            if candidate in excluded or (not after_503 and candidate == current):
+                continue
+            availability = self.model_group_candidate_availability(candidate)
+            if availability is None:
+                continue
+            primary, secondary = self._model_group_candidate_thresholds(candidate)
+            rate = self.model_group_candidate_multiplier(candidate)
+            primary_match = availability > primary and (
+                after_503 or rate < current_rate
+            )
+            secondary_match = availability > secondary and (
+                after_503 or rate < current_rate / 1.2
+            )
+            if primary_match or secondary_match:
+                qualified.append(
+                    (
+                        rate,
+                        -availability,
+                        candidate.provider_name,
+                        candidate.credential_uuid or "",
+                        candidate,
+                    )
+                )
+        if not qualified:
+            return None if after_503 else current
+        return min(qualified)[-1]
+
     def cheapest_model_group_candidate(
         self, group_name: str
     ) -> _ModelGroupProviderCandidate | None:
-        """Select the available candidate with the lowest effective multiplier."""
-        available = self.available_model_group_candidates(group_name)
-        if all(
-            self.model_group_candidate_multiplier(candidate) == 1.0
-            for candidate in available
-        ):
-            ring = self.model_group_rings.get(group_name)
-            if ring is not None and ring.current in available:
-                return ring.current
-        return min(
-            available,
-            key=lambda candidate: (
-                self.model_group_candidate_multiplier(candidate),
-                self.model_group_candidates[group_name].index(candidate),
-            ),
-            default=None,
-        )
+        """Backward-compatible alias for cost-aware normal selection."""
+        return self.preferred_model_group_candidate(group_name)
 
     def _model_profile_for_candidate(
         self,
@@ -1962,22 +2086,13 @@ class GatewayConfig:
                     f"Model group '{group_name}' configuration unavailable: "
                     "all enabled providers are cooling"
                 )
-            selected_candidate = self.cheapest_model_group_candidate(group_name)
+            selected_candidate = ring.current
             # A disabled/cooling candidate must never become a fresh route.
             if selected_candidate not in available:
-                selected_candidate = next(
-                    (
-                        candidate
-                        for candidate in available
-                        if candidate.provider_name in self.providers
-                    ),
-                    None,
+                raise ModelGroupConfigurationUnavailable(
+                    f"Model group '{group_name}' configuration unavailable: "
+                    "current candidate is cooling and no cost-aware selection completed"
                 )
-                if selected_candidate is None:
-                    raise ModelGroupConfigurationUnavailable(
-                        f"Model group '{group_name}' configuration unavailable: "
-                        "no enabled provider can issue an upstream request"
-                    )
             provider_name = selected_candidate.provider_name
         provider_type = self.provider_types[provider_name]
         shim_name = self.provider_shim_names.get(provider_name)

@@ -743,7 +743,9 @@ async def _proxy_handler(  # noqa: C901
     # among concurrent requests for the same Provider.
     provider_refresh = getattr(request.app, "provider_refresh_coordinator", None)
     if provider_refresh is not None:
-        await provider_refresh.before_request(group_name)
+        refresh_result = provider_refresh.before_request(group_name)
+        if hasattr(refresh_result, "__await__"):
+            await refresh_result
 
     _mark_stream_active(request, is_stream=is_stream)
     t0 = time.monotonic()
@@ -769,6 +771,23 @@ async def _proxy_handler(  # noqa: C901
                 else:
                     observation, _waited, inherited_leader = await ring.await_attempt()
                     failover_leader = inherited_leader
+
+                if not failover_leader and hasattr(
+                    config, "preferred_model_group_candidate"
+                ):
+                    preferred = config.preferred_model_group_candidate(group_name)
+                    if preferred is not None and preferred != ring.current:
+                        failover_leader, _waited = await ring.claim_observation(
+                            observation
+                        )
+                        if not failover_leader:
+                            continue
+                        try:
+                            await ring.select_automatically(preferred)
+                        finally:
+                            await ring.publish()
+                            failover_leader = False
+                        continue
 
             try:
                 route, provider_info = config.resolve(source_provider, model)
@@ -904,6 +923,7 @@ async def _proxy_handler(  # noqa: C901
 
             provider_failed = bool(
                 ring is not None
+                and response.status_code == 503
                 and profile.get("upstream_provider_failure")
                 and profile.get("provider_failure_origin") == "upstream_response"
                 and not isinstance(response, StreamingResponse)
@@ -929,18 +949,21 @@ async def _proxy_handler(  # noqa: C901
                 configured_candidates = getattr(ring, "candidates", ring.available())
                 if failed_provider not in configured_candidates:
                     failed_provider = route.provider_name
-                eligible_candidates = (
-                    config.available_model_group_candidates(group_name)
-                    if hasattr(config, "available_model_group_candidates")
-                    else ring.available()
-                )
-                next_provider = next(
-                    (
-                        candidate
-                        for candidate in eligible_candidates
-                        if candidate != failed_provider
-                    ),
-                    None,
+                next_provider = (
+                    config.preferred_model_group_candidate(
+                        group_name,
+                        failed=(failed_provider,),
+                        after_503=True,
+                    )
+                    if hasattr(config, "preferred_model_group_candidate")
+                    else next(
+                        (
+                            candidate
+                            for candidate in ring.available()
+                            if candidate != failed_provider
+                        ),
+                        None,
+                    )
                 )
                 if next_provider is not None:
                     # Persistence succeeds before either runtime current or
@@ -1094,7 +1117,9 @@ async def _before_auxiliary_provider_resolution(
     )
     provider_refresh = getattr(request.app, "provider_refresh_coordinator", None)
     if provider_refresh is not None:
-        await provider_refresh.before_request(group_name)
+        refresh_result = provider_refresh.before_request(group_name)
+        if hasattr(refresh_result, "__await__"):
+            await refresh_result
 
 
 async def handle_codex_search(request: Any) -> Response:

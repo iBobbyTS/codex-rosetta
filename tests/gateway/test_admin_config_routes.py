@@ -2840,6 +2840,8 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     body["new_api_aggregation_bin"] = "5m"
     body["api_keys"][0]["new_api_group"] = "team"
     body["api_keys"][0]["new_api_model"] = "gpt-4.1-mini"
+    body["api_keys"][0]["availability_threshold_primary"] = 70
+    body["api_keys"][0]["availability_threshold_secondary"] = 40
     request = _provider_admin_request(config_path, data, "openai", body)
 
     response = _run(put_provider(request))
@@ -2866,6 +2868,8 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     )
     assert credential["new_api_group"] == "team"
     assert credential["new_api_model"] == "gpt-4.1-mini"
+    assert credential["availability_threshold_primary"] == 70
+    assert credential["availability_threshold_secondary"] == 40
 
 
 def test_put_provider_removes_new_api_aggregation_bin_when_leaving_new_api(tmp_path):

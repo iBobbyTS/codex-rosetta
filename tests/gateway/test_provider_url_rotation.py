@@ -523,6 +523,37 @@ def test_model_group_nonstream_non503_retries_without_rotating_credential(
     asyncio.run(scenario())
 
 
+def test_model_group_literal_503_uses_three_attempts_per_credential(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        target = f"{origin}/responses"
+        client.add(target, *_literal_503s(3))
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+
+        result = await transport.send_request(
+            provider,
+            "openai_responses",
+            {},
+            "model",
+            retry_nonstandard_statuses=True,
+        )
+
+        assert result.status_code == 503
+        assert client.calls == [target] * 3
+        assert sleeps == [1.0, 2.0]
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("status", [201, 204, 302])
 @pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_model_group_non200_status_uses_exact_retry_budget(
