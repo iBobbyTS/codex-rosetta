@@ -34,10 +34,20 @@ class AutomaticSwitchEvent:
         }
 
 
-def _candidate_dict(candidate: _ModelGroupProviderCandidate) -> dict[str, str | None]:
+def _candidate_dict(
+    candidate: _ModelGroupProviderCandidate, config: GatewayConfig
+) -> dict[str, str | None]:
+    credential_id: str | None = None
+    if candidate.credential_uuid is not None:
+        provider = config.providers.get(candidate.provider_name)
+        if provider is not None:
+            try:
+                credential_id = provider.credential_id_for_uuid(candidate.credential_uuid)
+            except ValueError:
+                credential_id = None
     return {
         "provider": candidate.provider_name,
-        "credential_uuid": candidate.credential_uuid,
+        "credential_id": credential_id,
     }
 
 
@@ -61,8 +71,8 @@ class AutomaticSwitchEventStore:
         event = AutomaticSwitchEvent(
             id=self._next_id,
             group=group,
-            old_candidate=_candidate_dict(old_candidate),
-            new_candidate=_candidate_dict(new_candidate),
+            old_candidate=_candidate_dict(old_candidate, self._config),
+            new_candidate=_candidate_dict(new_candidate, self._config),
             old_rate=self._config.model_group_candidate_multiplier(old_candidate),
             new_rate=self._config.model_group_candidate_multiplier(new_candidate),
         )

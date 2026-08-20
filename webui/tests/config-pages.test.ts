@@ -1714,7 +1714,7 @@ describe('ModelsPage', () => {
     apiMock.get.mockImplementation((path: string) => {
       if (path === '/admin/api/config') return Promise.resolve({ providers: {}, model_groups: {}, tool_profile_presets: [] });
       polls += 1;
-      return Promise.resolve(polls === 1 ? { cursor: 7, events: [] } : { cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_uuid: null }, new_candidate: { provider: 'new', credential_uuid: 'credential-2' }, old_rate: 0.4, new_rate: 0.2 }] });
+      return Promise.resolve(polls === 1 ? { cursor: 7, events: [] } : { cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_id: null }, new_candidate: { provider: 'new', credential_id: 'credential-2' }, old_rate: 0.4, new_rate: 0.2 }] });
     });
     render(ModelsPage);
     await screen.findByRole('button', { name: 'Request notification permission' });
@@ -1751,7 +1751,7 @@ describe('ModelsPage', () => {
       await vi.advanceTimersByTimeAsync(4000);
       expect(eventPaths).toHaveLength(1);
 
-      resolveFirstPoll({ cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_uuid: null }, new_candidate: { provider: 'new', credential_uuid: null }, old_rate: 0.4, new_rate: 0.2 }] });
+      resolveFirstPoll({ cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_id: null }, new_candidate: { provider: 'new', credential_id: null }, old_rate: 0.4, new_rate: 0.2 }] });
       await vi.advanceTimersByTimeAsync(0);
       expect(created).toHaveBeenCalledTimes(1);
 

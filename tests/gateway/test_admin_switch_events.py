@@ -90,11 +90,11 @@ def test_automatic_switch_store_exposes_only_events_after_cursor() -> None:
             "group": "fast",
             "old_candidate": {
                 "provider": "old",
-                "credential_uuid": "00000000-0000-4000-8000-000000000001",
+                "credential_id": "old",
             },
             "new_candidate": {
                 "provider": "new",
-                "credential_uuid": "00000000-0000-4000-8000-000000000002",
+                "credential_id": "new",
             },
             "old_rate": 0.4,
             "new_rate": 0.2,
