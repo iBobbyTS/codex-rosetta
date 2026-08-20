@@ -971,6 +971,12 @@ async def get_config(request: Any) -> Response:
                         and entry["new_api_group"]
                         else {}
                     ),
+                    **(
+                        {"new_api_model": entry["new_api_model"]}
+                        if isinstance(entry.get("new_api_model"), str)
+                        and entry["new_api_model"]
+                        else {}
+                    ),
                 }
                 for entry in masked["api_keys"]
             ]
@@ -1610,6 +1616,14 @@ def _resolve_draft_provider_api_keys(
                 )
             if new_api_group:
                 merged_entry["new_api_group"] = new_api_group
+        new_api_model = entry.get("new_api_model")
+        if new_api_model is not None:
+            if not isinstance(new_api_model, str):
+                raise ValueError(
+                    f"'api_keys[{index}].new_api_model' must be a string or null"
+                )
+            if new_api_model.strip():
+                merged_entry["new_api_model"] = new_api_model.strip()
         merged_keys.append(merged_entry)
     if len({entry["uuid"] for entry in merged_keys}) != len(merged_keys):
         raise ValueError("'api_keys[].uuid' values must be unique")

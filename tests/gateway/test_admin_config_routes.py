@@ -2837,6 +2837,7 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     body = _provider_put_body(data, "openai")
     body["openai_variant"] = "new_api"
     body["api_keys"][0]["new_api_group"] = "team"
+    body["api_keys"][0]["new_api_model"] = "gpt-4.1-mini"
     request = _provider_admin_request(config_path, data, "openai", body)
 
     response = _run(put_provider(request))
@@ -2845,6 +2846,7 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["providers"]["openai"]["openai_variant"] == "new_api"
     assert saved["providers"]["openai"]["api_keys"][0]["new_api_group"] == "team"
+    assert saved["providers"]["openai"]["api_keys"][0]["new_api_model"] == "gpt-4.1-mini"
 
     get_request = SimpleNamespace(
         app=request.app,
@@ -2853,8 +2855,11 @@ def test_put_provider_round_trips_openai_variant_and_new_api_group(tmp_path):
     masked_response = _run(get_config(get_request))
     masked = json.loads(masked_response.body)
     credential = masked["providers"]["openai"]["api_keys"][0]
-    assert credential["key"] == "***"
+    assert credential["key"] == config_routes._mask_api_key(
+        saved["providers"]["openai"]["api_keys"][0]["key"]
+    )
     assert credential["new_api_group"] == "team"
+    assert credential["new_api_model"] == "gpt-4.1-mini"
 
 
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
@@ -2891,6 +2896,7 @@ def test_resolve_draft_provider_api_keys_preserves_optional_group_metadata():
                 "id": "renamed",
                 "key": "sk-s***cret",
                 "new_api_group": "new",
+                "new_api_model": "gpt-4.1-mini",
             }
         ],
         existing,
@@ -2902,6 +2908,7 @@ def test_resolve_draft_provider_api_keys_preserves_optional_group_metadata():
             "id": "renamed",
             "key": "sk-secret",
             "new_api_group": "new",
+            "new_api_model": "gpt-4.1-mini",
         }
     ]
 
@@ -2915,6 +2922,21 @@ def test_resolve_draft_provider_api_keys_rejects_non_string_group():
                     "id": "primary",
                     "key": "sk-secret",
                     "new_api_group": 1,
+                }
+            ],
+            {"api_keys": []},
+        )
+
+
+def test_resolve_draft_provider_api_keys_rejects_non_string_model():
+    with pytest.raises(ValueError, match="new_api_model.*string or null"):
+        config_routes._resolve_draft_provider_api_keys(
+            [
+                {
+                    "uuid": _PRIMARY_CREDENTIAL_UUID,
+                    "id": "primary",
+                    "key": "sk-secret",
+                    "new_api_model": 1,
                 }
             ],
             {"api_keys": []},
