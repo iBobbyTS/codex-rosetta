@@ -106,6 +106,7 @@ from .tools import (
     get_tool_profiles,
     put_tool_profile,
 )
+from ..events import get_model_group_switch_events
 
 
 def register_admin_routes(app: Any) -> None:
@@ -168,6 +169,9 @@ def register_admin_routes(app: Any) -> None:
     )
     app.route("/admin/api/config/model-groups/<path:name>", methods=["DELETE"])(
         delete_model_group
+    )
+    app.route("/admin/api/model-group-switch-events", methods=["GET"])(
+        get_model_group_switch_events
     )
     app.route("/admin/api/config/providers/<name>/models", methods=["GET"])(
         fetch_upstream_models

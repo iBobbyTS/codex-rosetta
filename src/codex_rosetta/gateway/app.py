@@ -1304,6 +1304,7 @@ def _flush_now(app: App) -> None:
 def _bind_provider_current_recorders(  # noqa: C901
     config: GatewayConfig,
     config_path: str | None,
+    automatic_switch_recorder: Any | None = None,
 ) -> None:
     """Bind config-path-aware URL and credential recorders per provider row."""
     write_lock = asyncio.Lock()
@@ -1382,6 +1383,7 @@ def _bind_provider_current_recorders(  # noqa: C901
         provider_info.bind_current_credential_recorder(record_credential)
     for ring in config.model_group_rings.values():
         ring.bind_recorder(record_model_group)
+        ring.bind_automatic_switch_recorder(automatic_switch_recorder)
 
 
 # ---------------------------------------------------------------------------
@@ -1411,7 +1413,12 @@ def create_app(
     image_fetch_workers = ImageFetchWorkerPool()
     web_run_health_state = WebRunHealthState()
     transport = HttpTransport()
-    _bind_provider_current_recorders(config, config_path)
+    from .admin.events import AutomaticSwitchEventStore
+
+    automatic_switch_events = AutomaticSwitchEventStore(config)
+    _bind_provider_current_recorders(
+        config, config_path, automatic_switch_events.record
+    )
 
     app = GatewayApp(
         max_body_size=config.request_body_limit_bytes,
@@ -1531,6 +1538,7 @@ def create_app(
     app.auth_state = auth_state  # type: ignore
     app.upstream_error_log_state = upstream_error_log_state  # type: ignore
     app.body_log_state = body_log_state  # type: ignore
+    app.automatic_switch_events = automatic_switch_events  # type: ignore
 
     setup_admin(app, config, config_path)
     app.provider_refresh_coordinator = ProviderRefreshCoordinator(  # type: ignore

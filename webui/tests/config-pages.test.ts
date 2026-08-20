@@ -1,7 +1,7 @@
 // @vitest-environment-options { "customExportConditions": ["browser"] }
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import KeysPage from '../src/admin/pages/KeysPage.svelte';
 import ModelsPage from '../src/admin/pages/ModelsPage.svelte';
 import ProvidersPage from '../src/admin/pages/ProvidersPage.svelte';
@@ -72,6 +72,8 @@ beforeEach(() => {
   apiMock.put.mockResolvedValue({ ok: true });
   apiMock.del.mockResolvedValue({ ok: true });
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe('ProvidersPage', () => {
   it('orders OpenAI variants and persists ordered New API groups with rates', async () => {
@@ -1675,6 +1677,54 @@ describe('KeysPage', () => {
 });
 
 describe('ModelsPage', () => {
+  it('requests notification permission manually in every state and auto-asks only when undecided', async () => {
+    const requestPermission = vi.fn().mockResolvedValue('denied');
+    class NotificationMock {
+      static permission: NotificationPermission = 'denied';
+      static requestPermission = requestPermission;
+    }
+    vi.stubGlobal('Notification', NotificationMock);
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config'
+      ? { providers: { upstream: { api_type: 'chat', auto_rotate_credentials: true } }, model_groups: {}, tool_profile_presets: [] }
+      : { cursor: 0, events: [] }));
+    render(ModelsPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Request notification permission' }));
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    await fireEvent.click(screen.getByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Model Group' })).getByRole('button', { name: '+ Add Provider' }));
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+
+    NotificationMock.permission = 'default';
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Model Group' })).getByRole('button', { name: 'Cancel' }));
+    await fireEvent.click(screen.getByRole('button', { name: '+ Add Model Group' }));
+    await fireEvent.click(within(screen.getByRole('dialog', { name: 'Add Model Group' })).getByRole('button', { name: '+ Add Provider' }));
+    expect(requestPermission).toHaveBeenCalledTimes(2);
+  });
+
+  it('delivers automatic switch events through system notifications without replaying older events', async () => {
+    const created = vi.fn();
+    class NotificationMock {
+      static permission: NotificationPermission = 'granted';
+      static requestPermission = vi.fn();
+      constructor(title: string, options?: NotificationOptions) { created(title, options); }
+    }
+    vi.stubGlobal('Notification', NotificationMock);
+    let polls = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve({ providers: {}, model_groups: {}, tool_profile_presets: [] });
+      polls += 1;
+      return Promise.resolve(polls === 1 ? { cursor: 7, events: [] } : { cursor: 8, events: [{ id: 8, group: 'fast', old_candidate: { provider: 'old', credential_uuid: null }, new_candidate: { provider: 'new', credential_uuid: 'credential-2' }, old_rate: 0.4, new_rate: 0.2 }] });
+    });
+    render(ModelsPage);
+    await screen.findByRole('button', { name: 'Request notification permission' });
+    await new Promise((resolve) => window.setTimeout(resolve, 2100));
+    await waitFor(() => expect(created).toHaveBeenCalledWith(
+      'Model group fast switched provider',
+      { body: 'old (0.4x) → new (credential-2) (0.2x)' },
+    ));
+  });
+
   it('renders a full Provider selector until a false-mode Provider needs a key pair', async () => {
     apiMock.get.mockResolvedValue({
       providers: {

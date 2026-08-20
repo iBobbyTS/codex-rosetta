@@ -322,10 +322,19 @@ def _activate_gateway_config(
             state._redactor = value
         from ...app import _bind_provider_current_recorders
 
-        _bind_provider_current_recorders(new_config, getattr(app, "config_path", None))
+        automatic_switch_events = getattr(app, "automatic_switch_events", None)
+        _bind_provider_current_recorders(
+            new_config,
+            getattr(app, "config_path", None),
+            automatic_switch_events.record
+            if automatic_switch_events is not None
+            else None,
+        )
         app.admin_cors_origins = activation.admin_cors_origins
         app.max_body_size = activation.max_body_size
         app.gateway_config = new_config
+        if automatic_switch_events is not None:
+            automatic_switch_events.update_config(new_config)
         provider_refresh = getattr(app, "provider_refresh_coordinator", None)
         if provider_refresh is not None:
             provider_refresh.sync_config(new_config)

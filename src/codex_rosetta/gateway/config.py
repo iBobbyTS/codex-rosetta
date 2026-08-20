@@ -82,6 +82,9 @@ class _ModelGroupProviderCandidate:
 
 
 ModelGroupProviderRecorder = Callable[[str, _ModelGroupProviderCandidate], Any]
+ModelGroupAutomaticSwitchRecorder = Callable[
+    [str, _ModelGroupProviderCandidate, _ModelGroupProviderCandidate], Any
+]
 ModelGroupCandidateCooldownClearer = Callable[[_ModelGroupProviderCandidate], None]
 _MISSING_MODEL_GROUP_CURRENT = object()
 
@@ -102,6 +105,7 @@ class ModelGroupProviderRing:
         self.group_name = group_name
         self._ring = OrderedFailoverCoordinator(providers, current)
         self._record_current: ModelGroupProviderRecorder | None = None
+        self._record_automatic_switch: ModelGroupAutomaticSwitchRecorder | None = None
         self._clear_candidate_cooldown: ModelGroupCandidateCooldownClearer | None = None
 
     @property
@@ -154,6 +158,12 @@ class ModelGroupProviderRing:
     def bind_recorder(self, recorder: ModelGroupProviderRecorder | None) -> None:
         self._record_current = recorder
 
+    def bind_automatic_switch_recorder(
+        self, recorder: ModelGroupAutomaticSwitchRecorder | None
+    ) -> None:
+        """Bind the non-blocking notification hook for automatic changes."""
+        self._record_automatic_switch = recorder
+
     def bind_candidate_cooldown_clearer(
         self, clearer: ModelGroupCandidateCooldownClearer | None
     ) -> None:
@@ -185,6 +195,7 @@ class ModelGroupProviderRing:
         clear_cooldown: bool,
     ) -> None:
         provider = self._canonical_candidate(provider)
+        previous = self.current
         if self._record_current is not None and provider != self.current:
             result = self._record_current(self.group_name, provider)
             if hasattr(result, "__await__"):
@@ -194,6 +205,14 @@ class ModelGroupProviderRing:
             if self._clear_candidate_cooldown is not None:
                 self._clear_candidate_cooldown(provider)
         self._ring.set_current(provider)
+        if (
+            not clear_cooldown
+            and previous != provider
+            and self._record_automatic_switch is not None
+        ):
+            result = self._record_automatic_switch(self.group_name, previous, provider)
+            if hasattr(result, "__await__"):
+                await result
 
 
 def _validate_provider_credential_uuid(value: Any, *, field: str) -> str:
