@@ -309,10 +309,13 @@ class TestOpenAIResponsesToolOps:
             {"type": "custom", "name": "exec", "description": None},
             {"type": "custom", "name": "exec", "description": ["invalid"]},
             {"type": "custom", "name": "exec", "description": 42},
+            {"type": "future_tool", "description": None},
+            {"type": "future_tool", "description": ["invalid"]},
+            {"type": "future_tool", "description": 42},
             {"type": {"invalid": "type"}, "name": "exec"},
         ],
     )
-    def test_p_tool_definition_to_ir_namespace_skips_malformed_custom_children(
+    def test_p_tool_definition_to_ir_namespace_skips_malformed_children(
         self, malformed_child: dict[str, Any]
     ):
         provider_tool = {
@@ -328,6 +331,21 @@ class TestOpenAIResponsesToolOps:
 
         assert isinstance(result, list)
         assert [tool["name"] for tool in result] == ["exec"]
+
+    def test_p_tool_definition_to_ir_namespace_unknown_child_defaults_description(
+        self,
+    ):
+        provider_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [{"type": "future_tool"}],
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+
+        assert isinstance(result, list)
+        assert result[0]["name"] == "future_tool"
+        assert result[0]["description"] == ""
 
     def test_p_tool_definition_to_ir_namespace_custom_child_defaults_description(
         self,

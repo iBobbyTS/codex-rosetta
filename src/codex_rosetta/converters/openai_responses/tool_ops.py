@@ -104,10 +104,12 @@ def _valid_namespace_child(child: dict[str, Any]) -> bool:
         return False
     if "name" in child and not isinstance(child_name, str):
         return False
-    if child_type != "custom":
+    if child_type == "function":
         return True
     if "description" in child and not isinstance(child["description"], str):
         return False
+    if child_type != "custom":
+        return True
     return bool(child_name)
 
 
