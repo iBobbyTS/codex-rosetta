@@ -319,6 +319,60 @@ class TestOpenAIResponsesConverter:
             "'multi_agent_v1-spawn_agent'; keeping the first definition"
         ]
 
+    def test_request_from_provider_preserves_lite_namespace_custom_tools(self):
+        """Responses Lite keeps custom children available for Chat degradation."""
+        context = ConversionContext()
+        provider_request = {
+            "model": "ox-alpha",
+            "input": [
+                {
+                    "type": "additional_tools",
+                    "role": "developer",
+                    "tools": [
+                        {
+                            "type": "namespace",
+                            "name": "functions",
+                            "description": "",
+                            "tools": [
+                                {
+                                    "type": "custom",
+                                    "name": "exec",
+                                    "description": "Run JavaScript.",
+                                },
+                                {
+                                    "type": "custom",
+                                    "name": "apply_patch",
+                                    "description": "Apply a patch.",
+                                },
+                                {
+                                    "type": "function",
+                                    "name": "wait",
+                                    "description": "Wait for execution.",
+                                    "parameters": {},
+                                },
+                            ],
+                        }
+                    ],
+                },
+                {"role": "user", "content": "Edit the file."},
+            ],
+        }
+
+        result = self.converter.request_from_provider(provider_request, context=context)
+
+        assert [tool["name"] for tool in result["tools"]] == [
+            "exec",
+            "apply_patch",
+            "functions-wait",
+        ]
+        assert [tool["metadata"]["provider_type"] for tool in result["tools"]] == [
+            "custom",
+            "custom",
+            "namespace",
+        ]
+        assert context.get_responses_native_tool_type("exec") == "custom"
+        assert context.get_responses_native_tool_type("apply_patch") == "custom"
+
     def test_request_from_provider_with_text_format(self):
         """Test text field -> response_format."""
         provider_request = {

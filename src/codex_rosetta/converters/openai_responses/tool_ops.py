@@ -271,7 +271,15 @@ class OpenAIResponsesToolOps(BaseToolOps):
                 for child in provider_tool["tools"]:
                     if not isinstance(child, dict):
                         continue
-                    if child.get("type", "function") != "function":
+                    child_type = child.get("type", "function")
+                    if child_type != "function":
+                        degraded = OpenAIResponsesToolOps._degrade_non_function_tool(
+                            child, child_type
+                        )
+                        if isinstance(degraded, list):
+                            ir_tools.extend(degraded)
+                        else:
+                            ir_tools.append(degraded)
                         continue
                     description = child.get("description", "")
                     if namespace_description:
@@ -321,35 +329,10 @@ class OpenAIResponsesToolOps(BaseToolOps):
             # satisfy validation; ``ir_tool_definition_to_p`` restores the
             # original payload on the outbound leg.
             if tool_type != "function" and tool_type not in _IR_ALLOWED_TYPES:
-                hosted_tool = OpenAIResponsesToolOps._hosted_tool_definition_to_ir(
+                degraded = OpenAIResponsesToolOps._degrade_non_function_tool(
                     provider_tool, tool_type
                 )
-                if hosted_tool is not None:
-                    return hosted_tool
-
-                # Synthesize a minimal JSON Schema for cross-provider
-                # degradation so other providers see "a function that
-                # accepts one text input" instead of an empty schema.
-                synth_params: dict[str, Any] = {}
-                if provider_tool.get("name"):
-                    synth_params = {
-                        "type": "object",
-                        "properties": {"input": {"type": "string"}},
-                        "required": ["input"],
-                    }
-                desc = provider_tool.get("description", "")
-                result = {
-                    "type": "function",
-                    "name": provider_tool.get("name", tool_type),
-                    "description": desc,
-                    "parameters": synth_params,
-                    "_passthrough": dict(provider_tool),
-                }
-                result["metadata"] = {"provider_type": tool_type}
-                result["required_parameters"] = (
-                    synth_params.get("required", []) if synth_params else []
-                )
-                return cast(ToolDefinition, result)
+                return degraded
 
             # Flat format (Responses API native).
             # Custom tools use "schema" instead of "parameters".
@@ -379,6 +362,40 @@ class OpenAIResponsesToolOps(BaseToolOps):
         result["metadata"] = (
             {"provider_type": downgraded_from} if downgraded_from else {}
         )
+        return cast(ToolDefinition, result)
+
+    @staticmethod
+    def _degrade_non_function_tool(
+        provider_tool: dict[str, Any],
+        tool_type: str,
+    ) -> ToolDefinition | list[ToolDefinition]:
+        """Reuse one loss-minimizing degradation for top-level and child tools."""
+        hosted_tool = OpenAIResponsesToolOps._hosted_tool_definition_to_ir(
+            provider_tool, tool_type
+        )
+        if hosted_tool is not None:
+            return hosted_tool
+
+        # Cross-provider functions need an object schema even when their source
+        # tool accepts freeform input.
+        synth_params: dict[str, Any] = {}
+        if provider_tool.get("name"):
+            synth_params = {
+                "type": "object",
+                "properties": {"input": {"type": "string"}},
+                "required": ["input"],
+            }
+        result = {
+            "type": "function",
+            "name": provider_tool.get("name", tool_type),
+            "description": provider_tool.get("description", ""),
+            "parameters": synth_params,
+            "_passthrough": dict(provider_tool),
+            "metadata": {"provider_type": tool_type},
+            "required_parameters": synth_params.get("required", [])
+            if synth_params
+            else [],
+        }
         return cast(ToolDefinition, result)
 
     # ==================== Tool Choice ====================

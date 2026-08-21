@@ -142,6 +142,66 @@ def _profile_route() -> ResolvedRoute:
     )
 
 
+def test_native_capabilities_detect_nested_custom_execution_tools():
+    capabilities = NativeToolCapabilities.from_chat_tools(
+        [
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [
+                    {"type": "custom", "name": "exec"},
+                    {
+                        "type": "namespace",
+                        "name": "nested",
+                        "tools": [{"type": "custom", "name": "apply_patch"}],
+                    },
+                ],
+            }
+        ]
+    )
+
+    assert capabilities.has_custom_exec is True
+    assert capabilities.has_custom_apply_patch is True
+
+
+def test_native_capabilities_ignore_malformed_or_inexact_nested_tools():
+    capabilities = NativeToolCapabilities.from_chat_tools(
+        [
+            {"type": "namespace", "name": "missing-children"},
+            {"type": "namespace", "name": "wrong-children", "tools": {}},
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [
+                    None,
+                    {"type": "function", "name": "exec"},
+                    {"type": "custom", "name": "unknown"},
+                    {"type": "namespace", "name": "not-a-leaf"},
+                ],
+            },
+        ]
+    )
+
+    assert capabilities.has_custom_exec is False
+    assert capabilities.has_custom_apply_patch is False
+
+
+def test_native_capabilities_retain_legacy_top_level_shapes():
+    capabilities = NativeToolCapabilities.from_chat_tools(
+        [
+            {"type": "custom", "name": "exec"},
+            {"type": "custom", "name": "apply_patch"},
+            {"type": "function", "function": {"name": "exec_command"}},
+            {"type": "function", "name": "write_stdin"},
+        ]
+    )
+
+    assert capabilities.has_custom_exec is True
+    assert capabilities.has_custom_apply_patch is True
+    assert capabilities.has_exec_command is True
+    assert capabilities.has_write_stdin is True
+
+
 def test_localize_code_editing_chat_request_replaces_native_tools():
     body = {
         "model": "glm-5.2",

@@ -12,6 +12,7 @@ import json
 import shlex
 import uuid
 from collections import OrderedDict
+from collections.abc import Iterator
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -182,6 +183,19 @@ class ReadOutputCache:
         return expanded_old, expanded_new
 
 
+def _iter_tool_capability_definitions(tools: list[Any]) -> Iterator[dict[str, Any]]:
+    """Yield tool definitions, descending only through Namespace child lists."""
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        yield tool
+        if tool.get("type") != "namespace":
+            continue
+        children = tool.get("tools")
+        if isinstance(children, list):
+            yield from _iter_tool_capability_definitions(children)
+
+
 @dataclass(frozen=True)
 class NativeToolCapabilities:
     """Executable Codex tool capabilities present in the original request."""
@@ -203,7 +217,7 @@ class NativeToolCapabilities:
         has_write_stdin = False
         has_custom_apply_patch = False
         has_custom_exec = False
-        for tool in tools:
+        for tool in _iter_tool_capability_definitions(tools):
             name = _chat_tool_name(tool)
             if name == "exec_command":
                 has_exec_command = True

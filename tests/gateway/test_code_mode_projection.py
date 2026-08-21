@@ -3342,6 +3342,143 @@ def test_projected_mapping_history_restores_original_chat_call():
     assert json.loads(function["arguments"]) == arguments
 
 
+def test_gateway_projects_0149_lite_exec_and_localizes_write_edit():
+    captured_body: dict = {}
+    upstream_response = {
+        "id": "chatcmpl-0149-lite",
+        "object": "chat.completion",
+        "created": 1,
+        "model": "deepseek-v4-flash",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_shell",
+                            "type": "function",
+                            "function": {
+                                "name": "exec_command",
+                                "arguments": '{"cmd":"pwd"}',
+                            },
+                        },
+                        {
+                            "id": "call_edit",
+                            "type": "function",
+                            "function": {
+                                "name": "Edit",
+                                "arguments": json.dumps(
+                                    {
+                                        "file_path": "fixtures/example.txt",
+                                        "old_string": "before",
+                                        "new_string": "after",
+                                    }
+                                ),
+                            },
+                        },
+                        {
+                            "id": "call_write",
+                            "type": "function",
+                            "function": {
+                                "name": "Write",
+                                "arguments": json.dumps(
+                                    {
+                                        "file_path": "fixtures/new.txt",
+                                        "content": "created\n",
+                                    }
+                                ),
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        captured_body.update(body)
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_response,
+            raw_content=json.dumps(upstream_response).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    provider_info = MagicMock()
+    provider_info.base_url = "https://example.test"
+    body = {
+        "model": "ox-alpha",
+        "input": [
+            {
+                "type": "additional_tools",
+                "role": "developer",
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "functions",
+                        "description": "",
+                        "tools": [
+                            {
+                                "type": "custom",
+                                "name": "exec",
+                                "description": _exec_description(),
+                            },
+                            {
+                                "type": "custom",
+                                "name": "apply_patch",
+                                "description": "Apply a patch.",
+                            },
+                            {
+                                "type": "function",
+                                "name": "wait",
+                                "description": "Wait for execution.",
+                                "parameters": {},
+                            },
+                        ],
+                    }
+                ],
+            },
+            {"role": "user", "content": "Inspect, edit, and write files."},
+        ],
+    }
+
+    response, _ = asyncio.run(
+        handle_non_streaming(
+            _route(),
+            provider_info,
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+        )
+    )
+
+    target_names = {
+        tool["function"]["name"]
+        for tool in captured_body["tools"]
+        if isinstance(tool.get("function"), dict)
+    }
+    assert {"exec_command", "Edit", "Write"}.issubset(target_names)
+
+    response_body = json.loads(response.body)
+    assert b"Tool adaptation error" not in response.body
+    output = {item["call_id"]: item for item in response_body["output"]}
+    assert output["call_shell"]["type"] == "custom_tool_call"
+    assert output["call_shell"]["name"] == "exec"
+    assert "tools.exec_command" in output["call_shell"]["input"]
+    assert output["call_edit"]["type"] == "custom_tool_call"
+    assert output["call_edit"]["name"] == "apply_patch"
+    assert "*** Update File: fixtures/example.txt" in output["call_edit"]["input"]
+    assert output["call_write"]["type"] == "custom_tool_call"
+    assert output["call_write"]["name"] == "apply_patch"
+    assert "*** Add File: fixtures/new.txt" in output["call_write"]["input"]
+
+
 def test_gateway_projects_direct_tools_and_persists_exec_round_trip_with_ttl(tmp_path):
     captured_bodies: list[dict] = []
     upstream_responses = [

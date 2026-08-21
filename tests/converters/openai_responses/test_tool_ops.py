@@ -257,6 +257,50 @@ class TestOpenAIResponsesToolOps:
         )
         assert "Spawn and manage sub-agents." in result[0]["description"]
 
+    def test_p_tool_definition_to_ir_namespace_degrades_custom_children(self):
+        """Namespace custom children reuse the top-level custom degradation."""
+        custom_exec = {
+            "type": "custom",
+            "name": "exec",
+            "description": "Run JavaScript.",
+            "format": {
+                "type": "grammar",
+                "syntax": "lark",
+                "definition": "start: /.+/",
+            },
+        }
+        provider_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "description": "",
+            "tools": [
+                custom_exec,
+                {
+                    "type": "function",
+                    "name": "wait",
+                    "description": "Wait for execution.",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            ],
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+
+        assert isinstance(result, list)
+        assert [tool["name"] for tool in result] == ["exec", "functions-wait"]
+        degraded = result[0]
+        assert degraded["type"] == "function"
+        assert degraded["description"] == "Run JavaScript."
+        assert degraded["parameters"] == {
+            "type": "object",
+            "properties": {"input": {"type": "string"}},
+            "required": ["input"],
+        }
+        assert degraded["required_parameters"] == ["input"]
+        assert degraded["metadata"] == {"provider_type": "custom"}
+        assert cast(Any, degraded)["_passthrough"] == custom_exec
+        assert result[1]["metadata"]["provider_type"] == "namespace"
+
     def test_tool_definition_round_trip(self):
         """Test tool definition round-trip."""
         ir_tool = cast(
