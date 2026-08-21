@@ -206,6 +206,70 @@ class OpenAIResponsesToolOps(BaseToolOps):
     # ==================== Tool Definition ====================
 
     @staticmethod
+    def _namespace_tool_definitions_to_ir(
+        provider_tool: dict[str, Any],
+    ) -> list[ToolDefinition]:
+        """Flatten one Responses Namespace into IR tool definitions."""
+        namespace = provider_tool.get("name", "")
+        namespace_description = provider_tool.get("description", "")
+        ir_tools: list[ToolDefinition] = []
+        for child in provider_tool["tools"]:
+            if not isinstance(child, dict):
+                continue
+            child_type = child.get("type", "function")
+            child_name = child.get("name")
+            if not _valid_namespace_child(child):
+                continue
+            if child_type != "function":
+                degraded = OpenAIResponsesToolOps._degrade_non_function_tool(
+                    child, child_type
+                )
+                if isinstance(degraded, list):
+                    ir_tools.extend(degraded)
+                else:
+                    ir_tools.append(degraded)
+                continue
+            description = child.get("description", "")
+            if namespace_description:
+                description = (
+                    f"{namespace_description}\n\n{description}"
+                    if description
+                    else namespace_description
+                )
+            params = child.get("parameters", {})
+            child_name = child_name or ""
+            chat_tool_name = _responses_namespace_chat_tool_name(namespace, child_name)
+            underscore_alias = _responses_namespace_chat_tool_name(
+                namespace, child_name, separator="_"
+            )
+            dotted_alias = _responses_namespace_chat_tool_name(
+                namespace, child_name, separator="."
+            )
+            result = {
+                "type": "function",
+                "name": chat_tool_name,
+                "description": description,
+                "parameters": params,
+                "required_parameters": params.get("required", [])
+                if isinstance(params, dict)
+                else [],
+                "metadata": {
+                    "provider_type": "namespace",
+                    "responses_namespace": namespace,
+                    "responses_namespace_description": namespace_description,
+                    "responses_namespace_child_name": child_name,
+                    "responses_chat_tool_name": chat_tool_name,
+                    "responses_chat_tool_aliases": [
+                        underscore_alias,
+                        dotted_alias,
+                    ],
+                    "responses_namespace_child": dict(child),
+                },
+            }
+            ir_tools.append(cast(ToolDefinition, result))
+        return ir_tools
+
+    @staticmethod
     def ir_tool_definition_to_p(ir_tool: ToolDefinition, **kwargs: Any) -> dict:
         """IR ToolDefinition → OpenAI Responses tool definition.
 
@@ -282,66 +346,9 @@ class OpenAIResponsesToolOps(BaseToolOps):
             if tool_type == "namespace" and isinstance(
                 provider_tool.get("tools"), list
             ):
-                namespace = provider_tool.get("name", "")
-                namespace_description = provider_tool.get("description", "")
-                ir_tools: list[ToolDefinition] = []
-                for child in provider_tool["tools"]:
-                    if not isinstance(child, dict):
-                        continue
-                    child_type = child.get("type", "function")
-                    child_name = child.get("name")
-                    if not _valid_namespace_child(child):
-                        continue
-                    if child_type != "function":
-                        degraded = OpenAIResponsesToolOps._degrade_non_function_tool(
-                            child, child_type
-                        )
-                        if isinstance(degraded, list):
-                            ir_tools.extend(degraded)
-                        else:
-                            ir_tools.append(degraded)
-                        continue
-                    description = child.get("description", "")
-                    if namespace_description:
-                        description = (
-                            f"{namespace_description}\n\n{description}"
-                            if description
-                            else namespace_description
-                        )
-                    params = child.get("parameters", {})
-                    child_name = child_name or ""
-                    chat_tool_name = _responses_namespace_chat_tool_name(
-                        namespace, child_name
-                    )
-                    underscore_alias = _responses_namespace_chat_tool_name(
-                        namespace, child_name, separator="_"
-                    )
-                    dotted_alias = _responses_namespace_chat_tool_name(
-                        namespace, child_name, separator="."
-                    )
-                    result = {
-                        "type": "function",
-                        "name": chat_tool_name,
-                        "description": description,
-                        "parameters": params,
-                        "required_parameters": params.get("required", [])
-                        if isinstance(params, dict)
-                        else [],
-                        "metadata": {
-                            "provider_type": "namespace",
-                            "responses_namespace": namespace,
-                            "responses_namespace_description": namespace_description,
-                            "responses_namespace_child_name": child_name,
-                            "responses_chat_tool_name": chat_tool_name,
-                            "responses_chat_tool_aliases": [
-                                underscore_alias,
-                                dotted_alias,
-                            ],
-                            "responses_namespace_child": dict(child),
-                        },
-                    }
-                    ir_tools.append(cast(ToolDefinition, result))
-                return ir_tools
+                return OpenAIResponsesToolOps._namespace_tool_definitions_to_ir(
+                    provider_tool
+                )
 
             # Non-function tools outside the IR type set (e.g. web_search or
             # Codex custom apply_patch) are stored as passthrough to avoid
