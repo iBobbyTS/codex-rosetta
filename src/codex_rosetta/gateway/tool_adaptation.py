@@ -184,12 +184,12 @@ class ReadOutputCache:
 
 
 def _iter_tool_capability_definitions(tools: list[Any]) -> Iterator[dict[str, Any]]:
-    """Yield tool definitions, descending only through Namespace child lists."""
+    """Yield leaf definitions, descending only through Namespace child lists."""
     for tool in tools:
         if not isinstance(tool, dict):
             continue
-        yield tool
         if tool.get("type") != "namespace":
+            yield tool
             continue
         children = tool.get("tools")
         if isinstance(children, list):
@@ -219,15 +219,18 @@ class NativeToolCapabilities:
         has_custom_exec = False
         for tool in _iter_tool_capability_definitions(tools):
             name = _chat_tool_name(tool)
-            if name == "exec_command":
+            if not isinstance(name, str) or not name:
+                continue
+            tool_type = _chat_tool_type(tool)
+            if tool_type == "function" and name == "exec_command":
                 has_exec_command = True
-            elif name == "shell_command":
+            elif tool_type == "function" and name == "shell_command":
                 has_shell_command = True
-            elif name == "write_stdin":
+            elif tool_type == "function" and name == "write_stdin":
                 has_write_stdin = True
-            elif name == "apply_patch" and _chat_tool_type(tool) == "custom":
+            elif tool_type == "custom" and name == "apply_patch":
                 has_custom_apply_patch = True
-            elif name == "exec" and _chat_tool_type(tool) == "custom":
+            elif tool_type == "custom" and name == "exec":
                 has_custom_exec = True
 
         return cls(

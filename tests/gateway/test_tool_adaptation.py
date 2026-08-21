@@ -186,6 +186,44 @@ def test_native_capabilities_ignore_malformed_or_inexact_nested_tools():
     assert capabilities.has_custom_apply_patch is False
 
 
+def test_native_capabilities_require_valid_execution_leaves():
+    invalid_capabilities = NativeToolCapabilities.from_chat_tools(
+        [
+            {
+                "type": "namespace",
+                "name": "exec_command",
+                "tools": [{"type": "custom", "name": "unknown"}],
+            },
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [
+                    {"type": "custom", "name": "exec_command"},
+                    {"type": "namespace", "name": "shell_command", "tools": []},
+                    {"type": "function", "name": {"invalid": "name"}},
+                    {"type": "function", "name": "write_stdin"},
+                ],
+            },
+        ]
+    )
+
+    assert invalid_capabilities.has_exec_command is False
+    assert invalid_capabilities.has_shell_command is False
+    assert invalid_capabilities.has_write_stdin is True
+
+    valid_capabilities = NativeToolCapabilities.from_chat_tools(
+        [
+            {
+                "type": "namespace",
+                "name": "functions",
+                "tools": [{"type": "function", "name": "exec_command"}],
+            }
+        ]
+    )
+
+    assert valid_capabilities.has_exec_command is True
+
+
 def test_native_capabilities_retain_legacy_top_level_shapes():
     capabilities = NativeToolCapabilities.from_chat_tools(
         [

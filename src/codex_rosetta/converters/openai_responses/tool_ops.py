@@ -96,6 +96,20 @@ def _responses_namespace_chat_tool_name(
     return f"{prefix}{suffix}"
 
 
+def _valid_namespace_child(child: dict[str, Any]) -> bool:
+    """Return whether a Namespace child has safe core definition fields."""
+    child_type = child.get("type", "function")
+    child_name = child.get("name")
+    if not isinstance(child_type, str):
+        return False
+    if "name" in child and not isinstance(child_name, str):
+        return False
+    if child_type != "custom":
+        return True
+    description = child.get("description")
+    return bool(child_name) and (description is None or isinstance(description, str))
+
+
 # ==================== Orphaned Tool Call Fix ====================
 
 
@@ -272,6 +286,9 @@ class OpenAIResponsesToolOps(BaseToolOps):
                     if not isinstance(child, dict):
                         continue
                     child_type = child.get("type", "function")
+                    child_name = child.get("name")
+                    if not _valid_namespace_child(child):
+                        continue
                     if child_type != "function":
                         degraded = OpenAIResponsesToolOps._degrade_non_function_tool(
                             child, child_type
@@ -289,7 +306,7 @@ class OpenAIResponsesToolOps(BaseToolOps):
                             else namespace_description
                         )
                     params = child.get("parameters", {})
-                    child_name = child.get("name", "")
+                    child_name = child_name or ""
                     chat_tool_name = _responses_namespace_chat_tool_name(
                         namespace, child_name
                     )
