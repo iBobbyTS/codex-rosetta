@@ -411,13 +411,17 @@ def _resolved_admin_model_entry(
         entry["validation_error"] = str(exc)
         return entry
 
-    model_info = editable_model_info(profile.catalog_model())
+    model_info_source = (
+        profile.model_info if profile.uses_fallback_profile else profile.catalog_model()
+    )
+    model_info = editable_model_info(model_info_source)
     if "identity" not in model_info:
         editable_preset = detect_model_preset(model_name, profile.upstream_model)
         if editable_preset is not None:
             model_info["identity"] = editable_preset["identity"]
     entry["model_info"] = model_info
     entry["preset_slug"] = profile.preset_slug
+    entry["uses_fallback_profile"] = profile.uses_fallback_profile
     model_diff, runtime_diff = canonical_model_overrides(profile)
     entry["has_overrides"] = bool(model_diff or runtime_diff)
     if entry["has_overrides"]:

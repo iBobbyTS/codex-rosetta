@@ -1839,6 +1839,35 @@ describe('ModelsPage', () => {
     await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', { providers: ['upstream'], current_provider: 'upstream', type: 'llm', models: { 'demo-model': {} } }));
   });
 
+  it('shows the Terra fallback and derives unknown-model identity fields', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { upstream: { api_type: 'chat' } },
+      model_groups: {},
+      tool_profile_presets: [],
+      model_presets: [{
+        slug: 'gpt-5.6-terra', display_name: 'GPT-5.6 Terra', description: 'Terra',
+        priority: 1, context_window: 128000, effective_context_window_percent: 95,
+        auto_compact_token_limit: 102400, input_modalities: ['text'],
+        supported_reasoning_levels: ['medium'],
+      }],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Model Group' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Model Group' }));
+    await fireEvent.input(dialog.getByLabelText('Exposed model'), { target: { value: 'OX Alpha' } });
+    await fireEvent.input(dialog.getByLabelText('Upstream model'), { target: { value: 'stealth/ox-alpha' } });
+
+    expect(dialog.getByText('Unknown model; gpt-5.6-terra configuration was applied automatically.')).toBeInTheDocument();
+    expect(dialog.queryByText('Auto-detected: GPT-5.6 Terra')).toBeNull();
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Enter Model Information Manually' }));
+    const infoDialog = within(screen.getByRole('dialog', { name: 'Model Information' }));
+    expect(infoDialog.getByLabelText('Slug')).toHaveValue('stealth/ox-alpha');
+    expect(infoDialog.getByLabelText('Display Name')).toHaveValue('OX Alpha');
+    expect(infoDialog.getByLabelText('Description')).toHaveValue('OX Alpha');
+    expect(infoDialog.getByLabelText('Identity')).toHaveValue('OX Alpha');
+  });
+
   it('preserves provider rows, renders status, and saves add/remove/reorder exactly', async () => {
     apiMock.get.mockResolvedValue({
       providers: {

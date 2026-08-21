@@ -4886,7 +4886,7 @@ def test_put_model_group_persists_model_info_without_runtime_modality_override(
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     saved_info = saved["model_groups"]["Vision"]["models"]["vision-alias"]["model_info"]
-    assert saved_info["slug"] == "vision-alias"
+    assert "slug" not in saved_info
     assert saved_info["display_name"] == "Vision Alias"
     assert saved_info["context_window"] == 262_144
     route, _provider = app.gateway_config.resolve("openai_responses", "vision-alias")

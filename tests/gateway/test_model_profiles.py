@@ -236,13 +236,46 @@ def test_runtime_sampling_override_validation(
         )
 
 
-def test_unknown_preset_requires_complete_model_info() -> None:
-    with pytest.raises(ValueError, match="complete model_info"):
-        resolve_model_profile(
-            exposed_model="unknown-model",
-            upstream_model=None,
-            provider_id="custom",
-        )
+def test_unknown_model_inherits_terra_profile() -> None:
+    profile = resolve_model_profile(
+        exposed_model="unknown-model",
+        upstream_model="stealth/ox-alpha",
+        provider_id="custom",
+    )
+
+    assert profile.preset_slug == "gpt-5.6-terra"
+    assert profile.uses_fallback_profile is True
+    assert profile.upstream_model == "stealth/ox-alpha"
+    assert profile.model_info["slug"] == "stealth/ox-alpha"
+    assert profile.model_info["display_name"] == "unknown-model"
+    assert profile.model_info["description"] == "unknown-model"
+    assert profile.model_info["identity"] == "unknown-model"
+    assert profile.catalog_model()["slug"] == "unknown-model"
+    terra = resolve_model_profile(
+        exposed_model="gpt-5.6-terra", upstream_model=None, provider_id="custom"
+    )
+    assert (
+        profile.catalog_model()["model_messages"]
+        == terra.catalog_model()["model_messages"]
+    )
+    assert canonical_model_overrides(profile) == ({}, {})
+
+
+def test_unknown_model_can_override_inherited_terra_metadata() -> None:
+    profile = resolve_model_profile(
+        exposed_model="unknown-model",
+        upstream_model=None,
+        provider_id="custom",
+        model_info_override={"display_name": "OX Alpha", "context_window": 262_144},
+    )
+
+    assert profile.model_info["display_name"] == "OX Alpha"
+    assert profile.model_info["context_window"] == 262_144
+    assert canonical_model_overrides(profile)[0] == {
+        "display_name": "OX Alpha",
+        "context_window": 262_144,
+        "max_context_window": 262_144,
+    }
 
 
 def test_legacy_eight_field_model_info_remains_readable() -> None:

@@ -215,7 +215,7 @@ Rosetta Tool Profile：直传 / 修改 / 禁用 / 注入
 
 Admin 的模型组弹窗会优先完整匹配配置的上游模型名，未命中时再完整匹配暴露模型名。选择手动填写模型信息后，会打开独立的可视化字段编辑弹窗；界面不会显示完整 catalog JSON 或其中包含的系统提示词。编辑可见字段时，Rosetta 会保留完整 resolved Codex 记录中的隐藏字段。Provider 还可以提供第二个独立的“{Provider}额外配置”弹窗，而不是拆分模型信息弹窗。只有当当前 Provider 与该行模型按上游优先、暴露名回退的精确规则命中额外配置 preset 时，Admin 才显示该按钮。在模型信息编辑器中，草稿与命中的 preset 相同时，“恢复预设配置”按钮不可点击；每个存在差异的可见字段单独显示黄色边框，任一草稿差异都会启用恢复按钮。
 
-配置只保存相对命中内置 preset 的规范化递归差异。读取时，Rosetta 深度复制 preset，递归覆盖 `model_info`；再复制所选 provider 的 runtime preset，并递归覆盖 `runtime_capabilities`。对象递归合并，数组整体替换，标量直接替换，`null` 表示显式覆盖；字段缺失表示继承，删除 override 表示恢复 preset。保存时重新计算深度 diff，因此空的 `model_info` 和 `runtime_capabilities` 不会写入。未命中 preset 的模型没有继承基础，必须保存完整且有效的 `model_info`。
+配置只保存相对命中内置 preset 的规范化递归差异。读取时，Rosetta 深度复制 preset，递归覆盖 `model_info`；再复制所选 provider 的 runtime preset，并递归覆盖 `runtime_capabilities`。对象递归合并，数组整体替换，标量直接替换，`null` 表示显式覆盖；字段缺失表示继承，删除 override 表示恢复 preset。保存时重新计算深度 diff，因此空的 `model_info` 和 `runtime_capabilities` 不会写入。未命中内置 preset 的模型默认继承完整的 `gpt-5.6-terra` 记录；模型信息中的 slug 默认使用上游模型名称，显示名称、描述和模型身份默认使用对外模型名称，显式填写的 `model_info` 字段只保存相对该派生 Terra 基准的差异。catalog 的 `comp_hash` 仍使用上游模型名称生成 Rosetta 自有的 custom hash，不继承 Terra 的 compaction hash。
 
 Provider runtime override 暂时只支持 `temperature` 和 `top_p`，且目前只有 OpenCode Go Provider Profile 声明这两个字段。数值会替换请求 IR 中对应的采样参数；显式 `null` 会删除该参数，字段缺失则继承请求值。其他 Provider 会拒绝这些 override。OpenCode catalog 会把已知默认值绑定到精确模型名，匹配时优先使用 `upstream_model`，未命中再回退到暴露模型名，因此独立的额外配置弹窗可以自动填充，而请求序列化不需要增加模型名分支。配置只保存相对该模型级 Provider preset 的差异。存在有效差异时状态显示黄色；清除额外配置会恢复命中的 preset。输入模态和 reasoning 档位仍属于普通 `model_info` 能力。同一个 `ResolvedModelProfile` 同时供生成 Codex catalog 和 Gateway 请求约束使用。不支持的 reasoning effort 会降到最近的已声明档位并记录 warning；不支持图片时沿用现有兼容占位行为并记录 trace。
 

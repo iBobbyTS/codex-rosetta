@@ -764,7 +764,7 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
             runtime_capabilities_override=spec.get("runtime_capabilities"),
         )
         model = profile.catalog_model()
-        if profile.preset_slug in presets:
+        if not profile.uses_fallback_profile and profile.preset_slug in presets:
             preset_comp_hash = presets[profile.preset_slug].get("comp_hash")
             if isinstance(preset_comp_hash, str):
                 preset_compaction_hashes[name] = preset_comp_hash

@@ -276,8 +276,12 @@ overlays `runtime_capabilities`. Objects merge recursively, arrays replace as a
 whole, scalars replace directly, and `null` is an explicit override. Missing
 fields inherit; deleting an override restores the preset. Saving repeats the
 deep diff, so empty `model_info` and `runtime_capabilities` objects are omitted.
-An unmatched model has no inheritance base and must save a complete valid
-`model_info` record.
+An unmatched model inherits the complete `gpt-5.6-terra` record by default. Its
+model-info slug defaults to the upstream model name, while display name,
+description, and identity default to the exposed model name. Explicit
+`model_info` fields are saved as a diff from that derived Terra base. Its
+catalog `comp_hash` remains a Rosetta-owned custom hash of the upstream model
+name rather than Terra's compaction hash.
 
 Provider runtime overrides currently support only `temperature` and `top_p`,
 and only the OpenCode Go Provider Profile declares those fields. A numeric value

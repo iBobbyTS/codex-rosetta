@@ -192,6 +192,18 @@ def _legacy_override_base(
     return base, expanded
 
 
+def _terra_fallback_model_info(
+    exposed_model: str, upstream_model: str
+) -> dict[str, Any]:
+    """Materialize Terra capabilities with identities for an unknown model."""
+    base = copy.deepcopy(full_model_presets()["gpt-5.6-terra"])
+    base["slug"] = upstream_model
+    base["display_name"] = exposed_model
+    base["description"] = exposed_model
+    base["identity"] = exposed_model
+    return base
+
+
 @dataclass(frozen=True, slots=True)
 class ResolvedModelProfile:
     """One resolved model record used by catalog generation and the gateway."""
@@ -199,6 +211,7 @@ class ResolvedModelProfile:
     exposed_model: str
     upstream_model: str
     preset_slug: str | None
+    uses_fallback_profile: bool
     model_info: dict[str, Any]
     runtime_preset: dict[str, Any]
     runtime_capabilities: dict[str, Any]
@@ -234,15 +247,14 @@ def resolve_model_profile(
         exposed_model, preset, raw_override
     )
     if preset is None:
-        if not normalized_override:
-            raise ValueError(
-                f"model {exposed_model!r} does not match a built-in preset; "
-                "a complete model_info record is required"
-            )
+        # Unknown models use Terra's complete Codex surface by default. This
+        # keeps new upstream names usable without duplicating the catalog JSON.
+        legacy_base = _terra_fallback_model_info(exposed_model, upstream)
         model_info = validate_full_model_info(
             deep_merge(legacy_base, normalized_override), field="model_info"
         )
-        preset_slug = None
+        preset_slug = "gpt-5.6-terra"
+        uses_fallback_profile = True
     else:
         base = legacy_base
         base["slug"] = exposed_model
@@ -250,6 +262,7 @@ def resolve_model_profile(
             deep_merge(base, normalized_override), field="model_info"
         )
         preset_slug = preset["slug"]
+        uses_fallback_profile = False
 
     provider_entry = get_provider_catalog_entry(provider_id)
     if provider_entry is None:
@@ -294,6 +307,7 @@ def resolve_model_profile(
         exposed_model=exposed_model,
         upstream_model=upstream,
         preset_slug=preset_slug,
+        uses_fallback_profile=uses_fallback_profile,
         model_info=model_info,
         runtime_preset=runtime_preset,
         runtime_capabilities=runtime,
@@ -308,6 +322,11 @@ def canonical_model_overrides(
     """Return normalized minimal config overrides for a resolved profile."""
     if profile.preset_slug is None:
         model_diff = editable_model_info(profile.model_info)
+    elif profile.uses_fallback_profile:
+        base = _terra_fallback_model_info(profile.exposed_model, profile.upstream_model)
+        model_diff = normalized_deep_diff(
+            editable_model_info(profile.model_info), editable_model_info(base)
+        )
     else:
         base = copy.deepcopy(full_model_presets()[profile.preset_slug])
         base["slug"] = profile.exposed_model

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tomllib
 from pathlib import Path
 
@@ -249,7 +250,7 @@ def test_model_entry_overrides_every_shared_field_and_keeps_unknown_fallback() -
     assert MODEL_PRESET_IGNORED_CATALOG_FIELDS.isdisjoint(model)
 
 
-def test_catalog_rejects_unknown_upstream_without_complete_model_info() -> None:
+def test_catalog_accepts_unknown_upstream_with_custom_compaction_group() -> None:
     def comp_hash(alias: str, upstream: str, provider: str) -> str:
         raw = {
             "model_groups": {
@@ -263,14 +264,36 @@ def test_catalog_rejects_unknown_upstream_without_complete_model_info() -> None:
         [model] = build_model_catalog(raw)["models"]
         return model["comp_hash"]
 
-    with pytest.raises(ValueError, match="complete model_info"):
-        comp_hash("first-alias", "shared-upstream-model", "provider-a")
-
     defaults = {model["slug"]: model for model in build_model_catalog({})["models"]}
+    unknown_hash = comp_hash("first-alias", "shared-upstream-model", "provider-a")
+    assert unknown_hash.startswith("rosetta-comp-v1:custom:")
+    assert unknown_hash != defaults["gpt-5.6-terra"]["comp_hash"]
     assert (
         comp_hash("official-alias", "gpt-5.5", "provider-a")
         == defaults["gpt-5.5"]["comp_hash"]
     )
+
+
+def test_unknown_catalog_identity_and_compaction_follow_separate_names() -> None:
+    upstream = "stealth/ox-alpha"
+    [model] = build_model_catalog(
+        {
+            "model_groups": {
+                "unknown": {
+                    "provider": ["provider-a"],
+                    "type": "llm",
+                    "models": {"OX Alpha": {"upstream_model": upstream}},
+                }
+            }
+        }
+    )["models"]
+
+    assert model["slug"] == "OX Alpha"
+    assert model["display_name"] == "OX Alpha"
+    assert model["description"] == "OX Alpha"
+    assert model["identity"] == "OX Alpha"
+    expected_digest = hashlib.sha256(upstream.encode("utf-8")).hexdigest()
+    assert model["comp_hash"] == f"rosetta-comp-v1:custom:{expected_digest}"
 
 
 def test_catalog_applies_complete_manual_model_info_to_an_exposed_alias() -> None:
