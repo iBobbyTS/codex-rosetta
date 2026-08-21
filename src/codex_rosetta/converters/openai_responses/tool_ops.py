@@ -106,8 +106,9 @@ def _valid_namespace_child(child: dict[str, Any]) -> bool:
         return False
     if child_type != "custom":
         return True
-    description = child.get("description")
-    return bool(child_name) and (description is None or isinstance(description, str))
+    if "description" in child and not isinstance(child["description"], str):
+        return False
+    return bool(child_name)
 
 
 # ==================== Orphaned Tool Call Fix ====================

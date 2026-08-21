@@ -306,7 +306,9 @@ class TestOpenAIResponsesToolOps:
         [
             {"type": "custom", "name": {"invalid": "name"}},
             {"type": "custom", "name": None},
+            {"type": "custom", "name": "exec", "description": None},
             {"type": "custom", "name": "exec", "description": ["invalid"]},
+            {"type": "custom", "name": "exec", "description": 42},
             {"type": {"invalid": "type"}, "name": "exec"},
         ],
     )
@@ -326,6 +328,20 @@ class TestOpenAIResponsesToolOps:
 
         assert isinstance(result, list)
         assert [tool["name"] for tool in result] == ["exec"]
+
+    def test_p_tool_definition_to_ir_namespace_custom_child_defaults_description(
+        self,
+    ):
+        provider_tool = {
+            "type": "namespace",
+            "name": "functions",
+            "tools": [{"type": "custom", "name": "exec"}],
+        }
+
+        result = OpenAIResponsesToolOps.p_tool_definition_to_ir(provider_tool)
+
+        assert isinstance(result, list)
+        assert result[0]["description"] == ""
 
     def test_tool_definition_round_trip(self):
         """Test tool definition round-trip."""
