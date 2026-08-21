@@ -717,6 +717,11 @@ class OpenAIChatConverter(BaseConverter):
         events: list[IRStreamEvent],
     ) -> None:
         """Emit ContentBlockEndEvent (if needed) and FinishEvent."""
+        if context is not None and (
+            context.is_ended or not context.mark_choice_finished(choice_index)
+        ):
+            return
+
         # Close any open content block before emitting FinishEvent.
         # OpenAI doesn't have an explicit content-block-end concept,
         # but downstream formats (e.g. Anthropic) require it.
@@ -777,13 +782,17 @@ class OpenAIChatConverter(BaseConverter):
             context.mark_ended()
             events.append(StreamEndEvent(type="stream_end"))
 
-        # Also emit StreamEndEvent when we got a finish_reason but upstream
-        # may not send a subsequent empty-choices chunk (e.g. when the
-        # upstream ignores stream_options.include_usage).
+        # Also emit StreamEndEvent when usage accompanies either the first or
+        # a repeated finish. Some upstreams repeat a finish only to attach
+        # final usage instead of sending a subsequent empty-choices chunk.
         if (
             not context.is_ended
             and usage
-            and any(e.get("type") == "finish" for e in events if isinstance(e, dict))
+            and any(
+                choice.get("finish_reason")
+                and context.is_choice_finished(choice.get("index", 0))
+                for choice in choices
+            )
         ):
             context.mark_ended()
             events.append(StreamEndEvent(type="stream_end"))

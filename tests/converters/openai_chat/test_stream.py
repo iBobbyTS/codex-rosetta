@@ -772,6 +772,94 @@ class TestStreamResponseFromProviderWithContext:
         end_idx = next(i for i, e in enumerate(events) if e["type"] == "stream_end")
         assert end_idx > usage_idx
 
+    def test_repeated_finish_emits_one_terminal_pair(self):
+        """Only the first finish for a choice emits terminal IR events."""
+        ctx = StreamContext(current_block_index=0)
+        ctx.mark_started()
+
+        first = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            context=ctx,
+        )
+        repeated = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            context=ctx,
+        )
+
+        events = [*first, *repeated]
+        assert [event["type"] for event in events].count("content_block_end") == 1
+        assert [event["type"] for event in events].count("finish") == 1
+
+    def test_conflicting_repeated_finish_keeps_first_reason(self):
+        """A conflicting repeated finish does not replace the first result."""
+        ctx = StreamContext()
+        ctx.mark_started()
+
+        first = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            context=ctx,
+        )
+        repeated = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            context=ctx,
+        )
+
+        finishes = [event for event in [*first, *repeated] if event["type"] == "finish"]
+        assert len(finishes) == 1
+        assert finishes[0]["finish_reason"]["reason"] == "tool_calls"
+
+    def test_repeated_finish_with_late_usage_ends_once(self):
+        """A repeated finish may carry the final usage and close the stream."""
+        ctx = StreamContext()
+        ctx.mark_started()
+        first = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            context=ctx,
+        )
+        repeated = self.converter.stream_response_from_provider(
+            {
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+            context=ctx,
+        )
+        after_end = self.converter.stream_response_from_provider(
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            context=ctx,
+        )
+
+        events = [*first, *repeated, *after_end]
+        types = [event["type"] for event in events]
+        assert types.count("finish") == 1
+        assert types.count("usage") == 1
+        assert types.count("stream_end") == 1
+
+    def test_finish_state_is_independent_per_choice(self):
+        """Each choice may emit one finish independently."""
+        ctx = StreamContext()
+        ctx.mark_started()
+        chunk = {
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": "stop"},
+                {"index": 1, "delta": {}, "finish_reason": "length"},
+                {"index": 0, "delta": {}, "finish_reason": "tool_calls"},
+            ]
+        }
+
+        events = self.converter.stream_response_from_provider(chunk, context=ctx)
+        finishes = [event for event in events if event["type"] == "finish"]
+        assert [
+            (event["choice_index"], event["finish_reason"]["reason"])
+            for event in finishes
+        ] == [
+            (0, "stop"),
+            (1, "length"),
+        ]
+
     def test_tool_call_registered_in_context(self):
         """ToolCallStartEvent registers tool call in context."""
         ctx = StreamContext()

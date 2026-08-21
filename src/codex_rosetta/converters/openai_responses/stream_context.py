@@ -77,6 +77,7 @@ class OpenAIResponsesStreamContext(StreamContext):
         ctx.pending_response = base.pending_response
         ctx._started = base._started
         ctx._ended = base._ended
+        ctx._finished_choice_indexes = base._finished_choice_indexes
         ctx._tool_call_args = base._tool_call_args
         ctx._tool_call_order = base._tool_call_order
         ctx._tool_call_types = base._tool_call_types

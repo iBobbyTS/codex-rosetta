@@ -6,6 +6,7 @@ from typing import Any, cast
 
 import pytest
 
+from codex_rosetta.converters.base.context import StreamContext
 from codex_rosetta.converters.openai_chat import OpenAIChatConverter
 from codex_rosetta.converters.openai_responses import OpenAIResponsesConverter
 from codex_rosetta.converters.openai_responses.stream_context import (
@@ -1385,6 +1386,78 @@ class TestStreamResponseToProviderWithContext:
         assert end_result["type"] == "response.completed"
         assert end_result["response"]["usage"]["input_tokens"] == 20
         assert end_result["response"]["usage"]["output_tokens"] == 10
+
+    def test_chat_duplicate_finish_with_late_usage_composes_once(self):
+        """Chat repeated finish rebuilds one Responses terminal tool sequence."""
+        chat = OpenAIChatConverter()
+        responses = OpenAIResponsesConverter()
+        context = StreamContext()
+        chunks = [
+            {
+                "id": "chatcmpl_123",
+                "model": "ox-alpha",
+                "created": 123,
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "id": "call_123",
+                                    "index": 0,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "exec_command",
+                                        "arguments": '{"cmd":"pwd"}',
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": None,
+                    }
+                ],
+            },
+            {"choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            {
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
+                "usage": {
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                },
+            },
+        ]
+
+        rebuilt: list[dict[str, Any]] = []
+        for chunk in chunks:
+            for ir_event in chat.stream_response_from_provider(chunk, context=context):
+                converted = responses.stream_response_to_provider(
+                    ir_event, context=context
+                )
+                if isinstance(converted, list):
+                    rebuilt.extend(converted)
+                elif converted:
+                    rebuilt.append(cast(dict[str, Any], converted))
+
+        event_types = [event["type"] for event in rebuilt]
+        assert event_types.count("response.function_call_arguments.done") == 1
+        assert event_types.count("response.output_item.done") == 1
+        assert event_types.count("response.completed") == 1
+        completed = next(
+            event for event in rebuilt if event["type"] == "response.completed"
+        )
+        assert completed["response"]["usage"] == {
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "input_tokens_details": {
+                "cached_tokens": 0,
+                "cache_write_tokens": 0,
+            },
+            "output_tokens_details": {"reasoning_tokens": 0},
+        }
+        upgraded = context.metadata["_responses_stream_ctx"]
+        assert upgraded._finished_choice_indexes is context._finished_choice_indexes
 
     def test_full_stream_sequence_with_context(self):
         """Full stream sequence produces correct events with no duplicates."""
