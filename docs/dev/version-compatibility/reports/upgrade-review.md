@@ -116,6 +116,46 @@ matrix, nested tool behavior, Code Mode image shape, collaboration continuation,
 and terminal-stream checks remain pending the later live section. No credentials
 or raw gateway logs are included in this tracked report.
 
+## S03 Live Agent Update (2026-08-21)
+
+The requested live-agent execution used a locally built `codex-cli 0.149.0`
+from `rust-v0.149.0` and the configured OpenRouter model `ox-alpha`. Gateway
+traces confirmed actual upstream `stealth/ox-alpha`; each attempted cell used
+isolated local mode with ChatGPT OAuth plus an experimental bearer token. No
+provider/model substitution was made.
+
+The repository inventory contains 41 numbered `expected.json` rows. The
+current credential-free matrix records 17 passes, 1 model tool-selection
+failure, and 23 explicit specialized-runner blocks. The 17 passing rows are:
+
+- `command_execution/01..04`: foreground, delayed polling, stdin, and two-stage same-session interaction;
+- `subagent_tools/01..06`: all six collaboration Functions;
+- `builtin_tools/01..06`: Code Mode wait, plan, file edit/write, image view, Goal lifecycle, and visual recognition;
+- `local_skills/01`.
+
+`namespace_tools/01` failed because Ox Alpha selected an incorrect MCP path
+instead of the exact `clock`/`memories` Namespace-only calls. This is recorded
+as model tool-selection evidence, not as a Rosetta protocol conversion failure.
+`browser_use/01` is GUI-only; `orchestrator_skills/01` requires an app-server
+resource backend; context-compaction, continuation, deferred-search,
+network-search, image-generation, and summary-quality rows require their
+dedicated checked-in runners/prerequisites. They remain explicit blocked or
+runner-not-supported rows in the redacted matrix, not silent passes.
+
+The full redacted row manifest is retained at
+`.agent-work/audit-packs/codex-0149-tool-migration/current/live-agent-matrix.json`.
+The package remains `0.144.0.r0`; this live evidence does not authorize a
+package-wide 0.149 compatibility claim.
+
+## Final deterministic checks
+
+- `conda run -n llm-rosetta pytest -o addopts='' tests/ --ignore=tests/integration -q`: **4779 passed, 4 skipped, 9 warnings**.
+- Focused S01 contract/catalog gate: **40 passed**.
+- Focused S02 converter/projection/tool gate: **401 passed, 1 warning**.
+- `make lint`: ruff check passed; format check remains blocked by five pre-existing README formatting findings outside this feature diff.
+- `make test`: the repository `pytest.ini` requests unavailable coverage addopts in the bare command; equivalent run with `-o addopts=''` passed as recorded above.
+- 0.149 Code Mode host source build: blocked by a V8 prebuilt archive HTTP 404; the installed Codex app host was used only in isolated live runs and no host binary was changed in the repository.
+
 ---
 
 # Codex 0.147.0 Upgrade Review
