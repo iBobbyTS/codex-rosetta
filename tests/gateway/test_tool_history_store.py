@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 
 from codex_rosetta.gateway.tool_history_translation import ToolHistoryObjectKind
+from codex_rosetta.gateway.proxy import _tool_history_source_template
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.observability.tool_history_store import (
     ToolHistoryCapacityError,
@@ -295,6 +296,31 @@ def test_exact_source_conflict_does_not_overwrite_existing_target(tmp_path):
     )[0]
     assert hit is not None
     assert hit["function"]["name"] == "Bash"
+    persistence.close()
+
+
+def test_surface_namespaced_source_allows_profile_target_change(tmp_path):
+    persistence = PersistenceManager(str(tmp_path))
+    source = _call("source")
+    first = _call("source", name="Bash")
+    second = _call("source", name="Read")
+    assert persistence.upsert_tool_history_translation_templates(
+        principal_id="principal-a",
+        object_kind=ToolHistoryObjectKind.CALL,
+        source_template=_tool_history_source_template(source, "sha256:old"),
+        target_template=first,
+        expire_at="2030-01-02T00:00:00+00:00",
+        timestamp="2026-01-01T00:00:00+00:00",
+    ) is True
+    assert persistence.upsert_tool_history_translation_templates(
+        principal_id="principal-a",
+        object_kind=ToolHistoryObjectKind.CALL,
+        source_template=_tool_history_source_template(source, "sha256:new"),
+        target_template=second,
+        expire_at="2030-01-02T00:00:00+00:00",
+        timestamp="2026-01-01T00:00:00+00:00",
+    ) is True
+    assert persistence.count_tool_history_translations() == 2
     persistence.close()
 
 

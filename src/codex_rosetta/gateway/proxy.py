@@ -47,6 +47,7 @@ from .chat_tool_surface import (
     ChatToolSurfaceCoordinator,
     ChatToolSurfaceUnavailable,
     apply_chat_tool_surface,
+    chat_tool_surface_contract_generation,
 )
 from .codex_compaction import (
     COMPACT_PROMPT_SHA256,
@@ -167,6 +168,26 @@ MAX_MODEL_ID_BYTES = 256
 # generous forward-compatible envelope while preventing state-map keys from
 # bypassing the stores' value-byte accounting.
 MAX_CODEX_WINDOW_ID_BYTES = 128
+TOOL_HISTORY_SURFACE_NAMESPACE_VERSION = "v1"
+
+
+TOOL_HISTORY_SURFACE_NAMESPACE_KEY = "_codex_rosetta_tool_history_surface"
+
+
+def _tool_history_source_template(
+    source_template: dict[str, Any],
+    surface_generation: str | None,
+) -> dict[str, Any]:
+    """Bind a persisted source identity to the active Chat tool surface."""
+    if surface_generation is None:
+        return source_template
+    return {
+        TOOL_HISTORY_SURFACE_NAMESPACE_KEY: {
+            "version": TOOL_HISTORY_SURFACE_NAMESPACE_VERSION,
+            "generation": surface_generation,
+        },
+        "object": copy.deepcopy(source_template),
+    }
 
 
 async def _convert_request(
@@ -1049,6 +1070,7 @@ def _replay_persistent_tool_history(
     state_scope: GatewayStateScope,
     enabled: bool,
     body: dict[str, Any],
+    history_surface_generation: str | None = None,
 ) -> tuple[dict[str, Any], ToolHistorySnapshot, set[int]]:
     snapshot = ToolHistorySnapshot.capture(body)
     if not snapshot.objects:
@@ -1063,7 +1085,16 @@ def _replay_persistent_tool_history(
     try:
         hits = persistence.lookup_tool_history_translation_templates(
             principal_id=state_scope.principal_id,
-            objects=[(item.kind, item.source_template) for item in snapshot.objects],
+            objects=[
+                (
+                    item.kind,
+                    _tool_history_source_template(
+                        item.source_template,
+                        history_surface_generation,
+                    ),
+                )
+                for item in snapshot.objects
+            ],
             now=now.isoformat(),
         )
     except Exception as exc:
@@ -1081,6 +1112,7 @@ def _persist_tool_history_candidate(
     state_scope: GatewayStateScope,
     enabled: bool,
     candidate: ToolHistoryTranslationCandidate,
+    history_surface_generation: str | None = None,
 ) -> bool:
     if not enabled:
         return False
@@ -1093,7 +1125,10 @@ def _persist_tool_history_candidate(
         return persistence.upsert_tool_history_translation_templates(
             principal_id=state_scope.principal_id,
             object_kind=candidate.kind,
-            source_template=candidate.source_template,
+            source_template=_tool_history_source_template(
+                candidate.source_template,
+                history_surface_generation,
+            ),
             target_template=candidate.target_template,
             expire_at=(
                 now + timedelta(hours=DEFAULT_TOOL_CALL_CACHE_TTL_HOURS)
@@ -1113,6 +1148,7 @@ def _persist_accepted_request_tool_history(
     state_scope: GatewayStateScope,
     enabled: bool,
     candidates: list[ToolHistoryTranslationCandidate],
+    history_surface_generation: str | None = None,
 ) -> tuple[int, int]:
     """Persist accepted request candidates; result capacity skips are non-fatal."""
     written = 0
@@ -1124,6 +1160,7 @@ def _persist_accepted_request_tool_history(
                 state_scope=state_scope,
                 enabled=enabled,
                 candidate=candidate,
+                history_surface_generation=history_surface_generation,
             ):
                 written += 1
         except RuntimeError as exc:
@@ -1149,6 +1186,7 @@ def _persist_accepted_request_tool_history_or_error(
     enabled: bool,
     candidates: list[ToolHistoryTranslationCandidate],
     profile: dict[str, Any],
+    history_surface_generation: str | None = None,
 ) -> Response | None:
     """Persist accepted request history and translate fatal failures to HTTP."""
     try:
@@ -1157,6 +1195,7 @@ def _persist_accepted_request_tool_history_or_error(
             state_scope=state_scope,
             enabled=enabled,
             candidates=candidates,
+            history_surface_generation=history_surface_generation,
         )
     except RuntimeError as exc:
         return error_response_for_source(source_provider, 503, str(exc))
@@ -1199,6 +1238,7 @@ def _translate_and_persist_localized_response_tools(
     capabilities: NativeToolCapabilities | None = None,
     read_cache: ReadOutputCache | None = None,
     exec_projections: dict[str, ExecToolProjection] | None = None,
+    history_surface_generation: str | None = None,
 ) -> None:
     if not should_localize_code_tools(route) and not exec_projections:
         return
@@ -1209,6 +1249,7 @@ def _translate_and_persist_localized_response_tools(
             state_scope=state_scope,
             enabled=persistent_tool_history,
             candidate=_candidate_from_mapping(mapping),
+            history_surface_generation=history_surface_generation,
         )
 
     translate_localized_ir_response(
@@ -1237,6 +1278,7 @@ def _convert_non_streaming_upstream_response(
     exec_projections: dict[str, ExecToolProjection],
     body_log_state: BodyLogState | None,
     profile: dict[str, Any],
+    history_surface_generation: str | None = None,
 ) -> Response:
     """Translate one accepted upstream response and persist model tool calls."""
 
@@ -1251,6 +1293,7 @@ def _convert_non_streaming_upstream_response(
             capabilities=tool_capabilities,
             read_cache=read_cache,
             exec_projections=exec_projections,
+            history_surface_generation=history_surface_generation,
         )
         metadata_store.cache_from_response(ir_response)
 
@@ -1731,6 +1774,13 @@ async def handle_non_streaming(  # noqa: C901
         metadata_store=metadata_store,
         codex_tool_store=codex_tool_store,
     )
+    history_surface_generation = (
+        chat_tool_surface_contract_generation(route)
+        if state_scope is not None
+        and codex_window_id is not None
+        and route.target_provider == "openai_chat"
+        else None
+    )
     tool_history_snapshot = ToolHistorySnapshot(objects=())
     tool_history_hit_indexes: set[int] = set()
     tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
@@ -1912,6 +1962,7 @@ async def handle_non_streaming(  # noqa: C901
             state_scope=scope,
             enabled=persistent_tool_history,
             body=target_body,
+            history_surface_generation=history_surface_generation,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
@@ -2018,6 +2069,7 @@ async def handle_non_streaming(  # noqa: C901
         enabled=persistent_tool_history,
         candidates=tool_history_candidates,
         profile=profile,
+        history_surface_generation=history_surface_generation,
     )
     if tool_history_error is not None:
         return tool_history_error, profile
@@ -2039,6 +2091,7 @@ async def handle_non_streaming(  # noqa: C901
             exec_projections=exec_projections,
             body_log_state=body_log_state,
             profile=profile,
+            history_surface_generation=history_surface_generation,
         ),
         profile,
     )
@@ -2910,6 +2963,13 @@ async def handle_streaming(  # noqa: C901
         metadata_store=metadata_store,
         codex_tool_store=codex_tool_store,
     )
+    history_surface_generation = (
+        chat_tool_surface_contract_generation(route)
+        if state_scope is not None
+        and codex_window_id is not None
+        and route.target_provider == "openai_chat"
+        else None
+    )
     tool_history_snapshot = ToolHistorySnapshot(objects=())
     tool_history_hit_indexes: set[int] = set()
     tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
@@ -3047,6 +3107,7 @@ async def handle_streaming(  # noqa: C901
             state_scope=scope,
             enabled=persistent_tool_history,
             body=target_body,
+            history_surface_generation=history_surface_generation,
         )
     target_body = _apply_converted_request_tool_adaptation(
         target_body,
@@ -3180,6 +3241,7 @@ async def handle_streaming(  # noqa: C901
             state_scope=scope,
             enabled=persistent_tool_history,
             candidates=tool_history_candidates,
+            history_surface_generation=history_surface_generation,
         )
     except RuntimeError as exc:
         await stream.close()
@@ -3215,6 +3277,7 @@ async def handle_streaming(  # noqa: C901
                 state_scope=scope,
                 enabled=persistent_tool_history,
                 candidate=_candidate_from_mapping(mapping),
+                history_surface_generation=history_surface_generation,
             )
 
         stream_transformer = LocalizedToolCallStreamTransformer(

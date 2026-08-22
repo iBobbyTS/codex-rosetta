@@ -439,12 +439,14 @@ Request log 的 success/error 上限会在启动和 Admin 热更新时使用同�
 ## 可执行工具历史存储
 
 启用工具本地化后，原生/模型端对象翻译属于可执行重放状态，而不是诊断数据。Call 与
-Result 会按已认证 principal 分开保存；session、thread、window、fork、Provider、
-model 和协议顶层 call ID 都不是所有权或查找维度。Rosetta 根据精确 source template
-派生按 principal 与对象类型做域隔离的 keyed HMAC lookup token，再使用 AES-256-GCM
-加密 source 和 target template；每行使用独立 nonce 和认证 scope。因此 SQLite 列中既
-没有普通 hash，也没有有损的 `[REDACTED]` projection。Request log、stream trace、
-error dump、API 和 Admin UI 仍是独立的诊断界面，继续执行上文的 token-only 脱敏规则。
+Result 会按已认证 principal 分开保存。对于持久化的 Responses-to-Chat window，加密的
+source identity 还会绑定 Chat Tool Surface contract generation，因此 Catalog/Profile
+surface 变化时不会复用旧的或冲突的翻译，也不会改变 principal 的配额统计。在同一个未变化的
+surface 内，session、thread、window、fork、Provider、model 和协议顶层 call ID 都不是所有权或查找维度。Rosetta 根据精确
+source template 派生按 principal 与对象类型做域隔离的 keyed HMAC lookup token，再使用
+AES-256-GCM 加密 source 和 target template；每行使用独立 nonce 和认证 scope。因此
+SQLite 列中既没有普通 hash，也没有有损的 `[REDACTED]` projection。Request log、stream
+trace、error dump、API 和 Admin UI 仍是独立的诊断界面，继续执行上文的 token-only 脱敏规则。
 
 默认情况下，首次持久化映射会在 `gateway.db` 同目录原子创建
 `data/tool-mapping.key`。数据目录权限为 `0700`，key 文件权限为 `0600`；多个 gateway

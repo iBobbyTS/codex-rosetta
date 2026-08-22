@@ -13,7 +13,9 @@ import pytest
 from codex_rosetta.gateway.chat_tool_surface import (
     ChatToolSurfaceCoordinator,
     InMemoryChatToolSurfaceStore,
+    chat_tool_surface_contract_generation,
 )
+from codex_rosetta.gateway.proxy import _tool_history_source_template
 from codex_rosetta.gateway.code_mode_projection import (
     ExecToolProjection,
     plan_exec_tool_definitions,
@@ -104,6 +106,29 @@ def _body(*tools: dict, projections: tuple[str, ...] = ()) -> dict:
             for name in projections
         }
     return body
+
+
+def test_chat_surface_generation_changes_when_profile_contract_changes():
+    baseline = chat_tool_surface_contract_generation(
+        _route(tool_profile_name="chat-legacy", tool_profile={"exec": "disabled"})
+    )
+    changed = chat_tool_surface_contract_generation(
+        _route(tool_profile_name="chat-default", tool_profile={"exec": "passthrough"})
+    )
+
+    assert baseline.startswith("sha256:")
+    assert changed.startswith("sha256:")
+    assert changed != baseline
+
+
+def test_tool_history_source_identity_tracks_chat_surface_generation():
+    source = {"type": "function", "function": {"name": "exec_command"}}
+    legacy = _tool_history_source_template(source, "sha256:legacy")
+    default = _tool_history_source_template(source, "sha256:default")
+
+    assert source == {"type": "function", "function": {"name": "exec_command"}}
+    assert legacy != default
+    assert legacy["object"] == source
 
 
 def _apply(coordinator, body, *, scope=None, persistence=None, route=None):

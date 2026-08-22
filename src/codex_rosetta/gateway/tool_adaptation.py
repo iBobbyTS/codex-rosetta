@@ -1323,6 +1323,11 @@ def _localized_call_to_native(
             tool_input["yield_time_ms"] = max(250, min(timeout, 30_000))
         if localized_input.get("run_in_background"):
             tool_input.setdefault("yield_time_ms", 1_000)
+        max_output_tokens = _optional_int(localized_input, "max_output_tokens")
+        if max_output_tokens is not None:
+            if max_output_tokens <= 0:
+                raise ValueError("Bash max_output_tokens must be positive.")
+            tool_input["max_output_tokens"] = max_output_tokens
         return "exec_command", tool_input, "function"
 
     if localized_name == "Read":
@@ -1696,6 +1701,12 @@ def _localize_history_tool_call(
             return tool_call
         localized_name = "Bash"
         localized_input = {"command": cmd}
+        max_output_tokens = _optional_int(native_args, "max_output_tokens")
+        if max_output_tokens is not None and max_output_tokens > 0:
+            localized_input["max_output_tokens"] = max_output_tokens
+        yield_time_ms = _optional_int(native_args, "yield_time_ms")
+        if yield_time_ms is not None:
+            localized_input["timeout"] = max(250, min(yield_time_ms, 30_000))
     else:
         localized_name = mapping.localized_name
         localized_input = mapping.localized_input

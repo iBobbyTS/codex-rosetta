@@ -52,13 +52,22 @@ not reuse, delete, rename, or clear an earlier run directory, and do not add a
 model name, counter, seconds, or another suffix. Retain the exact absolute
 `run_root` path for the entire executor/judge handoff.
 
-Through the main GUI task's ordinary shell tool, start
-`python3 tests/live_agent/browser_use/serve_fixture.py --port 8876`, retain its
-exact operating-system PID and port, and write bounded server output to
-`<run_root>/fixture-server.log`. Record the PID and port in `execution.json` as
-soon as the ready marker is observed; do not infer the PID later by searching
-for a process name. Verify only that the server reports its ready marker. Open
-`http://127.0.0.1:8876/` in the selected in-app Browser.
+Through the main GUI task's ordinary shell tool, start the fixture as the
+foreground process of one persistent `exec_command` session and keep that
+session open for the entire run:
+
+```text
+python3 tests/live_agent/browser_use/serve_fixture.py --port 8876
+```
+
+Write bounded server output to `<run_root>/fixture-server.log`. Record the
+exact operating-system PID and port in `execution.json` as soon as the ready
+marker `BROWSER_FIXTURE_READY http://127.0.0.1:8876/` is observed; do not infer
+the PID later by searching for a process name, and do not let the launching
+session exit or close. A detached background start (`nohup ... &`) in a session
+that then exits is reaped on macOS and yields `ERR_CONNECTION_REFUSED`;
+`setsid` is not available on macOS. Verify only that the server reports its
+ready marker. Open `http://127.0.0.1:8876/` in the selected in-app Browser.
 
 Exercise each executor capability group in `expected.json` in order. Before
 every action, resolve a unique semantic locator or obtain fresh screenshot/DOM

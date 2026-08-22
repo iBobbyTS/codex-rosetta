@@ -80,8 +80,12 @@ Use this shape:
 ```
 
 `fixture_server.pid` must be the positive integer PID returned by the shell
-when this run starts the server, not a later name-based lookup. The executor
-must preserve the original value after cleanup so the judge can check for a
+when this run starts the server, not a later name-based lookup. Start the
+fixture as the foreground process of one persistent held `exec_command` session
+and keep that session open for the entire run; do not use a detached
+`nohup ... &` start in a session that exits, because macOS reaps the child and
+the fixture becomes unreachable (`ERR_CONNECTION_REFUSED`). The executor must
+preserve the original PID value after cleanup so the judge can check for a
 surviving process and listener. The executor's final response must repeat this
 exact PID and port.
 

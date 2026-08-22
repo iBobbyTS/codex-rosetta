@@ -24,7 +24,7 @@ Codex-Rosetta 可以在 Responses 到 Chat 的路由上本地化模型端编辑�
 - `Write(file_path, content)`
 - `Glob(pattern, path?)`
 - `Grep(pattern, path?, glob?, type?, output_mode?, case_insensitive?, line_numbers?, before_context?, after_context?, context?, head_limit?, offset?, multiline?)`
-- `Bash(command, timeout?, description?, run_in_background?)`
+- `Bash(command, timeout?, max_output_tokens?, description?, run_in_background?)`
 
 本地化的 `Edit` 描述明确要求模型尽可能替换完整的行或连续的代码块。这有助于提升转换到 Codex patch 的质量，因为当 `old_string` 包含完整的行上下文时，`apply_patch` 的可靠性要高得多。
 

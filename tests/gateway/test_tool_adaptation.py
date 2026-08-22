@@ -319,6 +319,24 @@ def test_translate_localized_bash_to_exec_command():
     assert translated.mapping.localized_name == "Bash"
 
 
+def test_translate_localized_bash_preserves_max_output_tokens():
+    translated = translate_localized_tool_call_part(
+        {
+            "type": "tool_call",
+            "tool_call_id": "call_bash-budget",
+            "tool_name": "Bash",
+            "tool_input": {"command": "printf ok", "max_output_tokens": 1234},
+        }
+    )
+
+    assert translated is not None
+    assert translated.part["tool_name"] == "exec_command"
+    assert translated.part["tool_input"] == {
+        "cmd": "printf ok",
+        "max_output_tokens": 1234,
+    }
+
+
 def test_translate_localized_edit_to_custom_apply_patch():
     translated = translate_localized_tool_call_part(
         {
@@ -1050,6 +1068,41 @@ def test_persisted_mapping_restores_history_without_memory_store():
     assert used_call_ids == {"call_edit"}
 
 
+def test_native_bash_history_fallback_preserves_output_budget():
+    adapted = localize_code_editing_chat_request(
+        {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call_bash",
+                            "type": "function",
+                            "function": {
+                                "name": "exec_command",
+                                "arguments": json.dumps(
+                                    {
+                                        "cmd": "printf ok",
+                                        "max_output_tokens": 1234,
+                                    }
+                                ),
+                            },
+                        }
+                    ],
+                }
+            ]
+        },
+        store=CodexToolLocalizationStore(),
+    )
+
+    function = adapted["messages"][0]["tool_calls"][0]["function"]
+    assert function["name"] == "Bash"
+    assert json.loads(function["arguments"]) == {
+        "command": "printf ok",
+        "max_output_tokens": 1234,
+    }
+
+
 def test_encrypted_mapping_restores_exact_raw_history_after_restart(tmp_path):
     persistence = PersistenceManager(
         str(tmp_path),
@@ -1335,6 +1388,89 @@ def test_gateway_preserves_unused_translation_for_other_forks(tmp_path):
     asyncio.run(run())
     assert "messages" in captured_body
     assert persistence.count_tool_history_translations() == 1
+    persistence.close()
+
+
+def test_gateway_persists_bash_output_budget_variants_without_conflict(tmp_path):
+    command = "printf same-command"
+    upstream_body = {
+        "id": "chatcmpl-bash-budgets",
+        "object": "chat.completion",
+        "created": 123,
+        "model": "glm-5.2",
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "tool_calls": [
+                        {
+                            "id": "call-bash-small",
+                            "type": "function",
+                            "function": {
+                                "name": "Bash",
+                                "arguments": json.dumps(
+                                    {"command": command, "max_output_tokens": 1000}
+                                ),
+                            },
+                        },
+                        {
+                            "id": "call-bash-large",
+                            "type": "function",
+                            "function": {
+                                "name": "Bash",
+                                "arguments": json.dumps(
+                                    {"command": command, "max_output_tokens": 2000}
+                                ),
+                            },
+                        },
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ],
+    }
+
+    async def send_request(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        return UpstreamResponse(
+            status_code=200,
+            body=upstream_body,
+            raw_content=json.dumps(upstream_body).encode(),
+        )
+
+    transport = MagicMock()
+    transport.send_request = AsyncMock(side_effect=send_request)
+    persistence = PersistenceManager(str(tmp_path))
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "run the command twice"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+
+    async def run():
+        return await handle_non_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+            persistence=persistence,
+            state_scope=_persistent_scope(),
+            codex_window_id="window-bash-budgets",
+        )
+
+    response, _profile = asyncio.run(run())
+    assert response.status_code == 200
+    assert persistence.count_tool_history_translations() == 2
     persistence.close()
 
 
@@ -1696,6 +1832,106 @@ def test_gateway_streaming_localizes_request_and_returns_native_tool_events():
     assert "response.function_call_arguments.delta" in joined
     assert '\\"cmd\\": \\"printf ok\\"' in joined
     assert '"name": "Bash"' not in joined
+
+
+def test_gateway_streaming_persists_bash_output_budget_variants_without_conflict(
+    tmp_path,
+):
+    command = "printf same-command"
+    stream = _ChatStream(
+        [
+            {
+                "id": "chatcmpl-bash-budget-stream",
+                "object": "chat.completion.chunk",
+                "created": 123,
+                "model": "glm-5.2",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call-bash-small",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Bash",
+                                        "arguments": json.dumps(
+                                            {
+                                                "command": command,
+                                                "max_output_tokens": 1000,
+                                            }
+                                        ),
+                                    },
+                                },
+                                {
+                                    "index": 1,
+                                    "id": "call-bash-large",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "Bash",
+                                        "arguments": json.dumps(
+                                            {
+                                                "command": command,
+                                                "max_output_tokens": 2000,
+                                            }
+                                        ),
+                                    },
+                                },
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        ]
+    )
+
+    async def send_streaming(
+        provider_info, target_provider, body, model, *, extra_headers=None
+    ):
+        return stream
+
+    transport = MagicMock()
+    transport.send_streaming = AsyncMock(side_effect=send_streaming)
+    persistence = PersistenceManager(str(tmp_path))
+    body = {
+        "model": "glm-5.2",
+        "input": [{"role": "user", "content": "run the command twice"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "exec_command",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "stream": True,
+    }
+
+    async def run() -> list[str]:
+        response, _profile = await handle_streaming(
+            _route(),
+            _provider_info(),
+            body,
+            transport=transport,
+            metadata_store=ProviderMetadataStore(),
+            codex_tool_store=CodexToolLocalizationStore(),
+            persistence=persistence,
+            state_scope=_persistent_scope(),
+            codex_window_id="window-bash-budget-stream",
+        )
+        assert response.status_code == 200
+        assert isinstance(response, StreamingResponse)
+        chunks: list[str] = []
+        async for chunk in response._generator:
+            chunks.append(chunk)
+        return chunks
+
+    chunks = asyncio.run(run())
+
+    assert chunks
+    assert persistence.count_tool_history_translations() == 2
+    persistence.close()
 
 
 def test_gateway_streaming_translates_edit_to_exec_when_apply_patch_absent():

@@ -24,7 +24,7 @@ When `localize_code_editing_tools` is enabled for an OpenAI Responses to OpenAI 
 - `Write(file_path, content)`
 - `Glob(pattern, path?)`
 - `Grep(pattern, path?, glob?, type?, output_mode?, case_insensitive?, line_numbers?, before_context?, after_context?, context?, head_limit?, offset?, multiline?)`
-- `Bash(command, timeout?, description?, run_in_background?)`
+- `Bash(command, timeout?, max_output_tokens?, description?, run_in_background?)`
 
 The localized `Edit` description explicitly asks the model to replace complete lines or complete consecutive line blocks when possible. This improves conversion to Codex patches because `apply_patch` is much more reliable when the old text includes full line context.
 

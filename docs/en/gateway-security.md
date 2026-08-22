@@ -576,15 +576,19 @@ manual clearing also delete unreferenced body blobs.
 
 When tool localization is enabled, native/model-facing object translations are
 executable replay state rather than diagnostic data. Calls and results are
-stored independently under the authenticated principal. Session, thread,
-window, fork, Provider, model, and protocol-level call ID are not ownership or
-lookup dimensions. Rosetta derives a principal- and object-kind-separated keyed
-HMAC lookup token from the exact source template, then encrypts both the source
-and target templates with AES-256-GCM using a unique nonce and authenticated
-scope for every row. The SQLite columns therefore contain neither a plain hash
-nor a redacted `[REDACTED]` projection. Request logs, traces, error dumps, APIs,
-and the Admin UI remain separate diagnostic surfaces and continue to apply the
-token-only redaction policy above.
+stored independently under the authenticated principal. For a persistent
+Responses-to-Chat window, the encrypted source identity is also bound to the
+Chat Tool Surface contract generation, so a changed catalog/profile surface
+cannot reuse an older or conflicting translation without changing principal
+quota accounting. Within one unchanged surface,
+session, thread, window, fork, Provider, model, and protocol-level call ID are
+not ownership or lookup dimensions. Rosetta derives a principal- and
+object-kind-separated keyed HMAC lookup token from the exact source template,
+then encrypts both the source and target templates with AES-256-GCM using a
+unique nonce and authenticated scope for every row. The SQLite columns
+therefore contain neither a plain hash nor a redacted `[REDACTED]` projection.
+Request logs, traces, error dumps, APIs, and the Admin UI remain separate
+diagnostic surfaces and continue to apply the token-only redaction policy above.
 
 By default the first persisted mapping atomically creates
 `data/tool-mapping.key` next to `gateway.db`. The data directory is mode `0700`

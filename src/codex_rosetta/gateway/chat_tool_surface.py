@@ -40,6 +40,21 @@ class ChatToolSurfaceUnavailable(RuntimeError):
     """A persistent window surface could not be read or written safely."""
 
 
+def chat_tool_surface_contract_generation(route: ResolvedRoute) -> str:
+    """Return the stable generation used by a route's Chat tool contract."""
+    catalog = load_tool_catalog()
+    metadata = catalog["metadata"]
+    generation_material = {
+        "schema_version": metadata["schema_version"],
+        "codex_source_commit": metadata["codex_source_commit"],
+        "profile_name": route.tool_profile_name,
+        "profile": route.tool_profile,
+        "profile_inputs": route.tool_profile_inputs,
+        "adapter_contract": ADAPTER_CONTRACT_VERSION,
+    }
+    return _canonical_hash(generation_material)
+
+
 @dataclass(frozen=True)
 class ChatToolSurfaceDecision:
     """Final upstream body and privacy-safe decision metadata."""
@@ -438,23 +453,13 @@ def _eligible(
 def _surface_scope(
     *, route: ResolvedRoute, state_scope: GatewayStateScope, window_id: str
 ) -> dict[str, Any]:
-    catalog = load_tool_catalog()
-    metadata = catalog["metadata"]
-    generation_material = {
-        "schema_version": metadata["schema_version"],
-        "codex_source_commit": metadata["codex_source_commit"],
-        "profile_name": route.tool_profile_name,
-        "profile": route.tool_profile,
-        "profile_inputs": route.tool_profile_inputs,
-        "adapter_contract": ADAPTER_CONTRACT_VERSION,
-    }
     return {
         "provider": state_scope.provider_name,
         "model": state_scope.model,
         "window_id": window_id,
         "source_api": str(route.source_provider),
         "target_api": str(route.target_provider),
-        "contract_generation": _canonical_hash(generation_material),
+        "contract_generation": chat_tool_surface_contract_generation(route),
     }
 
 

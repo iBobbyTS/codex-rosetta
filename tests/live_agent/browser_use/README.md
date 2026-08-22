@@ -104,7 +104,46 @@ record, never permission to terminate an unrelated process.
 The task starts the fixture server on `127.0.0.1:8876` from the GUI task's
 shell tool. If the port is already occupied, the main task must identify and
 stop only a prior instance of this fixture or report the conflict; it must not
-silently switch ports because the expected URLs are deterministic.
+silently switch ports because the expected URLs are deterministic. Follow the
+fixed keep-alive procedure in the next section instead of experimenting with
+detached-background starts.
+
+## Fixture keep-alive (fixed procedure)
+
+The fixture dies when its launching shell session exits, so it must run inside
+one persistent held session that stays open for the entire run:
+
+1. From the GUI task's shell tool, start the fixture as the foreground process
+   of an `exec_command` session that you keep open:
+
+   ```text
+   python3 tests/live_agent/browser_use/serve_fixture.py --port 8876
+   ```
+
+   Keep that session alive (do not let the command return or the session be
+   closed) until cleanup. Write bounded server output to
+   `<run_root>/fixture-server.log` (for example with `tee`).
+2. Wait for the ready marker in that session's output:
+
+   ```text
+   BROWSER_FIXTURE_READY http://127.0.0.1:8876/
+   ```
+
+   Record the exact operating-system PID and port in `execution.json`
+   immediately; never infer the PID later from a process name.
+3. Leave the session open while the Browser matrix runs. On recovery, keep the
+   same fixture process; only recreate fixture tabs.
+4. At cleanup, verify ownership first (reported PID exists, port `8876` is
+   listening, a bounded localhost request returns this suite's exact fixture
+   title and ready marker, and the unique listener PID equals the reported
+   PID), then send `SIGTERM` to that exact PID, recheck the listener, and send
+   `SIGKILL` only if the same owner still holds the port.
+
+Do not use a detached background start (`nohup ... &`) in a session that then
+exits: on macOS the short-lived shell session reaps the child, the port stops
+listening, and the in-app Browser sees `ERR_CONNECTION_REFUSED`. `setsid` is
+not available on macOS, so it is not a fallback. The verified working method is
+the persistent held session above.
 
 ## Scenario
 
