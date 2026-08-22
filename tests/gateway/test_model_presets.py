@@ -46,8 +46,8 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "additional_speed_tiers": [],
 }
 
-CODEX_0147_MODEL_CATALOG_SHA256 = (
-    "384ff2e0ca67f65d2866e422e2ec7dfa5ed9e3fec7a84fe14005247a7087a302"
+CODEX_0149_MODEL_CATALOG_SHA256 = (
+    "c18214b1ba88ab9bd164753115324a7a29c0582e8d071f7b3babf749d892f549"
 )
 
 
@@ -58,7 +58,7 @@ def test_bundled_catalog_matches_reviewed_codex_0147_asset() -> None:
         .read_bytes()
     )
 
-    assert hashlib.sha256(raw).hexdigest() == CODEX_0147_MODEL_CATALOG_SHA256
+    assert hashlib.sha256(raw).hexdigest() == CODEX_0149_MODEL_CATALOG_SHA256
 
 
 def test_shared_overrides_match_runtime_snapshot() -> None:
@@ -171,7 +171,7 @@ def test_admin_detection_combines_codex_catalog_and_third_party_presets() -> Non
     assert "supports_parallel_tool_calls" not in presets["minimax-m3"]
 
 
-def test_official_and_third_party_presets_preserve_codex_0147_guidance_fields() -> None:
+def test_official_and_third_party_presets_preserve_codex_0149_guidance_fields() -> None:
     presets = full_model_presets()
 
     assert presets["gpt-5.6-terra"]["include_apps_usage_instructions"] is True

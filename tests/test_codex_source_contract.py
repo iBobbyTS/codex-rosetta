@@ -509,7 +509,6 @@ def test_responses_lite_snapshot_keeps_stable_capability_subset():
                     "multi_agent_version": "v2",
                     "use_responses_lite": True,
                     "input_modalities": ["text", "image"],
-                    "supports_parallel_tool_calls": True,
                     "supports_search_tool": True,
                     "supported_reasoning_levels": [
                         {"effort": "medium", "description": "ignored text"},
@@ -527,7 +526,6 @@ def test_responses_lite_snapshot_keeps_stable_capability_subset():
                     "multi_agent_version": "v1",
                     "use_responses_lite": True,
                     "input_modalities": ["text"],
-                    "supports_parallel_tool_calls": False,
                     "supports_search_tool": False,
                     "supported_reasoning_levels": [{"effort": "low"}],
                     "default_reasoning_level": "low",
@@ -545,6 +543,8 @@ def test_responses_lite_snapshot_keeps_stable_capability_subset():
     assert snapshot[1]["supported_reasoning_levels"] == ["medium", "ultra"]
     assert snapshot[1]["tool_mode"] == "code_mode_only"
     assert snapshot[1]["multi_agent_version"] == "v2"
+    assert "supports_parallel_tool_calls" not in snapshot[0]
+    assert "supports_parallel_tool_calls" not in snapshot[1]
     assert "base_instructions" not in snapshot[1]
 
 

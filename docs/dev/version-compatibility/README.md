@@ -23,7 +23,23 @@ Compatibility cannot be declared just because the version numbers are the same.
 
 Codex-Rosetta source versions use `{codex_version}.r{patch_number}`. The first three segments match the target Codex CLI release, while `rN` is the Rosetta patch number for that Codex release. Each newly adopted Codex release starts at `r0`; only subsequent Rosetta fixes increment `rN`. Source versions retain the literal `rN`, while Python package metadata normalizes it to the equivalent PEP 440 `.postN` form. Manual GitHub Release tags retain the repository's historical `v` prefix, so source `0.144.0.r0` maps to tag `v0.144.0.r0`.
 
-## Current 0.147.0 adaptation baseline
+## Current 0.149.0 tool adaptation baseline
+
+Inspection date: 2026-08-21. This scoped routine review covers Codex-facing
+source-contract extraction and model/tool catalog values only. The target is
+`rust-v0.149.0` at commit
+`758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`; the prior catalog baseline was
+`rust-v0.147.0` at `be6e8eac029b183056b7e4402879f15d2c85f61b`. Rosetta remains
+`0.144.0.r0` because this task does not authorize a full inventory or package
+release claim.
+
+`make check-codex-compat` passes against the exact 0.149 source contract.
+The bundled catalog removes the deleted `supports_parallel_tool_calls` field
+and records `872000` as the maximum context for the three `gpt-5.6-*` entries.
+Runtime projection, converter behavior, and real Ox Alpha live-agent evidence
+are owned by later sections and are not claimed here.
+
+## Historical 0.147.0 adaptation baseline
 
 Inspection date: 2026-08-17
 

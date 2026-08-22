@@ -1,3 +1,123 @@
+# Codex 0.149.0 Scoped Tool/Catalog Upgrade Review
+
+Date: 2026-08-21
+Codex version: 0.149.0
+
+## Scope and identity
+
+- Review mode: **routine, scoped to Codex-facing source contract and model/tool
+  catalog**; the requested full non-tool compatibility inventory is deferred.
+- Target source: `rust-v0.149.0`, commit
+  `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`.
+- Previous source/catalog identity: `rust-v0.147.0`, commit
+  `be6e8eac029b183056b7e4402879f15d2c85f61b`.
+- Rosetta package version retained: `0.144.0.r0`.
+- Codex-Rosetta product/test base commit: `e3267a0f9d533b27ad012b90efe8d9077094ebeb`.
+
+## Automated result
+
+`conda run -n llm-rosetta python scripts/check_codex_compatibility.py` passes
+with the exact target source. The extractor now treats the removed
+`supports_parallel_tool_calls` field as absent, while capturing the 0.149
+`ModelInfo`/`ModelMessages`/metadata and registration changes. The bundled
+catalog and admin metadata bind to the target commit; the three `gpt-5.6-*`
+entries use `max_context_window: 872000`.
+
+Focused extractor/catalog tests are the S01 gate. Runtime projection,
+converter, and live Ox Alpha results are intentionally left as placeholders
+for S02/S03 and are not implied by this report.
+
+## Contract-group output
+
+- High-confidence unchanged: source contract groups unchanged in the reviewed
+  extractor, including apply-patch, model fields, metadata keys, SSE names,
+  tool wire types, transport constants, and registration anchors.
+- Possibly unchanged: groups whose extracted names/member sets match but whose
+  full runtime semantics are outside this scoped tool/catalog review; they are
+  unverified below.
+- Changed: source commit plus 0.149 code-mode/tool-registration,
+  collaboration-linkage, metadata, model-field, and routing-header groups;
+  baseline refreshed after review. Final checker output: `Changed: None`.
+
+## Itemized CP results
+
+The compact status table below is accompanied by this required six-column
+classification record. S01 owns only source/catalog rows; S02/S03 fill their
+runtime and live cells without changing the retained package decision.
+
+| ID and compatibility point | Classification | Source code/contract evidence | Fix or review plan | Automation results | Real API results |
+|---|---|---|---|---|---|
+| CP-01 — Agent-facing API | unverified | No S01 tool/catalog closure | S03 live runner | not run | pending S03 |
+| CP-02 — Responses transparent handling | unverified | Non-tool response semantics excluded | future full inventory | not run | pending |
+| CP-03 — Search and Images endpoints | unsupported in S01 | Non-tool endpoint excluded | future full inventory | not run | unsupported |
+| CP-04 — Request/window identity | unverified | metadata not live-tested | S03 representative rows | not run | pending |
+| CP-05 — Responses→Chat bridge | unsupported in S01 | S02 owner | S02 converter tests/live | not run | pending S02/S03 |
+| CP-06 — Responses Lite/additional_tools | unverified | 0.149 catalog contract refreshed | S02 nested tool path | source checker pass | pending S03 |
+| CP-07 — Codex model catalog | changed | source catalog removed parallel field; 872000 limits | S01 catalog sync | 40 focused tests pass | pending |
+| CP-08 — custom/freeform tool | unsupported in S01 | Code Mode deferred | S02 projection | not run | pending |
+| CP-09 — Code tool localization | unsupported in S01 | runtime deferred | S02 projection | not run | pending |
+| CP-10 — Tool history consistency | unverified | excluded | future full inventory | not run | pending |
+| CP-11 — Deferred discovery | unverified | registration drift captured | S02/S03 | source checker pass | pending |
+| CP-12 — Tool usage tips | unverified | prompt semantics excluded | S03 | not run | pending |
+| CP-13 — Skill delivery | unverified | extension behavior excluded | future full inventory | not run | pending |
+| CP-14 — Live-agent authentication | unverified | runtime auth excluded | S03 dual-auth | not run | pending |
+| CP-15 — Web search bridge | unsupported in S01 | search excluded | future full inventory | not run | unsupported |
+| CP-16 — Self-hosted Bing | unsupported in S01 | search excluded | future full inventory | not run | unsupported |
+| CP-17 — Stream lifecycle | unverified | runtime deferred | S02/S03 | not run | pending |
+| CP-18 — Message phase | unverified | UI excluded | future full inventory | not run | pending |
+| CP-19 — Reasoning | unverified | catalog only | future full inventory | catalog sync | pending |
+| CP-20 — Context compaction | unsupported in S01 | excluded | future full inventory | not run | unsupported |
+| CP-21 — GPT relay identity | unsupported in S01 | provider routing excluded | future full inventory | not run | unsupported |
+| CP-22 — Model-group Tool Profiles | changed | catalog remains authority | S02 profile tests | focused tests pass | pending |
+| CP-23 — Static tool catalog | changed | admin metadata bound to 0.149 source | S01 catalog tests | focused tests pass | pending |
+| CP-24 — Late instruction/cache | unverified | excluded | future full inventory | not run | pending |
+| CP-25 — Chat surface stability | unverified | runtime deferred | S02/S03 | not run | pending |
+| CP-26 — Collaboration confidentiality/delivery | unverified | linkage captured, runtime deferred | S02/S03 | source checker pass | pending |
+
+## Canonical CP registry disposition
+
+All canonical rows are listed below. Only CP-07 and CP-23 have automated
+evidence in this scoped section; every other row is explicitly unverified or
+unsupported here.
+
+| ID | Status in this scoped review |
+| --- | --- |
+| CP-01 | unverified |
+| CP-02 | unverified |
+| CP-03 | unsupported in S01 |
+| CP-04 | unverified |
+| CP-05 | unsupported in S01 |
+| CP-06 | unverified |
+| CP-07 | automated contract/catalog check passed; live evidence pending |
+| CP-08 | unsupported in S01 |
+| CP-09 | unsupported in S01 |
+| CP-10 | unverified |
+| CP-11 | unverified |
+| CP-12 | unverified |
+| CP-13 | unverified |
+| CP-14 | unverified |
+| CP-15 | unsupported in S01 |
+| CP-16 | unsupported in S01 |
+| CP-17 | unverified |
+| CP-18 | unverified |
+| CP-19 | unverified |
+| CP-20 | unverified |
+| CP-21 | unsupported in S01 |
+| CP-22 | unverified |
+| CP-23 | automated metadata/catalog check passed; live evidence pending |
+| CP-24 | unverified |
+| CP-25 | unverified |
+| CP-26 | unverified |
+
+## Limitations and live evidence placeholder
+
+No live API or agent run is claimed by S01. The configured OpenRouter Ox Alpha
+matrix, nested tool behavior, Code Mode image shape, collaboration continuation,
+and terminal-stream checks remain pending the later live section. No credentials
+or raw gateway logs are included in this tracked report.
+
+---
+
 # Codex 0.147.0 Upgrade Review
 
 Date: 2026-08-17

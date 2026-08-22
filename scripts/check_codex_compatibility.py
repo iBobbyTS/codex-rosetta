@@ -109,7 +109,6 @@ RESPONSES_LITE_MODEL_CAPABILITY_KEYS = (
     "multi_agent_version",
     "slug",
     "supported_reasoning_levels",
-    "supports_parallel_tool_calls",
     "supports_search_tool",
     "tool_mode",
     "use_responses_lite",

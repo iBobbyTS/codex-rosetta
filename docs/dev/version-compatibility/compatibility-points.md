@@ -58,6 +58,19 @@ and test matrix below must each contain every registered name exactly once.
 
 ## Current upgrade status
 
+Codex `0.149.0` is under a scoped routine tool/catalog adaptation against
+peeled commit `758ef40f50c1a458425c7cfbf1eb12cbc07af0b0`. The previous source
+and catalog identity was `0.147.0` / `be6e8eac029b183056b7e4402879f15d2c85f61b`.
+The source-contract extractor and bundled model/admin metadata now bind to
+0.149. `supports_parallel_tool_calls` is absent from the source-derived model
+surface, and `gpt-5.6-*` max context is `872000`. Only tool/catalog rows are
+automated in this section; all other `CP-01` through `CP-26` rows remain
+`unverified` or `unsupported` pending the runtime and live-agent sections.
+The package version remains `0.144.0.r0`; no 0.149 package compatibility or
+release approval is claimed.
+
+The prior 0.147 review follows as historical context.
+
 Codex `0.147.0` is under a full-inventory, source-first adaptation against
 peeled commit `be6e8eac029b183056b7e4402879f15d2c85f61b`. The reviewed source
 snapshot is bound to that commit so subsequent drift is detectable, but this

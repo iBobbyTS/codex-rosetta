@@ -1,5 +1,5 @@
 {
-  "codex_source_commit": "be6e8eac029b183056b7e4402879f15d2c85f61b",
+  "codex_source_commit": "758ef40f50c1a458425c7cfbf1eb12cbc07af0b0",
   "contract": {
     "apply_patch": {
       "format_type": "grammar",
@@ -36,9 +36,9 @@
       }
     },
     "code_mode_exec_shape": {
-      "description_builder_sha256": "af585759d5c4dcd97e824c885b42f5a23974e1ee130bb305ccb09b1c32a62f73",
+      "description_builder_sha256": "58c3e8e05e421a6e65eedc18545e2a5f999e063079ba8de2bfcf5fab7bae3fe6",
       "nested_declaration_renderer_sha256": "80d9ffb8ca7469a0bcc74d5c9ce52cdb631edcdc271efdf9c0bf587febf563cd",
-      "nested_sample_renderer_sha256": "c1b48d36df4e857b2dd640b1374e3aa38fc25c49803f9154adb0d18368663193",
+      "nested_sample_renderer_sha256": "05e116aacf8ff4c07ef1d0a9a45aa77856ed1a78c696e2d10af6bd96a310b5fc",
       "nested_section_heading_renderer_sha256": "2bd54e63ee0a3deefcc64bcc1b39d0abed019778eadadb3e299babc4becf208d",
       "public_tool_names": {
         "PUBLIC_TOOL_NAME": "exec",
@@ -55,6 +55,7 @@
       "OPENAI_BETA_HEADER": "OpenAI-Beta",
       "X_CODEX_INSTALLATION_ID_HEADER": "x-codex-installation-id",
       "X_CODEX_PARENT_THREAD_ID_HEADER": "x-codex-parent-thread-id",
+      "X_CODEX_ROUTING_HINT_HEADER": "x-codex-routing-hint",
       "X_CODEX_TURN_METADATA_HEADER": "x-codex-turn-metadata",
       "X_CODEX_TURN_STATE_HEADER": "x-codex-turn-state",
       "X_CODEX_WINDOW_ID_HEADER": "x-codex-window-id",
@@ -213,15 +214,15 @@
         "type_markers_sha256": "afd466c6f001b43a3584b0f648203f3cde31b26293aa48b61ff3ce2bc0e5c045"
       },
       "production_linkage_modules": {
-        "codex-rs/core/src/agent/control.rs": "fc7f32488f1de23becbc5899f7078c015995e2e9197db9344c6e77282edce4d6",
+        "codex-rs/core/src/agent/control.rs": "6969e371eba2d3076374a4a270475ecf7cd3239cad0bf0fec648d49c7013c1e9",
         "codex-rs/core/src/stream_events_utils.rs": "4d456c89855deb13e41d304d849f8ae106f069842104b200da50bcd6a463f252",
-        "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs": "630115e8dc5eb2cbe3a1affbeae1972f953598c787c2f554e2f6bea6cf337182",
-        "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs": "2a8c4093f8d26a373c79b5ee9b3d326c719fb21b5de3a9351365272142b8b78c",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/message_tool.rs": "cc4154386b29e30a31f019ddbc37a1d5a02eb8c85c369988d566f87abcd5cca6",
+        "codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs": "1b6d8eb041c5d26152bf76f7ce01b98ccbf6d9e6dd67262ed63b487bb4aebac4",
         "codex-rs/core/src/tools/parallel.rs": "2eb773163bcbc007ab42e2c9221cdc4158568da534c9c3bfe8819d80a8cb23f8",
-        "codex-rs/core/src/tools/registry.rs": "bf5cb173ffe783cfa5670064a37aea2e9536085c05a5a9a33b5fe72c3c57ed18"
+        "codex-rs/core/src/tools/registry.rs": "0b8a41fceae64696a9406d14c15bc6f2ced930ed3a2e01b456536a3c146b0958"
       },
-      "protocol_module_sha256": "6de87633a0a2aa55377d073917e18cda5834fa0841be6bae2c0846d8e7739cec",
-      "provider_filter_sha256": "9a556d69acb8101fe8d6c2835633dd4b79c4f59790fbccd5437d2bab23dc107f",
+      "protocol_module_sha256": "ca51d3b5c624f47708d31be33772406c863bc746920ed67075fca82cd0f8392a",
+      "provider_filter_sha256": "1878eecd10379438db9196d9a519794702d5c42fa89cb12b7f8aa1e700395fe3",
       "tool_call_fields": {
         "call_id": {
           "attributes": [],
@@ -435,6 +436,18 @@
         ],
         "type": "Option<MultiAgentVersion>"
       },
+      "node_repl_auto_review_required": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
+      "node_repl_disabled": {
+        "attributes": [
+          "#[serde(default)]"
+        ],
+        "type": "bool"
+      },
       "priority": {
         "attributes": [],
         "type": "i32"
@@ -469,10 +482,6 @@
         "attributes": [
           "#[serde(default)]"
         ],
-        "type": "bool"
-      },
-      "supports_parallel_tool_calls": {
-        "attributes": [],
         "type": "bool"
       },
       "supports_reasoning_summary_parameter": {
@@ -539,6 +548,12 @@
         "attributes": [],
         "type": "Option<CollaborationModeMessages>"
       },
+      "guardian_v2": {
+        "attributes": [
+          "#[serde(default, skip_serializing_if = \"Option::is_none\")]"
+        ],
+        "type": "Option<GuardianV2ModelConfig>"
+      },
       "instructions_template": {
         "attributes": [],
         "type": "Option<String>"
@@ -546,6 +561,10 @@
       "instructions_variables": {
         "attributes": [],
         "type": "Option<ModelInstructionsVariables>"
+      },
+      "multi_agent": {
+        "attributes": [],
+        "type": "Option<MultiAgentMessages>"
       },
       "permissions": {
         "attributes": [],
@@ -761,7 +780,6 @@
           "xhigh",
           "max"
         ],
-        "supports_parallel_tool_calls": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -785,7 +803,6 @@
           "max",
           "ultra"
         ],
-        "supports_parallel_tool_calls": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -809,7 +826,6 @@
           "max",
           "ultra"
         ],
-        "supports_parallel_tool_calls": true,
         "supports_search_tool": true,
         "tool_mode": "code_mode_only",
         "use_responses_lite": true,
@@ -817,18 +833,25 @@
       }
     ],
     "responses_metadata_keys": {
-      "CODE_MODE_TOOL_NAMES_KEY": "code_mode_tool_names",
+      "AGENT_NAME_KEY": "agent_name",
+      "AUTO_REVIEW_ENABLED_KEY": "auto_review_enabled",
       "COMPACTION_KEY": "compaction",
       "FORKED_FROM_THREAD_ID_KEY": "forked_from_thread_id",
       "INSTALLATION_ID_KEY": "installation_id",
+      "LEGACY_CODE_MODE_TOOL_NAMES_KEY": "code_mode_tool_names",
+      "NODE_REPL_AUTO_REVIEW_REQUIRED_KEY": "node_repl_auto_review_required",
+      "NODE_REPL_DISABLED_KEY": "node_repl_disabled",
       "PARENT_THREAD_ID_KEY": "parent_thread_id",
       "PARENT_TURN_ID_KEY": "parent_turn_id",
       "REQUEST_KIND_KEY": "request_kind",
+      "ROOT_TURN_ID_KEY": "root_turn_id",
       "SANDBOX_KEY": "sandbox",
+      "SANDBOX_MODE_KEY": "sandbox_mode",
       "SESSION_ID_KEY": "session_id",
       "SUBAGENT_KIND_KEY": "subagent_kind",
       "THREAD_ID_KEY": "thread_id",
       "THREAD_SOURCE_KEY": "thread_source",
+      "TOOL_NAMESPACES_INFO_KEY": "tool_namespaces_info",
       "TURN_ID_KEY": "turn_id",
       "TURN_STARTED_AT_UNIX_MS_KEY": "turn_started_at_unix_ms",
       "WINDOW_ID_KEY": "window_id",
@@ -890,11 +913,11 @@
     "tool_registration_sites": {
       "CoreToolPlanContext::core_sources": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "055aecdcc78a83098b6027de74b5a947e25c49a3bd353da66c844f0a6979f0a1"
+        "sha256": "46a9169d14bd4701c57aee4cf8d3dab03845afae8ee9baaf4f88566a976df172"
       },
       "GoalExtension::tools": {
         "path": "codex-rs/ext/goal/src/extension.rs",
-        "sha256": "24e2b4301084f94b3e4753c4107955919fe0268a06e3171d29032afe68debc0f"
+        "sha256": "e4bf13259fe6964ce6c4e718a83f561570159926a2bd8731a922ca9458b6269c"
       },
       "ImageGenerationExtension::tools": {
         "path": "codex-rs/ext/image-generation/src/extension.rs",
@@ -902,7 +925,7 @@
       },
       "McpToolContributor::tools": {
         "path": "codex-rs/ext/extension-api/src/contributors/mcp.rs",
-        "sha256": "7558ceb40370b35eac4402e150e894d41ae18cebdb817ebddda78cea8c306c5a"
+        "sha256": "6af901187101ee96487bce24f549b75f4f841ad4a93e1343b898ff2f88a5fe1f"
       },
       "MemoriesExtension::tools": {
         "path": "codex-rs/ext/memories/src/extension.rs",
@@ -910,7 +933,7 @@
       },
       "SkillsExtension::tools": {
         "path": "codex-rs/ext/skills/src/extension.rs",
-        "sha256": "2140a9b49c60f12259a8705bfc165e895fbf9ac8929c7c6350c5b2241e758e04"
+        "sha256": "db5bdd1b31bdb2466489cdb4746fafb15799fbc522c184921f02c4af646106be"
       },
       "WebSearchExtension::tools": {
         "path": "codex-rs/ext/web-search/src/extension.rs",
@@ -922,11 +945,11 @@
       },
       "add_core_tool_sources": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "055aecdcc78a83098b6027de74b5a947e25c49a3bd353da66c844f0a6979f0a1"
+        "sha256": "46a9169d14bd4701c57aee4cf8d3dab03845afae8ee9baaf4f88566a976df172"
       },
       "add_core_utility_tools": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "1399184f62200e03a5b230e0ca16afef66f308c8471b46cf6f7a1f9e87a799fc"
+        "sha256": "edf51a03148c1581479586a41d1b7cebec0b890bd975f14a2df2e63b6ecfd4a5"
       },
       "add_mcp_resource_tools": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -954,15 +977,15 @@
       },
       "append_mcp_tools": {
         "path": "codex-rs/core/src/mcp_tool_exposure.rs",
-        "sha256": "db17c47bfbc83a441023241db1dc6637bb4598021af0acf6d68b3333b08bfed6"
+        "sha256": "df733df1420391691cd861728ca8bd1c4bcc298b2c6e4c4169f886ed922c80a8"
       },
       "append_tool_search_executor": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "c809bfd99e0dca9b7366e127dea19c25ca97e800ae0c550879e4cd5e5d8b20c6"
+        "sha256": "52f6eee2a3f06c62746663244468960d7cd757ff8afa9059e757a5e4fa04c44b"
       },
       "apply_direct_model_only_namespace_overrides": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "5f801e31ff80aec4eca0048d20a9df93075b201ec00a6e994abc40cbbe35cd12"
+        "sha256": "25fcc5a52c4d70609e5aee173da4411c566d1d50d0c0692de2919280c1a6fdd3"
       },
       "apply_mcp_tool_exposure_policy": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -970,11 +993,11 @@
       },
       "build_model_visible_specs": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "a91288ecbbd8c988110db71d67587b8e4a62f0efaff0dc4e99090a82966e4c44"
+        "sha256": "5f3c6a29595f9f7ac114a55389f6097d788fdcb46032cb4ae5fef462fa0eb7f5"
       },
       "build_tool_router": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "00c43b3744f4e42f8d5d8536367eb94d27c8cd3eaf34ed6e148cf60d1f9ce3f7"
+        "sha256": "b9691fd70fbf551a981ba890ff23871748024d57a5f37d61be33e0c78fbe796b"
       },
       "collab_tools_enabled": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -986,7 +1009,7 @@
       },
       "finalize_tool_router": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "2dd75bcebe9572299d14865ad255a7baee80203065c1bd420054fd54749b4edf"
+        "sha256": "5e8bc1b0375814fdf080133d40eeb0327c45ec6d84e4bb9cb2f0dde11613edbb"
       },
       "hosted_model_tool_specs": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -1018,7 +1041,7 @@
       },
       "register_code_mode_executors": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "de2605b3a76993b98661d9b09105505fb843d6b4b21be586a969b82b048d501a"
+        "sha256": "c549a92a7128f59e342478c7f72273ccbf229763b33b7555172cb5df1f74c178"
       },
       "search_tool_enabled": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
@@ -1030,7 +1053,7 @@
       },
       "spec_plan.rs::module": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
-        "sha256": "6321bbdb398cdfd6bdec1bbc48bb179a663bf4a6f7d6bff2d418bb08a8944202"
+        "sha256": "02fd1cfd12a76946c9d0fec10f6b990f0932cf8a6e693ea586a0fb11e06b7ce6"
       },
       "standalone_web_search_enabled": {
         "path": "codex-rs/core/src/tools/spec_plan.rs",
