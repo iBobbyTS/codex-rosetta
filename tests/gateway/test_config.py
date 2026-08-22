@@ -54,6 +54,20 @@ def test_default_config_search_only_uses_xdg_directory() -> None:
     assert config_path_for_dir(expected) == os.path.join(expected, "config.jsonc")
 
 
+def test_active_model_group_provider_skips_disabled_candidate() -> None:
+    disabled = {"provider": "test", "enabled": False}
+
+    assert (
+        gateway_config.active_model_group_provider(
+            [disabled, "secondary"],
+            field="model_groups.test.provider",
+            current_provider=disabled,
+            eligible_provider_names={"test", "secondary"},
+        )
+        == "secondary"
+    )
+
+
 def test_example_config_parses_with_explicit_provider_rotation_mode() -> None:
     path = os.path.join(
         os.path.dirname(__file__), "..", "..", "examples", "gateway", "config.jsonc"
@@ -1685,6 +1699,112 @@ class TestModelGroups:
         assert config.model_group_rings["test-llm"].current == "test"
         assert raw["model_groups"]["test-llm"]["provider"] == ["test", "disabled"]
         assert raw["model_groups"]["test-llm"]["current_provider"] == "disabled"
+
+    def test_disabled_provider_only_candidate_falls_back_without_reordering(self):
+        raw = _minimal_raw()
+        raw["providers"]["secondary"] = {
+            **raw["providers"]["test"],
+            "base_urls": ["https://secondary.example.com"],
+            "current_base_url": "https://secondary.example.com",
+        }
+        disabled = {"provider": "test", "enabled": False}
+        group = raw["model_groups"]["test-llm"]
+        group["provider"] = [disabled, "secondary"]
+        group["current_provider"] = disabled
+
+        config = GatewayConfig(raw)
+
+        assert config.model_group_candidates["test-llm"][0].enabled is False
+        assert config.model_group_rings["test-llm"].candidates == ("secondary",)
+        assert config.model_group_rings["test-llm"].current == "secondary"
+        assert config.models == {"gpt-test": "secondary"}
+        assert config.available_model_group_candidates("test-llm") == (
+            config.model_group_rings["test-llm"].current,
+        )
+        assert config.resolve("openai_responses", "gpt-test")[0].provider_name == (
+            "secondary"
+        )
+        assert raw["model_groups"]["test-llm"]["provider"] == [
+            disabled,
+            "secondary",
+        ]
+
+    def test_disabled_fixed_credential_candidate_is_not_in_ring(self):
+        raw = _minimal_raw()
+        secondary_uuid = "00000000-0000-4000-8000-000000000002"
+        raw["providers"]["test"].update(
+            auto_rotate_credentials=False,
+            api_keys=[
+                *raw["providers"]["test"]["api_keys"],
+                {"uuid": secondary_uuid, "id": "secondary", "key": "sk-secondary"},
+            ],
+        )
+        disabled = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+            "enabled": False,
+        }
+        enabled = {"provider": "test", "credential_uuid": secondary_uuid}
+        raw["model_groups"]["test-llm"]["provider"] = [disabled, enabled]
+
+        config = GatewayConfig(raw)
+        ring = config.model_group_rings["test-llm"]
+        ring_candidate = ring.candidates[0]
+
+        assert (ring_candidate.provider_name, ring_candidate.credential_uuid) == (
+            "test",
+            secondary_uuid,
+        )
+        assert ring_candidate.enabled is True
+        assert ring.current == ring_candidate
+        assert config.resolve("openai_responses", "gpt-test")[1].auth_headers() == {
+            "Authorization": "Bearer sk-secondary"
+        }
+        assert (
+            gateway_config._model_group_candidate_raw(
+                config.model_group_candidates["test-llm"][0]
+            )
+            == disabled
+        )
+
+    def test_all_route_disabled_candidates_fail_closed_and_do_not_expand_models(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["provider"] = [
+            {"provider": "test", "enabled": False}
+        ]
+
+        config = GatewayConfig(raw)
+
+        assert config.model_group_rings.get("test-llm") is None
+        assert config.model_group_provider_names["test-llm"] == ("test",)
+        assert config.models == {}
+        assert config.available_model_group_candidates("test-llm") == ()
+        with pytest.raises(
+            ModelGroupConfigurationUnavailable, match="no enabled provider"
+        ):
+            config.resolve("openai_responses", "gpt-test")
+
+    @pytest.mark.parametrize("enabled", [None, 0, 1, "false", []])
+    def test_candidate_enabled_must_be_boolean(self, enabled):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["provider"] = [
+            {"provider": "test", "enabled": enabled}
+        ]
+
+        with pytest.raises(
+            ValueError, match=r"provider\[0\]\.enabled must be a boolean"
+        ):
+            GatewayConfig(raw)
+
+    def test_candidate_identity_duplicate_ignores_enabled_flag(self):
+        raw = _minimal_raw()
+        raw["model_groups"]["test-llm"]["provider"] = [
+            {"provider": "test", "enabled": False},
+            "test",
+        ]
+
+        with pytest.raises(ValueError, match="candidates must be unique"):
+            GatewayConfig(raw)
 
     def test_explicit_current_provider_must_be_an_exact_candidate_member(self):
         raw = _minimal_raw()

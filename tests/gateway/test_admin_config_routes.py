@@ -3808,7 +3808,7 @@ def test_put_provider_preserves_disabled_current_when_deleting_other_credential(
     assert response.status_code == 200
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["model_groups"]["OpenAI"]["provider"] == ["disabled", primary]
-    assert saved["model_groups"]["OpenAI"]["current_provider"] == "disabled"
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == primary
     current = request.app.gateway_config.model_group_rings["OpenAI"].current
     assert current.provider_name == "openai"
     assert current.credential_uuid == _PRIMARY_CREDENTIAL_UUID
@@ -4198,6 +4198,7 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
             "auto_rotate_credentials": True,
             "current": True,
             "enabled": True,
+            "routing_enabled": True,
             "status": "available",
             "error": None,
         },
@@ -4208,10 +4209,187 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
             "auto_rotate_credentials": True,
             "current": False,
             "enabled": True,
+            "routing_enabled": True,
             "status": "available",
             "error": None,
         },
     ]
+
+
+def test_get_config_separates_global_and_model_group_route_enabled(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config["providers"]["disabled"] = {
+        **config["providers"]["openai"],
+        "enabled": False,
+        "base_urls": ["https://disabled.example.com"],
+        "current_base_url": "https://disabled.example.com",
+    }
+    config["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "enabled": False},
+        "secondary",
+        "disabled",
+    ]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+    )
+
+    body = json.loads(_run(get_config(SimpleNamespace(app=app))).body)
+    rows = body["model_groups"]["OpenAI"]["providers"]
+
+    assert rows[0]["enabled"] is True
+    assert rows[0]["routing_enabled"] is False
+    assert rows[0]["status"] == "disabled"
+    assert rows[0]["error"] is None
+    assert rows[0]["current"] is False
+    assert rows[1]["enabled"] is True
+    assert rows[1]["routing_enabled"] is True
+    assert rows[1]["current"] is True
+    assert rows[2]["enabled"] is False
+    assert rows[2]["routing_enabled"] is True
+    assert rows[2]["status"] == "disabled"
+    assert "is disabled" in rows[2]["error"]
+    assert body["model_groups"]["OpenAI"]["current_provider"] == "secondary"
+
+
+def test_put_model_group_round_trips_disabled_provider_only_candidate(tmp_path):
+    config = _config_data()
+    config["providers"]["secondary"] = {
+        **config["providers"]["openai"],
+        "base_urls": ["https://secondary.example.com"],
+        "current_base_url": "https://secondary.example.com",
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    disabled = {"provider": "openai", "enabled": False}
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": [disabled, "secondary"],
+            "current_provider": disabled,
+            "type": "llm",
+            "tool_profile": None,
+            "models": {"gpt-test": {}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == [disabled, "secondary"]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == "secondary"
+    assert app.gateway_config.model_group_rings["OpenAI"].candidates == ("secondary",)
+    projected = json.loads(_run(get_config(SimpleNamespace(app=app))).body)
+    rows = projected["model_groups"]["OpenAI"]["providers"]
+    assert rows[0]["routing_enabled"] is False
+    assert rows[0]["enabled"] is True
+    assert rows[0]["current"] is False
+    assert rows[1]["routing_enabled"] is True
+    assert rows[1]["current"] is True
+
+
+def test_put_model_group_round_trips_disabled_fixed_credential_candidate(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    config["providers"]["openai"]["api_keys"].append(
+        {
+            "uuid": _SECONDARY_CREDENTIAL_UUID,
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    config["model_groups"]["OpenAI"]["provider"] = [
+        {"provider": "openai", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+    initial_config = GatewayConfig(config)
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    disabled = {
+        "provider": "openai",
+        "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        "enabled": False,
+    }
+    enabled = {
+        "provider": "openai",
+        "credential_uuid": _SECONDARY_CREDENTIAL_UUID,
+    }
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": [disabled, enabled],
+            "current_provider": disabled,
+            "type": "llm",
+            "tool_profile": None,
+            "models": {"gpt-test": {}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model_groups"]["OpenAI"]["provider"] == [disabled, enabled]
+    assert saved["model_groups"]["OpenAI"]["current_provider"] == enabled
+    ring = app.gateway_config.model_group_rings["OpenAI"]
+    assert ring.current.credential_uuid == _SECONDARY_CREDENTIAL_UUID
+    projected = json.loads(_run(get_config(SimpleNamespace(app=app))).body)
+    rows = projected["model_groups"]["OpenAI"]["providers"]
+    assert rows[0]["routing_enabled"] is False
+    assert rows[0]["credential_uuid"] == _PRIMARY_CREDENTIAL_UUID
+    assert rows[1]["routing_enabled"] is True
+    assert rows[1]["credential_uuid"] == _SECONDARY_CREDENTIAL_UUID
+
+
+def test_put_model_group_rejects_non_boolean_routing_candidate_without_write(tmp_path):
+    config = _config_data()
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(config)
+    config_path.write_text(original, encoding="utf-8")
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=GatewayConfig(config),
+        stream_trace_state=StreamTraceState(GatewayConfig(config).stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(
+        app=app,
+        path_params={"name": "OpenAI"},
+        json=lambda: {
+            "providers": [{"provider": "openai", "enabled": "false"}],
+            "type": "llm",
+            "tool_profile": None,
+            "models": {"gpt-test": {}},
+        },
+    )
+
+    response = _run(put_model_group(request))
+
+    assert response.status_code == 400
+    assert b"enabled must be a boolean" in response.body
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_path):
@@ -4270,6 +4448,7 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
         "auto_rotate_credentials": True,
         "current": True,
         "enabled": True,
+        "routing_enabled": True,
         "status": "available",
         "error": None,
     }
@@ -4280,6 +4459,7 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
         "auto_rotate_credentials": True,
         "current": False,
         "enabled": True,
+        "routing_enabled": True,
         "status": "cooling",
         "error": None,
     }
@@ -4338,6 +4518,7 @@ def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
             "auto_rotate_credentials": False,
             "current": True,
             "enabled": True,
+            "routing_enabled": True,
             "status": "cooling",
             "error": None,
         }

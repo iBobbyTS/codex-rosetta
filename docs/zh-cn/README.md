@@ -78,6 +78,13 @@ UI 中调整的顺序；可选 `current_provider` 使用相同的 Provider 名�
 `current_provider` 时使用第一个符合条件的有序候选项；已保存的当前候选项不可用时，也
 会回退到第一个符合条件的候选项，但不会改写列表顺序。
 
+每个有序候选项还可以设置可选的路由资格标志。旧的 Provider 字符串和
+`{provider, credential_uuid}` 对象默认启用；设置 `enabled: false` 时使用对象
+形式，并在 Admin 中保留对应的 Provider 或凭据，同时将其从展开、当前选择、首选
+路由和故障转移中排除。启用的候选项继续使用紧凑的旧表示，`current_provider` 永远
+不包含该标志。Admin 行的 `routing_enabled` 开关与 Provider 全局的 `enabled` 设置
+相互独立。
+
 从自动轮换切换为模型组管理时，现有模型组行会绑定到该 Provider 当时的当前凭据
 UUID；重新开启自动轮换时，会在该 Provider 首次出现的位置合并其所有 pair。移除被
 引用的凭据时，界面会先列出所有受影响模型组并要求确认；确认后会移除所有匹配 pair，

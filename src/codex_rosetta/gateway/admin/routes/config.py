@@ -448,7 +448,7 @@ def _model_group_provider_rows_for_admin(
             for index, candidate in enumerate(candidates)
             if candidate == runtime_current
         ),
-        0 if candidates else -1,
+        -1,
     )
     seen_candidates: set[_ModelGroupProviderCandidate] = set()
     provider_api_types: list[str | None] = []
@@ -532,7 +532,12 @@ def _model_group_provider_rows_for_admin(
                 ),
                 "current": index == current_index,
                 "enabled": enabled,
-                "status": ("disabled" if row_error is not None else runtime_status),
+                "routing_enabled": candidate.enabled,
+                "status": (
+                    "disabled"
+                    if row_error is not None or not candidate.enabled
+                    else runtime_status
+                ),
                 "error": row_error,
             }
         )
@@ -619,7 +624,7 @@ def _normalize_model_groups_for_admin(
         }
         if runtime_current is not None:
             normalized_group["current_provider"] = _model_group_candidate_raw(
-                runtime_current
+                runtime_current, current=True
             )
         if group_provider_error:
             normalized_group["validation_error"] = group_provider_error
@@ -798,7 +803,8 @@ def _requested_model_group_current_candidate(
     eligible = [
         candidate
         for candidate in candidates
-        if isinstance(providers.get(candidate.provider_name), dict)
+        if candidate.enabled
+        and isinstance(providers.get(candidate.provider_name), dict)
         and providers[candidate.provider_name].get("enabled", True) is not False
     ]
     try:
@@ -834,7 +840,7 @@ def _serialized_model_group_current(
     """Return the optional serialized current-candidate field."""
     if candidate is None:
         return {}
-    return {"current_provider": _model_group_candidate_raw(candidate)}
+    return {"current_provider": _model_group_candidate_raw(candidate, current=True)}
 
 
 def _validate_requested_model_group_providers(
@@ -1316,9 +1322,14 @@ def _rewrite_provider_candidate_mode(
             if item_provider != provider_name:
                 rewritten.append(item)
                 continue
+            item_enabled = item.get("enabled", True) if isinstance(item, dict) else True
             if auto_rotate:
                 if not provider_added:
-                    rewritten.append(provider_name)
+                    rewritten.append(
+                        provider_name
+                        if item_enabled
+                        else {"provider": provider_name, "enabled": False}
+                    )
                     provider_added = True
             elif isinstance(item, str):
                 rewritten.append(
@@ -1328,7 +1339,13 @@ def _rewrite_provider_candidate_mode(
                     }
                 )
             else:
-                rewritten.append(item)
+                rewritten.append(
+                    {
+                        "provider": provider_name,
+                        "credential_uuid": current_credential_uuid,
+                        **({"enabled": False} if item_enabled is False else {}),
+                    }
+                )
         group["provider"] = rewritten
         if current_provider == provider_name:
             group["current_provider"] = (
@@ -1386,15 +1403,22 @@ def _normalize_current_after_candidate_mutation(
         )[0]
     except ValueError:
         parsed_current = None
-    if parsed_current in candidates:
-        return
     provider_map = providers if isinstance(providers, dict) else {}
     eligible = [
         candidate
         for candidate in candidates
-        if isinstance(provider_map.get(candidate.provider_name), dict)
+        if candidate.enabled
+        and isinstance(provider_map.get(candidate.provider_name), dict)
         and provider_map[candidate.provider_name].get("enabled", True) is not False
     ]
+    if parsed_current in eligible:
+        canonical_current = next(
+            candidate for candidate in eligible if candidate == parsed_current
+        )
+        group["current_provider"] = _model_group_candidate_raw(
+            canonical_current, current=True
+        )
+        return
     current = _model_group_current_candidate(
         _MISSING_MODEL_GROUP_CURRENT,
         candidates,
@@ -1404,7 +1428,7 @@ def _normalize_current_after_candidate_mutation(
     if current is None:
         group.pop("current_provider", None)
     else:
-        group["current_provider"] = _model_group_candidate_raw(current)
+        group["current_provider"] = _model_group_candidate_raw(current, current=True)
 
 
 def _normalize_sub2api_account_id(body: dict[str, Any]) -> None:

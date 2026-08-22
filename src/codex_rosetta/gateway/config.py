@@ -61,6 +61,7 @@ class _ModelGroupProviderCandidate:
 
     provider_name: str
     credential_uuid: str | None = None
+    enabled: bool = True
 
     def __hash__(self) -> int:
         if self.credential_uuid is None:
@@ -257,10 +258,18 @@ def _model_group_provider_candidates(
                 )
             candidates.append(_ModelGroupProviderCandidate(item))
             continue
-        if not isinstance(item, dict) or set(item) != {
-            "provider",
-            "credential_uuid",
-        }:
+        if not isinstance(item, dict) or "provider" not in item:
+            raise ValueError(
+                f"config: {item_field} must be a provider name or "
+                "provider/credential_uuid object"
+            )
+        unsupported = set(item) - {"provider", "credential_uuid", "enabled"}
+        if unsupported:
+            raise ValueError(
+                f"config: {item_field} must be a provider name or "
+                "provider/credential_uuid object"
+            )
+        if "credential_uuid" not in item and "enabled" not in item:
             raise ValueError(
                 f"config: {item_field} must be a provider name or "
                 "provider/credential_uuid object"
@@ -272,22 +281,40 @@ def _model_group_provider_candidates(
             or provider_name != provider_name.strip()
         ):
             raise ValueError(f"config: {item_field}.provider must be non-empty")
-        credential_uuid = _validate_provider_credential_uuid(
-            item.get("credential_uuid"),
-            field=f"config: {item_field}.credential_uuid",
+        credential_uuid = (
+            _validate_provider_credential_uuid(
+                item.get("credential_uuid"),
+                field=f"config: {item_field}.credential_uuid",
+            )
+            if "credential_uuid" in item
+            else None
         )
-        candidates.append(_ModelGroupProviderCandidate(provider_name, credential_uuid))
+        enabled = item.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"config: {item_field}.enabled must be a boolean")
+        candidates.append(
+            _ModelGroupProviderCandidate(provider_name, credential_uuid, enabled)
+        )
     return candidates
 
 
-def _model_group_candidate_raw(candidate: _ModelGroupProviderCandidate) -> Any:
+def _model_group_candidate_raw(
+    candidate: _ModelGroupProviderCandidate, *, current: bool = False
+) -> Any:
     """Serialize one normalized model-group candidate without credentials."""
     if candidate.credential_uuid is None:
-        return candidate.provider_name
-    return {
+        if candidate.enabled and not current:
+            return candidate.provider_name
+        if current:
+            return candidate.provider_name
+        return {"provider": candidate.provider_name, "enabled": False}
+    serialized = {
         "provider": candidate.provider_name,
         "credential_uuid": candidate.credential_uuid,
     }
+    if not candidate.enabled and not current:
+        serialized["enabled"] = False
+    return serialized
 
 
 def _model_group_current_candidate(
@@ -304,13 +331,23 @@ def _model_group_current_candidate(
             [current_value],
             field=field,
         )
-        explicit = parsed[0]
+        explicit = next(
+            (candidate for candidate in candidates if candidate == parsed[0]), None
+        )
         if explicit not in candidates:
             raise ValueError(f"config: {field} must be a member of provider")
 
-    eligible = candidates if eligible_candidates is None else eligible_candidates
-    if explicit is not None and explicit in eligible:
-        return explicit
+    eligible = (
+        [candidate for candidate in candidates if candidate.enabled]
+        if eligible_candidates is None
+        else [candidate for candidate in eligible_candidates if candidate.enabled]
+    )
+    if explicit is not None:
+        selected = next(
+            (candidate for candidate in eligible if candidate == explicit), None
+        )
+        if selected is not None:
+            return selected
     return next((candidate for candidate in candidates if candidate in eligible), None)
 
 
@@ -457,12 +494,12 @@ def active_model_group_provider(
     """Return the effective provider while preserving configured candidate order."""
     candidates = _model_group_provider_candidates(value, field=field)
     eligible = (
-        candidates
+        [candidate for candidate in candidates if candidate.enabled]
         if eligible_provider_names is None
         else [
             candidate
             for candidate in candidates
-            if candidate.provider_name in eligible_provider_names
+            if candidate.enabled and candidate.provider_name in eligible_provider_names
         ]
     )
     current = _model_group_current_candidate(
@@ -873,7 +910,7 @@ def resolve_model_tool_profile_names(
             eligible_candidates=[
                 candidate
                 for candidate in candidates
-                if candidate.provider_name in raw_providers
+                if candidate.enabled and candidate.provider_name in raw_providers
             ],
         )
         if current is None:
@@ -1665,18 +1702,19 @@ class GatewayConfig:
                 candidates,
                 field=f"model_groups.{group_name}.current_provider",
                 eligible_candidates=(
-                    candidates
+                    [candidate for candidate in candidates if candidate.enabled]
                     if eligible_provider_names is None
                     else [
                         candidate
                         for candidate in candidates
-                        if candidate.provider_name in eligible_provider_names
+                        if candidate.enabled
+                        and candidate.provider_name in eligible_provider_names
                     ]
                 ),
             )
-            if not candidates:
+            if not candidates or current is None:
                 continue
-            provider_name = (current or candidates[0]).provider_name
+            provider_name = current.provider_name
 
             for model_name, model_value in group_models.items():
                 if model_name in expanded:
@@ -1720,12 +1758,12 @@ class GatewayConfig:
                 raise ValueError(
                     f"config: model group '{group_name}' providers must use the same api_type"
                 )
-            enabled = [
+            eligible = [
                 candidate
                 for candidate in candidates
-                if candidate.provider_name in self._raw_providers
+                if candidate.enabled and candidate.provider_name in self._raw_providers
             ]
-            if enabled:
+            if eligible:
                 current = _model_group_current_candidate(
                     (
                         group_value["current_provider"]
@@ -1734,10 +1772,10 @@ class GatewayConfig:
                     ),
                     candidates,
                     field=f"model_groups.{group_name}.current_provider",
-                    eligible_candidates=enabled,
+                    eligible_candidates=eligible,
                 )
                 assert current is not None
-                ring = ModelGroupProviderRing(group_name, enabled, current)
+                ring = ModelGroupProviderRing(group_name, eligible, current)
                 self.model_group_rings[group_name] = ring
                 self.model_group_provider_names[group_name] = tuple(
                     candidate.provider_name for candidate in candidates
@@ -1864,8 +1902,16 @@ class GatewayConfig:
         ring = self.model_group_rings.get(group_name)
         if ring is None:
             return tuple(
-                (name, "disabled" if name not in self.providers else "available")
-                for name in self.model_group_provider_names.get(group_name, ())
+                (
+                    candidate.provider_name,
+                    (
+                        "disabled"
+                        if not candidate.enabled
+                        or candidate.provider_name not in self.providers
+                        else "available"
+                    ),
+                )
+                for candidate in self.model_group_candidates.get(group_name, ())
             )
         statuses = dict(ring.status_snapshot())
         return tuple(
@@ -1888,6 +1934,8 @@ class GatewayConfig:
     def _model_group_candidate_available(
         self, candidate: _ModelGroupProviderCandidate
     ) -> bool:
+        if not candidate.enabled:
+            return False
         provider = self.providers.get(candidate.provider_name)
         if provider is None or not provider.has_available_base_url():
             return False

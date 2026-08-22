@@ -1983,6 +1983,33 @@ describe('ModelsPage', () => {
     expect(dialog.getByRole('radio', { name: 'Current provider second' })).toBeChecked();
   });
 
+  it('persists an all-disabled routing provider list without a current provider', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { first: { api_type: 'chat' }, second: { api_type: 'chat' } },
+      model_groups: {
+        Main: {
+          providers: [
+            { name: 'first', current: true, enabled: true, routing_enabled: true, status: 'available', error: null },
+            { name: 'second', current: false, enabled: true, routing_enabled: true, status: 'available', error: null },
+          ],
+          type: 'llm',
+          models: { 'demo-model': {} },
+        },
+      },
+      tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    const switches = dialog.getAllByRole('checkbox', { name: /Allow .* in model group routing/ });
+    for (const toggle of switches) await fireEvent.click(toggle);
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      { providers: [{ provider: 'first', enabled: false }, { provider: 'second', enabled: false }], type: 'llm', models: { 'demo-model': {} } },
+    ));
+  });
+
   it('selects the first eligible remaining row when the current row is removed', async () => {
     apiMock.get.mockResolvedValue({
       providers: {

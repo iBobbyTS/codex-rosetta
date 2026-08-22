@@ -92,6 +92,15 @@ any list member. Configurations without `current_provider` use the first
 eligible ordered candidate, and an unavailable saved selection falls back to
 the first eligible candidate without rewriting the list.
 
+Each ordered candidate may also set an optional route-eligibility flag. Legacy
+provider strings and `{provider, credential_uuid}` objects are enabled by
+default; setting `enabled: false` uses an object form and keeps that exact
+Provider or credential visible in Admin while excluding it from expansion,
+current selection, preferred routing, and failover. Enabled candidates keep
+their compact legacy representation, and `current_provider` never includes the
+flag. The Admin row's `routing_enabled` switch is separate from the Provider's
+global `enabled` setting.
+
 Changing a Provider from automatic to model-group-managed rotation binds its
 existing model-group rows to the then-current credential UUID. Changing it back
 collapses that Provider's pairs at their first occurrence. Removing a referenced
