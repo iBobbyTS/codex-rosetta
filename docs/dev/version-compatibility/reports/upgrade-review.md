@@ -125,8 +125,11 @@ isolated local mode with ChatGPT OAuth plus an experimental bearer token. No
 provider/model substitution was made.
 
 The repository inventory contains 41 numbered `expected.json` rows. The
-current credential-free matrix records 17 passes, 1 model tool-selection
-failure, and 23 explicit specialized-runner blocks. The 17 passing rows are:
+initial credential-free matrix recorded 17 passes, 1 model tool-selection
+failure, and 23 specialized-runner rows. A follow-up run then used the locally
+built Codex 0.149 CLI and standalone `codex-app-server` binary for the
+app-server-owned rows that were executable on this host. The existing 17
+passing rows are:
 
 - `command_execution/01..04`: foreground, delayed polling, stdin, and two-stage same-session interaction;
 - `subagent_tools/01..06`: all six collaboration Functions;
@@ -136,11 +139,32 @@ failure, and 23 explicit specialized-runner blocks. The 17 passing rows are:
 `namespace_tools/01` failed because Ox Alpha selected an incorrect MCP path
 instead of the exact `clock`/`memories` Namespace-only calls. This is recorded
 as model tool-selection evidence, not as a Rosetta protocol conversion failure.
-`browser_use/01` is GUI-only; `orchestrator_skills/01` requires an app-server
-resource backend; context-compaction, continuation, deferred-search,
-network-search, image-generation, and summary-quality rows require their
-dedicated checked-in runners/prerequisites. They remain explicit blocked or
-runner-not-supported rows in the redacted matrix, not silent passes.
+`browser_use/01` remains GUI-only and was not part of this CLI run.
+`orchestrator_skills/01` still needs its deterministic `codex_apps` resource
+backend, which is a distinct prerequisite from the standalone app-server
+binary. The app-server protocol rows were executed as follows:
+
+- `context_compaction/01` with `deepseek-v4-flash` and `context-limit`: the
+  0.149 CLI and standalone app-server completed the model turn, emitted the
+  marker, and produced one Rosetta compaction mapping. The runner observed an
+  early compaction response but no later installed-follow-up item, so the
+  protocol result is recorded as incomplete rather than skipped.
+- `context_compaction/02` with `gpt-5.6-terra` and manual compaction: the
+  complete chain and marker were observed, but the configured route was
+  converted (`wire_passthrough=false`) instead of satisfying the native
+  passthrough expectation.
+- `interrupt_continuation/01`: `steer` and hard `interrupt` both completed
+  successfully through the standalone app-server. `fork` completed the parent
+  and child protocol with stable tool definitions and exact prefix, but its
+  fork request had zero cached tokens and therefore failed the cache-hit
+  contract.
+
+These app-server rows are no longer classified as blocked due to runner
+availability. Their raw credentials remain outside the tracked report; the
+credential-free run roots and traces are retained under
+`tmp/agent_testing_workspace/202608220053`,
+`tmp/agent_testing_workspace/202608220054`, and
+`tmp/agent_testing_workspace/202608220055`.
 
 The full redacted row manifest is retained at
 `.agent-work/audit-packs/codex-0149-tool-migration/current/live-agent-matrix.json`.
@@ -154,7 +178,9 @@ package-wide 0.149 compatibility claim.
 - Focused S02 converter/projection/tool gate: **401 passed, 1 warning**.
 - `make lint`: ruff check passed; format check remains blocked by five pre-existing README formatting findings outside this feature diff.
 - `make test`: the repository `pytest.ini` requests unavailable coverage addopts in the bare command; equivalent run with `-o addopts=''` passed as recorded above.
-- 0.149 Code Mode host source build: blocked by a V8 prebuilt archive HTTP 404; the installed Codex app host was used only in isolated live runs and no host binary was changed in the repository.
+- 0.149 standalone `codex-app-server`: release binary built and verified for
+  version, stdio initialize, and WebSocket readiness. The separate Code Mode
+  host source build was not required for these app-server protocol cells.
 
 ---
 

@@ -41,13 +41,6 @@ EXPECTED_FUNCTIONS = {
 }
 
 EXPECTED_NAMESPACE_CHILDREN = {
-    "multi_agent_v1": {
-        "close_agent",
-        "resume_agent",
-        "send_input",
-        "spawn_agent",
-        "wait_agent",
-    },
     "collaboration": {
         "followup_task",
         "interrupt_agent",
@@ -254,13 +247,13 @@ def test_tool_profile_references_use_independent_current_provider() -> None:
                 "provider": ["first", "second"],
                 "current_provider": "second",
                 "type": "llm",
-                "tool_profile": "builtin",
+                "tool_profile": "chat-legacy",
                 "models": {"gpt-test": {}},
             }
         },
     }
 
-    assert _tool_profile_references(data) == {"builtin": ["models"]}
+    assert _tool_profile_references(data) == {"chat-legacy": ["models"]}
     assert data["model_groups"]["models"]["provider"] == ["first", "second"]
 
 
@@ -313,7 +306,7 @@ def test_catalog_contains_all_fixed_tools_and_includes_profile_owned_search():
         EXPECTED_EXEC_TOOLS
     )
     assert {items[item_id]["name"] for item_id in groups["function"]} == (
-        (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS - {"test_sync_tool"})
+        (EXPECTED_FUNCTIONS - EXPECTED_EXEC_TOOLS - {"test_sync_tool", "shell_command"})
         | {"exec", "web_search", "tool_search"}
     )
     assert items["function.test_sync_tool"]["ui_hidden"] is True
@@ -321,7 +314,6 @@ def test_catalog_contains_all_fixed_tools_and_includes_profile_owned_search():
         "function.test_sync_tool" not in item_ids for item_ids in groups.values()
     )
     assert {items[item_id]["name"] for item_id in groups["namespace"]} == {
-        "multi_agent_v1",
         "collaboration",
     }
     assert all(
@@ -355,6 +347,12 @@ def test_catalog_contains_all_fixed_tools_and_includes_profile_owned_search():
         "namespace",
         "rosetta_injection",
     }
+    assert "function.shell_command" not in items
+    assert "namespace.multi_agent_v1" not in items
+    assert not any(
+        "multi_agent_v1" in json.dumps(value)
+        for value in (catalog["placements"], catalog["source_registrations"])
+    )
 
     actual_namespace_children = {
         items[namespace_id]["name"]: {items[child_id]["name"] for child_id in child_ids}
@@ -406,13 +404,10 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert catalog["metadata"]["codex_cli_version"] == "0.149.0"
     assert catalog["metadata"]["codex_source_commit"] == CODEX_0149_SOURCE_COMMIT
     assert catalog["metadata"]["profile_selection"] == "model_group"
-    assert catalog["builtin_profile"]["id"] == "builtin"
-    assert catalog["builtin_profile"]["name"] == (
-        "Chat Default（适用于第三方仅提供chat api的模型）"
-    )
+    assert catalog["builtin_profile"]["id"] == "chat-legacy"
+    assert catalog["builtin_profile"]["name"] == "Chat Legacy（旧版工具注入）"
     assert catalog["builtin_profile"]["api_types"] == ["chat"]
     assert catalog["builtin_profile"]["tools"] == {
-        "namespace.multi_agent_v1": "disabled",
         "namespace.image_gen.imagegen": "modified",
         "hosted.web_search": "disabled",
         "hosted.tool_search": "modified",
@@ -424,7 +419,7 @@ def test_catalog_defaults_and_namespace_image_policy():
         "function.write_stdin": "modified",
     }
     assert "namespace.mcp_github" not in catalog["builtin_profile"]["inputs"]
-    assert catalog["preset_profiles"] == [
+    assert catalog["preset_profiles"][1:] == [
         {
             "id": "web-run-injection",
             "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
@@ -552,12 +547,7 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert request_user_input["note_i18n"] == "tools.note.request_user_input"
     assert request_user_input["note_visible_when"] == ["modified"]
 
-    builtin = tool_profile_contract()["builtin"]
-    assert builtin["namespace.multi_agent_v1"] == "disabled"
-    assert all(
-        builtin[child_id] == "disabled"
-        for child_id in _namespaces["namespace.multi_agent_v1"]
-    )
+    builtin = tool_profile_contract()["chat-legacy"]
     assert builtin["namespace.multi_agent_v2"] == "expanded"
     assert builtin["function.exec_command"] == "modified"
     assert builtin["function.write_stdin"] == "modified"
@@ -607,10 +597,6 @@ def test_catalog_defaults_and_namespace_image_policy():
     assert items["custom.exec"]["description_visible_when"] == ["disabled"]
     assert tool_profile_contract()["internal_containers_when_disabled"] == frozenset(
         {"custom.exec"}
-    )
-    assert builtin["function.shell_command"] == "disabled"
-    assert items["function.shell_command"]["description_i18n"] == (
-        "tools.description.shell_command_replaced"
     )
     goal_notes = {
         "function.create_goal": "tools.note.create_goal",
@@ -662,7 +648,6 @@ def test_catalog_defaults_and_namespace_image_policy():
     for item_id in (
         "function.exec_command",
         "function.write_stdin",
-        "function.shell_command",
     ):
         assert policies[items[item_id]["policy_id"]]["supported"] == [
             "disabled",
@@ -752,7 +737,7 @@ def test_bundled_responses_profiles_preserve_or_map_only_intended_tools() -> Non
         if state != passthrough[item_id]
     } == {"namespace.web.run": "modified"}
     assert mapping == {
-        **profiles["builtin"]["tools"],
+        **profiles["chat-legacy"]["tools"],
         "hosted.tool_search": "passthrough",
     }
 
@@ -794,7 +779,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
             "Test": {
                 "provider": ["test-provider"],
                 "type": "llm",
-                "tool_profile": "builtin",
+                "tool_profile": "chat-legacy",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
@@ -806,7 +791,7 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(raw), encoding="utf-8")
     app = create_app(GatewayConfig(raw), str(config_path))
-    tools = dict(tool_profile_contract()["builtin"])
+    tools = dict(tool_profile_contract()["chat-legacy"])
     tools["function.update_plan"] = "disabled"
     tools["hosted.tool_search"] = "disabled"
 
@@ -816,7 +801,8 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     assert response.status_code == 200
     profiles = json.loads(getattr(response, "body"))["profiles"]
     assert [(profile["id"], profile["readonly"]) for profile in profiles] == [
-        ("builtin", True),
+        ("chat-legacy", True),
+        ("chat-default", True),
         ("web-run-injection", True),
         ("responses-tool-mapping", True),
     ]
@@ -826,20 +812,20 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
             _api_request(
                 app,
                 "PUT",
-                "/admin/api/tools/profiles/builtin",
+                "/admin/api/tools/profiles/chat-legacy",
                 {"tools": tools},
             )
         )
     )
     assert response.status_code == 400
 
-    builtin_tools = dict(tool_profile_contract()["readonly"]["builtin"]["tools"])
+    builtin_tools = dict(tool_profile_contract()["readonly"]["chat-legacy"]["tools"])
     response = asyncio.run(
         app._dispatch(
             _api_request(
                 app,
                 "PUT",
-                "/admin/api/tools/profiles/builtin",
+                "/admin/api/tools/profiles/chat-legacy",
                 {
                     "api_types": ["chat"],
                     "tools": builtin_tools,
@@ -861,12 +847,12 @@ def test_admin_tool_profile_crud_and_reference_guard(tmp_path):
     builtin = next(
         profile
         for profile in json.loads(getattr(response, "body"))["profiles"]
-        if profile["id"] == "builtin"
+        if profile["id"] == "chat-legacy"
     )
     assert builtin["inputs"]["hosted.web_search"]["token"] == ("bundled-profile-token")
     saved = json.loads(config_path.read_text(encoding="utf-8"))
-    assert saved["tool_profile_input_overrides"]["builtin"] == builtin["inputs"]
-    assert "builtin" not in saved["tool_profiles"]
+    assert saved["tool_profile_input_overrides"]["chat-legacy"] == builtin["inputs"]
+    assert "chat-legacy" not in saved["tool_profiles"]
 
     response = asyncio.run(
         app._dispatch(

@@ -8,13 +8,12 @@
     "profile_selection": "model_group"
   },
   "builtin_profile": {
-    "id": "builtin",
-    "name": "Chat Default（适用于第三方仅提供chat api的模型）",
+    "id": "chat-legacy",
+    "name": "Chat Legacy（旧版工具注入）",
     "api_types": [
       "chat"
     ],
     "tools": {
-      "namespace.multi_agent_v1": "disabled",
       "namespace.image_gen.imagegen": "modified",
       "hosted.web_search": "disabled",
       "custom.apply_patch": "disabled",
@@ -62,6 +61,25 @@
     }
   },
   "preset_profiles": [
+    {
+      "id": "chat-default",
+      "name": "Chat Default（仅工具翻译）",
+      "api_types": [
+        "chat"
+      ],
+      "defaults": {
+        "function": "passthrough",
+        "custom": "passthrough",
+        "hosted": "passthrough",
+        "namespace": "passthrough",
+        "custom_injection": "disabled"
+      },
+      "tools": {
+        "injection.rosetta.send_line": "injected",
+        "injection.rosetta.tool_read": "injected",
+        "injection.rosetta.invoke_deferred_tool": "injected"
+      }
+    },
     {
       "id": "web-run-injection",
       "name": "web.run 注入（适用于尚未支持/alpha/search端点的中转站）",
@@ -314,27 +332,6 @@
         "stability": "stable",
         "initial_delivery": "eager",
         "deferred_adapter": "nested_exec"
-      }
-    },
-    {
-      "id": "function.shell_command",
-      "name": "shell_command",
-      "type": "function",
-      "policy_id": "legacy_shell_disabled",
-      "delivery": {
-        "localized_native_source": true
-      },
-      "description_i18n": "tools.description.shell_command_replaced",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.function.shell_command"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "direct_function"
       }
     },
     {
@@ -1185,24 +1182,6 @@
       }
     },
     {
-      "id": "namespace.multi_agent_v1",
-      "name": "multi_agent_v1",
-      "type": "namespace",
-      "policy_id": "multi_agent_expansion",
-      "default_expanded": true,
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "namespace_function"
-      }
-    },
-    {
       "id": "namespace.multi_agent_v2",
       "name": "collaboration",
       "type": "namespace",
@@ -1221,96 +1200,6 @@
         "stability": "conditional",
         "initial_delivery": "eager",
         "deferred_adapter": "namespace_function"
-      }
-    },
-    {
-      "id": "namespace.multi_agent_v1.close_agent",
-      "name": "close_agent",
-      "type": "function",
-      "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1.close_agent"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "nested_exec"
-      }
-    },
-    {
-      "id": "namespace.multi_agent_v1.resume_agent",
-      "name": "resume_agent",
-      "type": "function",
-      "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1.resume_agent"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "nested_exec"
-      }
-    },
-    {
-      "id": "namespace.multi_agent_v1.send_input",
-      "name": "send_input",
-      "type": "function",
-      "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1.send_input"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "nested_exec"
-      }
-    },
-    {
-      "id": "namespace.multi_agent_v1.spawn_agent",
-      "name": "spawn_agent",
-      "type": "function",
-      "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1.spawn_agent"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "nested_exec"
-      }
-    },
-    {
-      "id": "namespace.multi_agent_v1.wait_agent",
-      "name": "wait_agent",
-      "type": "function",
-      "namespace_id": "namespace.multi_agent_v1",
-      "policy_id": "passthrough",
-      "source_binding": {
-        "origin": "codex_source",
-        "registration_ids": [
-          "item.namespace.multi_agent_v1.wait_agent"
-        ]
-      },
-      "surface_policy": {
-        "stability": "conditional",
-        "initial_delivery": "eager",
-        "deferred_adapter": "nested_exec"
       }
     },
     {
@@ -2202,25 +2091,25 @@
           "parameters": {
             "type": "object",
             "properties": {
-            "name": {
-              "type": "string",
-              "pattern": "^[A-Za-z0-9_.-]+$",
-              "maxLength": 512
-            },
-            "definition_hash": {
-              "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$",
-              "description": "Exact definition_hash returned by the paired tool_read result."
-            },
-            "arguments": {
+              "name": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9_.-]+$",
+                "maxLength": 512
+              },
+              "definition_hash": {
+                "type": "string",
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "description": "Exact definition_hash returned by the paired tool_read result."
+              },
+              "arguments": {
                 "type": "object",
                 "description": "Arguments matching the tool declaration returned by tool_read."
               }
             },
             "required": [
-          "name",
-          "definition_hash",
-          "arguments"
+              "name",
+              "definition_hash",
+              "arguments"
             ],
             "additionalProperties": false
           }
@@ -2281,14 +2170,12 @@
           "function.request_user_input",
           "hosted.web_search",
           "hosted.tool_search",
-          "function.shell_command",
           "function.new_context"
         ]
       },
       {
         "id": "namespace",
         "item_ids": [
-          "namespace.multi_agent_v1",
           "namespace.multi_agent_v2"
         ]
       },
@@ -2307,16 +2194,6 @@
       }
     ],
     "namespaces": [
-      {
-        "namespace_id": "namespace.multi_agent_v1",
-        "child_ids": [
-          "namespace.multi_agent_v1.close_agent",
-          "namespace.multi_agent_v1.resume_agent",
-          "namespace.multi_agent_v1.send_input",
-          "namespace.multi_agent_v1.spawn_agent",
-          "namespace.multi_agent_v1.wait_agent"
-        ]
-      },
       {
         "namespace_id": "namespace.multi_agent_v2",
         "child_ids": [
@@ -2362,16 +2239,6 @@
       "exposure": "Conditional",
       "conditions": [],
       "item_id": "function.write_stdin"
-    },
-    {
-      "id": "item.function.shell_command",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_shell_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "function.shell_command"
     },
     {
       "id": "item.function.update_plan",
@@ -2604,16 +2471,6 @@
       "item_id": "hosted.tool_search"
     },
     {
-      "id": "item.namespace.multi_agent_v1",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "namespace",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1"
-    },
-    {
       "id": "item.namespace.multi_agent_v2",
       "source_path": "codex-rs/core/src/tools/spec_plan.rs",
       "source_symbol": "add_collaboration_tools",
@@ -2622,56 +2479,6 @@
       "exposure": "Conditional",
       "conditions": [],
       "item_id": "namespace.multi_agent_v2"
-    },
-    {
-      "id": "item.namespace.multi_agent_v1.close_agent",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1.close_agent"
-    },
-    {
-      "id": "item.namespace.multi_agent_v1.resume_agent",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1.resume_agent"
-    },
-    {
-      "id": "item.namespace.multi_agent_v1.send_input",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1.send_input"
-    },
-    {
-      "id": "item.namespace.multi_agent_v1.spawn_agent",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1.spawn_agent"
-    },
-    {
-      "id": "item.namespace.multi_agent_v1.wait_agent",
-      "source_path": "codex-rs/core/src/tools/spec_plan.rs",
-      "source_symbol": "add_collaboration_tools",
-      "registration_kind": "static",
-      "tool_spec_kind": "function",
-      "exposure": "Conditional",
-      "conditions": [],
-      "item_id": "namespace.multi_agent_v1.wait_agent"
     },
     {
       "id": "item.namespace.multi_agent_v2.followup_task",

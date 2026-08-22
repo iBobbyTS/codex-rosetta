@@ -61,6 +61,12 @@ native opaque payloads.
 
 ## Automated native smoke run
 
+The app-server protocol runner prefers the locally built Codex 0.149
+standalone binary at `../openai-codex-src/codex-rs/target/{release,debug}/`
+when it is present. Set `CODEX_APP_SERVER_BIN` to select another compiled
+binary explicitly; the runner passes `--listen stdio://` to that binary. If no
+standalone binary is available, it falls back to `codex app-server --stdio`.
+
 `run_live.py` automates the isolated setup, dual-auth validation, gateway
 lifecycle, a real Codex app-server session, and bounded native-compaction
 checks. It defaults to task `02` with `gpt-5.6-terra`, which is an intentional

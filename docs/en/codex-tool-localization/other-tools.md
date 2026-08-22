@@ -6,7 +6,7 @@ Codex has several agent/runtime tools whose behavior depends on more than a simp
 
 Plan mode uses `request_user_input` when the model needs a real user decision before producing or revising a plan. Chat models can confuse that with the final approval step and ask the user whether to proceed after they already emitted a proposed plan.
 
-The bundled **Chat Default** Profile marks `request_user_input` as Modified and appends guidance with these effects:
+The bundled **Chat Legacy** Profile marks `request_user_input` as Modified and appends guidance with these effects:
 
 - Use it only for preferences or decisions that materially change the plan.
 - Do not use it to ask whether to approve, proceed with, or implement a proposed plan.
@@ -17,24 +17,24 @@ This is a prompt-level/tool-description adaptation. It does not change the tool 
 
 ## TODO / update_plan
 
-When Codex exposes `update_plan` only as a nested Code Mode tool, the bundled **Chat Default** Profile projects it into an ordinary Chat function. Rosetta derives the current parameter schema and description from Codex's `exec` declaration instead of maintaining a duplicate schema. A model call is rebuilt as a deterministic custom `exec` script for Codex. If Codex already exposes a direct `update_plan` Function, that direct definition is preserved.
+When Codex exposes `update_plan` only as a nested Code Mode tool, the bundled Chat Profiles project it into an ordinary Chat function. Rosetta derives the current parameter schema and description from Codex's `exec` declaration instead of maintaining a duplicate schema. A model call is rebuilt as a deterministic custom `exec` script for Codex. If Codex already exposes a direct `update_plan` Function, that direct definition is preserved.
 
 ## Goal Tools
 
 Goal state is managed through `get_goal`, `create_goal`, and `update_goal`. Chat models may not infer the right sequence from the terse native tool descriptions.
 
-The bundled **Chat Default** Profile marks `create_goal` and `update_goal` as Modified and appends guidance for:
+The bundled **Chat Legacy** Profile marks `create_goal` and `update_goal` as Modified and appends guidance for:
 
 - `create_goal`: call it when the user explicitly asks to mark a goal complete or blocked but no active goal exists, or when `update_goal` reports that the thread has no goal. Do not set `token_budget` unless the user explicitly provided a numeric token budget.
 - `update_goal`: when goal state is uncertain, call `get_goal` first. If there is no active goal, call `create_goal` with a concise objective and no token budget unless explicitly requested, then retry `update_goal`.
 
-`get_goal` is Pass through: Rosetta projects its current Code Mode declaration and translates the call back to `exec` without appending guidance. `create_goal` and `update_goal` remain Modified because they retain the Profile-owned guidance above.
+`get_goal` is Pass through: Rosetta projects its current Code Mode declaration and translates the call back to `exec` without appending guidance. In Chat Legacy, `create_goal` and `update_goal` remain Modified because they retain the Profile-owned guidance above; Chat Default leaves the native declaration unchanged apart from protocol translation.
 
 Their Tools-page cards display the actual complete guidance from the selected Profile in a read-only textarea titled **Appended Description Prompt**, rather than using the card description for this content.
 
 ## Code Mode Nested Tools
 
-Recent Codex Code Mode surfaces keep several runtime tools inside the custom `exec` description instead of exposing every tool as a top-level Function. For Responses-to-Chat routes, the Chat Default projection rules map the following nested declarations into ordinary Chat functions when those declarations are present and their Profile state is Pass through or Modified:
+Recent Codex Code Mode surfaces keep several runtime tools inside the custom `exec` description instead of exposing every tool as a top-level Function. For Responses-to-Chat routes, the Chat Profile projection rules map the following nested declarations into ordinary Chat functions when those declarations are present and their Profile state is Pass through or Modified:
 
 - `exec_command`, `write_stdin`, `update_plan`, and `view_image`
 - `web__run` (Codex runtime identity `web.run`), exposed to Chat as `web-run`
@@ -49,9 +49,9 @@ Recent Codex Code Mode surfaces keep several runtime tools inside the custom `ex
 
 Rosetta reads each schema and description from the actual Codex `exec` declaration. Its reverse parser covers the TypeScript grammar emitted by Codex, including literals, unions, intersections, arrays, tuples, and object index signatures. Constraints that Codex itself omits while rendering JSON Schema to TypeScript cannot be reconstructed. Rosetta does not invent a Function when a declaration cannot be parsed. A same-named direct Function wins, and projection fails closed for that name.
 
-Chat Default marks the parent `exec` tool Disabled for model exposure. On a Responses-to-Chat route, Rosetta nevertheless retains that container through the source Profile filter, reads it for projection, and removes it before the outbound Chat request. The removal is fail-closed: even when no model-visible declaration can be parsed, the Disabled parent `exec` is not exposed as a fallback. A copied Profile may explicitly set the parent to Pass through or Modified when raw `exec` exposure is intentional.
+The bundled Chat Profiles mark the parent `exec` tool Disabled for model exposure. On a Responses-to-Chat route, Rosetta nevertheless retains that container through the source Profile filter, reads it for projection, and removes it before the outbound Chat request. The removal is fail-closed: even when no model-visible declaration can be parsed, the Disabled parent `exec` is not exposed as a fallback. A copied Profile may explicitly set the parent to Pass through or Modified when raw `exec` exposure is intentional.
 
-For Exec Expansion cards, **Pass through** means representation-only adaptation: expose the current declaration as a normal Chat Function and translate its call back to `exec`, without appending any catalog text. Chat Default uses this state for `exec_command`, `write_stdin`, `update_plan`, `view_image`, `get_goal`, Clock, Memories, and Skills. **Modified** is retained where the Profile changes model-visible guidance or behavior: `create_goal` and `update_goal` append guidance, while `web.run` uses the global Admin search mapping. The mapping is an ordered list of up to 32 Tavily, self-hosted Google/Bing, enabled configured Responses Provider, or eligible DeepSeek official Responses rows. Modified search tries eligible rows in order under the documented failover/cooldown rules, including a configured Responses or DeepSeek first row. The DeepSeek row uses fixed `deepseek-v4-flash` and one `search_query.q`; it has no Pro, domains, multi-query, history, usage, or quota state. Passthrough ignores this list and its Search Models and forwards `/v1/alpha/search` on the current native Responses route; Disabled remains blocked.
+For Exec Expansion cards, **Pass through** means representation-only adaptation: expose the current declaration as a normal Chat Function and translate its call back to `exec`, without appending any catalog text. Chat Default uses this state for the native declarations it translates. **Modified** is retained by Chat Legacy where the Profile changes model-visible guidance or behavior: `create_goal` and `update_goal` append guidance, while `web.run` uses the global Admin search mapping. The mapping is an ordered list of up to 32 Tavily, self-hosted Google/Bing, enabled configured Responses Provider, or eligible DeepSeek official Responses rows. Modified search tries eligible rows in order under the documented failover/cooldown rules, including a configured Responses or DeepSeek first row. The DeepSeek row uses fixed `deepseek-v4-flash` and one `search_query.q`; it has no Pro, domains, multi-query, history, usage, or quota state. Passthrough ignores this list and its Search Models and forwards `/v1/alpha/search` on the current native Responses route; Disabled remains blocked.
 
 With `web.run` Modified, Rosetta rewrites the live `web__run` declaration even
 when it remains nested inside a custom `exec` tool on a direct Responses route.
@@ -70,31 +70,31 @@ used both the static and sidecar-backed subsets. Unsupported live declaration
 branches are removed before the upstream request and still fail closed at
 runtime. Passthrough preserves the complete nested declaration unchanged.
 
-Chat Default keeps `image_gen__imagegen` Modified and exposes editable Base URL and Token fields. Once those credentials are saved, Rosetta projects the Function to the upstream model and handles the resulting OpenAI-style image generation or edit request through `/v1/images/generations` or `/v1/images/edits`. Leave the Token blank until image generation is intentionally configured.
+Chat Legacy keeps `image_gen__imagegen` Modified and exposes editable Base URL and Token fields. Chat Default leaves the native image tool unchanged apart from protocol translation. Once those credentials are saved, Rosetta projects the Function to the upstream model and handles the resulting OpenAI-style image generation or edit request through `/v1/images/generations` or `/v1/images/edits`. Leave the Token blank until image generation is intentionally configured.
 
 Calls to projected Functions are rebuilt as deterministic JavaScript calls on the nested `tools` object and returned to Codex as `custom_tool_call` calls to `exec`. The exact Chat-to-Codex call object and its result object are stored independently in the principal-isolated encrypted tool-history cache. An exact history hit restores the original Chat Function or result while injecting the current protocol-level call ID. Each entry has an absolute 24-hour TTL that is not renewed by reads; an expired entry is retranslated and written again after the current request is accepted. `view_image` forwards its result through `image(...)`, `image_gen.imagegen` uses `generatedImage(...)`, and text-bearing projected tools use `text(...)`.
 
-Chat Default disables the `apply_patch` exec projection. Instead, Rosetta injects the three read tools `Read`, `Glob`, and `Grep`, plus the two write tools `Edit` and `Write`. `Edit` and `Write` may use Codex's nested `apply_patch` implementation internally without exposing `apply_patch` to the upstream model.
+Chat Legacy disables the `apply_patch` exec projection and injects the legacy file tools `Read`, `Glob`, `Grep`, `Edit`, and `Write`. Chat Default performs no such file-tool injection and only adds the deferred Rosetta tools `send_line`, `tool_read`, and `invoke_deferred_tool`.
 
 The top-level `wait`, `request_user_input`, and `new_context` Functions are not projected through `exec`. They remain direct Functions in both directions. Codex marks `new_context` as direct-model-only, so Code Mode Only does not move it under `exec`.
 
 ## Subagents And Namespace Tools
 
-Codex exposes subagent capabilities through Responses namespace tools such as `collaboration` and legacy `multi_agent_v1`. Chat Completions does not have the same nested namespace tool shape.
+Codex exposes subagent capabilities through Responses namespace tools such as `collaboration` and `multi_agent_v2`. Chat Completions does not have the same nested namespace tool shape.
 
 For Responses-to-Chat routes, Rosetta flattens namespace child tools into ordinary Chat function tools. For example:
 
 ```text
-multi_agent_v1-spawn_agent
+multi_agent_v2-spawn_agent
 ```
 
-During request conversion, Rosetta records the mapping from the flattened tool name to its Responses namespace. The hyphenated `multi_agent_v1-spawn_agent` form is canonical and valid on Chat APIs that restrict Function names to letters, digits, underscores, and hyphens. On return Rosetta also accepts `multi_agent_v1_spawn_agent`, `multi_agent_v1.spawn_agent`, and a bare `spawn_agent` when the selected name belongs to exactly one namespace and does not collide with an ordinary Function. Ambiguous names fail closed. Rosetta then restores the Responses namespace metadata before returning the event to Codex:
+During request conversion, Rosetta records the mapping from the flattened tool name to its Responses namespace. The hyphenated `multi_agent_v2-spawn_agent` form is canonical and valid on Chat APIs that restrict Function names to letters, digits, underscores, and hyphens. On return Rosetta also accepts `multi_agent_v2_spawn_agent`, `multi_agent_v2.spawn_agent`, and a bare `spawn_agent` when the selected name belongs to exactly one namespace and does not collide with an ordinary Function. Ambiguous names fail closed. Rosetta then restores the Responses namespace metadata before returning the event to Codex:
 
 ```json
 {
   "type": "function_call",
   "name": "spawn_agent",
-  "namespace": "multi_agent_v1"
+  "namespace": "multi_agent_v2"
 }
 ```
 
@@ -128,11 +128,11 @@ The important behavior is that tool calls must survive the round trip:
 - Namespace metadata is restored when the tool came from a Responses namespace.
 - Message `phase` metadata is preserved so work-process output remains foldable in Codex.
 
-`test_sync_tool` remains in the internal catalog contract for persisted Profile compatibility, is Disabled in Chat Default, and is deliberately hidden from the Tools page. It is a model-catalog-triggered Codex test hook rather than a Rosetta-supported user tool.
+`test_sync_tool` remains in the internal catalog contract for persisted Profile compatibility and is deliberately hidden from the Tools page. It is a model-catalog-triggered Codex test hook rather than a Rosetta-supported user tool.
 
 ## Tool Profile Scope
 
-Each Tool Profile declares a non-empty set of applicable Provider protocols in its required `api_types` array. The current choices are `chat`, `responses`, `anthropic`, and `google`, and a user Profile may select any combination. **Chat Default（适用于第三方仅提供chat api的模型）** applies to Chat; **web.run 注入（适用于尚未支持/alpha/search端点的中转站）** and **工具映射（适用于第三方模型提供的Responses接口）** apply to Responses. Responses model groups also offer a special **Pass through** option that is not a Profile and performs no tool mapping. The model-group editor lists this option only for Responses, followed by bundled and user Profiles whose set contains the selected Provider protocol; the backend rejects mismatched references. Anthropic and Google Providers have no bundled default Profile, but user Profiles may explicitly support either protocol.
+Each Tool Profile declares a non-empty set of applicable Provider protocols in its required `api_types` array. The current choices are `chat`, `responses`, `anthropic`, and `google`, and a user Profile may select any combination. **Chat Default（仅工具翻译）** and **Chat Legacy（旧版工具注入）** apply to Chat; **web.run 注入（适用于尚未支持/alpha/search端点的中转站）** and **工具映射（适用于第三方模型提供的Responses接口）** apply to Responses. Responses model groups also offer a special **Pass through** option that is not a Profile and performs no tool mapping. The model-group editor lists this option only for Responses, followed by bundled and user Profiles whose set contains the selected Provider protocol; the backend rejects mismatched references. Anthropic and Google Providers have no bundled default Profile, but user Profiles may explicitly support either protocol.
 
 The bundled Profile manages current Codex image generation through `image_gen.imagegen`. It does not contain the obsolete hosted `image_generation` tool.
 
@@ -142,8 +142,8 @@ The Tools page has four categories:
 
 - **Exec Expansion**: ordinary Chat Functions projected from tools nested in Codex `exec`. Codex flattens namespaced runtime identities into `namespace__function` properties such as `clock__sleep`, `web__run`, and `image_gen__imagegen`; the catalog lists those Functions directly and does not invent parent Namespace cards.
 - **Function**: direct Functions and hosted tools managed with the same card shape.
-- **Namespace**: fixed tools directly exposed by Codex as Responses Namespaces: `collaboration` and legacy `multi_agent_v1`. Installed plugin, MCP, app, and connector Namespaces are runtime-dynamic and are not part of this static catalog.
-- **Rosetta Injection**: catalog-owned injected tools: `Read`, `Glob`, `Grep`, `Edit`, `Write`, `send_line`, `tool_read`, and `invoke_deferred_tool`.
+- **Namespace**: fixed tools directly exposed by Codex as Responses Namespaces: `collaboration` and `multi_agent_v2`. Installed plugin, MCP, app, and connector Namespaces are runtime-dynamic and are not part of this static catalog.
+- **Rosetta Injection**: catalog-owned injected tools: legacy file tools `Read`, `Glob`, `Grep`, `Edit`, and `Write`, plus deferred tools `send_line`, `tool_read`, and `invoke_deferred_tool`.
 
 The catalog currently contains 57 items and is compiled at Gateway startup.
 Unknown schema fields, adapter IDs, dependencies, state/API combinations,
@@ -176,11 +176,11 @@ For conditionally assembled Codex tools, the detail panel separately shows their
 
 A Function, Hosted, or Namespace catalog item may declare multiple `profile_inputs`. Each entry has a stable ID, a localized subtitle, a default value, and a `text`, `password`, `select`, or `textarea` input type. A select declares ordered `{value, label}` options: the Tools page displays each label and persists its value. A textarea may be catalog-owned and read-only so the current Profile value can be inspected and copied without being edited. The Tools page renders the entries in catalog order beneath the tool status selector. Hosted `web_search` owns its Provider, Token, and guidance in each Profile. `web.run` has no Profile credentials: Modified uses the global search Provider on the Admin **Web Search** page, while Passthrough forwards `/v1/alpha/search` directly to the upstream model API. DeepSeek rows store only an eligible configured Provider name; their credential remains owned by Provider configuration.
 
-An input may declare `visible_when` with a list of tool states, for example `["modified"]`. Hidden inputs retain their saved Profile values. A catalog-owned input may also be hidden from the UI entirely while remaining available to runtime Profile mutation. Card descriptions appear in every supported state by default; an item may restrict them with `description_visible_when` using the same state-list format. Modified Functions normally display a localized summary of how the tool description is changed; `create_goal` and `update_goal` instead expose their actual Profile guidance through the read-only textarea above. A catalog item may declare `profile_mutations`: generic Profile processing applies its configured description or parameter-description append operations in Modified, or in Expanded for a Namespace. The Chat Default guidance for `request_user_input`, the Goal tools, and selected `collaboration` Functions uses this mechanism; the converter contains no Function-name-specific guidance. Chat Default disables legacy hosted `web_search` and keeps `web.run` as its configured search surface. A copied Profile may enable hosted `web_search`; it remains protocol-converted in Passthrough or Modified, but only Modified can append its Profile guidance.
+An input may declare `visible_when` with a list of tool states, for example `["modified"]`. Hidden inputs retain their saved Profile values. A catalog-owned input may also be hidden from the UI entirely while remaining available to runtime Profile mutation. Card descriptions appear in every supported state by default; an item may restrict them with `description_visible_when` using the same state-list format. Modified Functions normally display a localized summary of how the tool description is changed; `create_goal` and `update_goal` instead expose their actual Profile guidance through the read-only textarea above. A catalog item may declare `profile_mutations`: generic Profile processing applies its configured description or parameter-description append operations in Modified, or in Expanded for a Namespace. The Chat Legacy guidance for `request_user_input`, the Goal tools, and selected `collaboration` Functions uses this mechanism; the converter contains no Function-name-specific guidance. Chat Legacy disables legacy hosted `web_search` and keeps `web.run` as its configured search surface. Chat Default leaves these native declarations unchanged apart from protocol translation. A copied Profile may enable hosted `web_search`; it remains protocol-converted in Passthrough or Modified, but only Modified can append its Profile guidance.
 
 All Namespace rows start expanded on the Tools page. This display default is independent of each Namespace Profile state, and users can still collapse rows locally.
 
-The bundled **Chat Default** Profile disables the legacy `multi_agent_v1` Namespace while leaving `collaboration` enabled. Collaboration children are flattened for Chat and restored to native Responses namespace calls; they are not translated through Code Mode `exec`. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
+The bundled Chat Profiles keep `collaboration` available for Responses-to-Chat translation. Collaboration children are flattened for Chat and restored to native Responses namespace calls; they are not translated through Code Mode `exec`. `multi_agent_v2` is the current static catalog Namespace when supplied by Codex. Whenever any Namespace is Disabled, every child Function is forced to Disabled and its state selector is locked until the Namespace is enabled again.
 
 User Profiles persist their applicable protocol set in `api_types` and user-entered values under `inputs.<function-item-id>.<input-id>`. Creating a Profile copy carries the current protocol set and values into the new Profile; switching or resetting a Profile restores its saved values. The bundled Profile protocol set and tool delivery states remain read-only. Bundled visible fields can still be explicitly saved under `tool_profile_input_overrides.<profile-id>` without changing the packaged JSON. Inputs have no effect unless their runtime feature consumes them; currently Modified Functions consume hidden catalog guidance, Hosted `web_search` consumes its Profile credentials, and `image_gen.imagegen` consumes its Base URL and Token. Modified `web.run` instead reads `server.web_search`.
 

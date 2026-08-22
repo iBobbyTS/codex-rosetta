@@ -35,7 +35,7 @@ from codex_rosetta.routing import ResolvedRoute
 
 
 def _profile(**overrides: str) -> dict[str, str]:
-    profile = dict(tool_profile_contract()["builtin"])
+    profile = dict(tool_profile_contract()["chat-legacy"])
     profile.update(overrides)
     return profile
 
@@ -63,9 +63,8 @@ def _route(
 def test_builtin_profile_covers_catalog_with_type_specific_states():
     contract = tool_profile_contract()
 
-    assert set(contract["builtin"]) == set(contract["supported"])
+    assert set(contract["chat-legacy"]) == set(contract["supported"])
     assert set(contract["namespace_children"]) == {
-        "namespace.multi_agent_v1",
         "namespace.multi_agent_v2",
     }
     for item_id in (
@@ -78,17 +77,16 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
         "namespace.skills.list",
         "namespace.skills.read",
     ):
-        assert contract["builtin"][item_id] == "passthrough"
-    assert contract["builtin"]["namespace.web.run"] == "modified"
-    assert contract["builtin"]["namespace.image_gen.imagegen"] == "modified"
-    assert contract["builtin"]["function.view_image"] == "modified"
-    assert contract["builtin"]["hosted.web_search"] == "disabled"
-    assert contract["builtin"]["namespace.multi_agent_v1"] == "disabled"
-    assert "namespace.mcp_github" not in contract["builtin"]
-    assert contract["builtin"]["custom.exec"] == "disabled"
+        assert contract["chat-legacy"][item_id] == "passthrough"
+    assert contract["chat-legacy"]["namespace.web.run"] == "modified"
+    assert contract["chat-legacy"]["namespace.image_gen.imagegen"] == "modified"
+    assert contract["chat-legacy"]["function.view_image"] == "modified"
+    assert contract["chat-legacy"]["hosted.web_search"] == "disabled"
+    assert "namespace.mcp_github" not in contract["chat-legacy"]
+    assert contract["chat-legacy"]["custom.exec"] == "disabled"
     assert contract["internal_containers_when_disabled"] == frozenset({"custom.exec"})
-    assert contract["builtin"]["namespace.multi_agent_v2.spawn_agent"] == "modified"
-    view_image_details = contract["readonly"]["builtin"]["inputs"][
+    assert contract["chat-legacy"]["namespace.multi_agent_v2.spawn_agent"] == "modified"
+    view_image_details = contract["readonly"]["chat-legacy"]["inputs"][
         "function.view_image"
     ]["supported_details"]
     assert view_image_details == "auto,low,high"
@@ -99,32 +97,29 @@ def test_builtin_profile_covers_catalog_with_type_specific_states():
     )
     assert (
         "message field is the complete child task"
-        in contract["readonly"]["builtin"]["inputs"][
+        in contract["readonly"]["chat-legacy"]["inputs"][
             "namespace.multi_agent_v2.spawn_agent"
         ]["guidance"]
     )
     assert (
         "Pass raw JavaScript source"
-        in contract["readonly"]["builtin"]["inputs"]["custom.exec"]["guidance"]
+        in contract["readonly"]["chat-legacy"]["inputs"]["custom.exec"]["guidance"]
     )
     assert set(contract["readonly"]) == {
-        "builtin",
+        "chat-default",
+        "chat-legacy",
         "web-run-injection",
         "responses-tool-mapping",
     }
-    assert all(
-        contract["builtin"][child_id] == "disabled"
-        for child_id in contract["namespace_children"]["namespace.multi_agent_v1"]
-    )
     assert contract["supported"]["injection.claude_code.read"] == (
         "disabled",
         "injected",
     )
-    assert contract["builtin"]["injection.claude_code.read"] == "injected"
+    assert contract["chat-legacy"]["injection.claude_code.read"] == "injected"
 
 
 def test_disabled_namespace_forces_all_child_states_to_disabled():
-    tools = dict(tool_profile_contract()["builtin"])
+    tools = dict(tool_profile_contract()["chat-legacy"])
     tools["namespace.multi_agent_v2"] = "disabled"
     for child_id in tool_profile_contract()["namespace_children"][
         "namespace.multi_agent_v2"
@@ -145,7 +140,7 @@ def test_disabled_namespace_forces_all_child_states_to_disabled():
 
 
 def test_custom_profile_requires_non_empty_supported_api_types():
-    tools = dict(tool_profile_contract()["builtin"])
+    tools = dict(tool_profile_contract()["chat-legacy"])
 
     with pytest.raises(ValueError, match="api_types must be a non-empty array"):
         normalize_tool_profile_documents({"custom": {"tools": tools}})
@@ -195,7 +190,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
     tool_profiles_module.tool_profile_contract.cache_clear()
     try:
         contract = tool_profiles_module.tool_profile_contract()
-        assert contract["readonly"]["builtin"]["inputs"]["function.update_plan"] == {
+        assert contract["readonly"]["chat-legacy"]["inputs"]["function.update_plan"] == {
             "endpoint": "https://example.test/v1",
             "token": "",
             "quality": "standard",
@@ -219,7 +214,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
             ],
         }
 
-        tools = dict(contract["builtin"])
+        tools = dict(contract["chat-legacy"])
         documents = normalize_tool_profile_documents(
             {
                 "custom": {
@@ -256,7 +251,7 @@ def test_function_profile_inputs_support_text_password_and_select_values(monkeyp
 
 
 def test_bundled_profile_input_overrides_are_normalized_without_tool_states():
-    name = "builtin"
+    name = "chat-legacy"
     overrides = normalize_tool_profile_input_overrides(
         {
             name: {
@@ -286,7 +281,7 @@ def test_bundled_profile_input_overrides_reject_user_profiles():
 
 
 def test_bundled_profile_input_override_rejects_removed_web_run_inputs():
-    name = "builtin"
+    name = "chat-legacy"
 
     with pytest.raises(ValueError, match="unknown catalog IDs"):
         normalize_tool_profile_input_overrides(
@@ -638,7 +633,7 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
             "Test": {
                 "provider": ["test"],
                 "type": "llm",
-                "tool_profile": "builtin",
+                "tool_profile": "chat-legacy",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
@@ -650,7 +645,7 @@ def test_gateway_config_rejects_profile_for_different_provider_api_type():
 
     with pytest.raises(
         ValueError,
-        match=r"tool profile 'builtin' for api_types \['chat'\], not provider api_type 'responses'",
+        match=r"tool profile 'chat-legacy' for api_types \['chat'\], not provider api_type 'responses'",
     ):
         GatewayConfig(raw)
 
@@ -679,7 +674,7 @@ def test_gateway_config_rejects_profile_not_applicable_to_provider(api_type):
             "Test": {
                 "provider": ["test"],
                 "type": "llm",
-                "tool_profile": "builtin",
+                "tool_profile": "chat-legacy",
                 "models": {"gpt-test": {"upstream_model": "gpt-5.6-terra"}},
             }
         },
@@ -885,31 +880,49 @@ def test_bundled_profiles_expose_chat_and_responses_defaults():
     contract = tool_profile_contract()
 
     assert set(contract["readonly"]) == {
-        "builtin",
+        "chat-default",
+        "chat-legacy",
         "web-run-injection",
         "responses-tool-mapping",
     }
-    assert contract["readonly"]["builtin"]["api_types"] == ["chat"]
+    assert contract["readonly"]["chat-default"]["api_types"] == ["chat"]
+    assert contract["readonly"]["chat-legacy"]["api_types"] == ["chat"]
     assert {
         tuple(profile["api_types"])
         for profile_id, profile in contract["readonly"].items()
-        if profile_id != "builtin"
+        if profile_id not in {"chat-default", "chat-legacy"}
     } == {("responses",)}
-    assert resolve_tool_profile("builtin", {}) == contract["builtin"]
-    assert "hosted.image_generation" not in contract["builtin"]
-    assert contract["builtin"]["hosted.web_search"] == "disabled"
-    assert contract["builtin"]["custom.apply_patch"] == "disabled"
-    assert contract["builtin"]["namespace.web.run"] == "modified"
-    assert contract["readonly"]["web-run-injection"]["tools"] != contract["builtin"]
+    assert resolve_tool_profile("chat-legacy", {}) == contract["chat-legacy"]
+    assert "hosted.image_generation" not in contract["chat-legacy"]
+    assert contract["chat-legacy"]["hosted.web_search"] == "disabled"
+    assert contract["chat-legacy"]["custom.apply_patch"] == "disabled"
+    assert contract["chat-legacy"]["namespace.web.run"] == "modified"
+    assert contract["readonly"]["web-run-injection"]["tools"] != contract["chat-legacy"]
     assert (
         contract["readonly"]["web-run-injection"]["tools"]["namespace.web.run"]
         == "modified"
     )
     responses_mapping = contract["readonly"]["responses-tool-mapping"]["tools"]
     assert responses_mapping == {
-        **contract["builtin"],
+        **contract["chat-legacy"],
         "hosted.tool_search": "passthrough",
     }
+
+    chat_default = contract["readonly"]["chat-default"]
+    assert chat_default["api_types"] == ["chat"]
+    assert {
+        item_id for item_id, state in chat_default["tools"].items()
+        if item_id.startswith("injection.") and state == "injected"
+    } == {
+        "injection.rosetta.send_line",
+        "injection.rosetta.tool_read",
+        "injection.rosetta.invoke_deferred_tool",
+    }
+    assert all(
+        state != "modified"
+        for item_id, state in chat_default["tools"].items()
+        if not item_id.startswith("injection.")
+    )
 
 
 def test_passthrough_option_is_not_a_creatable_tool_profile() -> None:
@@ -1530,7 +1543,7 @@ def test_chat_default_disables_hosted_web_search():
         ]
     }
 
-    adapted = _apply_tool_adaptation(body, _route(tool_profile_contract()["builtin"]))
+    adapted = _apply_tool_adaptation(body, _route(tool_profile_contract()["chat-legacy"]))
 
     assert adapted["tools"] == [{"type": "function", "name": "wait", "parameters": {}}]
 
@@ -1632,8 +1645,8 @@ def test_injected_state_adds_selected_alias_without_modifying_native_tool():
 
 
 def test_resolve_builtin_profile_returns_independent_copy():
-    first = resolve_tool_profile("builtin", {})
-    second = resolve_tool_profile("builtin", {})
+    first = resolve_tool_profile("chat-legacy", {})
+    second = resolve_tool_profile("chat-legacy", {})
 
     first["function.update_plan"] = "disabled"
 

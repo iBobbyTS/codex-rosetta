@@ -3,8 +3,16 @@
 from __future__ import annotations
 
 import json
+import os
 import runpy
+import select
+import socket
+import subprocess
+import time
+import urllib.request
 from pathlib import Path
+
+import pytest
 
 
 RUNNER = runpy.run_path(
@@ -14,6 +22,7 @@ RUNNER = runpy.run_path(
 _command_start_count = RUNNER["_command_start_count"]
 _count_matches_expected = RUNNER["_count_matches_expected"]
 _trace_result = RUNNER["_trace_result"]
+_app_server_command = RUNNER["_app_server_command"]
 
 MATRIX = runpy.run_path(
     str(Path(__file__).parent / "context_compaction" / "provider_matrix.py"),
@@ -90,6 +99,136 @@ def test_count_matches_exact_or_minimum_contract() -> None:
     assert _count_matches_expected(
         2, {"minimum": 1}, exact_key="exact", minimum_key="minimum"
     )
+
+
+def _standalone_app_server_command() -> list[str]:
+    command = _app_server_command()
+    if command[0] == "codex":
+        pytest.skip("standalone codex-app-server binary is not available")
+    return command
+
+
+def test_app_server_command_honors_explicit_binary_override(
+    monkeypatch, tmp_path
+) -> None:
+    binary = tmp_path / "codex-app-server"
+    binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    binary.chmod(0o755)
+    monkeypatch.setenv("CODEX_APP_SERVER_BIN", str(binary))
+
+    assert _app_server_command() == [str(binary), "--listen", "stdio://"]
+
+
+def test_codex_0149_standalone_app_server_reports_its_version() -> None:
+    command = _standalone_app_server_command()
+    completed = subprocess.run(
+        [command[0], "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == "codex-app-server 0.149.0"
+
+
+def test_codex_0149_standalone_app_server_completes_stdio_initialize(tmp_path) -> None:
+    command = _standalone_app_server_command()
+    codex_home = tmp_path / "codex_home"
+    codex_home.mkdir()
+    process = subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "CODEX_HOME": str(codex_home)},
+    )
+    try:
+        assert process.stdin is not None
+        assert process.stdout is not None
+        process.stdin.write(
+            json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "codex-rosetta-test",
+                            "title": "Codex Rosetta Test",
+                            "version": "0.149.0",
+                        },
+                        "capabilities": {
+                            "experimentalApi": True,
+                            "requestAttestation": False,
+                            "mcpServerOpenAIFormElicitation": False,
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
+        process.stdin.flush()
+        ready, _, _ = select.select([process.stdout], [], [], 20)
+        if not ready:
+            stderr = process.stderr.read() if process.stderr is not None else ""
+            raise AssertionError(
+                f"standalone app-server did not answer initialize: {stderr}"
+            )
+        line = process.stdout.readline()
+        if not line:
+            stderr = process.stderr.read() if process.stderr is not None else ""
+            raise AssertionError(
+                f"standalone app-server closed before initialize response: {stderr}"
+            )
+        response = json.loads(line)
+        assert response["id"] == 1
+        assert response["result"]["userAgent"].endswith("; 0.149.0)")
+        assert response["result"]["codexHome"] == str(codex_home)
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=10)
+
+
+def test_codex_0149_standalone_app_server_serves_websocket_readyz(tmp_path) -> None:
+    command = _standalone_app_server_command()
+    codex_home = tmp_path / "codex_home"
+    codex_home.mkdir()
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    process = subprocess.Popen(
+        [command[0], "--listen", f"ws://127.0.0.1:{port}"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        env={**os.environ, "CODEX_HOME": str(codex_home)},
+    )
+    try:
+        response = None
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/readyz", timeout=0.5
+                ) as ready:
+                    response = (ready.status, ready.read().decode())
+                    break
+            except OSError:
+                if process.poll() is not None:
+                    break
+                time.sleep(0.1)
+        if response is None:
+            stderr = process.stderr.read() if process.stderr is not None else ""
+            raise AssertionError(
+                f"standalone app-server did not become ready: {stderr}"
+            )
+        assert response == (200, "")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=10)
 
 
 def test_provider_matrix_baseline_mismatch_is_blocked() -> None:

@@ -1087,7 +1087,10 @@ def _set_provider_base_url(path: Path, provider_name: str, base_url: str) -> Non
     provider = providers.get(provider_name) if isinstance(providers, dict) else None
     if not isinstance(provider, dict):
         raise RuntimeError(f"provider {provider_name!r} is missing from test config")
-    provider["base_url"] = base_url.rstrip("/")
+    normalized = base_url.rstrip("/")
+    provider["base_urls"] = [normalized]
+    provider["current_base_url"] = normalized
+    provider.pop("base_url", None)
     _write_json(path, config)
 
 
@@ -1100,6 +1103,10 @@ def main() -> int:
     run_id = datetime.now().astimezone().strftime("%Y%m%d%H%M")
     run_root = ROOT / "tmp" / "agent_testing_workspace" / run_id
     gateway_log_root = Path("/Volumes/RAMDisk") / run_id
+    if not gateway_log_root.parent.is_dir() or not os.access(
+        gateway_log_root.parent, os.W_OK
+    ):
+        gateway_log_root = run_root / "artifacts"
     if run_root.exists() or gateway_log_root.exists():
         raise RuntimeError(f"timestamped run root already exists: {run_id}")
     for directory in (
@@ -1120,7 +1127,7 @@ def main() -> int:
         ):
             raise RuntimeError(f"secret destination is not ignored: {secret_path}")
     shutil.copy2(GATEWAY_CONFIG_SOURCE, gateway_path)
-    gateway_log_root.mkdir(parents=True)
+    gateway_log_root.mkdir(parents=True, exist_ok=True)
     env_path = _create_conda_env(run_root)
     port = _free_port()
     client_key, providers = _configure_run(

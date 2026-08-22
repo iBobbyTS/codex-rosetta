@@ -354,13 +354,14 @@ def should_localize_code_tools(route: Any) -> bool:
         return True
     lookup = tool_catalog_lookups()["by_type_name"]
     native_modified = any(
-        route_tool_state(route, lookup[(tool_type, name)]) == "modified"
+        route_tool_state(route, item_id) == "modified"
         for tool_type, name in (
             ("custom", "apply_patch"),
             ("function", "exec_command"),
             ("function", "write_stdin"),
             ("function", "shell_command"),
         )
+        if (item_id := lookup.get((tool_type, name))) is not None
     )
     return (
         native_modified
@@ -377,14 +378,15 @@ def localized_native_tool_names(route: Any) -> frozenset[str]:
     exec_projection_ids = set(tool_profile_contract()["exec_projections"])
     return frozenset(
         name
-        for item_id, tool_type, name in (
-            ("custom.apply_patch", "custom", "apply_patch"),
-            ("function.exec_command", "function", "exec_command"),
-            ("function.write_stdin", "function", "write_stdin"),
-            ("function.shell_command", "function", "shell_command"),
+        for tool_type, name in (
+            ("custom", "apply_patch"),
+            ("function", "exec_command"),
+            ("function", "write_stdin"),
+            ("function", "shell_command"),
         )
+        if (item_id := lookup.get((tool_type, name))) is not None
         if item_id not in exec_projection_ids
-        if route_tool_state(route, lookup[(tool_type, name)]) == "modified"
+        if route_tool_state(route, item_id) == "modified"
     )
 
 

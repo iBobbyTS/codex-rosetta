@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -22,6 +23,7 @@ from gateway_runtime import (
     check_ignored as _shared_check_ignored,
     codex_env as _codex_env,
     configure_gateway_and_codex,
+    codex_cli_command,
     free_port as _free_port,
     validate_auth as _validate_auth,
     wait_ready as _wait_ready,
@@ -34,6 +36,42 @@ ROOT = SUITE.parents[2]
 DEFAULT_MODEL = "gpt-5.6-terra"
 DEFAULT_TASK_ID = "02"
 DEFAULT_TRIGGER = "manual"
+
+
+def _app_server_command() -> list[str]:
+    """Return the app-server command used by isolated protocol runners.
+
+    Prefer an explicitly selected binary, then the local 0.149 source build,
+    and finally the CLI dispatcher used by environments without the source
+    checkout.  The standalone binary uses ``--listen``; the CLI dispatcher
+    uses its legacy ``--stdio`` spelling.
+    """
+
+    configured = os.environ.get("CODEX_APP_SERVER_BIN")
+    candidates = (
+        [Path(configured).expanduser()]
+        if configured
+        else [
+            ROOT.parent
+            / "openai-codex-src"
+            / "codex-rs"
+            / "target"
+            / "release"
+            / "codex-app-server",
+            ROOT.parent
+            / "openai-codex-src"
+            / "codex-rs"
+            / "target"
+            / "debug"
+            / "codex-app-server",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return [str(candidate), "--listen", "stdio://"]
+    if configured:
+        raise RuntimeError(f"CODEX_APP_SERVER_BIN is not executable: {configured}")
+    return ["codex", "app-server", "--stdio"]
 
 
 def _is_gpt_model(model: str) -> bool:
@@ -199,7 +237,7 @@ def _run_codex(run_root: Path, timeout_seconds: int) -> tuple[int, str | None]:
         try:
             completed = subprocess.run(
                 [
-                    "codex",
+                    *codex_cli_command(),
                     "exec",
                     "--json",
                     "--skip-git-repo-check",
@@ -230,7 +268,7 @@ class _AppServerClient:
         self.messages: list[dict[str, Any]] = []
         self._stderr = (run_root / "artifacts" / "app-server.stderr").open("wb")
         self.process = subprocess.Popen(
-            ["codex", "app-server", "--stdio"],
+            _app_server_command(),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=self._stderr,
@@ -443,6 +481,10 @@ def main() -> int:
     run_id = datetime.now().astimezone().strftime("%Y%m%d%H%M")
     run_root = ROOT / "tmp" / "agent_testing_workspace" / run_id
     gateway_log_root = Path("/Volumes/RAMDisk") / run_id
+    if not gateway_log_root.parent.is_dir() or not os.access(
+        gateway_log_root.parent, os.W_OK
+    ):
+        gateway_log_root = run_root / "artifacts"
     if run_root.exists() or gateway_log_root.exists():
         raise RuntimeError(f"timestamped run root already exists: {run_id}")
     for directory in (
@@ -458,7 +500,7 @@ def main() -> int:
     auth_path = run_root / "codex_home" / "auth.json"
     _check_ignored(gateway_path, auth_path)
     shutil.copy2(GATEWAY_CONFIG_SOURCE, gateway_path)
-    gateway_log_root.mkdir(parents=True)
+    gateway_log_root.mkdir(parents=True, exist_ok=True)
     (run_root / "artifacts" / "gateway-log-root.txt").write_text(
         str(gateway_log_root) + "\n",
         encoding="utf-8",

@@ -22,7 +22,7 @@ Provider 配置会保存所选 `provider` 和 `api_type: "responses"`。供应�
 - OpenAI 官方选择 **透传**。这是模型组的特殊选项，不是 Tool Profile；Rosetta 不执行任何工具映射，请求、工具声明、响应 JSON 和 SSE 字节都走直接路径。
 - OpenAI 自定义以及“自定义 + 自定义”选择 **web.run 注入（适用于尚未支持/alpha/search端点的中转站）**。原始工具形态全部保留，只有 `web.run` 设为 Modified 并由 Rosetta 处理。
 - 列表内第三方供应商选择 Responses 时，自动使用 **工具映射（适用于第三方模型提供的Responses接口）**，同时保持 Responses 直接传输。
-- 任何 Chat 协议选择 **Chat Default（适用于第三方仅提供chat api的模型）**。Anthropic 和 Google 协议没有内置默认 Profile，但可以使用显式兼容的用户 Profile。
+- 任何 Chat 协议默认选择 **Chat Default（仅工具翻译）**。旧版工具注入行为保留在 **Chat Legacy**。Anthropic 和 Google 协议没有内置默认 Profile，但可以使用显式兼容的用户 Profile。
 
 现在只支持 `responses` 这一种 Responses 协议值；旧的 `responses_passthrough` 与 `responses_rosetta` 不再接受，加载配置前必须替换为 `responses`。
 
@@ -49,7 +49,7 @@ Rosetta 的无工具提示词摘要，而不转发 native Remote Compaction V2�
 - 原生的 Responses 工具项结构。
 - 供应商特定的请求字段，如 `include`。
 
-**透传**选项会完全绕过 Tool Profile 解析，因此 Rosetta 既不映射原生工具，也不注入合成工具。打包的 **web.run 注入** Profile 会保留原始 Responses 工具形态，只有 `web.run` 为 Modified。Rosetta 只改写 custom `exec` 描述中实时提供的 `web__run` Section；其他 Responses 字段和上游响应字节仍走直接路径。**工具映射** 则继承已验证的 Chat Default 映射策略，供列表内第三方 Responses 实现使用。
+**透传**选项会完全绕过 Tool Profile 解析，因此 Rosetta 既不映射原生工具，也不注入合成工具。打包的 **web.run 注入** Profile 会保留原始 Responses 工具形态，只有 `web.run` 为 Modified。Rosetta 只改写 custom `exec` 描述中实时提供的 `web__run` Section；其他 Responses 字段和上游响应字节仍走直接路径。**工具映射** 则继承已验证的 Chat 翻译策略，供列表内第三方 Responses 实现使用。
 
 Codex 的独立 Search 和 Images 客户端还会使用三个 JSON 端点：
 

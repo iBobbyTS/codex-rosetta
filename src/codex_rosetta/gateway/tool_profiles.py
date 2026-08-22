@@ -9,7 +9,10 @@ from typing import Any, cast
 from .admin.tool_catalog import load_tool_catalog
 from .tool_catalog_contract import compile_tool_catalog
 
-BUILTIN_TOOL_PROFILE = "builtin"
+# Chat routes default to the translation-only profile.  The legacy localized
+# surface remains bundled as ``chat-legacy``; ``builtin`` is retained below as
+# an internal base-state key for existing preset construction.
+BUILTIN_TOOL_PROFILE = "chat-default"
 TOOL_PROFILE_PASSTHROUGH_OPTION = "passthrough"
 TOOL_PROFILE_API_TYPES = ("chat", "responses", "anthropic", "google")
 MAX_TOOL_PROFILE_NAME_LENGTH = 128
@@ -845,6 +848,9 @@ def tool_profile_contract() -> dict[str, Any]:
         "profiles": profiles,
         "supported": supported,
         "builtin": builtin,
+        # Internal base-state name retained for preset construction and
+        # runtime-plan callers; user-facing resolution is via bundled IDs.
+        "chat-legacy": builtin,
         "input_definitions": input_definitions,
         "profile_mutations": profile_mutations,
         "exec_projections": exec_projections,

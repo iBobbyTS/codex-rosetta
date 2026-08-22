@@ -18,6 +18,31 @@ from codex_rosetta.gateway.config import _strip_jsonc_comments
 
 AUTH_SOURCE = Path("/Users/ibobby/.codex-multi-2/auth.json")
 GATEWAY_CONFIG_SOURCE = Path.home() / ".config/codex-rosetta-gateway/config.jsonc"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def codex_cli_command() -> list[str]:
+    """Return the local Codex CLI command compatible with the generated catalog."""
+
+    configured = os.environ.get("CODEX_CLI_BIN")
+    candidates = (
+        [Path(configured).expanduser()]
+        if configured
+        else [
+            REPO_ROOT.parent
+            / "openai-codex-src"
+            / "codex-rs"
+            / "target"
+            / "debug"
+            / "codex",
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return [str(candidate)]
+    if configured:
+        raise RuntimeError(f"CODEX_CLI_BIN is not executable: {configured}")
+    return ["codex"]
 
 
 def write_json(path: Path, value: Any) -> None:
@@ -106,13 +131,18 @@ def configure_gateway_and_codex(
             f"model {model!r}; stop and choose whether to update the config or "
             "select another model"
         )
-    providers = sorted(
-        {
-            provider
-            for _, group in matching_groups
-            if isinstance(provider := group.get("provider"), str) and provider
-        }
-    )
+    provider_names: set[str] = set()
+    for _, group in matching_groups:
+        configured = group.get("provider")
+        candidates = configured if isinstance(configured, list) else [configured]
+        for candidate in candidates:
+            if isinstance(candidate, str) and candidate:
+                provider_names.add(candidate)
+            elif isinstance(candidate, dict):
+                provider = candidate.get("provider")
+                if isinstance(provider, str) and provider:
+                    provider_names.add(provider)
+    providers = sorted(provider_names)
     if expected_gateway_provider and expected_gateway_provider not in providers:
         raise RuntimeError(
             "USER_DECISION_REQUIRED: expected provider "
@@ -159,7 +189,7 @@ def validate_auth(run_root: Path, *, port: int, client_key: str) -> None:
     shutil.copy2(AUTH_SOURCE, run_root / "codex_home" / "auth.json")
     os.chmod(run_root / "codex_home" / "auth.json", 0o600)
     status = subprocess.run(
-        ["codex", "login", "status"],
+        [*codex_cli_command(), "login", "status"],
         check=False,
         capture_output=True,
         text=True,
