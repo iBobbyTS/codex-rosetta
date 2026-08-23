@@ -178,6 +178,7 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
                 yield from _iter_diagnostic_strings((parsed_data,))
             else:
                 yield data
+                yield from ((parsed_data,) if isinstance(parsed_data, str) else ())
         parsed_sse = True
     if not parsed_sse:
         yield value

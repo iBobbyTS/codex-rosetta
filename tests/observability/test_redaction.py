@@ -376,6 +376,13 @@ def test_contains_ordered_fragments_parses_wrapped_first_sse_frame() -> None:
     )
 
 
+def test_contains_ordered_fragments_parses_sse_json_string_scalars() -> None:
+    diagnostic = 'data: "sk-"\n\ndata: "secret"\n\n'
+
+    assert SecretRedactor({"sk-secret"}).contains_ordered_fragments((diagnostic,))
+    assert SecretRedactor({'"sk-"'}).contains_ordered_fragments((diagnostic,))
+
+
 @pytest.mark.parametrize("token", ["null", "true", "1"])
 def test_contains_ordered_fragments_preserves_json_scalar_text(token: str) -> None:
     assert SecretRedactor({token}).contains_ordered_fragments((token,))
