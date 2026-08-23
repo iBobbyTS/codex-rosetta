@@ -4607,6 +4607,40 @@ def test_get_config_fails_closed_when_semantic_json_redaction_retains_credential
     assert row["cooldown_detail"] == "[REDACTED]"
 
 
+@pytest.mark.parametrize(
+    ("credential", "detail"),
+    [
+        ("1", f'{{"value":{"1" * 5_000}}}'),
+        ("sk-test", "[" * 1_100 + '"sk-test"' + "]" * 1_100),
+    ],
+    ids=("integer-limit", "recursion-limit"),
+)
+def test_get_config_fails_closed_for_semantic_json_pipeline_errors(
+    tmp_path, credential, detail
+):
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = credential
+    runtime_config = GatewayConfig(config)
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["cooldown_detail"] == "[REDACTED]"
+
+
 def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["auto_rotate_credentials"] = False

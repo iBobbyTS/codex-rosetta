@@ -456,13 +456,18 @@ def _redact_cooldown_detail(redactor: SecretRedactor, detail: str) -> str:
         return redactor.redact_wire_bytes(redacted_detail.encode("utf-8")).decode(
             "utf-8"
         )
+    except Exception:
+        return REDACTED
 
-    safe_detail = json.dumps(
-        redactor.redact(parsed_detail),
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return REDACTED if redactor.contains_json_semantic(safe_detail) else safe_detail
+    try:
+        safe_detail = json.dumps(
+            redactor.redact(parsed_detail),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        return REDACTED if redactor.contains_json_semantic(safe_detail) else safe_detail
+    except Exception:
+        return REDACTED
 
 
 def _model_group_provider_rows_for_admin(
