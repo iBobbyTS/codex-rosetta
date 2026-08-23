@@ -99,7 +99,7 @@ def test_supervisor_retries_compose_port_allocation_race(
         lambda _port: True,
     )
 
-    def run_compose(*arguments: str, environment: dict[str, str]):
+    def run_compose(*arguments: str, environment: dict[str, str], **_kwargs):
         nonlocal first_up
         if arguments[0] == "up":
             up_ports.append(environment[WEB_RUN_HOST_PORT_ENV])
@@ -160,8 +160,14 @@ def test_supervisor_cleans_compose_project_when_health_never_becomes_ready(
     assert supervisor.endpoint is None
 
 
-def test_supervisor_reports_compose_startup_timeout_without_blocking_cleanup(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize(
+    ("cleanup_returncode", "fallback_expected"), [(0, False), (1, True)]
+)
+def test_supervisor_reports_compose_startup_timeout_with_bounded_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_returncode: int,
+    fallback_expected: bool,
 ) -> None:
     supervisor = WebRunSidecarSupervisor(
         str(tmp_path / "config.jsonc"),
@@ -185,16 +191,32 @@ def test_supervisor_reports_compose_startup_timeout_without_blocking_cleanup(
         ),
     )
 
-    def unexpected_cleanup(_environment: dict[str, str]) -> None:
-        pytest.fail("timed-out startup must not perform another blocking Compose call")
+    cleanup_timeouts: list[float] = []
+    fallback_calls: list[None] = []
 
-    monkeypatch.setattr(supervisor, "_best_effort_down", unexpected_cleanup)
+    def bounded_cleanup(
+        _environment: dict[str, str], *, timeout_seconds: float
+    ) -> subprocess.CompletedProcess[str]:
+        cleanup_timeouts.append(timeout_seconds)
+        return subprocess.CompletedProcess([], cleanup_returncode, "", "cleanup failed")
+
+    monkeypatch.setattr(supervisor, "_best_effort_down", bounded_cleanup)
+    monkeypatch.setattr(
+        supervisor,
+        "_cleanup_orphaned_networks",
+        lambda: fallback_calls.append(None),
+    )
 
     with pytest.raises(
         WebRunSidecarStartupError,
         match="Docker Compose startup timed out after 30 seconds",
     ):
         supervisor.start()
+
+    assert cleanup_timeouts == [
+        web_run_supervisor.DOCKER_COMPOSE_CLEANUP_TIMEOUT_SECONDS
+    ]
+    assert bool(fallback_calls) is fallback_expected
 
 
 def test_run_compose_converts_timeout_to_bounded_error(
@@ -246,6 +268,42 @@ def test_managed_compose_resource_uses_dynamic_loopback_port() -> None:
     assert 'restart: "no"' in contents
 
 
+def test_supervisor_removes_only_empty_managed_networks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    supervisor = WebRunSidecarSupervisor(
+        str(tmp_path / "config.jsonc"),
+        compose_file=_compose_file(tmp_path),
+    )
+    empty = "codex-rosetta-web-run-old_default"
+    active = "codex-rosetta-web-run-active_default"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[1:3] == ["network", "ls"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                f"{empty}\n{active}\nother-project_default\n",
+                "",
+            )
+        if command[1:3] == ["network", "inspect"]:
+            count = "0\n" if command[3] == empty else "1\n"
+            return subprocess.CompletedProcess(command, 0, count, "")
+        if command[1:3] == ["network", "rm"]:
+            return subprocess.CompletedProcess(command, 0, f"{empty}\n", "")
+        raise AssertionError(f"unexpected Docker command: {command}")
+
+    monkeypatch.setattr(web_run_supervisor.subprocess, "run", fake_run)
+
+    supervisor._cleanup_orphaned_networks()
+
+    assert ["docker", "network", "rm", empty] in calls
+    assert ["docker", "network", "rm", active] not in calls
+    assert ["docker", "network", "rm", "other-project_default"] not in calls
+
+
 def test_repository_compose_reuses_packaged_build_context() -> None:
     compose_file = Path(__file__).parents[2] / "docker" / "docker-compose.yaml"
     contents = compose_file.read_text(encoding="utf-8")
@@ -282,4 +340,9 @@ def test_supervisor_uses_bounded_lifecycle_timeouts() -> None:
     assert web_run_supervisor.WEB_RUN_STARTUP_TIMEOUT_SECONDS == 300.0
     assert web_run_supervisor.DOCKER_DAEMON_TIMEOUT_SECONDS == 30
     assert web_run_supervisor.DOCKER_COMPOSE_TIMEOUT_SECONDS == 30
+    assert (
+        web_run_supervisor.DOCKER_COMPOSE_CLEANUP_TIMEOUT_SECONDS
+        < web_run_supervisor.DOCKER_COMPOSE_TIMEOUT_SECONDS
+    )
+    assert web_run_supervisor.DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS == 10
     assert web_run_supervisor.DOCKER_COMPOSE_STOP_GRACE_SECONDS == 30

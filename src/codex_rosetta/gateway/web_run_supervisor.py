@@ -25,8 +25,11 @@ MAX_WEB_RUN_PORT_ATTEMPTS = 100
 WEB_RUN_STARTUP_TIMEOUT_SECONDS = 300.0
 DOCKER_DAEMON_TIMEOUT_SECONDS = 30
 DOCKER_COMPOSE_TIMEOUT_SECONDS = 30
+DOCKER_COMPOSE_CLEANUP_TIMEOUT_SECONDS = 10
+DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS = 10
 DOCKER_COMPOSE_STOP_GRACE_SECONDS = 30
 WEB_RUN_HOST_PORT_ENV = "CODEX_ROSETTA_WEB_RUN_HOST_PORT"
+_MANAGED_PROJECT_PREFIX = "codex-rosetta-web-run-"
 
 _ENV_UNSET = object()
 _PORT_CONFLICT_MARKERS = (
@@ -108,6 +111,16 @@ class WebRunSidecarSupervisor:
             )
             if result.returncode != 0:
                 if _is_compose_timeout(result):
+                    cleanup = self._best_effort_down(
+                        environment,
+                        timeout_seconds=DOCKER_COMPOSE_CLEANUP_TIMEOUT_SECONDS,
+                    )
+                    if cleanup.returncode != 0:
+                        logger.warning(
+                            "Timed-out web-run startup cleanup failed: %s",
+                            self._bounded_command_error(cleanup),
+                        )
+                        self._cleanup_orphaned_networks()
                     raise WebRunSidecarStartupError(
                         "failed to start web-run sidecar: "
                         f"Docker Compose startup timed out after "
@@ -193,6 +206,7 @@ class WebRunSidecarSupervisor:
             raise WebRunSidecarStartupError(
                 "Docker daemon is unavailable for --with-web-run"
             )
+        self._cleanup_orphaned_networks()
 
     def _build_compose_environment(self, port: int) -> dict[str, str]:
         environment = dict(self._environ)
@@ -205,7 +219,13 @@ class WebRunSidecarSupervisor:
         self,
         *arguments: str,
         environment: dict[str, str],
+        timeout_seconds: float | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        command_timeout = (
+            DOCKER_COMPOSE_TIMEOUT_SECONDS
+            if timeout_seconds is None
+            else timeout_seconds
+        )
         command = [
             "docker-compose",
             "--project-name",
@@ -224,9 +244,7 @@ class WebRunSidecarSupervisor:
                 start_new_session=os.name == "posix",
             )
             try:
-                stdout, stderr = process.communicate(
-                    timeout=DOCKER_COMPOSE_TIMEOUT_SECONDS
-                )
+                stdout, stderr = process.communicate(timeout=command_timeout)
             except subprocess.TimeoutExpired:
                 _terminate_compose_process(process)
                 stdout, _stderr = process.communicate()
@@ -236,7 +254,7 @@ class WebRunSidecarSupervisor:
                     stdout=stdout,
                     stderr=(
                         "docker-compose command timed out after "
-                        f"{DOCKER_COMPOSE_TIMEOUT_SECONDS} seconds"
+                        f"{command_timeout} seconds"
                     ),
                 )
             except BaseException:
@@ -302,14 +320,117 @@ class WebRunSidecarSupervisor:
         self._previous_environment.clear()
         self._environment_applied = False
 
-    def _best_effort_down(self, environment: dict[str, str]) -> None:
-        self._run_compose(
+    def _best_effort_down(
+        self,
+        environment: dict[str, str],
+        *,
+        timeout_seconds: float = DOCKER_COMPOSE_STOP_GRACE_SECONDS,
+    ) -> subprocess.CompletedProcess[str]:
+        return self._run_compose(
             "down",
             "--remove-orphans",
             "--timeout",
-            str(DOCKER_COMPOSE_STOP_GRACE_SECONDS),
+            str(timeout_seconds),
             environment=environment,
+            timeout_seconds=timeout_seconds,
         )
+
+    def _cleanup_orphaned_networks(self) -> None:
+        """Remove only empty networks owned by earlier managed sidecars.
+
+        A forced process exit can leave a Compose network behind after its
+        container is gone.  Scope cleanup to the supervisor's project prefix
+        and require zero connected containers before removing anything.
+        """
+
+        environment = dict(self._environ)
+        try:
+            listed = subprocess.run(
+                [
+                    "docker",
+                    "network",
+                    "ls",
+                    "--filter",
+                    f"name=^{_MANAGED_PROJECT_PREFIX}",
+                    "--format",
+                    "{{.Name}}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS,
+                check=False,
+                env=environment,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            logger.warning("Unable to inspect managed web-run networks: %s", exc)
+            return
+        if listed.returncode != 0:
+            logger.warning(
+                "Unable to inspect managed web-run networks: %s",
+                " ".join((listed.stderr or listed.stdout or "unknown error").split()),
+            )
+            return
+
+        for raw_name in (listed.stdout or "").splitlines():
+            name = raw_name.strip()
+            if not name.startswith(_MANAGED_PROJECT_PREFIX) or any(
+                character.isspace() for character in name
+            ):
+                continue
+            try:
+                inspected = subprocess.run(
+                    [
+                        "docker",
+                        "network",
+                        "inspect",
+                        name,
+                        "--format",
+                        "{{len .Containers}}",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS,
+                    check=False,
+                    env=environment,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                logger.warning("Unable to inspect managed network %s: %s", name, exc)
+                continue
+            if inspected.returncode != 0:
+                continue
+            try:
+                connected_containers = int((inspected.stdout or "").strip())
+            except ValueError:
+                logger.warning(
+                    "Unable to read container count for managed network %s", name
+                )
+                continue
+            if connected_containers != 0:
+                continue
+            try:
+                removed = subprocess.run(
+                    ["docker", "network", "rm", name],
+                    capture_output=True,
+                    text=True,
+                    timeout=DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS,
+                    check=False,
+                    env=environment,
+                )
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                logger.warning(
+                    "Unable to remove orphaned managed network %s: %s", name, exc
+                )
+                continue
+            if removed.returncode == 0:
+                logger.info("Removed orphaned managed web-run network %s", name)
+            else:
+                logger.debug(
+                    "Managed web-run network %s was not removed: %s",
+                    name,
+                    " ".join(
+                        (removed.stderr or removed.stdout or "unknown error").split()
+                    ),
+                )
 
     def _bounded_command_error(self, result: subprocess.CompletedProcess[str]) -> str:
         message = (
@@ -326,7 +447,7 @@ def _managed_compose_file() -> Path:
 def _compose_project_name(config_path: str) -> str:
     identity = f"{config_path}:{os.getpid()}:{secrets.token_hex(4)}"
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
-    return f"codex-rosetta-web-run-{digest}"
+    return f"{_MANAGED_PROJECT_PREFIX}{digest}"
 
 
 def _is_loopback_port_available(port: int) -> bool:
@@ -361,6 +482,8 @@ def _terminate_compose_process(process: subprocess.Popen[str]) -> None:
 
 __all__: Sequence[str] = (
     "DEFAULT_WEB_RUN_HOST_PORT",
+    "DOCKER_COMPOSE_CLEANUP_TIMEOUT_SECONDS",
+    "DOCKER_NETWORK_CLEANUP_TIMEOUT_SECONDS",
     "ManagedWebRunEndpoint",
     "WebRunSidecarStartupError",
     "WebRunSidecarSupervisor",

@@ -193,8 +193,12 @@ port-allocation races advance to the next port automatically. The generated
 bearer token and selected URL override `server.web_run` only for the running
 process, continue to apply after Admin config reloads, and are restored on
 shutdown. Gateway startup fails closed if the service or Chromium does not
-become ready. Normal exit and `Ctrl-C` remove only that invocation's managed
-Compose project.
+become ready. Startup timeout cleanup is bounded. Before a new managed sidecar
+starts, the CLI removes only empty networks whose name begins with
+`codex-rosetta-web-run-`; networks with connected containers and all other
+Docker resources are left untouched. Normal exit and `Ctrl-C` remove only that
+invocation's managed Compose project. A force-killed process can still require
+the same project's scoped `docker-compose ... down --remove-orphans` cleanup.
 
 For a gateway that also runs inside Compose, browser-backed `web.run` remains
 an optional profile. Start it together with the gateway by supplying a dedicated

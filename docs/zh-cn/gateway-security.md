@@ -154,7 +154,10 @@ sidecar 上下文，创建隔离的 Compose project，并且只绑定 `127.0.0.1
 `8766` 开始选择；遇到已占用端口或启动时的端口竞争会自动顺延。自动生成的 Bearer
 Token 和选定 URL 只在当前进程中覆盖 `server.web_run`，Admin 热重载后仍然有效，退出
 时恢复原环境。若 service 或 Chromium 未能就绪，Gateway 会 fail-closed，不会继续启动；
-正常退出或 `Ctrl-C` 只删除本次调用托管的 Compose project。
+启动超时后的清理有独立上限。每次新的 managed sidecar 启动前，CLI 只会删除名称以
+`codex-rosetta-web-run-` 开头且没有连接容器的网络；有连接容器的网络及其他 Docker
+资源都会保留。正常退出或 `Ctrl-C` 只删除本次调用托管的 Compose project。若进程被强制
+终止，仍可能需要对对应 project 执行带 `--remove-orphans` 的定向清理。
 
 当 Gateway 本身也运行在 Compose 中时，浏览器版 `web.run` 仍是可选 profile。提供
 一个不少于 24 个字符的独立随机 Bearer Token，即可与网关一起启动：
