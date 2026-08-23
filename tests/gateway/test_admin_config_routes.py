@@ -35,6 +35,10 @@ from codex_rosetta.gateway.config import (
     GatewayConfig,
     MAX_WEB_SEARCH_PROVIDERS,
 )
+from codex_rosetta.gateway.downstream_errors import (
+    DownstreamErrorOrigin,
+    prefix_error_body,
+)
 from codex_rosetta.gateway.logging import BodyLogState
 from codex_rosetta.gateway.search_provider_candidates import (
     search_candidates_capabilities,
@@ -4629,6 +4633,49 @@ def test_get_config_fails_closed_when_json_fields_reconstruct_credential(tmp_pat
     )
 
     assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["cooldown_detail"] == "[REDACTED]"
+
+
+@pytest.mark.parametrize(
+    "detail",
+    [
+        pytest.param(
+            prefix_error_body(
+                b'data: {"part":"sk-"}\n\ndata: {"part":"secret"}\n\n',
+                DownstreamErrorOrigin.UPSTREAM,
+            ).decode("utf-8"),
+            id="production-error-envelope",
+        ),
+        pytest.param(
+            'Upstream: data: {"part":"sk-"}\n\ndata: {"part":"secret"}\n\n',
+            id="plain-diagnostic",
+        ),
+    ],
+)
+def test_get_config_fails_closed_when_prefixed_sse_frames_reconstruct_credential(
+    tmp_path, detail
+):
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = "sk-secret"
+    runtime_config = GatewayConfig(config)
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    assert b"sk-secret" not in response.body
     row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
     assert row["cooldown_detail"] == "[REDACTED]"
 

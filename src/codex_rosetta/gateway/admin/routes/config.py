@@ -453,9 +453,15 @@ def _redact_cooldown_detail(redactor: SecretRedactor, detail: str) -> str:
         parsed_detail = json.loads(detail)
     except json.JSONDecodeError:
         redacted_detail = redactor.redact(detail)
-        return redactor.redact_wire_bytes(redacted_detail.encode("utf-8")).decode(
-            "utf-8"
-        )
+        safe_detail = redactor.redact_wire_bytes(
+            redacted_detail.encode("utf-8")
+        ).decode("utf-8")
+        try:
+            if redactor.contains_ordered_fragments((safe_detail,)):
+                return REDACTED
+        except Exception:
+            return REDACTED
+        return safe_detail
     except Exception:
         return REDACTED
 

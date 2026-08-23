@@ -150,13 +150,24 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
             return
 
     parsed_sse = False
-    for frame in re.split(r"\r?\n\r?\n", stripped):
+    for frame_index, frame in enumerate(re.split(r"\r?\n\r?\n", stripped)):
         data_lines: list[str] = []
-        for line in frame.splitlines():
+        wrapped_prefix: str | None = None
+        for line_index, line in enumerate(frame.splitlines()):
             if line.startswith("data:"):
                 data_lines.append(line[5:].removeprefix(" "))
+            elif frame_index == 0 and line_index == 0:
+                wrapped_data = re.fullmatch(
+                    r"(?P<prefix>.+\s)data:(?P<data>.*)",
+                    line,
+                )
+                if wrapped_data is not None:
+                    wrapped_prefix = wrapped_data.group("prefix")
+                    data_lines.append(wrapped_data.group("data").removeprefix(" "))
         if not data_lines:
             continue
+        if wrapped_prefix is not None:
+            yield wrapped_prefix
         data = "\n".join(data_lines)
         try:
             parsed_data = decode_json_preserving_members(data)

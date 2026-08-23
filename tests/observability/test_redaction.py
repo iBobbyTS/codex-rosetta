@@ -362,6 +362,20 @@ def test_contains_ordered_fragments_parses_json_and_sse_diagnostic_text() -> Non
     )
 
 
+def test_contains_ordered_fragments_parses_wrapped_first_sse_frame() -> None:
+    diagnostic = (
+        'Upstream: data: {"diagnostic":"CANARY-ALPHA-"}\n\n'
+        'data: {"diagnostic":"BETA"}\n\n'
+    )
+
+    assert SecretRedactor({"CANARY-ALPHA-BETA"}).contains_ordered_fragments(
+        (diagnostic,)
+    )
+    assert SecretRedactor({"Upstream: CANARY"}).contains_ordered_fragments(
+        (diagnostic,)
+    )
+
+
 @pytest.mark.parametrize("token", ["null", "true", "1"])
 def test_contains_ordered_fragments_preserves_json_scalar_text(token: str) -> None:
     assert SecretRedactor({token}).contains_ordered_fragments((token,))
