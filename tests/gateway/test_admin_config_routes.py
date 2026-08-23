@@ -4201,6 +4201,8 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
             "routing_enabled": True,
             "status": "available",
             "error": None,
+            "availability": None,
+            "rate_multiplier": 1.0,
         },
         {
             "name": "secondary",
@@ -4212,6 +4214,8 @@ def test_get_config_exposes_only_active_model_group_provider(tmp_path):
             "routing_enabled": True,
             "status": "available",
             "error": None,
+            "availability": None,
+            "rate_multiplier": 1.0,
         },
     ]
 
@@ -4392,7 +4396,9 @@ def test_put_model_group_rejects_non_boolean_routing_candidate_without_write(tmp
     assert config_path.read_text(encoding="utf-8") == original
 
 
-def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_path):
+def test_get_config_projects_ordered_model_group_provider_status_and_errors(
+    tmp_path, monkeypatch
+):
     runtime = _config_data()
     runtime["providers"]["secondary"] = {
         **runtime["providers"]["openai"],
@@ -4409,7 +4415,10 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     }
     runtime["model_groups"]["OpenAI"]["provider"] = ["openai", "secondary"]
     runtime_config = GatewayConfig(runtime)
-    runtime_config.model_group_rings["OpenAI"].mark_failed("secondary")
+    runtime_ring = runtime_config.model_group_rings["OpenAI"]
+    runtime_ring._ring._clock = lambda: 100.0
+    runtime_ring.mark_failed("secondary", '{"error":"credential sk-test unavailable"}')
+    monkeypatch.setattr(config_routes.time, "time", lambda: 1_700_000_000.0)
 
     persisted = json.loads(json.dumps(runtime))
     persisted["model_groups"]["OpenAI"]["provider"] = [
@@ -4432,6 +4441,7 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
     response = _run(get_config(request))
 
     assert response.status_code == 200
+    assert b"sk-test" not in response.body
     rows = json.loads(response.body)["model_groups"]["OpenAI"]["providers"]
     assert [row["name"] for row in rows] == [
         "openai",
@@ -4451,6 +4461,8 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
         "routing_enabled": True,
         "status": "available",
         "error": None,
+        "availability": None,
+        "rate_multiplier": 1.0,
     }
     assert rows[1] == {
         "name": "secondary",
@@ -4462,9 +4474,15 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(tmp_
         "routing_enabled": True,
         "status": "cooling",
         "error": None,
+        "availability": None,
+        "rate_multiplier": 1.0,
+        "cooldown_detail": '{"error":"credential [REDACTED] unavailable"}',
+        "cooldown_recovery_at_ms": 1_700_003_600_000,
     }
     assert rows[2]["status"] == "disabled"
     assert rows[2]["enabled"] is False
+    assert rows[2]["availability"] is None
+    assert rows[2]["rate_multiplier"] is None
     assert "not found" in rows[2]["error"]
     assert rows[3]["status"] == "disabled"
     assert rows[3]["enabled"] is False
@@ -4519,9 +4537,70 @@ def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
             "current": True,
             "enabled": True,
             "routing_enabled": True,
-            "status": "cooling",
+            "status": "disabled",
             "error": None,
+            "availability": None,
+            "rate_multiplier": 1.0,
         }
+
+
+def test_get_config_projects_selected_special_availability_and_zero_multiplier(
+    tmp_path,
+):
+    config = _config_data()
+    secondary_uuid = _SECONDARY_CREDENTIAL_UUID
+    config["providers"]["openai"].update(
+        openai_variant="new_api",
+        api_keys=[
+            {
+                **config["providers"]["openai"]["api_keys"][0],
+                "automatic_rate_multiplier": 1,
+                "availability_threshold_primary": 70,
+                "availability_threshold_secondary": 40,
+            },
+            {
+                "uuid": secondary_uuid,
+                "id": "secondary",
+                "key": "sk-secondary",
+                "automatic_rate_multiplier": 0,
+                "availability_threshold_primary": 60,
+                "availability_threshold_secondary": 20,
+            },
+        ],
+        availability_snapshot={
+            "updated_at": 1,
+            "credentials": {
+                secondary_uuid: {
+                    "value": 0,
+                    "timestamp": 1,
+                    "kind": "success_rate",
+                }
+            },
+        },
+    )
+    runtime_config = GatewayConfig(config)
+    asyncio.run(runtime_config.providers["openai"].select_credential("secondary"))
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["availability"] == {
+        "kind": "percentage",
+        "value": 0.0,
+        "band": "red",
+    }
+    assert row["rate_multiplier"] == 0
 
 
 def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_path):

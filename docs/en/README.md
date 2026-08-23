@@ -101,6 +101,17 @@ their compact legacy representation, and `current_provider` never includes the
 flag. The Admin row's `routing_enabled` switch is separate from the Provider's
 global `enabled` setting.
 
+The Admin config view also projects each candidate's process-local runtime
+state without changing the stored model-group shape. `status` remains
+`available`, `cooling`, or `disabled`; configuration errors stay in `error`,
+while a cooling row may add a separately token-redacted `cooldown_detail` and
+Unix-epoch-millisecond `cooldown_recovery_at_ms`. Each row includes its
+effective `rate_multiplier`. `availability` is populated only for special
+Providers with a refreshed selected-credential snapshot: `new_api` uses a
+percentage value, while `sub2api` uses remaining and maximum concurrency. Both
+carry a green/yellow/red band from that credential's configured thresholds;
+missing snapshots are `null`, while numeric zero remains valid data.
+
 Changing a Provider from automatic to model-group-managed rotation binds its
 existing model-group rows to the then-current credential UUID. Changing it back
 collapses that Provider's pairs at their first occurrence. Removing a referenced

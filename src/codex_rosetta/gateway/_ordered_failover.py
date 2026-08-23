@@ -113,6 +113,7 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
         self._cooldown_until: dict[_CandidateT, float] = {}
+        self._cooldown_details: dict[_CandidateT, str | None] = {}
         self._gate = FailoverGate[None, None]()
 
     @property
@@ -171,16 +172,34 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
             return False, waited
         return leader, waited
 
-    def mark_failed(self, candidate: _CandidateT) -> None:
+    def mark_failed(self, candidate: _CandidateT, detail: str | None = None) -> None:
         self._cooldown_until[candidate] = self._clock() + self._cooldown_seconds
+        self._cooldown_details[candidate] = detail
 
-    def _prune(self) -> None:
-        now = self._clock()
+    def _prune(self, now: float | None = None) -> None:
+        now = self._clock() if now is None else now
         self._cooldown_until = {
             candidate: deadline
             for candidate, deadline in self._cooldown_until.items()
             if deadline > now
         }
+        self._cooldown_details = {
+            candidate: self._cooldown_details.get(candidate)
+            for candidate in self._cooldown_until
+        }
+
+    def cooldown_detail(
+        self, candidate: _CandidateT
+    ) -> tuple[str | None, float] | None:
+        """Return retained detail and remaining seconds for one cooldown."""
+        if candidate not in self._candidates:
+            raise ValueError("candidate must belong to ordered candidates")
+        now = self._clock()
+        self._prune(now)
+        deadline = self._cooldown_until.get(candidate)
+        if deadline is None:
+            return None
+        return self._cooldown_details.get(candidate), deadline - now
 
     def available(self) -> tuple[_CandidateT, ...]:
         self._prune()
@@ -204,6 +223,7 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         if candidate not in self._candidates:
             raise ValueError("candidate must belong to ordered candidates")
         self._cooldown_until.pop(candidate, None)
+        self._cooldown_details.pop(candidate, None)
 
     def next_available_after(self, candidate: _CandidateT) -> _CandidateT | None:
         self._prune()

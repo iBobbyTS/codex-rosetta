@@ -926,6 +926,7 @@ async def _proxy_handler(  # noqa: C901
                     model_group_failover=ring is not None,
                 )
 
+            error_detail = _response_error_detail(response)
             provider_failed = bool(
                 ring is not None
                 and response.status_code == 503
@@ -975,7 +976,7 @@ async def _proxy_handler(  # noqa: C901
                     # cooldown state changes, so recorder failure cannot split
                     # the two authoritative views.
                     await ring.select_automatically(next_provider)
-                    ring.mark_failed(failed_provider)
+                    ring.mark_failed(failed_provider, error_detail)
                     _clear_request_local_state(
                         state_scope,
                         metadata_store=store,
@@ -983,7 +984,7 @@ async def _proxy_handler(  # noqa: C901
                     )
                     state_scope = None
                     continue
-                ring.mark_failed(failed_provider)
+                ring.mark_failed(failed_provider, error_detail)
                 await ring.publish()
                 failover_leader = False
             elif failover_leader:
@@ -996,7 +997,6 @@ async def _proxy_handler(  # noqa: C901
                     late_developer_rewritten_items
                 )
             status_code = response.status_code
-            error_detail = _response_error_detail(response)
             if isinstance(response, StreamingResponse):
                 assert pre_entry_id is not None
                 _instrument_stream_response(

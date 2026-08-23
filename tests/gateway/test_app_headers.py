@@ -945,9 +945,12 @@ def test_proxy_handler_cools_group_after_every_candidate_exhausts_503(
         "cooling",
         "cooling",
     )
+    assert ring.cooldown_detail(ring.candidates[0])[0] == ('{"error": "unavailable"}')
+    assert ring.cooldown_detail(ring.candidates[1])[0] == ('{"error": "unavailable"}')
 
     asyncio.run(ring.select(ring.current))
     assert ring.status_snapshot()[1][1] == "available"
+    assert ring.cooldown_detail(ring.candidates[1]) is None
 
 
 def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(

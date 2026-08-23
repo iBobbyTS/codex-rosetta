@@ -529,6 +529,143 @@ def test_cost_selection_uses_strict_parallel_thresholds_and_persisted_snapshot()
     )
 
 
+def test_automatic_candidate_runtime_credential_owns_availability_and_multiplier() -> (
+    None
+):
+    raw = _minimal_raw()
+    secondary_uuid = "00000000-0000-4000-8000-000000000002"
+    raw["providers"]["test"].update(
+        provider="openai",
+        openai_variant="new_api",
+        api_keys=[
+            {
+                **raw["providers"]["test"]["api_keys"][0],
+                "automatic_rate_multiplier": 1,
+                "availability_threshold_primary": 70,
+                "availability_threshold_secondary": 40,
+            },
+            {
+                "uuid": secondary_uuid,
+                "id": "secondary",
+                "key": "sk-secondary",
+                "automatic_rate_multiplier": 0,
+                "availability_threshold_primary": 60,
+                "availability_threshold_secondary": 20,
+            },
+        ],
+        current_api_key="primary",
+        availability_snapshot={
+            "updated_at": 1,
+            "credentials": {
+                _PRIMARY_CREDENTIAL_UUID: {
+                    "value": 99,
+                    "timestamp": 1,
+                    "kind": "success_rate",
+                },
+                secondary_uuid: {
+                    "value": 0,
+                    "timestamp": 1,
+                    "kind": "success_rate",
+                },
+            },
+        },
+    )
+    config = GatewayConfig(raw)
+    candidate = config.model_group_rings["test-llm"].current
+
+    asyncio.run(config.providers["test"].select_credential("secondary"))
+
+    assert raw["providers"]["test"]["current_api_key"] == "primary"
+    assert config.providers["test"].current_credential_id == "secondary"
+    assert config.model_group_candidate_availability_details(candidate) == {
+        "kind": "percentage",
+        "value": 0.0,
+        "band": "red",
+    }
+    assert config.model_group_candidate_multiplier(candidate) == 0
+
+
+@pytest.mark.parametrize(
+    ("value", "expected_band"),
+    [(70, "green"), (40, "yellow"), (39, "red")],
+)
+def test_new_api_availability_details_use_configured_threshold_bands(
+    value: int, expected_band: str
+) -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        provider="openai",
+        openai_variant="new_api",
+        api_keys=[
+            {
+                **raw["providers"]["test"]["api_keys"][0],
+                "availability_threshold_primary": 70,
+                "availability_threshold_secondary": 40,
+            }
+        ],
+        availability_snapshot={
+            "updated_at": 1,
+            "credentials": {
+                _PRIMARY_CREDENTIAL_UUID: {
+                    "value": value,
+                    "timestamp": 1,
+                    "kind": "success_rate",
+                }
+            },
+        },
+    )
+    config = GatewayConfig(raw)
+    candidate = config.model_group_rings["test-llm"].current
+
+    assert config.model_group_candidate_availability_details(candidate) == {
+        "kind": "percentage",
+        "value": float(value),
+        "band": expected_band,
+    }
+
+
+def test_fixed_sub2api_candidate_projects_zero_remaining_and_maximum() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        provider="openai",
+        openai_variant="sub2api",
+        auto_rotate_credentials=False,
+        api_keys=[
+            {
+                **raw["providers"]["test"]["api_keys"][0],
+                "automatic_rate_multiplier": 0,
+                "availability_threshold_primary": 8,
+                "availability_threshold_secondary": 3,
+            }
+        ],
+        availability_snapshot={
+            "updated_at": 1,
+            "credentials": {
+                _PRIMARY_CREDENTIAL_UUID: {
+                    "value": 0,
+                    "used": 20,
+                    "maximum": 20,
+                    "timestamp": 1,
+                    "kind": "available_concurrency",
+                }
+            },
+        },
+    )
+    raw["model_groups"]["test-llm"]["provider"] = [
+        {"provider": "test", "credential_uuid": _PRIMARY_CREDENTIAL_UUID}
+    ]
+    config = GatewayConfig(raw)
+    candidate = config.model_group_rings["test-llm"].current
+
+    assert config.model_group_candidate_availability_details(candidate) == {
+        "kind": "concurrency",
+        "value": 0.0,
+        "maximum": 20.0,
+        "band": "red",
+    }
+    assert config.model_group_candidate_multiplier(candidate) == 0
+
+
 def test_503_cost_selection_allows_higher_rate() -> None:
     raw = _minimal_raw()
     raw["providers"]["test"]["rate_multiplier"] = 1

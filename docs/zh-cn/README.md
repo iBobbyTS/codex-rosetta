@@ -85,6 +85,14 @@ UI 中调整的顺序；可选 `current_provider` 使用相同的 Provider 名�
 不包含该标志。Admin 行的 `routing_enabled` 开关与 Provider 全局的 `enabled` 设置
 相互独立。
 
+Admin 配置视图还会投影每个候选项的进程内运行时状态，但不会改变模型组的持久化
+结构。`status` 仍为 `available`、`cooling` 或 `disabled`；配置错误继续保存在
+`error`，冷却中的行则可以额外包含单独经过令牌脱敏的 `cooldown_detail`，以及使用
+Unix epoch 毫秒的 `cooldown_recovery_at_ms`。每行还包含有效的
+`rate_multiplier`。只有特殊 Provider 已刷新所选凭据的快照时才会填充
+`availability`：`new_api` 使用百分比值，`sub2api` 使用剩余并发和最大并发。两者
+都按该凭据配置的阈值携带绿/黄/红档位；快照缺失时为 `null`，数值零则仍是有效数据。
+
 从自动轮换切换为模型组管理时，现有模型组行会绑定到该 Provider 当时的当前凭据
 UUID；重新开启自动轮换时，会在该 Provider 首次出现的位置合并其所有 pair。移除被
 引用的凭据时，界面会先列出所有受影响模型组并要求确认；确认后会移除所有匹配 pair，

@@ -134,8 +134,18 @@ class ModelGroupProviderRing:
     ) -> tuple[tuple[_ModelGroupProviderCandidate, str], ...]:
         return self._ring.status_snapshot()
 
-    def mark_failed(self, provider: _ModelGroupProviderCandidate | str) -> None:
-        self._ring.mark_failed(self._canonical_candidate(provider))
+    def mark_failed(
+        self,
+        provider: _ModelGroupProviderCandidate | str,
+        detail: str | None = None,
+    ) -> None:
+        self._ring.mark_failed(self._canonical_candidate(provider), detail)
+
+    def cooldown_detail(
+        self, provider: _ModelGroupProviderCandidate | str
+    ) -> tuple[str | None, float] | None:
+        """Return retained detail and remaining seconds for one cooldown."""
+        return self._ring.cooldown_detail(self._canonical_candidate(provider))
 
     def next_available(
         self, failed: _ModelGroupProviderCandidate | str
@@ -1986,15 +1996,49 @@ class GatewayConfig:
                 ),
                 None,
             )
-        current_id = provider.get("current_api_key")
+        runtime_provider = self.providers.get(candidate.provider_name)
+        if runtime_provider is None:
+            return None
+        current_id = runtime_provider.current_credential_id
         return next(
             (
                 entry
                 for entry in credentials
                 if isinstance(entry, Mapping) and entry.get("id") == current_id
             ),
-            next((entry for entry in credentials if isinstance(entry, Mapping)), None),
+            None,
         )
+
+    def _model_group_candidate_availability_snapshot(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> tuple[str, Mapping[str, Any]] | None:
+        provider = self._all_raw_providers.get(candidate.provider_name)
+        if not isinstance(provider, Mapping):
+            return None
+        variant = provider.get("openai_variant")
+        if variant not in {"sub2api", "new_api"}:
+            return None
+        credential = self._model_group_candidate_credential(candidate)
+        credential_uuid = credential.get("uuid") if credential is not None else None
+        snapshot = provider.get("availability_snapshot")
+        values = snapshot.get("credentials") if isinstance(snapshot, Mapping) else None
+        item = values.get(str(credential_uuid)) if isinstance(values, Mapping) else None
+        if not isinstance(item, Mapping):
+            return None
+        return variant, item
+
+    @staticmethod
+    def _availability_snapshot_number(
+        item: Mapping[str, Any], field: str
+    ) -> float | None:
+        value = item.get(field)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+        ):
+            return None
+        return float(value)
 
     def model_group_candidate_availability(
         self, candidate: _ModelGroupProviderCandidate
@@ -2005,19 +2049,38 @@ class GatewayConfig:
             return None
         if provider.get("openai_variant") not in {"sub2api", "new_api"}:
             return math.inf
-        credential = self._model_group_candidate_credential(candidate)
-        credential_uuid = credential.get("uuid") if credential is not None else None
-        snapshot = provider.get("availability_snapshot")
-        values = snapshot.get("credentials") if isinstance(snapshot, Mapping) else None
-        item = values.get(str(credential_uuid)) if isinstance(values, Mapping) else None
-        value = item.get("value") if isinstance(item, Mapping) else None
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-        ):
+        selected = self._model_group_candidate_availability_snapshot(candidate)
+        if selected is None:
             return None
-        return float(value)
+        _variant, item = selected
+        return self._availability_snapshot_number(item, "value")
+
+    def model_group_candidate_availability_details(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> dict[str, float | str] | None:
+        """Project selected special-provider availability for Admin display."""
+        selected = self._model_group_candidate_availability_snapshot(candidate)
+        if selected is None:
+            return None
+        variant, item = selected
+        value = self._availability_snapshot_number(item, "value")
+        if value is None:
+            return None
+        primary, secondary = self._model_group_candidate_thresholds(candidate)
+        band = (
+            "green" if value >= primary else "yellow" if value >= secondary else "red"
+        )
+        if variant == "new_api":
+            return {"kind": "percentage", "value": value, "band": band}
+        maximum = self._availability_snapshot_number(item, "maximum")
+        if maximum is None:
+            return None
+        return {
+            "kind": "concurrency",
+            "value": value,
+            "maximum": maximum,
+            "band": band,
+        }
 
     def _model_group_candidate_thresholds(
         self, candidate: _ModelGroupProviderCandidate

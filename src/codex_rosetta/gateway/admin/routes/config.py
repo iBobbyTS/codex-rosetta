@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import time
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -429,6 +430,23 @@ def _resolved_admin_model_entry(
     return entry
 
 
+def _model_group_candidate_status_for_admin(
+    candidate: _ModelGroupProviderCandidate,
+    *,
+    row_error: str | None,
+    runtime_status: str,
+    runtime_available: set[_ModelGroupProviderCandidate],
+) -> str:
+    """Apply the model-group Admin status precedence for one candidate."""
+    if row_error is not None or not candidate.enabled:
+        return "disabled"
+    if runtime_status == "cooling":
+        return "cooling"
+    if candidate not in runtime_available:
+        return "disabled"
+    return "available"
+
+
 def _model_group_provider_rows_for_admin(
     group_name: str,
     candidates: list[_ModelGroupProviderCandidate],
@@ -442,6 +460,8 @@ def _model_group_provider_rows_for_admin(
     runtime_statuses = (
         dict(runtime_ring.status_snapshot()) if runtime_ring is not None else {}
     )
+    runtime_available = set(runtime_config.available_model_group_candidates(group_name))
+    cooldown_redactor = SecretRedactor(runtime_config.token_values)
     current_index = next(
         (
             index
@@ -509,38 +529,48 @@ def _model_group_provider_rows_for_admin(
             )
         seen_candidates.add(candidate)
         runtime_status = runtime_statuses.get(candidate, "available")
-        runtime_provider = runtime_config.providers.get(provider_name)
-        if (
-            row_error is None
-            and runtime_status == "available"
-            and candidate.credential_uuid is not None
-            and runtime_provider is not None
-            and not runtime_provider.credential_uuid_is_available(
-                candidate.credential_uuid
-            )
-        ):
-            runtime_status = "cooling"
-        provider_rows.append(
-            {
-                "name": provider_name,
-                "credential_uuid": candidate.credential_uuid,
-                "credential_id": credential_id,
-                "auto_rotate_credentials": (
-                    provider_config.get("auto_rotate_credentials")
-                    if isinstance(provider_config, dict)
-                    else None
-                ),
-                "current": index == current_index,
-                "enabled": enabled,
-                "routing_enabled": candidate.enabled,
-                "status": (
-                    "disabled"
-                    if row_error is not None or not candidate.enabled
-                    else runtime_status
-                ),
-                "error": row_error,
-            }
+        final_status = _model_group_candidate_status_for_admin(
+            candidate,
+            row_error=row_error,
+            runtime_status=runtime_status,
+            runtime_available=runtime_available,
         )
+        if row_error is None and candidate in runtime_statuses:
+            availability = runtime_config.model_group_candidate_availability_details(
+                candidate
+            )
+            rate_multiplier = runtime_config.model_group_candidate_multiplier(candidate)
+        else:
+            availability = None
+            rate_multiplier = None
+        row = {
+            "name": provider_name,
+            "credential_uuid": candidate.credential_uuid,
+            "credential_id": credential_id,
+            "auto_rotate_credentials": (
+                provider_config.get("auto_rotate_credentials")
+                if isinstance(provider_config, dict)
+                else None
+            ),
+            "current": index == current_index,
+            "enabled": enabled,
+            "routing_enabled": candidate.enabled,
+            "status": final_status,
+            "error": row_error,
+            "availability": availability,
+            "rate_multiplier": rate_multiplier,
+        }
+        if final_status == "cooling" and runtime_ring is not None:
+            cooldown = runtime_ring.cooldown_detail(candidate)
+            if cooldown is not None:
+                detail, remaining_seconds = cooldown
+                row["cooldown_detail"] = (
+                    cooldown_redactor.redact(detail) if detail is not None else None
+                )
+                row["cooldown_recovery_at_ms"] = int(
+                    (time.time() + remaining_seconds) * 1000
+                )
+        provider_rows.append(row)
     return provider_rows
 
 
