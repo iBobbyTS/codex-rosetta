@@ -564,9 +564,13 @@ def _model_group_provider_rows_for_admin(
             cooldown = runtime_ring.cooldown_detail(candidate)
             if cooldown is not None:
                 detail, remaining_seconds = cooldown
-                row["cooldown_detail"] = (
-                    cooldown_redactor.redact(detail) if detail is not None else None
-                )
+                if detail is not None:
+                    redacted_detail = cooldown_redactor.redact(detail)
+                    row["cooldown_detail"] = cooldown_redactor.redact_wire_bytes(
+                        redacted_detail.encode("utf-8")
+                    ).decode("utf-8")
+                else:
+                    row["cooldown_detail"] = None
                 row["cooldown_recovery_at_ms"] = int(
                     (time.time() + remaining_seconds) * 1000
                 )

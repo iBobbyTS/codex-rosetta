@@ -4495,6 +4495,38 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(
     assert "duplicated" in rows[5]["error"]
 
 
+def test_get_config_redacts_json_escaped_credential_from_cooldown_detail(tmp_path):
+    credential = 'sk-"quoted\\credential'
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = credential
+    runtime_config = GatewayConfig(config)
+    detail = json.dumps(
+        {"error": f"credential {credential} unavailable"},
+        ensure_ascii=True,
+        separators=(",", ":"),
+    )
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert json.loads(row["cooldown_detail"]) == {
+        "error": "credential [REDACTED] unavailable"
+    }
+
+
 def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["auto_rotate_credentials"] = False
