@@ -465,7 +465,11 @@ def _redact_cooldown_detail(redactor: SecretRedactor, detail: str) -> str:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        return REDACTED if redactor.contains_json_semantic(safe_detail) else safe_detail
+        if redactor.contains_json_semantic(
+            safe_detail
+        ) or redactor.contains_ordered_fragments((safe_detail,)):
+            return REDACTED
+        return safe_detail
     except Exception:
         return REDACTED
 
