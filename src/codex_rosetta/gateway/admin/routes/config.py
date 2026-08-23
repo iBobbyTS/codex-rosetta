@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any, cast
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response
-from codex_rosetta.observability.redaction import SecretRedactor
+from codex_rosetta.observability.redaction import REDACTED, SecretRedactor
 from codex_rosetta.shims.providers import builtin_provider_shims
 
 from ...config import (
@@ -447,6 +447,24 @@ def _model_group_candidate_status_for_admin(
     return "available"
 
 
+def _redact_cooldown_detail(redactor: SecretRedactor, detail: str) -> str:
+    """Redact plain or JSON cooldown detail without leaking semantic values."""
+    try:
+        parsed_detail = json.loads(detail)
+    except json.JSONDecodeError:
+        redacted_detail = redactor.redact(detail)
+        return redactor.redact_wire_bytes(redacted_detail.encode("utf-8")).decode(
+            "utf-8"
+        )
+
+    safe_detail = json.dumps(
+        redactor.redact(parsed_detail),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return REDACTED if redactor.contains_json_semantic(safe_detail) else safe_detail
+
+
 def _model_group_provider_rows_for_admin(
     group_name: str,
     candidates: list[_ModelGroupProviderCandidate],
@@ -565,10 +583,9 @@ def _model_group_provider_rows_for_admin(
             if cooldown is not None:
                 detail, remaining_seconds = cooldown
                 if detail is not None:
-                    redacted_detail = cooldown_redactor.redact(detail)
-                    row["cooldown_detail"] = cooldown_redactor.redact_wire_bytes(
-                        redacted_detail.encode("utf-8")
-                    ).decode("utf-8")
+                    row["cooldown_detail"] = _redact_cooldown_detail(
+                        cooldown_redactor, detail
+                    )
                 else:
                     row["cooldown_detail"] = None
                 row["cooldown_recovery_at_ms"] = int(

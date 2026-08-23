@@ -4495,16 +4495,24 @@ def test_get_config_projects_ordered_model_group_provider_status_and_errors(
     assert "duplicated" in rows[5]["error"]
 
 
-def test_get_config_redacts_json_escaped_credential_from_cooldown_detail(tmp_path):
-    credential = 'sk-"quoted\\credential'
+@pytest.mark.parametrize(
+    ("credential", "escaped_credential"),
+    [
+        (
+            'sk-"quoted\\credential',
+            json.dumps('sk-"quoted\\credential', ensure_ascii=True)[1:-1],
+        ),
+        ("sk-a/b", r"sk-a\/b"),
+        ("sk-secret", r"sk-\u0073ecret"),
+    ],
+)
+def test_get_config_redacts_json_escaped_credential_from_cooldown_detail(
+    tmp_path, credential, escaped_credential
+):
     config = _config_data()
     config["providers"]["openai"]["api_keys"][0]["key"] = credential
     runtime_config = GatewayConfig(config)
-    detail = json.dumps(
-        {"error": f"credential {credential} unavailable"},
-        ensure_ascii=True,
-        separators=(",", ":"),
-    )
+    detail = f'{{"error":"credential {escaped_credential} unavailable"}}'
     runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
@@ -4525,6 +4533,78 @@ def test_get_config_redacts_json_escaped_credential_from_cooldown_detail(tmp_pat
     assert json.loads(row["cooldown_detail"]) == {
         "error": "credential [REDACTED] unavailable"
     }
+
+
+@pytest.mark.parametrize(
+    ("credential", "detail", "expected"),
+    [
+        (
+            "sk-test",
+            "credential sk-test unavailable",
+            "credential [REDACTED] unavailable",
+        ),
+        (
+            "sk-test",
+            "Authorization: Bearer upstream-session-token",
+            "Authorization: Bearer [REDACTED]",
+        ),
+        (
+            'sk-"quoted\\credential',
+            'credential sk-\\"quoted\\\\credential unavailable',
+            "credential [REDACTED] unavailable",
+        ),
+    ],
+)
+def test_get_config_preserves_non_json_cooldown_redaction_paths(
+    tmp_path, credential, detail, expected
+):
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = credential
+    runtime_config = GatewayConfig(config)
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["cooldown_detail"] == expected
+
+
+def test_get_config_fails_closed_when_semantic_json_redaction_retains_credential(
+    tmp_path,
+):
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = "1"
+    runtime_config = GatewayConfig(config)
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", "1")
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["cooldown_detail"] == "[REDACTED]"
 
 
 def test_get_config_merges_global_pair_cooldown_across_model_groups(tmp_path):
