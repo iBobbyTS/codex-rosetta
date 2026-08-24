@@ -389,8 +389,20 @@ def test_contains_ordered_fragments_parses_sse_json_string_scalars() -> None:
         'event: sk-\ndata: {"part":"secret"}\n\n',
         'id: sk-\ndata: {"part":"secret"}\n\n',
         ': sk-\ndata: {"part":"secret"}\n\n',
+        'event: sk-\n\ndata: {"part":"secret"}\n\n',
+        ': sk-\n\ndata: {"part":"secret"}\n\n',
+        'data: {"part":"sk-"}\n\nevent: secret\n\n',
+        'Upstream: event: sk-\n\ndata: {"part":"secret"}\n\n',
     ],
-    ids=("event", "id", "comment"),
+    ids=(
+        "event",
+        "id",
+        "comment",
+        "event-before-data-frame",
+        "comment-before-data-frame",
+        "data-before-event-frame",
+        "wrapped-event-before-data-frame",
+    ),
 )
 def test_contains_ordered_fragments_parses_sse_non_data_fragments(
     diagnostic: str,
@@ -400,6 +412,9 @@ def test_contains_ordered_fragments_parses_sse_non_data_fragments(
     assert redactor.contains_ordered_fragments((diagnostic,))
     assert not redactor.contains_ordered_fragments(
         ('event: ordinary\ndata: {"part":"secret"}\n\n',)
+    )
+    assert not redactor.contains_ordered_fragments(
+        ('event: ordinary\n\ndata: {"part":"secret"}\n\n',)
     )
 
 

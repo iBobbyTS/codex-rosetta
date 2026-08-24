@@ -163,6 +163,7 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
             return
 
     parsed_sse = False
+    sse_fragments: list[str] = []
     for frame_index, frame in enumerate(re.split(r"\r?\n\r?\n", stripped)):
         data_lines: list[str] = []
         ordered_fragments: list[str | None] = []
@@ -186,17 +187,17 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
                 data_lines.append(data_line.removeprefix(" "))
             else:
                 ordered_fragments.append(line_match.group("metadata").removeprefix(" "))
-        if not data_lines:
-            continue
         data = "\n".join(data_lines)
         for fragment in ordered_fragments:
             if fragment is not None:
-                yield fragment
+                sse_fragments.append(fragment)
                 continue
-            yield from _iter_sse_data(data)
-        parsed_sse = True
+            sse_fragments.extend(_iter_sse_data(data))
+        parsed_sse = parsed_sse or bool(data_lines)
     if not parsed_sse:
         yield value
+        return
+    yield from sse_fragments
 
 
 def _ordered_fragments_contain(

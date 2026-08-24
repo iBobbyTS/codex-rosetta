@@ -4711,14 +4711,12 @@ def test_get_config_fails_closed_when_sse_string_scalars_reconstruct_credential(
     assert row["cooldown_detail"] == "[REDACTED]"
 
 
-def test_get_config_fails_closed_when_sse_event_and_data_reconstruct_credential(
-    tmp_path,
-):
+def test_get_config_fails_closed_when_sse_frames_reconstruct_credential(tmp_path):
     config = _config_data()
     config["providers"]["openai"]["api_keys"][0]["key"] = "sk-secret"
     runtime_config = GatewayConfig(config)
     detail = prefix_error_body(
-        b'event: sk-\ndata: {"part":"secret"}\n\n',
+        b'event: sk-\n\ndata: {"part":"secret"}\n\n',
         DownstreamErrorOrigin.UPSTREAM,
     ).decode("utf-8")
     runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
