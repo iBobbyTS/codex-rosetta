@@ -139,6 +139,19 @@ def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[str]:
 
 def _iter_diagnostic_text(value: str) -> Iterable[str]:
     """Yield consumer-visible strings from plain, JSON, or SSE diagnostic text."""
+
+    def _iter_sse_data(data: str) -> Iterable[str]:
+        try:
+            parsed_data = decode_json_preserving_members(data)
+        except json.JSONDecodeError:
+            yield data
+            return
+        if isinstance(parsed_data, JsonObjectMembers | list):
+            yield from _iter_diagnostic_strings((parsed_data,))
+        else:
+            yield data
+            yield from ((parsed_data,) if isinstance(parsed_data, str) else ())
+
     stripped = value.strip()
     if stripped.startswith(("{", "[")):
         try:
@@ -152,33 +165,35 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
     parsed_sse = False
     for frame_index, frame in enumerate(re.split(r"\r?\n\r?\n", stripped)):
         data_lines: list[str] = []
-        wrapped_prefix: str | None = None
+        ordered_fragments: list[str | None] = []
         for line_index, line in enumerate(frame.splitlines()):
-            if line.startswith("data:"):
-                data_lines.append(line[5:].removeprefix(" "))
-            elif frame_index == 0 and line_index == 0:
-                wrapped_data = re.fullmatch(
-                    r"(?P<prefix>.+\s)data:(?P<data>.*)",
-                    line,
-                )
-                if wrapped_data is not None:
-                    wrapped_prefix = wrapped_data.group("prefix")
-                    data_lines.append(wrapped_data.group("data").removeprefix(" "))
+            prefix_pattern = r"(?:(?P<prefix>(?!(?:data|event|id|retry):|:).+\s))?" * (
+                frame_index == 0 and line_index == 0
+            )
+            line_match = re.fullmatch(
+                prefix_pattern
+                + r"(?:data:(?P<data>.*)|(?::|(?:event|id|retry):)(?P<metadata>.*))",
+                line,
+            )
+            if line_match is None:
+                continue
+            ordered_fragments.extend(
+                filter(None, (line_match.groupdict().get("prefix"),))
+            )
+            data_line = line_match.group("data")
+            if data_line is not None:
+                ordered_fragments.extend([None] * (not data_lines))
+                data_lines.append(data_line.removeprefix(" "))
+            else:
+                ordered_fragments.append(line_match.group("metadata").removeprefix(" "))
         if not data_lines:
             continue
-        if wrapped_prefix is not None:
-            yield wrapped_prefix
         data = "\n".join(data_lines)
-        try:
-            parsed_data = decode_json_preserving_members(data)
-        except json.JSONDecodeError:
-            yield data
-        else:
-            if isinstance(parsed_data, JsonObjectMembers | list):
-                yield from _iter_diagnostic_strings((parsed_data,))
-            else:
-                yield data
-                yield from ((parsed_data,) if isinstance(parsed_data, str) else ())
+        for fragment in ordered_fragments:
+            if fragment is not None:
+                yield fragment
+                continue
+            yield from _iter_sse_data(data)
         parsed_sse = True
     if not parsed_sse:
         yield value
