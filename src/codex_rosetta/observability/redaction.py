@@ -150,10 +150,20 @@ def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[_DiagnosticPart]
 def _diagnostic_alternatives(
     alternatives: Iterable[tuple[_DiagnosticPart, ...]],
 ) -> tuple[_DiagnosticPart, ...]:
+    def _flatten(
+        alternative: tuple[_DiagnosticPart, ...],
+    ) -> Iterable[tuple[_DiagnosticPart, ...]]:
+        if len(alternative) == 1 and isinstance(alternative[0], _DiagnosticChoice):
+            for nested in alternative[0].alternatives:
+                yield from _flatten(nested)
+            return
+        yield alternative
+
     unique: list[tuple[_DiagnosticPart, ...]] = []
     for alternative in alternatives:
-        if alternative not in unique:
-            unique.append(alternative)
+        for candidate in _flatten(alternative):
+            if candidate not in unique:
+                unique.append(candidate)
     if len(unique) == 1:
         return unique[0]
     return (_DiagnosticChoice(tuple(unique)),)

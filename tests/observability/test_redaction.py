@@ -505,6 +505,24 @@ def test_contains_ordered_fragments_counts_largest_sse_interpretation() -> None:
     assert not SecretRedactor({"credential"}).contains_ordered_fragments((diagnostic,))
 
 
+def test_contains_ordered_fragments_deduplicates_json_string_paths() -> None:
+    frame = f'data: "{"x" * 80}"\n\n'
+    diagnostic = frame * 1_000
+
+    assert not SecretRedactor({"y" * 100}).contains_ordered_fragments((diagnostic,))
+
+
+def test_sse_json_string_choice_has_unique_canonical_alternatives() -> None:
+    from codex_rosetta.observability.redaction import (
+        _DiagnosticChoice,
+        _iter_diagnostic_text,
+    )
+
+    parts = tuple(_iter_diagnostic_text('data: "ordinary"\n\n'))
+
+    assert parts == (_DiagnosticChoice((('"ordinary"',), ("ordinary",))),)
+
+
 def test_contains_ordered_fragments_fails_closed_for_realizable_char_overflow() -> None:
     diagnostic = f"data: {'x' * (MAX_ORDERED_DIAGNOSTIC_CHARS + 1)}\n\n"
 
