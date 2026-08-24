@@ -183,8 +183,10 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
             )
             data_line = line_match.group("data")
             if data_line is not None:
+                visible_data = data_line.removeprefix(" ")
                 ordered_fragments.extend([None] * (not data_lines))
-                data_lines.append(data_line.removeprefix(" "))
+                data_lines.append(visible_data)
+                ordered_fragments.append(visible_data)
             else:
                 ordered_fragments.append(line_match.group("metadata").removeprefix(" "))
         data = "\n".join(data_lines)

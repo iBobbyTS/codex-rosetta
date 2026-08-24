@@ -393,6 +393,9 @@ def test_contains_ordered_fragments_parses_sse_json_string_scalars() -> None:
         ': sk-\n\ndata: {"part":"secret"}\n\n',
         'data: {"part":"sk-"}\n\nevent: secret\n\n',
         'Upstream: event: sk-\n\ndata: {"part":"secret"}\n\n',
+        "data: sk-\nevent: secret\ndata: harmless\n\n",
+        "data: sk-\n: secret\ndata: harmless\n\n",
+        "data: sk-\nevent: ordinary\ndata: secret\n\n",
     ],
     ids=(
         "event",
@@ -402,6 +405,9 @@ def test_contains_ordered_fragments_parses_sse_json_string_scalars() -> None:
         "comment-before-data-frame",
         "data-before-event-frame",
         "wrapped-event-before-data-frame",
+        "event-between-data-lines",
+        "comment-between-data-lines",
+        "credential-data-around-event",
     ),
 )
 def test_contains_ordered_fragments_parses_sse_non_data_fragments(
@@ -416,6 +422,23 @@ def test_contains_ordered_fragments_parses_sse_non_data_fragments(
     assert not redactor.contains_ordered_fragments(
         ('event: ordinary\n\ndata: {"part":"secret"}\n\n',)
     )
+    assert not redactor.contains_ordered_fragments(
+        ("data: secret\nevent: sk-\ndata: harmless\n\n",)
+    )
+
+
+@pytest.mark.parametrize(
+    "diagnostic",
+    [
+        'event: sk-\ndata: {"part":\ndata: "secret"}\n\n',
+        'event: sk-\ndata:\ndata: "secret"\n\n',
+    ],
+    ids=("json-object", "json-string"),
+)
+def test_contains_ordered_fragments_preserves_multiline_sse_data_semantics(
+    diagnostic: str,
+) -> None:
+    assert SecretRedactor({"sk-secret"}).contains_ordered_fragments((diagnostic,))
 
 
 @pytest.mark.parametrize("token", ["null", "true", "1"])

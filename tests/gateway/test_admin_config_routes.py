@@ -4711,14 +4711,19 @@ def test_get_config_fails_closed_when_sse_string_scalars_reconstruct_credential(
     assert row["cooldown_detail"] == "[REDACTED]"
 
 
-def test_get_config_fails_closed_when_sse_frames_reconstruct_credential(tmp_path):
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'event: sk-\n\ndata: {"part":"secret"}\n\n',
+        b"data: sk-\nevent: secret\ndata: harmless\n\n",
+    ],
+    ids=("across-frames", "interleaved-data"),
+)
+def test_get_config_fails_closed_when_sse_frames_reconstruct_credential(tmp_path, body):
     config = _config_data()
     config["providers"]["openai"]["api_keys"][0]["key"] = "sk-secret"
     runtime_config = GatewayConfig(config)
-    detail = prefix_error_body(
-        b'event: sk-\n\ndata: {"part":"secret"}\n\n',
-        DownstreamErrorOrigin.UPSTREAM,
-    ).decode("utf-8")
+    detail = prefix_error_body(body, DownstreamErrorOrigin.UPSTREAM).decode("utf-8")
     runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
     config_path = tmp_path / "config.jsonc"
     config_path.write_text(json.dumps(config), encoding="utf-8")
