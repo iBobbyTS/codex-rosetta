@@ -1960,6 +1960,21 @@ describe('ModelsPage', () => {
       expect(dialog.getByRole('columnheader', { name: 'Provider / participation' })).toBeInTheDocument();
       expect(dialog.getByRole('columnheader', { name: 'Availability' })).toBeInTheDocument();
       expect(dialog.getByRole('columnheader', { name: 'Multiplier' })).toBeInTheDocument();
+      const headings = [...dialog.getByRole('table').querySelectorAll('thead th')];
+      expect(headings).toHaveLength(6);
+      expect(headings[0]).toHaveClass('suu-sortable-table__drag-column');
+      expect(headings[0]).not.toHaveClass('model-group-provider-heading');
+      expect(headings[1]).toHaveClass('model-group-provider-heading');
+      expect(headings[2]).toHaveClass('model-group-status-heading');
+      expect(headings[3]).toHaveClass('model-group-availability-heading');
+      expect(headings[4]).toHaveClass('model-group-multiplier-heading');
+      expect(headings[5]).toHaveClass('suu-sortable-table__remove-column');
+      expect(headings[0]).not.toHaveAttribute('style');
+      expect(getComputedStyle(headings[1]).width).toBe('42%');
+      expect(getComputedStyle(headings[2]).width).toBe('30%');
+      expect(getComputedStyle(headings[3]).width).toBe('18%');
+      expect(getComputedStyle(headings[4]).width).toBe('10%');
+      expect(headings[5]).not.toHaveAttribute('style');
       const providerRow = (name: string): HTMLTableRowElement => dialog.getByRole('button', { name: `Drag provider ${name}` }).closest('tr') as HTMLTableRowElement;
 
       expect(providerRow('newapi')).toHaveClass('suu-sortable-table-enhanced__row--green');
@@ -2160,17 +2175,68 @@ describe('ModelsPage', () => {
     }
   });
 
-  it('ignores a runtime response from a closed editor generation after reopen', async () => {
+  it('preserves distinct hydrated projections when duplicate persisted identities make live merge ambiguous', async () => {
     vi.useFakeTimers();
-    const runtime = deferred<Record<string, unknown>>();
+    const initial = {
+      providers: { duplicate: { api_type: 'chat', auto_rotate_credentials: true } },
+      model_groups: { Main: { providers: [
+        { name: 'duplicate', auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
+        { name: 'duplicate', auto_rotate_credentials: true, current: false, enabled: true, routing_enabled: true, status: 'disabled', error: 'Duplicate Provider candidate', rate_multiplier: null },
+      ], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    };
+    const refreshed = {
+      ...initial,
+      model_groups: { Main: { ...initial.model_groups.Main, providers: [
+        { name: 'duplicate', auto_rotate_credentials: true, current: false, enabled: true, routing_enabled: true, status: 'disabled', error: 'Changed duplicate error', rate_multiplier: 9 },
+        { name: 'duplicate', auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'ambiguous runtime', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 8 },
+      ] } },
+    };
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve(++configReads === 1 ? initial : refreshed);
+      return Promise.resolve({ cursor: 0, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await vi.advanceTimersByTimeAsync(2000);
+      await tick();
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      const duplicateRows = dialog.getAllByRole('button', { name: 'Drag provider duplicate' }).map((button) => button.closest('tr')!);
+      expect(duplicateRows[0]).toHaveTextContent('Available');
+      expect(duplicateRows[0]).toHaveTextContent('1x');
+      expect(duplicateRows[0]).not.toHaveTextContent('Changed duplicate error');
+      expect(duplicateRows[0]).not.toHaveTextContent('ambiguous runtime');
+      expect(duplicateRows[1]).toHaveTextContent('Not scheduled');
+      expect(duplicateRows[1]).toHaveTextContent('Duplicate Provider candidate');
+      expect(duplicateRows[1]).not.toHaveTextContent('8x');
+      expect(duplicateRows[1]).not.toHaveTextContent('9x');
+    } finally {
+      vi.useRealTimers();
+      apiMock.get.mockReset();
+    }
+  });
+
+  it('aborts stale runtime ownership and starts a reopened generation before the old promise settles', async () => {
+    vi.useFakeTimers();
+    const staleRuntime = deferred<Record<string, unknown>>();
+    const reopenedRuntime = deferred<Record<string, unknown>>();
     const initial = {
       providers: { first: { api_type: 'chat' } },
       model_groups: { Main: { providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 }], type: 'llm', models: { 'demo-model': {} } } },
       tool_profile_presets: [],
     };
     let configReads = 0;
-    apiMock.get.mockImplementation((path: string) => {
-      if (path === '/admin/api/config') return ++configReads === 1 ? Promise.resolve(initial) : runtime.promise;
+    const runtimeSignals: AbortSignal[] = [];
+    apiMock.get.mockImplementation((path: string, signal?: AbortSignal) => {
+      if (path === '/admin/api/config') {
+        configReads += 1;
+        if (configReads === 1) return Promise.resolve(initial);
+        runtimeSignals.push(signal!);
+        return configReads === 2 ? staleRuntime.promise : reopenedRuntime.promise;
+      }
       return Promise.resolve({ cursor: 0, events: [] });
     });
     try {
@@ -2180,15 +2246,22 @@ describe('ModelsPage', () => {
       await vi.advanceTimersByTimeAsync(2000);
       expect(configReads).toBe(2);
       await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(runtimeSignals[0]).toHaveProperty('aborted', true);
       await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-      runtime.resolve({ ...initial, model_groups: { Main: { ...initial.model_groups.Main, providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'stale cooldown', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 0.2 }] } } });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(configReads).toBe(3);
+      expect(runtimeSignals[1]).toHaveProperty('aborted', false);
+      staleRuntime.resolve({ ...initial, model_groups: { Main: { ...initial.model_groups.Main, providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'stale cooldown', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 0.2 }] } } });
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(configReads).toBe(3);
+      reopenedRuntime.resolve({ ...initial, model_groups: { Main: { ...initial.model_groups.Main, providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'disabled', error: null, rate_multiplier: 0.4 }] } } });
       await vi.advanceTimersByTimeAsync(0);
       await tick();
       const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
       const row = dialog.getByRole('button', { name: 'Drag provider first' }).closest('tr')!;
-      expect(row).toHaveTextContent('Available');
+      expect(row).toHaveTextContent('Not scheduled');
       expect(row).not.toHaveTextContent('stale cooldown');
-      expect(row).toHaveTextContent('1x');
+      expect(row).toHaveTextContent('0.4x');
     } finally {
       vi.useRealTimers();
       apiMock.get.mockReset();
