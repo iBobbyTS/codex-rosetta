@@ -2003,7 +2003,7 @@ describe('ModelsPage', () => {
     const initial = {
       providers: { first: { api_type: 'chat' }, second: { api_type: 'chat' }, third: { api_type: 'chat' } },
       model_groups: { Main: { providers: [
-        { name: 'first', current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
+        { name: 'first', current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'old candidate cooldown', cooldown_recovery_at_ms: 1787500000000, availability: { kind: 'percentage', value: 88, band: 'green' }, rate_multiplier: 1 },
         { name: 'second', current: false, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
       ], type: 'llm', models: { 'demo-model': {} } } },
       tool_profile_presets: [],
@@ -2026,6 +2026,12 @@ describe('ModelsPage', () => {
       await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
       const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
       await selectDropdown(dialog.getAllByLabelText('Select Provider')[0], 'third');
+      const changedProviderRow = dialog.getByRole('button', { name: 'Drag provider third' }).closest('tr')!;
+      expect(changedProviderRow).toHaveTextContent('Available');
+      expect(changedProviderRow).not.toHaveTextContent('old candidate cooldown');
+      expect(changedProviderRow).not.toHaveTextContent('88%');
+      expect(changedProviderRow).not.toHaveTextContent('1x');
+      expect(changedProviderRow).toHaveTextContent('—');
       await fireEvent.click(dialog.getByRole('radio', { name: 'Current provider third' }));
       await fireEvent.click(dialog.getByRole('checkbox', { name: 'Allow second in model group routing' }));
       await fireEvent.input(dialog.getByLabelText('Exposed model'), { target: { value: 'draft-model' } });
@@ -2043,6 +2049,7 @@ describe('ModelsPage', () => {
       const thirdRow = dialog.getByRole('button', { name: 'Drag provider third' }).closest('tr')!;
       expect(thirdRow).toHaveTextContent('Available');
       expect(thirdRow).not.toHaveTextContent('0.4x');
+      expect(thirdRow).not.toHaveTextContent('1x');
       expect(dialog.getByRole('radio', { name: 'Current provider third' })).toBeChecked();
       expect(dialog.getByRole('checkbox', { name: 'Allow second in model group routing' })).not.toBeChecked();
       expect(dialog.getByLabelText('Exposed model')).toHaveValue('draft-model');
@@ -2051,6 +2058,102 @@ describe('ModelsPage', () => {
       await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
         providers: [{ provider: 'second', enabled: false }, 'third'], current_provider: 'third', type: 'llm', models: { 'draft-model': {} },
       }));
+    } finally {
+      vi.useRealTimers();
+      apiMock.get.mockReset();
+    }
+  });
+
+  it('clears fixed-credential runtime fields and expansion until the new identity has authoritative runtime', async () => {
+    vi.useFakeTimers();
+    const oldDetail = `old fixed credential cooldown ${'detail '.repeat(30)}`;
+    const newDetail = `new authoritative cooldown ${'detail '.repeat(30)}`;
+    const initial = {
+      providers: { fixed: { api_type: 'chat', auto_rotate_credentials: false, api_keys: [{ uuid: FIRST_UUID, id: 'first' }, { uuid: SECOND_UUID, id: 'second' }] } },
+      model_groups: { Main: { providers: [{ name: 'fixed', credential_uuid: FIRST_UUID, credential_id: 'first', auto_rotate_credentials: false, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: oldDetail, cooldown_recovery_at_ms: 1787500000000, availability: { kind: 'concurrency', value: 5, maximum: 10, band: 'yellow' }, rate_multiplier: 1 }], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    };
+    const refreshed = {
+      ...initial,
+      model_groups: { Main: { ...initial.model_groups.Main, providers: [{ name: 'fixed', credential_uuid: SECOND_UUID, credential_id: 'second', auto_rotate_credentials: false, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: newDetail, cooldown_recovery_at_ms: 1787600000000, availability: { kind: 'concurrency', value: 7, maximum: 10, band: 'green' }, rate_multiplier: 0.2 }] } },
+    };
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve(++configReads === 1 ? initial : refreshed);
+      return Promise.resolve({ cursor: 0, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      await fireEvent.click(dialog.getByRole('button', { name: 'Expand cooldown detail for fixed' }));
+      await selectDropdown(dialog.getByLabelText('Select credential'), 'second');
+      let providerRow = dialog.getByRole('button', { name: 'Drag provider fixed' }).closest('tr')!;
+      expect(providerRow).toHaveTextContent('Available');
+      expect(providerRow).not.toHaveTextContent('old fixed credential cooldown');
+      expect(providerRow).not.toHaveTextContent('5 / 10');
+      expect(providerRow).not.toHaveTextContent('1x');
+      expect(providerRow).toHaveTextContent('—');
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await tick();
+      providerRow = dialog.getByRole('button', { name: 'Drag provider fixed' }).closest('tr')!;
+      expect(providerRow).toHaveTextContent('Cooling');
+      expect(providerRow).toHaveTextContent('new authoritative cooldown');
+      expect(providerRow).toHaveTextContent('7 / 10');
+      expect(providerRow).toHaveTextContent('0.2x');
+      expect(providerRow.querySelector('.model-group-provider-detail')).not.toHaveClass('expanded');
+      expect(within(providerRow).getByRole('button', { name: 'Expand cooldown detail for fixed' })).toHaveAttribute('aria-expanded', 'false');
+    } finally {
+      vi.useRealTimers();
+      apiMock.get.mockReset();
+    }
+  });
+
+  it('keeps automatic and fixed runtime identities distinct when legal names resemble composite keys', async () => {
+    vi.useFakeTimers();
+    const automaticName = `ordinary:${FIRST_UUID}`;
+    const initial = {
+      providers: {
+        [automaticName]: { api_type: 'chat', auto_rotate_credentials: true },
+        ordinary: { api_type: 'chat', auto_rotate_credentials: false, api_keys: [{ uuid: FIRST_UUID, id: 'first' }] },
+      },
+      model_groups: { Main: { providers: [
+        { name: automaticName, auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
+        { name: 'ordinary', credential_uuid: FIRST_UUID, credential_id: 'first', auto_rotate_credentials: false, current: false, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 2 },
+      ], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    };
+    const refreshed = {
+      ...initial,
+      model_groups: { Main: { ...initial.model_groups.Main, providers: [
+        { name: 'ordinary', credential_uuid: FIRST_UUID, credential_id: 'first', auto_rotate_credentials: false, current: false, enabled: true, routing_enabled: true, status: 'disabled', error: null, rate_multiplier: 0.22 },
+        { name: automaticName, auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'automatic runtime only', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 0.11 },
+      ] } },
+    };
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve(++configReads === 1 ? initial : refreshed);
+      return Promise.resolve({ cursor: 0, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await vi.advanceTimersByTimeAsync(2000);
+      await tick();
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      const automaticRow = dialog.getByRole('button', { name: `Drag provider ${automaticName}` }).closest('tr')!;
+      const fixedRow = dialog.getByRole('button', { name: 'Drag provider ordinary' }).closest('tr')!;
+      expect(automaticRow).toHaveTextContent('Cooling');
+      expect(automaticRow).toHaveTextContent('automatic runtime only');
+      expect(automaticRow).toHaveTextContent('0.11x');
+      expect(automaticRow).not.toHaveTextContent('0.22x');
+      expect(fixedRow).toHaveTextContent('Not scheduled');
+      expect(fixedRow).toHaveTextContent('0.22x');
+      expect(fixedRow).not.toHaveTextContent('automatic runtime only');
+      expect(fixedRow).not.toHaveTextContent('0.11x');
     } finally {
       vi.useRealTimers();
       apiMock.get.mockReset();
