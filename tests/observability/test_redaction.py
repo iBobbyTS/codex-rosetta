@@ -1,11 +1,13 @@
 """Tests for targeted diagnostic secret redaction."""
 
 import json
+from itertools import permutations
 from typing import Any, cast
 
 import pytest
 
 from codex_rosetta.observability.redaction import (
+    MAX_ORDERED_DIAGNOSTIC_CHARS,
     REDACTED,
     SecretRedactor,
     collect_token_values,
@@ -439,6 +441,85 @@ def test_contains_ordered_fragments_preserves_multiline_sse_data_semantics(
     diagnostic: str,
 ) -> None:
     assert SecretRedactor({"sk-secret"}).contains_ordered_fragments((diagnostic,))
+
+
+def test_contains_ordered_fragments_parses_aggregate_only_sse_json() -> None:
+    diagnostic = 'data: {"first":"sk-",\ndata: "second":"\\u0073ecret"}\n\n'
+
+    assert SecretRedactor({"sk-secret"}).contains_ordered_fragments((diagnostic,))
+
+
+_SSE_METADATA_PERMUTATIONS = [
+    pytest.param(field, order, id=f"{name}-{'-'.join(order)}")
+    for name, field in (
+        ("event", "event:"),
+        ("id", "id:"),
+        ("retry", "retry:"),
+        ("comment", ":"),
+    )
+    for order in permutations(("credential", "metadata", "harmless"))
+]
+
+
+@pytest.mark.parametrize(("metadata_field", "order"), _SSE_METADATA_PERMUTATIONS)
+def test_contains_ordered_fragments_preserves_sse_field_order(
+    metadata_field: str,
+    order: tuple[str, str, str],
+) -> None:
+    lines = {
+        "credential": "data: sk-",
+        "metadata": f"{metadata_field} secret",
+        "harmless": "data: harmless",
+    }
+    diagnostic = "\n".join(lines[item] for item in order) + "\n\n"
+    expected = order.index("credential") < order.index("metadata")
+
+    assert (
+        SecretRedactor({"sk-secret"}).contains_ordered_fragments((diagnostic,))
+        is expected
+    )
+
+
+@pytest.mark.parametrize("wrapper", ["", "Upstream: "])
+def test_contains_ordered_fragments_does_not_cross_sse_interpretations(
+    wrapper: str,
+) -> None:
+    diagnostic = f"{wrapper}data: sk-\nevent: ordinary\ndata: harmless\n\n"
+
+    assert not SecretRedactor({"harmlesssk-"}).contains_ordered_fragments((diagnostic,))
+
+
+def test_contains_ordered_fragments_does_not_cross_json_semantic_and_raw_views() -> (
+    None
+):
+    diagnostic = 'data: {"first":"ordinary",\ndata: "last":"harmless"}\n\n'
+
+    assert not SecretRedactor({'harmless{"first"'}).contains_ordered_fragments(
+        (diagnostic,)
+    )
+
+
+def test_contains_ordered_fragments_counts_largest_sse_interpretation() -> None:
+    diagnostic = f"data: {'x' * 400_000}\ndata: {'y' * 400_000}\n\n"
+
+    assert not SecretRedactor({"credential"}).contains_ordered_fragments((diagnostic,))
+
+
+def test_contains_ordered_fragments_fails_closed_for_realizable_char_overflow() -> None:
+    diagnostic = f"data: {'x' * (MAX_ORDERED_DIAGNOSTIC_CHARS + 1)}\n\n"
+
+    assert SecretRedactor({"credential"}).contains_ordered_fragments((diagnostic,))
+
+
+def test_contains_ordered_fragments_fails_closed_for_alternative_work_overflow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from codex_rosetta.observability import redaction
+
+    monkeypatch.setattr(redaction, "MAX_ORDERED_DIAGNOSTIC_WORK", 100)
+    diagnostic = f"data: {'x' * 80}\nevent: ordinary\ndata: {'y' * 80}\n\n"
+
+    assert SecretRedactor({"credential"}).contains_ordered_fragments((diagnostic,))
 
 
 @pytest.mark.parametrize("token", ["null", "true", "1"])

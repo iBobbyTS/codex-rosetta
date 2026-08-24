@@ -4745,6 +4745,34 @@ def test_get_config_fails_closed_when_sse_frames_reconstruct_credential(tmp_path
     assert row["cooldown_detail"] == "[REDACTED]"
 
 
+def test_get_config_preserves_inverse_order_sse_cooldown_detail(tmp_path):
+    config = _config_data()
+    config["providers"]["openai"]["api_keys"][0]["key"] = "sk-secret"
+    runtime_config = GatewayConfig(config)
+    detail = prefix_error_body(
+        b"data: harmless\nevent: secret\ndata: sk-\n\n",
+        DownstreamErrorOrigin.UPSTREAM,
+    ).decode("utf-8")
+    runtime_config.model_group_rings["OpenAI"].mark_failed("openai", detail)
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    assert response.status_code == 200
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["cooldown_detail"] == detail
+
+
 @pytest.mark.parametrize(
     ("credential", "detail"),
     [

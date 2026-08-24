@@ -74,6 +74,16 @@ class JsonObjectMembers:
     members: tuple[tuple[str, Any], ...]
 
 
+@dataclass(frozen=True)
+class _DiagnosticChoice:
+    """Mutually exclusive ordered interpretations of diagnostic fragments."""
+
+    alternatives: tuple[tuple[str | _DiagnosticChoice, ...], ...]
+
+
+_DiagnosticPart = str | _DiagnosticChoice
+
+
 class _DiagnosticWorkLimit(Exception):
     """Internal fail-closed signal for ordered diagnostic matching."""
 
@@ -120,7 +130,7 @@ def _add_token(values: set[str], value: Any) -> None:
         values.add(value)
 
 
-def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[str]:
+def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[_DiagnosticPart]:
     """Yield ordered string leaves from already-redacted diagnostic values."""
     for value in values:
         if isinstance(value, str):
@@ -137,20 +147,31 @@ def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[str]:
             yield from _iter_diagnostic_strings(value)
 
 
-def _iter_diagnostic_text(value: str) -> Iterable[str]:
+def _diagnostic_alternatives(
+    alternatives: Iterable[tuple[_DiagnosticPart, ...]],
+) -> tuple[_DiagnosticPart, ...]:
+    unique: list[tuple[_DiagnosticPart, ...]] = []
+    for alternative in alternatives:
+        if alternative not in unique:
+            unique.append(alternative)
+    if len(unique) == 1:
+        return unique[0]
+    return (_DiagnosticChoice(tuple(unique)),)
+
+
+def _iter_diagnostic_text(value: str) -> Iterable[_DiagnosticPart]:
     """Yield consumer-visible strings from plain, JSON, or SSE diagnostic text."""
 
-    def _iter_sse_data(data: str) -> Iterable[str]:
+    def _iter_sse_data(data: str) -> tuple[_DiagnosticPart, ...]:
         try:
             parsed_data = decode_json_preserving_members(data)
         except json.JSONDecodeError:
-            yield data
-            return
+            return (data,)
         if isinstance(parsed_data, JsonObjectMembers | list):
-            yield from _iter_diagnostic_strings((parsed_data,))
-        else:
-            yield data
-            yield from ((parsed_data,) if isinstance(parsed_data, str) else ())
+            return tuple(_iter_diagnostic_strings((parsed_data,)))
+        if isinstance(parsed_data, str):
+            return _diagnostic_alternatives(((data,), (parsed_data,)))
+        return (data,)
 
     stripped = value.strip()
     if stripped.startswith(("{", "[")):
@@ -163,10 +184,12 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
             return
 
     parsed_sse = False
-    sse_fragments: list[str] = []
+    sse_fragments: list[_DiagnosticPart] = []
     for frame_index, frame in enumerate(re.split(r"\r?\n\r?\n", stripped)):
         data_lines: list[str] = []
-        ordered_fragments: list[str | None] = []
+        raw_fragments: list[str] = []
+        data_positions: list[int] = []
+        frame_prefixes: list[str] = []
         for line_index, line in enumerate(frame.splitlines()):
             prefix_pattern = r"(?:(?P<prefix>(?!(?:data|event|id|retry):|:).+\s))?" * (
                 frame_index == 0 and line_index == 0
@@ -178,23 +201,27 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
             )
             if line_match is None:
                 continue
-            ordered_fragments.extend(
-                filter(None, (line_match.groupdict().get("prefix"),))
-            )
+            frame_prefixes.extend(filter(None, (line_match.groupdict().get("prefix"),)))
             data_line = line_match.group("data")
             if data_line is not None:
                 visible_data = data_line.removeprefix(" ")
-                ordered_fragments.extend([None] * (not data_lines))
+                data_positions.append(len(raw_fragments))
                 data_lines.append(visible_data)
-                ordered_fragments.append(visible_data)
+                raw_fragments.append(visible_data)
             else:
-                ordered_fragments.append(line_match.group("metadata").removeprefix(" "))
-        data = "\n".join(data_lines)
-        for fragment in ordered_fragments:
-            if fragment is not None:
-                sse_fragments.append(fragment)
-                continue
-            sse_fragments.extend(_iter_sse_data(data))
+                raw_fragments.append(line_match.group("metadata").removeprefix(" "))
+        sse_fragments.extend(frame_prefixes)
+        if data_lines:
+            semantic_fragments = (
+                tuple(raw_fragments[: data_positions[0]])
+                + _iter_sse_data("\n".join(data_lines))
+                + tuple(raw_fragments[data_positions[-1] + 1 :])
+            )
+            sse_fragments.extend(
+                _diagnostic_alternatives((tuple(raw_fragments), semantic_fragments))
+            )
+        else:
+            sse_fragments.extend(raw_fragments)
         parsed_sse = parsed_sse or bool(data_lines)
     if not parsed_sse:
         yield value
@@ -204,46 +231,117 @@ def _iter_diagnostic_text(value: str) -> Iterable[str]:
 
 def _ordered_fragments_contain(
     token: str,
-    fragments: tuple[str, ...],
+    fragments: tuple[_DiagnosticPart, ...],
     *,
     work_budget: int,
 ) -> tuple[bool, int]:
     """Check ordered reconstruction and report bounded comparison work."""
-    reachable: set[int] = set()
-    work = 0
     try:
-        for fragment in fragments:
-            work = _add_diagnostic_work(
-                work,
-                len(fragment) + len(reachable),
-                work_budget,
-            )
-            next_reachable = set(reachable)
-            if token in fragment:
-                return True, work
-            work = _add_starting_diagnostic_matches(
-                token,
-                fragment,
-                next_reachable,
-                work,
-                work_budget,
-            )
-            for matched in reachable:
-                remaining_len = len(token) - matched
-                work = _add_diagnostic_work(
-                    work,
-                    min(len(fragment), remaining_len),
-                    work_budget,
-                )
-                remaining = token[matched:]
-                if fragment.startswith(remaining):
-                    return True, work
-                if len(fragment) < len(remaining) and remaining.startswith(fragment):
-                    next_reachable.add(matched + len(fragment))
-            reachable = next_reachable
+        contains_token, _, work = _advance_diagnostic_parts(
+            token,
+            fragments,
+            reachable=set(),
+            work=0,
+            work_budget=work_budget,
+        )
+        return contains_token, work
     except _DiagnosticWorkLimit:
         return True, work_budget + 1
-    return False, work
+
+
+def _advance_diagnostic_parts(
+    token: str,
+    parts: tuple[_DiagnosticPart, ...],
+    *,
+    reachable: set[int],
+    work: int,
+    work_budget: int,
+) -> tuple[bool, set[int], int]:
+    for part in parts:
+        if isinstance(part, str):
+            contains_token, reachable, work = _advance_diagnostic_fragment(
+                token,
+                part,
+                reachable=reachable,
+                work=work,
+                work_budget=work_budget,
+            )
+            if contains_token:
+                return True, reachable, work
+            continue
+
+        choice_entry = reachable
+        merged_reachable: set[int] = set()
+        for alternative in part.alternatives:
+            contains_token, alternative_reachable, work = _advance_diagnostic_parts(
+                token,
+                alternative,
+                reachable=set(choice_entry),
+                work=work,
+                work_budget=work_budget,
+            )
+            if contains_token:
+                return True, alternative_reachable, work
+            merged_reachable.update(alternative_reachable)
+        reachable = merged_reachable
+    return False, reachable, work
+
+
+def _advance_diagnostic_fragment(
+    token: str,
+    fragment: str,
+    *,
+    reachable: set[int],
+    work: int,
+    work_budget: int,
+) -> tuple[bool, set[int], int]:
+    work = _add_diagnostic_work(
+        work,
+        len(fragment) + len(reachable),
+        work_budget,
+    )
+    next_reachable = set(reachable)
+    if token in fragment:
+        return True, next_reachable, work
+    work = _add_starting_diagnostic_matches(
+        token,
+        fragment,
+        next_reachable,
+        work,
+        work_budget,
+    )
+    for matched in reachable:
+        remaining_len = len(token) - matched
+        work = _add_diagnostic_work(
+            work,
+            min(len(fragment), remaining_len),
+            work_budget,
+        )
+        remaining = token[matched:]
+        if fragment.startswith(remaining):
+            return True, next_reachable, work
+        if len(fragment) < len(remaining) and remaining.startswith(fragment):
+            next_reachable.add(matched + len(fragment))
+    return False, next_reachable, work
+
+
+def _diagnostic_path_chars(
+    parts: tuple[_DiagnosticPart, ...],
+    *,
+    limit: int,
+) -> int:
+    total = 0
+    for part in parts:
+        if isinstance(part, str):
+            total += len(part)
+        else:
+            total += max(
+                _diagnostic_path_chars(alternative, limit=limit - total)
+                for alternative in part.alternatives
+            )
+        if total > limit:
+            raise _DiagnosticWorkLimit
+    return total
 
 
 def _add_diagnostic_work(work: int, amount: int, budget: int) -> int:
@@ -386,24 +484,24 @@ class SecretRedactor:
 
     def contains_ordered_fragments(self, values: Iterable[Any]) -> bool:
         """Return whether ordered diagnostic values can reconstruct a token."""
-        fragments: list[str] = []
-        total_chars = 0
-        for fragment in _iter_diagnostic_strings(values):
-            total_chars += len(fragment)
-            if total_chars > MAX_ORDERED_DIAGNOSTIC_CHARS:
-                return True
-            fragments.append(fragment)
-        frozen_fragments = tuple(fragments)
-        remaining_work = MAX_ORDERED_DIAGNOSTIC_WORK
-        for token in self._token_values:
-            contains_token, used_work = _ordered_fragments_contain(
-                token,
-                frozen_fragments,
-                work_budget=remaining_work,
+        try:
+            fragments = tuple(_iter_diagnostic_strings(values))
+            _diagnostic_path_chars(
+                fragments,
+                limit=MAX_ORDERED_DIAGNOSTIC_CHARS,
             )
-            if contains_token:
-                return True
-            remaining_work -= used_work
+            remaining_work = MAX_ORDERED_DIAGNOSTIC_WORK
+            for token in self._token_values:
+                contains_token, used_work = _ordered_fragments_contain(
+                    token,
+                    fragments,
+                    work_budget=remaining_work,
+                )
+                if contains_token:
+                    return True
+                remaining_work -= used_work
+        except _DiagnosticWorkLimit, RecursionError, ValueError:
+            return True
         return False
 
     def streaming_redactor(self) -> StreamingSecretRedactor:
