@@ -1930,6 +1930,168 @@ describe('ModelsPage', () => {
     ));
   });
 
+  it('renders merged runtime columns, local cooldown time, collapse control, and neutral hidden rows', async () => {
+    const localTime = vi.spyOn(Date.prototype, 'toLocaleString').mockReturnValue('LOCAL RECOVERY');
+    const longDetail = `redacted upstream failure ${'detail '.repeat(30)}`;
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config' ? {
+      providers: {
+        newapi: { api_type: 'chat' },
+        sub2api: { api_type: 'chat' },
+        invalid: { api_type: 'chat' },
+        hidden: { api_type: 'chat' },
+      },
+      model_groups: {
+        Main: {
+          providers: [
+            { name: 'newapi', current: true, enabled: true, routing_enabled: true, status: 'available', error: null, availability: { kind: 'percentage', value: 0, band: 'red' }, rate_multiplier: 0 },
+            { name: 'sub2api', current: false, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: longDetail, cooldown_recovery_at_ms: 1787500000000, availability: { kind: 'concurrency', value: 25, maximum: 100, band: 'yellow' }, rate_multiplier: 0.08 },
+            { name: 'invalid', current: false, enabled: false, routing_enabled: true, status: 'disabled', error: 'Provider configuration is invalid', availability: null, rate_multiplier: null },
+            { name: 'hidden', current: false, enabled: true, routing_enabled: false, status: 'available', error: null, availability: { kind: 'percentage', value: 99, band: 'green' }, rate_multiplier: 2 },
+          ],
+          type: 'llm', models: { 'demo-model': {} },
+        },
+      },
+      tool_profile_presets: [],
+    } : { cursor: 0, events: [] }));
+    try {
+      render(ModelsPage);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      expect(dialog.getByRole('columnheader', { name: 'Provider / participation' })).toBeInTheDocument();
+      expect(dialog.getByRole('columnheader', { name: 'Availability' })).toBeInTheDocument();
+      expect(dialog.getByRole('columnheader', { name: 'Multiplier' })).toBeInTheDocument();
+      const providerRow = (name: string): HTMLTableRowElement => dialog.getByRole('button', { name: `Drag provider ${name}` }).closest('tr') as HTMLTableRowElement;
+
+      expect(providerRow('newapi')).toHaveClass('suu-sortable-table-enhanced__row--green');
+      expect(providerRow('newapi')).toHaveTextContent('Available');
+      expect(providerRow('newapi')).toHaveTextContent('0%');
+      expect(providerRow('newapi')).toHaveTextContent('0x');
+      expect(providerRow('newapi').querySelector('.availability-red')).toHaveTextContent('0%');
+
+      const coolingRow = providerRow('sub2api');
+      expect(coolingRow).toHaveClass('suu-sortable-table-enhanced__row--yellow');
+      expect(coolingRow).toHaveTextContent('Cooling');
+      expect(coolingRow).toHaveTextContent('25 / 100');
+      expect(coolingRow).toHaveTextContent('0.08x');
+      expect(coolingRow).toHaveTextContent('Recovers at LOCAL RECOVERY');
+      const detail = coolingRow.querySelector('.model-group-provider-detail')!;
+      expect(detail).not.toHaveClass('expanded');
+      const expand = within(coolingRow).getByRole('button', { name: 'Expand cooldown detail for sub2api' });
+      expect(expand).toHaveAttribute('aria-expanded', 'false');
+      await fireEvent.click(expand);
+      expect(detail).toHaveClass('expanded');
+      expect(within(coolingRow).getByRole('button', { name: 'Collapse cooldown detail for sub2api' })).toHaveAttribute('aria-expanded', 'true');
+
+      expect(providerRow('invalid')).toHaveClass('suu-sortable-table-enhanced__row--red');
+      expect(providerRow('invalid')).toHaveTextContent('Not scheduled');
+      expect(providerRow('invalid')).toHaveTextContent('Provider configuration is invalid');
+      expect(providerRow('invalid')).toHaveTextContent('—');
+
+      const hiddenRow = providerRow('hidden');
+      expect(hiddenRow).not.toHaveClass('suu-sortable-table-enhanced__row--green');
+      expect(hiddenRow).not.toHaveTextContent('Available');
+      expect(hiddenRow).not.toHaveTextContent('99%');
+      expect(hiddenRow).not.toHaveTextContent('2x');
+      expect(within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' })).not.toBeChecked();
+    } finally {
+      localTime.mockRestore();
+    }
+  });
+
+  it('live-merges only matching runtime fields while preserving reordered edited drafts', async () => {
+    vi.useFakeTimers();
+    const initial = {
+      providers: { first: { api_type: 'chat' }, second: { api_type: 'chat' }, third: { api_type: 'chat' } },
+      model_groups: { Main: { providers: [
+        { name: 'first', current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
+        { name: 'second', current: false, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 },
+      ], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    };
+    const refreshed = {
+      ...initial,
+      model_groups: { Main: { ...initial.model_groups.Main, providers: [
+        { name: 'second', current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'server cooldown', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 0.2 },
+        { name: 'first', current: false, enabled: true, routing_enabled: true, status: 'disabled', error: null, rate_multiplier: 0.4 },
+      ] } },
+    };
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return Promise.resolve(++configReads === 1 ? initial : refreshed);
+      return Promise.resolve({ cursor: 0, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      await selectDropdown(dialog.getAllByLabelText('Select Provider')[0], 'third');
+      await fireEvent.click(dialog.getByRole('radio', { name: 'Current provider third' }));
+      await fireEvent.click(dialog.getByRole('checkbox', { name: 'Allow second in model group routing' }));
+      await fireEvent.input(dialog.getByLabelText('Exposed model'), { target: { value: 'draft-model' } });
+      const source = dialog.getByRole('button', { name: 'Drag provider second' });
+      const target = dialog.getByRole('button', { name: 'Drag provider third' }).closest('tr')!;
+      const dataTransfer = transfer();
+      await dragAt(source, 'dragstart', dataTransfer);
+      Object.defineProperty(target, 'getBoundingClientRect', { value: () => ({ top: 0, height: 100 }) });
+      await dragAt(target, 'dragover', dataTransfer, 25);
+      await dragAt(target, 'drop', dataTransfer, 25);
+
+      await vi.advanceTimersByTimeAsync(2000);
+      await tick();
+      expect(configReads).toBe(2);
+      const thirdRow = dialog.getByRole('button', { name: 'Drag provider third' }).closest('tr')!;
+      expect(thirdRow).toHaveTextContent('Available');
+      expect(thirdRow).not.toHaveTextContent('0.4x');
+      expect(dialog.getByRole('radio', { name: 'Current provider third' })).toBeChecked();
+      expect(dialog.getByRole('checkbox', { name: 'Allow second in model group routing' })).not.toBeChecked();
+      expect(dialog.getByLabelText('Exposed model')).toHaveValue('draft-model');
+
+      await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+      await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/model-groups/Main', {
+        providers: [{ provider: 'second', enabled: false }, 'third'], current_provider: 'third', type: 'llm', models: { 'draft-model': {} },
+      }));
+    } finally {
+      vi.useRealTimers();
+      apiMock.get.mockReset();
+    }
+  });
+
+  it('ignores a runtime response from a closed editor generation after reopen', async () => {
+    vi.useFakeTimers();
+    const runtime = deferred<Record<string, unknown>>();
+    const initial = {
+      providers: { first: { api_type: 'chat' } },
+      model_groups: { Main: { providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'available', error: null, rate_multiplier: 1 }], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    };
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => {
+      if (path === '/admin/api/config') return ++configReads === 1 ? Promise.resolve(initial) : runtime.promise;
+      return Promise.resolve({ cursor: 0, events: [] });
+    });
+    try {
+      render(ModelsPage);
+      await vi.advanceTimersByTimeAsync(0);
+      await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(configReads).toBe(2);
+      await fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      runtime.resolve({ ...initial, model_groups: { Main: { ...initial.model_groups.Main, providers: [{ name: 'first', current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: 'stale cooldown', cooldown_recovery_at_ms: 1787500000000, rate_multiplier: 0.2 }] } } });
+      await vi.advanceTimersByTimeAsync(0);
+      await tick();
+      const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+      const row = dialog.getByRole('button', { name: 'Drag provider first' }).closest('tr')!;
+      expect(row).toHaveTextContent('Available');
+      expect(row).not.toHaveTextContent('stale cooldown');
+      expect(row).toHaveTextContent('1x');
+    } finally {
+      vi.useRealTimers();
+      apiMock.get.mockReset();
+    }
+  });
+
   it('persists a non-first current provider through the ordered provider contract', async () => {
     const initial = {
       providers: {
@@ -1966,7 +2128,10 @@ describe('ModelsPage', () => {
         },
       },
     };
-    apiMock.get.mockResolvedValueOnce(initial).mockResolvedValueOnce(saved);
+    let configReads = 0;
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config'
+      ? (++configReads === 1 ? initial : saved)
+      : { cursor: 0, events: [] }));
     render(ModelsPage);
 
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
