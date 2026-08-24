@@ -141,7 +141,8 @@ test('keeps model mapping actions inside the model-group dialog', async ({ page 
 });
 
 test('wraps collapsed and expanded model-group cooldown detail inside the status column', async ({ page }) => {
-  const cooldownDetail = `Redacted upstream failure ${'with a deliberately long safe detail segment '.repeat(18)}`;
+  const cooldownDetail = '错误已脱敏请等待恢复后重试。'.repeat(7);
+  expect(cooldownDetail.length).toBeLessThanOrEqual(120);
   const config = {
     providers: { upstream: { provider: 'moonshot', base_url: 'https://api.moonshot.ai/v1', api_type: 'responses', auto_rotate_credentials: true } },
     models: { 'demo-model': { provider: 'upstream' } },

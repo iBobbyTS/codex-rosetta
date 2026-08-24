@@ -2013,6 +2013,29 @@ describe('ModelsPage', () => {
     }
   });
 
+  it('makes a short CJK cooldown detail fully reachable through the accessible toggle', async () => {
+    const detailText = '上游返回暂时不可用，请等待冷却完成后重试。该错误内容已经过服务端脱敏处理。';
+    expect(detailText.length).toBeLessThanOrEqual(120);
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config' ? {
+      providers: { cjk: { api_type: 'chat', auto_rotate_credentials: true } },
+      model_groups: { Main: { providers: [{ name: 'cjk', auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: detailText, cooldown_recovery_at_ms: 1787500000000, availability: null, rate_multiplier: 1 }], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    } : { cursor: 0, events: [] }));
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    const providerRow = dialog.getByRole('button', { name: 'Drag provider cjk' }).closest('tr')!;
+    const detail = within(providerRow).getByText(detailText, { exact: true }).closest('.model-group-provider-detail')!;
+    const expand = within(providerRow).getByRole('button', { name: 'Expand cooldown detail for cjk' });
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    expect(detail).not.toHaveClass('expanded');
+    expect(detail).toHaveTextContent(detailText);
+    await fireEvent.click(expand);
+    expect(detail).toHaveClass('expanded');
+    expect(detail).toHaveTextContent(detailText);
+    expect(within(providerRow).getByRole('button', { name: 'Collapse cooldown detail for cjk' })).toHaveAttribute('aria-expanded', 'true');
+  });
+
   it('live-merges only matching runtime fields while preserving reordered edited drafts', async () => {
     vi.useFakeTimers();
     const initial = {
