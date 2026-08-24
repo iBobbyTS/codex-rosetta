@@ -139,3 +139,56 @@ test('keeps model mapping actions inside the model-group dialog', async ({ page 
   expect(removeBox).not.toBeNull();
   expect(removeBox!.x + removeBox!.width).toBeLessThanOrEqual(rowBox!.x + rowBox!.width);
 });
+
+test('wraps collapsed and expanded model-group cooldown detail inside the status column', async ({ page }) => {
+  const cooldownDetail = `Redacted upstream failure ${'with a deliberately long safe detail segment '.repeat(18)}`;
+  const config = {
+    providers: { upstream: { provider: 'moonshot', base_url: 'https://api.moonshot.ai/v1', api_type: 'responses', auto_rotate_credentials: true } },
+    models: { 'demo-model': { provider: 'upstream' } },
+    model_groups: { Main: { providers: [{ name: 'upstream', auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'cooling', error: null, cooldown_detail: cooldownDetail, cooldown_recovery_at_ms: Date.now() + 60_000, availability: null, rate_multiplier: 1 }], type: 'llm', models: { 'demo-model': {} } } },
+    known_api_types: ['responses', 'chat', 'anthropic', 'google'], registered_shims: [], tool_profile_presets: [], model_presets: [], server: { request_body_limit_mb: 128 },
+  };
+  await page.route('**/admin/api/config', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(config) }));
+
+  for (const viewport of [{ width: 1280, height: 900 }, { width: 658, height: 850 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/admin/admin.html');
+    await page.getByRole('link', { name: 'Models' }).click();
+    await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Edit Model Group' });
+    const status = dialog.locator('.model-group-provider-status');
+    const detail = status.locator('.model-group-provider-detail');
+    const collapsed = await detail.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        whiteSpace: style.whiteSpace,
+        lineHeight: Number.parseFloat(style.lineHeight),
+        height: element.getBoundingClientRect().height,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      };
+    });
+    expect(collapsed.whiteSpace).toBe('normal');
+    expect(collapsed.height).toBeGreaterThan(collapsed.lineHeight);
+    expect(collapsed.height).toBeLessThanOrEqual(collapsed.lineHeight * 2.2);
+    expect(collapsed.scrollWidth).toBeLessThanOrEqual(collapsed.clientWidth + 1);
+
+    await dialog.getByRole('button', { name: 'Expand cooldown detail for upstream' }).click();
+    const expanded = await status.evaluate((cell) => {
+      const detailElement = cell.querySelector('.model-group-provider-detail') as HTMLElement;
+      const cellBox = cell.getBoundingClientRect();
+      const detailBox = detailElement.getBoundingClientRect();
+      return {
+        whiteSpace: getComputedStyle(detailElement).whiteSpace,
+        cellRight: cellBox.right,
+        detailRight: detailBox.right,
+        clientWidth: detailElement.clientWidth,
+        scrollWidth: detailElement.scrollWidth,
+      };
+    });
+    expect(expanded.whiteSpace).toBe('normal');
+    expect(expanded.scrollWidth).toBeLessThanOrEqual(expanded.clientWidth + 1);
+    expect(expanded.detailRight).toBeLessThanOrEqual(expanded.cellRight + 1);
+  }
+});
