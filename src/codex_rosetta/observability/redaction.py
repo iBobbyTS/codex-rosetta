@@ -150,20 +150,10 @@ def _iter_diagnostic_strings(values: Iterable[Any]) -> Iterable[_DiagnosticPart]
 def _diagnostic_alternatives(
     alternatives: Iterable[tuple[_DiagnosticPart, ...]],
 ) -> tuple[_DiagnosticPart, ...]:
-    def _flatten(
-        alternative: tuple[_DiagnosticPart, ...],
-    ) -> Iterable[tuple[_DiagnosticPart, ...]]:
-        if len(alternative) == 1 and isinstance(alternative[0], _DiagnosticChoice):
-            for nested in alternative[0].alternatives:
-                yield from _flatten(nested)
-            return
-        yield alternative
-
     unique: list[tuple[_DiagnosticPart, ...]] = []
     for alternative in alternatives:
-        for candidate in _flatten(alternative):
-            if candidate not in unique:
-                unique.append(candidate)
+        if alternative not in unique:
+            unique.append(alternative)
     if len(unique) == 1:
         return unique[0]
     return (_DiagnosticChoice(tuple(unique)),)
@@ -172,16 +162,18 @@ def _diagnostic_alternatives(
 def _iter_diagnostic_text(value: str) -> Iterable[_DiagnosticPart]:
     """Yield consumer-visible strings from plain, JSON, or SSE diagnostic text."""
 
-    def _iter_sse_data(data: str) -> tuple[_DiagnosticPart, ...]:
+    def _sse_data_alternatives(
+        data: str,
+    ) -> tuple[tuple[_DiagnosticPart, ...], ...]:
         try:
             parsed_data = decode_json_preserving_members(data)
         except json.JSONDecodeError:
-            return (data,)
+            return ((data,),)
         if isinstance(parsed_data, JsonObjectMembers | list):
-            return tuple(_iter_diagnostic_strings((parsed_data,)))
+            return (tuple(_iter_diagnostic_strings((parsed_data,))),)
         if isinstance(parsed_data, str):
-            return _diagnostic_alternatives(((data,), (parsed_data,)))
-        return (data,)
+            return ((data,), (parsed_data,))
+        return ((data,),)
 
     stripped = value.strip()
     if stripped.startswith(("{", "[")):
@@ -222,14 +214,14 @@ def _iter_diagnostic_text(value: str) -> Iterable[_DiagnosticPart]:
                 raw_fragments.append(line_match.group("metadata").removeprefix(" "))
         sse_fragments.extend(frame_prefixes)
         if data_lines:
-            semantic_fragments = (
-                tuple(raw_fragments[: data_positions[0]])
-                + _iter_sse_data("\n".join(data_lines))
-                + tuple(raw_fragments[data_positions[-1] + 1 :])
+            semantic_prefix = tuple(raw_fragments[: data_positions[0]])
+            semantic_suffix = tuple(raw_fragments[data_positions[-1] + 1 :])
+            frame_alternatives = [tuple(raw_fragments)]
+            frame_alternatives.extend(
+                semantic_prefix + data_alternative + semantic_suffix
+                for data_alternative in _sse_data_alternatives("\n".join(data_lines))
             )
-            sse_fragments.extend(
-                _diagnostic_alternatives((tuple(raw_fragments), semantic_fragments))
-            )
+            sse_fragments.extend(_diagnostic_alternatives(frame_alternatives))
         else:
             sse_fragments.extend(raw_fragments)
         parsed_sse = parsed_sse or bool(data_lines)

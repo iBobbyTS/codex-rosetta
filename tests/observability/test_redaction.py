@@ -512,15 +512,32 @@ def test_contains_ordered_fragments_deduplicates_json_string_paths() -> None:
     assert not SecretRedactor({"y" * 100}).contains_ordered_fragments((diagnostic,))
 
 
+def test_contains_ordered_fragments_deduplicates_metadata_json_string_paths() -> None:
+    frame = f'event: ordinary\ndata: "{"x" * 80}"\n\n'
+    diagnostic = frame * 1_000
+
+    assert not SecretRedactor({"y" * 100}).contains_ordered_fragments((diagnostic,))
+
+
 def test_sse_json_string_choice_has_unique_canonical_alternatives() -> None:
     from codex_rosetta.observability.redaction import (
         _DiagnosticChoice,
         _iter_diagnostic_text,
     )
 
-    parts = tuple(_iter_diagnostic_text('data: "ordinary"\n\n'))
+    parts = tuple(_iter_diagnostic_text('event: metadata\ndata: "ordinary"\n\n'))
+    choice = parts[0]
 
-    assert parts == (_DiagnosticChoice((('"ordinary"',), ("ordinary",))),)
+    assert isinstance(choice, _DiagnosticChoice)
+    assert choice.alternatives == (
+        ("metadata", '"ordinary"'),
+        ("metadata", "ordinary"),
+    )
+    assert all(
+        isinstance(fragment, str)
+        for alternative in choice.alternatives
+        for fragment in alternative
+    )
 
 
 def test_contains_ordered_fragments_fails_closed_for_realizable_char_overflow() -> None:
