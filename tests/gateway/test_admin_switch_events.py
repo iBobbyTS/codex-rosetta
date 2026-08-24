@@ -110,6 +110,52 @@ def test_automatic_switch_store_exposes_only_events_after_cursor() -> None:
     )
 
 
+def test_automatic_switch_store_uses_ordinary_provider_level_rates() -> None:
+    config = GatewayConfig(
+        {
+            "providers": {
+                name: {
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "request_encoding": "passthrough",
+                    "base_urls": [f"https://{name}.example/v1"],
+                    "api_keys": [
+                        {
+                            "uuid": credential_uuid,
+                            "id": name,
+                            "key": f"sk-{name}",
+                        }
+                    ],
+                    "auto_rotate_credentials": True,
+                    "rate_multiplier": rate,
+                }
+                for name, credential_uuid, rate in (
+                    ("old", "00000000-0000-4000-8000-000000000001", 0.01),
+                    ("new", "00000000-0000-4000-8000-000000000002", 0.08),
+                )
+            },
+            "model_groups": {
+                "fast": {
+                    "provider": ["old", "new"],
+                    "type": "llm",
+                    "models": {"gpt-5.6-terra": {}},
+                }
+            },
+            "server": {
+                "admin_password": "test",
+                "api_keys": [{"id": "client", "key": "client-key"}],
+            },
+        }
+    )
+    ring = config.model_group_rings["fast"]
+    store = AutomaticSwitchEventStore(config)
+
+    asyncio.run(store.record("fast", ring.candidates[0], ring.candidates[1]))
+
+    assert store.after(0)[0]["old_rate"] == 0.01
+    assert store.after(0)[0]["new_rate"] == 0.08
+
+
 def test_initial_cursor_does_not_replay_existing_switches() -> None:
     config = _config()
     ring = config.model_group_rings["fast"]

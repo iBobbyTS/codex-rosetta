@@ -4915,6 +4915,48 @@ def test_get_config_projects_selected_special_availability_and_zero_multiplier(
     assert row["rate_multiplier"] == 0
 
 
+@pytest.mark.parametrize("rate_multiplier", [0, 0.25])
+def test_get_config_projects_ordinary_automatic_provider_multiplier(
+    tmp_path, rate_multiplier
+):
+    config = _config_data()
+    config["providers"]["openai"].update(
+        rate_multiplier=rate_multiplier,
+        api_keys=[
+            config["providers"]["openai"]["api_keys"][0],
+            {
+                "uuid": _SECONDARY_CREDENTIAL_UUID,
+                "id": "secondary",
+                "key": "sk-secondary",
+            },
+        ],
+    )
+    runtime_config = GatewayConfig(config)
+    asyncio.run(runtime_config.providers["openai"].select_credential("secondary"))
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(config), encoding="utf-8")
+
+    response = _run(
+        get_config(
+            SimpleNamespace(
+                app=SimpleNamespace(
+                    config_path=str(config_path),
+                    gateway_config=runtime_config,
+                )
+            )
+        )
+    )
+
+    row = json.loads(response.body)["model_groups"]["OpenAI"]["providers"][0]
+    assert row["rate_multiplier"] == rate_multiplier
+    assert (
+        runtime_config.model_group_candidate_multiplier(
+            runtime_config.model_group_rings["OpenAI"].current
+        )
+        == rate_multiplier
+    )
+
+
 def test_put_model_group_persists_exact_provider_order_and_activates_first(tmp_path):
     config = _config_data()
     config["providers"]["secondary"] = {

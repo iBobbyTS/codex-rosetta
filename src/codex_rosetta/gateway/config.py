@@ -1969,7 +1969,14 @@ class GatewayConfig:
     def model_group_candidate_multiplier(
         self, candidate: _ModelGroupProviderCandidate
     ) -> float:
-        """Return one candidate's persisted effective credential multiplier."""
+        """Return one candidate's persisted effective multiplier."""
+        provider_config = self._all_raw_providers.get(candidate.provider_name)
+        if (
+            isinstance(provider_config, Mapping)
+            and provider_config.get("openai_variant") not in {"sub2api", "new_api"}
+            and provider_config.get("auto_rotate_credentials") is True
+        ):
+            return float(provider_config.get("rate_multiplier", 1.0))
         provider = self.providers.get(candidate.provider_name)
         if provider is None:
             return 1.0

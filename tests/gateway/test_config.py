@@ -413,6 +413,64 @@ def test_local_mode_defaults_to_enabled_and_unconfirmed() -> None:
     assert config.local_mode_confirmed is False
 
 
+@pytest.mark.parametrize(
+    ("configured_rate", "expected_rate", "preferred_index"),
+    [(None, 1.0, 1), (0, 0.0, 0), (0.01, 0.01, 0), (0.25, 0.25, 1)],
+)
+def test_ordinary_automatic_candidate_multiplier_uses_provider_rate(
+    configured_rate: float | None, expected_rate: float, preferred_index: int
+) -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"]["api_keys"].append(
+        {
+            "uuid": "00000000-0000-4000-8000-000000000002",
+            "id": "secondary",
+            "key": "sk-secondary",
+        }
+    )
+    if configured_rate is not None:
+        raw["providers"]["test"]["rate_multiplier"] = configured_rate
+    raw["providers"]["second"] = {
+        **raw["providers"]["test"],
+        "api_keys": [
+            {
+                "uuid": "00000000-0000-4000-8000-000000000003",
+                "id": "primary",
+                "key": "sk-second",
+                "rate_multiplier": 0.08,
+            }
+        ],
+        "base_urls": ["https://second.example.com"],
+        "current_base_url": "https://second.example.com",
+        "auto_rotate_credentials": False,
+    }
+    raw["providers"]["second"].pop("rate_multiplier", None)
+    raw["model_groups"]["test-llm"]["provider"] = [
+        "test",
+        {
+            "provider": "second",
+            "credential_uuid": "00000000-0000-4000-8000-000000000003",
+        },
+    ]
+    config = GatewayConfig(raw)
+    ring = config.model_group_rings["test-llm"]
+    candidate = ring.candidates[0]
+
+    assert config.model_group_candidate_multiplier(candidate) == expected_rate
+    assert (
+        config.preferred_model_group_candidate("test-llm")
+        == ring.candidates[preferred_index]
+    )
+
+    asyncio.run(config.providers["test"].select_credential("secondary"))
+
+    assert config.model_group_candidate_multiplier(candidate) == expected_rate
+    assert (
+        config.preferred_model_group_candidate("test-llm")
+        == ring.candidates[preferred_index]
+    )
+
+
 def test_special_provider_candidate_uses_automatic_times_adjustment() -> None:
     raw = _minimal_raw()
     raw["providers"]["test"].update(
