@@ -362,9 +362,7 @@ class StreamTraceLogger:
         """Append a prepared record batch to the configured JSONL path."""
         try:
             self._ensure_parent_directory()
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "a", encoding="utf-8") as fh:
+            with self._open_append_target() as fh:
                 fh.write("".join(lines))
         except OSError as exc:
             self._write_health.record_failure(exc)
@@ -375,15 +373,27 @@ class StreamTraceLogger:
         """Append a prepared trace spool without materializing it in memory."""
         try:
             self._ensure_parent_directory()
-            fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "a", encoding="utf-8") as target:
+            with self._open_append_target() as target:
                 while chunk := source.read(1_048_576):
                     target.write(chunk)
         except OSError as exc:
             self._write_health.record_failure(exc)
         else:
             self._write_health.record_success()
+
+    def _open_append_target(self) -> TextIO:
+        """Open the append target and transfer ownership of its raw descriptor."""
+        fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+            target = os.fdopen(fd, "a", encoding="utf-8")
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            raise
+        return target
 
     def _ensure_parent_directory(self) -> None:
         """Create the owner-only trace directory when it does not yet exist."""

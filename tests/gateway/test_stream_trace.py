@@ -629,6 +629,71 @@ def test_stream_trace_write_outage_is_shared_and_concurrency_safe(
     ]
 
 
+@pytest.mark.parametrize("append_path", ["lines", "file"])
+@pytest.mark.parametrize("failure_point", ["fchmod", "fdopen"])
+def test_stream_trace_pre_fdopen_failure_closes_raw_fd_on_every_retry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    append_path: str,
+    failure_point: str,
+) -> None:
+    """Pre-transfer append failures close each raw fd without repeated warnings."""
+    trace_path = tmp_path / "pre-fdopen-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="request",
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    opened_fds: list[int] = []
+    closed_fds: list[int] = []
+
+    def controlled_open(path: Any, flags: int, mode: int = 0o777) -> int:
+        assert Path(path) == trace_path
+        assert (
+            flags
+            == stream_trace.os.O_WRONLY
+            | stream_trace.os.O_CREAT
+            | stream_trace.os.O_APPEND
+        )
+        assert mode == 0o600
+        fd = 100 + len(opened_fds)
+        opened_fds.append(fd)
+        return fd
+
+    def controlled_fchmod(fd: int, mode: int) -> None:
+        assert fd in opened_fds
+        assert mode == 0o600
+        if failure_point == "fchmod":
+            raise OSError("pre-transfer unavailable")
+
+    def controlled_fdopen(fd: int, *args: Any, **kwargs: Any) -> Any:
+        assert fd in opened_fds
+        raise OSError("pre-transfer unavailable")
+
+    monkeypatch.setattr(stream_trace.os, "open", controlled_open)
+    monkeypatch.setattr(stream_trace.os, "fchmod", controlled_fchmod)
+    monkeypatch.setattr(stream_trace.os, "fdopen", controlled_fdopen)
+    monkeypatch.setattr(stream_trace.os, "close", closed_fds.append)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+
+    for index in range(2):
+        if append_path == "lines":
+            trace.log("failed", {"index": index})
+        else:
+            trace._append_file(io.StringIO(f"record-{index}\n"))
+
+    assert opened_fds == [100, 101]
+    assert closed_fds == opened_fds
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: pre-transfer unavailable"
+    ]
+
+
 def test_stream_trace_path_assignment_silences_old_logger_events(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
