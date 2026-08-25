@@ -158,6 +158,9 @@ test('wraps collapsed and expanded model-group cooldown detail inside the status
     await page.getByRole('button', { name: 'Edit', exact: true }).click();
 
     const dialog = page.getByRole('dialog', { name: 'Edit Model Group' });
+    const providerTable = dialog.locator('.model-group-provider-table table');
+    await expect(providerTable).toHaveCSS('table-layout', 'auto');
+    await expect(dialog.locator('.model-group-provider-heading')).not.toHaveAttribute('style');
     const status = dialog.locator('.model-group-provider-status');
     const detail = status.locator('.model-group-provider-detail');
     const collapsed = await detail.evaluate((element) => {

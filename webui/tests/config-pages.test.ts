@@ -1970,10 +1970,10 @@ describe('ModelsPage', () => {
       expect(headings[4]).toHaveClass('model-group-multiplier-heading');
       expect(headings[5]).toHaveClass('suu-sortable-table__remove-column');
       expect(headings[0]).not.toHaveAttribute('style');
-      expect(getComputedStyle(headings[1]).width).toBe('42%');
-      expect(getComputedStyle(headings[2]).width).toBe('30%');
-      expect(getComputedStyle(headings[3]).width).toBe('18%');
-      expect(getComputedStyle(headings[4]).width).toBe('10%');
+      expect(headings[1]).not.toHaveAttribute('style');
+      expect(headings[2]).not.toHaveAttribute('style');
+      expect(headings[3]).not.toHaveAttribute('style');
+      expect(headings[4]).not.toHaveAttribute('style');
       expect(headings[5]).not.toHaveAttribute('style');
       const providerRow = (name: string): HTMLTableRowElement => dialog.getByRole('button', { name: `Drag provider ${name}` }).closest('tr') as HTMLTableRowElement;
 
