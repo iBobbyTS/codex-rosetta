@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analyze Huge JSONL"
+  short_description: "Safely split and inspect huge JSONL logs"
+  default_prompt: "Use $analyze-huge-jsonl to safely split and inspect a huge JSONL log."
