@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -68,6 +69,38 @@ class PreparedStreamTraceUpdate:
     redactor: SecretRedactor
 
 
+class _StreamTraceWriteHealth:
+    """Concurrency-safe outage notifications for one configured trace path."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._lock = threading.Lock()
+        self._active = True
+        self._outage = False
+
+    def deactivate(self) -> None:
+        """Silence events from loggers retained after a path replacement."""
+        with self._lock:
+            self._active = False
+            self._outage = False
+
+    def record_failure(self, error: OSError) -> None:
+        """Report only the first failure in the current outage cycle."""
+        with self._lock:
+            if not self._active or self._outage:
+                return
+            self._outage = True
+            logger.warning("Stream trace writing paused after failure: %s", error)
+
+    def record_success(self) -> None:
+        """Report only the first successful write after an outage."""
+        with self._lock:
+            if not self._active or not self._outage:
+                return
+            self._outage = False
+            logger.warning("Stream trace writing resumed: %s", self.path)
+
+
 class StreamTraceState:
     """Mutable stream trace settings used by the running gateway."""
 
@@ -77,8 +110,29 @@ class StreamTraceState:
         *,
         token_values: Iterable[str] = (),
     ) -> None:
-        self.config = config or StreamTraceConfig()
+        self._state_lock = threading.Lock()
+        self._config = config or StreamTraceConfig()
+        self._write_health = _StreamTraceWriteHealth(
+            _resolve_trace_path(self._config.path)
+        )
         self._redactor = SecretRedactor(token_values)
+
+    @property
+    def config(self) -> StreamTraceConfig:
+        """Return the current runtime trace configuration."""
+        with self._state_lock:
+            return self._config
+
+    @config.setter
+    def config(self, config: StreamTraceConfig) -> None:
+        """Assign trace settings and silently reset health when the path changes."""
+        path = _resolve_trace_path(config.path)
+        with self._state_lock:
+            self._config = config
+            if path == self._write_health.path:
+                return
+            self._write_health.deactivate()
+            self._write_health = _StreamTraceWriteHealth(path)
 
     def prepare_update(
         self,
@@ -118,7 +172,10 @@ class StreamTraceState:
         force: bool = False,
     ) -> StreamTraceLogger | None:
         """Create a trace logger for one stream if current settings match."""
-        config = self.config
+        with self._state_lock:
+            config = self._config
+            redactor = self._redactor
+            write_health = self._write_health
         if not config.enabled:
             return None
 
@@ -140,7 +197,8 @@ class StreamTraceState:
             target_provider=target_provider,
             provider_name=provider_name,
             max_string_chars=config.max_string_chars,
-            redactor=self._redactor,
+            redactor=redactor,
+            write_health=write_health,
         )
 
 
@@ -159,6 +217,7 @@ class StreamTraceLogger:
         provider_name: str,
         max_string_chars: int = DEFAULT_MAX_CHARS,
         redactor: SecretRedactor | None = None,
+        write_health: _StreamTraceWriteHealth | None = None,
     ) -> None:
         self.path = path
         self.request_id = request_id
@@ -169,7 +228,7 @@ class StreamTraceLogger:
         self.provider_name = provider_name
         self.max_string_chars = max_string_chars
         self._redactor = redactor or SecretRedactor()
-        self._disabled = False
+        self._write_health = write_health or _StreamTraceWriteHealth(path)
         self._defer_response = False
         self._pending_response_file: TextIO | None = None
 
@@ -178,20 +237,23 @@ class StreamTraceLogger:
         if self._defer_response:
             raise RuntimeError("Stream response diagnostics are already deferred")
         self._defer_response = True
+        self._open_pending_response_file()
+
+    def _open_pending_response_file(self) -> TextIO | None:
+        """Open a deferred spool while keeping later trace attempts retryable."""
         try:
             self._ensure_parent_directory()
-            self._pending_response_file = tempfile.TemporaryFile(
+            pending_file = tempfile.TemporaryFile(
                 mode="w+",
                 encoding="utf-8",
                 newline="",
                 dir=self.path.parent,
             )
         except OSError as exc:
-            self._defer_response = False
-            self._disabled = True
-            logger.warning(
-                "Disabling stream trace after deferred spool failure: %s", exc
-            )
+            self._write_health.record_failure(exc)
+            return None
+        self._pending_response_file = pending_file
+        return pending_file
 
     def finish_response_diagnostics(
         self,
@@ -212,18 +274,14 @@ class StreamTraceLogger:
                     pending_file.flush()
                     pending_file.seek(0)
                 except OSError as exc:
-                    self._disabled = True
-                    logger.warning(
-                        "Disabling stream trace after deferred spool failure: %s",
-                        exc,
-                    )
+                    self._write_health.record_failure(exc)
                 else:
                     self._append_file(pending_file)
         finally:
             try:
                 pending_file.close()
-            except OSError as exc:
-                logger.warning("Failed to close deferred stream trace spool: %s", exc)
+            except OSError:
+                pass
 
     def log(
         self,
@@ -234,9 +292,6 @@ class StreamTraceLogger:
         response_redaction: Literal["exact", "protocol_fields"] = "exact",
     ) -> None:
         """Append one trace record to the JSONL file."""
-        if self._disabled:
-            return
-
         use_protocol_fields = (
             self._defer_response or response_redaction == "protocol_fields"
         )
@@ -262,20 +317,20 @@ class StreamTraceLogger:
         if self._defer_response:
             pending_file = self._pending_response_file
             if pending_file is None:
-                return
+                pending_file = self._open_pending_response_file()
+                if pending_file is None:
+                    return
             try:
                 pending_file.write(line)
             except OSError as exc:
-                self._defer_response = False
                 self._pending_response_file = None
-                self._disabled = True
                 try:
                     pending_file.close()
                 except OSError:
                     pass
-                logger.warning(
-                    "Disabling stream trace after deferred spool failure: %s", exc
-                )
+                self._write_health.record_failure(exc)
+            else:
+                self._write_health.record_success()
             return
         self._append_lines([line])
 
@@ -285,7 +340,7 @@ class StreamTraceLogger:
         This is intentionally separate from ``log`` because the enabled trace
         mode keeps the original request body complete instead of truncating it.
         """
-        if self._disabled or self._defer_response:
+        if self._defer_response:
             return
 
         record = {
@@ -312,8 +367,9 @@ class StreamTraceLogger:
             with os.fdopen(fd, "a", encoding="utf-8") as fh:
                 fh.write("".join(lines))
         except OSError as exc:
-            self._disabled = True
-            logger.warning("Disabling stream trace after write failure: %s", exc)
+            self._write_health.record_failure(exc)
+        else:
+            self._write_health.record_success()
 
     def _append_file(self, source: TextIO) -> None:
         """Append a prepared trace spool without materializing it in memory."""
@@ -325,8 +381,9 @@ class StreamTraceLogger:
                 while chunk := source.read(1_048_576):
                     target.write(chunk)
         except OSError as exc:
-            self._disabled = True
-            logger.warning("Disabling stream trace after write failure: %s", exc)
+            self._write_health.record_failure(exc)
+        else:
+            self._write_health.record_success()
 
     def _ensure_parent_directory(self) -> None:
         """Create the owner-only trace directory when it does not yet exist."""

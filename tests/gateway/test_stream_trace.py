@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import json
+import logging
 import stat
+import threading
 from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
@@ -125,6 +129,31 @@ def _direct_responses_body() -> dict[str, Any]:
         "input": [{"type": "message", "role": "user", "content": "hello"}],
         "stream": True,
     }
+
+
+def _create_state_logger(
+    state: StreamTraceState,
+    *,
+    request_id: str = "request",
+) -> StreamTraceLogger:
+    trace = state.create_logger(
+        request_id=request_id,
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    assert trace is not None
+    return trace
+
+
+def _trace_warning_messages(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "codex-rosetta-gateway" and record.levelno == logging.WARNING
+    ]
 
 
 def test_stream_trace_writes_jsonl_for_stream_events(tmp_path):
@@ -528,6 +557,127 @@ def test_stream_trace_state_uses_configured_path(tmp_path):
 
     assert logger is not None
     assert logger.path == trace_path
+
+
+def test_stream_trace_write_outage_is_shared_and_concurrency_safe(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Concurrent request loggers share one pause/recovery transition cycle."""
+    trace_path = tmp_path / "concurrent-recovery.jsonl"
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
+    traces = [
+        _create_state_logger(state, request_id=f"request-{index}") for index in range(8)
+    ]
+    real_open = stream_trace.os.open
+    control_lock = threading.Lock()
+    attempts = 0
+    failing = True
+
+    def controlled_open(path: Any, flags: int, mode: int = 0o777) -> int:
+        nonlocal attempts
+        if Path(path) == trace_path:
+            with control_lock:
+                attempts += 1
+                should_fail = failing
+            if should_fail:
+                raise OSError("trace volume unavailable")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(stream_trace.os, "open", controlled_open)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+
+    with ThreadPoolExecutor(max_workers=len(traces)) as executor:
+        list(
+            executor.map(
+                lambda item: item[1].log("failed", {"index": item[0]}),
+                enumerate(traces),
+            )
+        )
+
+    assert attempts == len(traces)
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: trace volume unavailable"
+    ]
+
+    failing = False
+    with ThreadPoolExecutor(max_workers=len(traces)) as executor:
+        list(
+            executor.map(
+                lambda item: item[1].log("recovered", {"index": item[0]}),
+                enumerate(traces),
+            )
+        )
+
+    assert attempts == len(traces) * 2
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: trace volume unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert len(records) == len(traces)
+    assert {record["stage"] for record in records} == {"recovered"}
+
+    failing = True
+    traces[0].log("failed-again", {})
+    failing = False
+    traces[0].log("recovered-again", {})
+    assert _trace_warning_messages(caplog)[-2:] == [
+        "Stream trace writing paused after failure: trace volume unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+
+
+def test_stream_trace_path_assignment_silences_old_logger_events(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Assignment-only path changes isolate late old-path success and failure."""
+    old_path = tmp_path / "old.jsonl"
+    new_path = tmp_path / "new.jsonl"
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(old_path)))
+    old_trace = _create_state_logger(state, request_id="old")
+    real_open = stream_trace.os.open
+    failing_paths = {old_path}
+
+    def controlled_open(path: Any, flags: int, mode: int = 0o777) -> int:
+        if Path(path) in failing_paths:
+            raise OSError(f"cannot write {Path(path).name}")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(stream_trace.os, "open", controlled_open)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+
+    old_trace.log("old-failure", {})
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: cannot write old.jsonl"
+    ]
+
+    state.config = StreamTraceConfig(enabled=True, path=str(new_path))
+    new_trace = _create_state_logger(state, request_id="new")
+    caplog.clear()
+    old_trace.log("old-late-failure", {})
+    failing_paths.remove(old_path)
+    old_trace.log("old-late-success", {})
+    new_trace.log("new-first-success", {})
+    assert _trace_warning_messages(caplog) == []
+
+    failing_paths.add(new_path)
+    new_trace.log("new-failure", {})
+    failing_paths.remove(new_path)
+    new_trace.log("new-recovery", {})
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: cannot write new.jsonl",
+        f"Stream trace writing resumed: {new_path}",
+    ]
+    assert [
+        json.loads(line)["stage"] for line in old_path.read_text().splitlines()
+    ] == ["old-late-success"]
+    assert [
+        json.loads(line)["stage"] for line in new_path.read_text().splitlines()
+    ] == ["new-first-success", "new-recovery"]
 
 
 def test_stream_trace_state_does_not_force_logger_when_disabled(tmp_path):
@@ -955,7 +1105,7 @@ def test_deferred_response_trace_spool_failure_does_not_change_stream(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """Trace spool I/O failure disables diagnostics without raising."""
+    """A failed spool creation is retried and reports one recovery."""
     trace_path = tmp_path / "spool-failure.jsonl"
     trace = StreamTraceLogger(
         path=trace_path,
@@ -967,19 +1117,207 @@ def test_deferred_response_trace_spool_failure_does_not_change_stream(
         provider_name="test-provider",
     )
     trace.log("stream_start", {"safe": True})
+    real_temporary_file = stream_trace.tempfile.TemporaryFile
+    spool_attempts = 0
 
     def fail_spool(*args: Any, **kwargs: Any) -> Any:
-        raise OSError("spool unavailable")
+        nonlocal spool_attempts
+        spool_attempts += 1
+        if spool_attempts == 1:
+            raise OSError("spool unavailable")
+        return real_temporary_file(*args, **kwargs)
 
     monkeypatch.setattr(stream_trace.tempfile, "TemporaryFile", fail_spool)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
     trace.defer_response_diagnostics()
     trace.log("upstream_chunk", {"content": "still delivered to client"})
     trace.finish_response_diagnostics(safe=True)
     trace.log("stream_complete", {"stream_outcome": "completed"})
 
     records = [json.loads(line) for line in trace_path.read_text().splitlines()]
-    assert [record["stage"] for record in records] == ["stream_start"]
-    assert "Disabling stream trace after deferred spool failure" in caplog.text
+    assert [record["stage"] for record in records] == [
+        "stream_start",
+        "upstream_chunk",
+        "stream_complete",
+    ]
+    assert spool_attempts == 2
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: spool unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+
+
+def test_deferred_response_trace_retries_after_spool_write_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed spool record is dropped while the next record retries."""
+    trace_path = tmp_path / "spool-write-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-spool-write",
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    real_temporary_file = stream_trace.tempfile.TemporaryFile
+    spool_attempts = 0
+
+    class FailingWriteSpool:
+        def write(self, value: str) -> int:
+            raise OSError("spool write unavailable")
+
+        def close(self) -> None:
+            return None
+
+    def controlled_spool(*args: Any, **kwargs: Any) -> Any:
+        nonlocal spool_attempts
+        spool_attempts += 1
+        if spool_attempts == 1:
+            return FailingWriteSpool()
+        return real_temporary_file(*args, **kwargs)
+
+    monkeypatch.setattr(stream_trace.tempfile, "TemporaryFile", controlled_spool)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+    trace.defer_response_diagnostics()
+    trace.log("dropped", {"content": "first"})
+    trace.log("retained", {"content": "second"})
+    trace.finish_response_diagnostics(safe=True)
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["retained"]
+    assert spool_attempts == 2
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: spool write unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+
+
+def test_deferred_response_trace_flush_failure_recovers_on_next_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed spool release is dropped and a later direct record retries."""
+    trace_path = tmp_path / "spool-flush-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-spool-flush",
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+
+    class FailingFlushSpool(io.StringIO):
+        def flush(self) -> None:
+            raise OSError("spool flush unavailable")
+
+    monkeypatch.setattr(
+        stream_trace.tempfile,
+        "TemporaryFile",
+        lambda *args, **kwargs: FailingFlushSpool(),
+    )
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+    trace.defer_response_diagnostics()
+    trace.log("dropped", {"content": "pending"})
+    trace.finish_response_diagnostics(safe=True)
+    trace.log("recovered", {"content": "safe terminal"})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["recovered"]
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: spool flush unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+
+
+def test_deferred_response_trace_append_failure_recovers_on_next_log(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failed final spool append does not disable later records."""
+    trace_path = tmp_path / "spool-append-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-spool-append",
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+    trace.defer_response_diagnostics()
+    trace.log("dropped", {"content": "pending"})
+    real_open = stream_trace.os.open
+    fail_next_append = True
+
+    def controlled_open(path: Any, flags: int, mode: int = 0o777) -> int:
+        nonlocal fail_next_append
+        if Path(path) == trace_path and fail_next_append:
+            fail_next_append = False
+            raise OSError("trace append unavailable")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(stream_trace.os, "open", controlled_open)
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+    trace.finish_response_diagnostics(safe=True)
+    trace.log("recovered", {"content": "safe terminal"})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == ["recovered"]
+    assert _trace_warning_messages(caplog) == [
+        "Stream trace writing paused after failure: trace append unavailable",
+        f"Stream trace writing resumed: {trace_path}",
+    ]
+
+
+def test_deferred_response_trace_close_failure_is_silent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Closing a released spool neither warns nor changes write health."""
+    trace_path = tmp_path / "spool-close-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-spool-close",
+        request_log_id=None,
+        model="test-model",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test-provider",
+    )
+
+    class CloseFailingSpool(io.StringIO):
+        def close(self) -> None:
+            if self.closed:
+                return
+            super().close()
+            raise OSError("spool close unavailable")
+
+    monkeypatch.setattr(
+        stream_trace.tempfile,
+        "TemporaryFile",
+        lambda *args, **kwargs: CloseFailingSpool(),
+    )
+    caplog.set_level(logging.WARNING, logger="codex-rosetta-gateway")
+    trace.defer_response_diagnostics()
+    trace.log("released", {"content": "safe"})
+    trace.finish_response_diagnostics(safe=True)
+    trace.log("later-success", {})
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "released",
+        "later-success",
+    ]
+    assert _trace_warning_messages(caplog) == []
 
 
 def test_terminal_response_trace_uses_protocol_diagnostic_redaction(
