@@ -75,13 +75,15 @@ class _RoutingClient:
         self.headers: list[dict[str, str]] = []
         self.before_response: dict[str, Any] = {}
 
-    def add(self, url: str, *responses: _FakeStreamingResponse) -> None:
+    def add(self, url: str, *responses: Any) -> None:
         self.responses[url].extend(responses)
 
     async def post(self, url: str, **kwargs: Any) -> _FakeStreamingResponse:
         self.calls.append(url)
         self.headers.append(dict(kwargs.get("headers", {})))
         response = self.responses[url].popleft()
+        if isinstance(response, BaseException):
+            raise response
         hook = self.before_response.get(url)
         if hook is not None:
             await hook()
@@ -130,6 +132,60 @@ def test_provider_success_does_not_round_robin_credentials() -> None:
         credentials=(("first", "key-first"), ("second", "key-second")),
     )
     assert [_auth_key(provider), _auth_key(provider)] == ["key-first", "key-first"]
+
+
+def test_pre_response_connection_failure_uses_url_retry_budget(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            *(
+                transport_module.UpstreamConnectionError("connection refused")
+                for _ in range(6)
+            ),
+        )
+        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+        delays: list[float] = []
+
+        async def retry_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        result = await _transport(
+            monkeypatch, client, retry_sleep=retry_sleep
+        ).send_request(provider, "openai_responses", {}, "model")
+        assert result.status_code == 200
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"]
+        assert delays == [1, 2, 4, 8, 16]
+        assert provider.base_url == second
+        assert writes == [("row-a", second)]
+
+    asyncio.run(scenario())
+
+
+def test_single_url_connection_exhaustion_returns_typed_502(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        provider, _ = _provider("row-a", first)
+        client = _RoutingClient()
+        client.add(
+            f"{first}/responses",
+            *(
+                transport_module.UpstreamConnectionError("dns failure")
+                for _ in range(6)
+            ),
+        )
+        result = await _transport(monkeypatch, client).send_request(
+            provider, "openai_responses", {}, "model"
+        )
+        assert result.status_code == 502
+        assert result.synthetic
+        assert "dns failure" in result.error_text
+        assert client.calls == [f"{first}/responses"] * 6
+
+    asyncio.run(scenario())
 
 
 def test_provider_manual_credential_selection_uses_selected_secret() -> None:

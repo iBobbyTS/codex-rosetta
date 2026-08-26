@@ -381,6 +381,30 @@ def _all_domains_502(count: int) -> bytes:
     ).encode()
 
 
+def _connection_failure_502(exc: UpstreamConnectionError) -> UpstreamResponse:
+    """Represent a pre-response connectivity failure as a 502 attempt."""
+    return UpstreamResponse(
+        status_code=502,
+        body=None,
+        raw_content=json.dumps(
+            {
+                "error": {
+                    "message": str(exc),
+                    "type": "upstream_error",
+                }
+            },
+            separators=(",", ":"),
+        ).encode(),
+    )
+
+
+def _mark_transport_exhausted(result: Any) -> Any:
+    """Mark the final 502 result as typed transport exhaustion in-place."""
+    if hasattr(result, "synthetic"):
+        result.synthetic = True
+    return result
+
+
 def _all_credentials_503(count: int) -> bytes:
     return json.dumps(
         {
@@ -885,7 +909,7 @@ class HttpTransport:
             provider_info.mark_base_url_failed(observed)
             next_url = provider_info.next_available_base_url(observed)
             if next_url is None:
-                return output_of(attempt)
+                return _mark_transport_exhausted(output_of(attempt))
             await provider_info.select_base_url(next_url)
             attempt = await operation()
 
@@ -956,13 +980,22 @@ class HttpTransport:
         async def operation() -> tuple[
             UpstreamResponse, tuple[str, int], tuple[str, int]
         ]:
-            return await self._send_request_observed(
-                provider_info,
-                target_provider,
-                body,
-                model,
-                extra_headers=extra_headers,
-            )
+            try:
+                return await self._send_request_observed(
+                    provider_info,
+                    target_provider,
+                    body,
+                    model,
+                    extra_headers=extra_headers,
+                )
+            except UpstreamConnectionError as exc:
+                if type(exc) is not UpstreamConnectionError:
+                    raise
+                return (
+                    _connection_failure_502(exc),
+                    provider_info.observe_url_rotation(),
+                    provider_info._credential_observed_snapshot()[0],
+                )
 
         return await self._send_with_failover(
             provider_info,
@@ -1065,16 +1098,28 @@ class HttpTransport:
         async def operation() -> tuple[
             HttpUpstreamStream, bool, tuple[str, int], tuple[str, int]
         ]:
-            return await self._send_streaming_observed(
-                provider_info,
-                target_provider,
-                body,
-                model,
-                extra_headers=extra_headers,
-                wire_body=wire_body,
-                wire_headers=wire_headers,
-                failover_enabled=allow_failover,
-            )
+            try:
+                return await self._send_streaming_observed(
+                    provider_info,
+                    target_provider,
+                    body,
+                    model,
+                    extra_headers=extra_headers,
+                    wire_body=wire_body,
+                    wire_headers=wire_headers,
+                    failover_enabled=allow_failover,
+                )
+            except UpstreamConnectionError as exc:
+                if type(exc) is not UpstreamConnectionError:
+                    raise
+                return (
+                    self._synthetic_stream(
+                        502, _connection_failure_502(exc).raw_content
+                    ),
+                    True,
+                    provider_info.observe_url_rotation(),
+                    provider_info._credential_observed_snapshot()[0],
+                )
 
         return await self._send_with_failover(
             provider_info,
@@ -1233,13 +1278,22 @@ class HttpTransport:
         async def operation() -> tuple[
             UpstreamResponse, tuple[str, int], tuple[str, int]
         ]:
-            return await self._send_passthrough_observed(
-                provider_info,
-                url,
-                body,
-                extra_headers=extra_headers,
-                method=method,
-            )
+            try:
+                return await self._send_passthrough_observed(
+                    provider_info,
+                    url,
+                    body,
+                    extra_headers=extra_headers,
+                    method=method,
+                )
+            except UpstreamConnectionError as exc:
+                if type(exc) is not UpstreamConnectionError:
+                    raise
+                return (
+                    _connection_failure_502(exc),
+                    provider_info.observe_url_rotation(),
+                    provider_info._credential_observed_snapshot()[0],
+                )
 
         return await self._send_with_failover(
             provider_info,
@@ -1310,6 +1364,12 @@ class HttpTransport:
             provider_info.proxy_url,
             allow_redirects=provider_info.allow_redirects,
         )
+        if method == "POST":
+            request_method = client.post
+        elif method == "GET":
+            request_method = client.get
+        else:
+            raise ValueError("Passthrough method must be GET or POST")
         try:
             request_url = provider_info.current_url_for(url)
             request_kwargs: dict[str, Any] = {
@@ -1318,11 +1378,6 @@ class HttpTransport:
             }
             if method == "POST":
                 request_kwargs["json"] = body
-                request_method = client.post
-            elif method == "GET":
-                request_method = client.get
-            else:
-                raise ValueError("Passthrough method must be GET or POST")
             resp = await request_method(request_url, **request_kwargs)
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
