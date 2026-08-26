@@ -400,6 +400,20 @@ def _connection_failure_502(exc: Exception) -> UpstreamResponse:
     )
 
 
+def _response_open_failure_502(
+    exc: HttpConnectionError | HttpTimeoutError,
+) -> UpstreamResponse:
+    """Separate response-head protocol failures from connectivity failures."""
+    message = str(exc)
+    if isinstance(exc, HttpConnectionError) and (
+        message.startswith("Malformed status line:")
+        or message == "Incomplete HTTP response header section"
+        or message == "HTTP 101 Switching Protocols is unsupported"
+    ):
+        raise UpstreamProtocolError(message) from exc
+    return _connection_failure_502(exc)
+
+
 def _mark_transport_exhausted(result: Any) -> Any:
     """Mark the final 502 result as typed transport exhaustion in-place."""
     if hasattr(result, "synthetic"):
@@ -1051,7 +1065,7 @@ class HttpTransport:
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpConnectionError, HttpTimeoutError) as exc:
-            return _connection_failure_502(exc)
+            return _response_open_failure_502(exc)
         except HttpClientError as exc:
             raise UpstreamConnectionError(str(exc)) from exc
         assert isinstance(resp, HttpStreamingResponse)
@@ -1198,7 +1212,9 @@ class HttpTransport:
             )
         except (HttpConnectionError, HttpTimeoutError) as exc:
             return (
-                self._synthetic_stream(502, _connection_failure_502(exc).raw_content),
+                self._synthetic_stream(
+                    502, _response_open_failure_502(exc).raw_content
+                ),
                 True,
             )
         except HttpClientError as exc:
@@ -1369,7 +1385,7 @@ class HttpTransport:
         except HttpResponseLimitError as exc:
             raise _header_safety_error(exc) from exc
         except (HttpConnectionError, HttpTimeoutError) as exc:
-            return _connection_failure_502(exc)
+            return _response_open_failure_502(exc)
         except HttpClientError as exc:
             raise UpstreamConnectionError(str(exc)) from exc
 

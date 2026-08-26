@@ -100,6 +100,41 @@ class _FakeClient:
         return self.response
 
 
+_RAW_RESPONSE_HEAD_CASES = frozenset(
+    {
+        "response-headers",
+        "malformed-status",
+        "incomplete-response-head",
+        "switching-protocols",
+    }
+)
+
+
+def _write_raw_response_head_case(
+    handler: BaseHTTPRequestHandler,
+    case: str,
+) -> None:
+    if case == "response-headers":
+        headers = b"".join(
+            f"X-Test-{index}: value\r\n".encode() for index in range(101)
+        )
+        response = b"HTTP/1.1 200 OK\r\n" + headers + b"Content-Length: 2\r\n\r\n{}"
+    else:
+        response = {
+            "malformed-status": b"NOT-A-VALID-HTTP-STATUS\r\n\r\n",
+            "incomplete-response-head": (
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+            ),
+            "switching-protocols": (
+                b"HTTP/1.1 101 Switching Protocols\r\n"
+                b"Connection: Upgrade\r\n"
+                b"Upgrade: websocket\r\n\r\n"
+            ),
+        }[case]
+    handler.close_connection = True
+    handler.wfile.write(response)
+
+
 def _provider(
     base_url: str = "https://upstream.example/v1",
     *,
@@ -241,14 +276,8 @@ class _LocalUpstreamHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(payload)))
             self.end_headers()
             self.wfile.write(payload)
-        elif case == "response-headers":
-            self.close_connection = True
-            headers = b"".join(
-                f"X-Test-{index}: value\r\n".encode() for index in range(101)
-            )
-            self.wfile.write(
-                b"HTTP/1.1 200 OK\r\n" + headers + b"Content-Length: 2\r\n\r\n{}"
-            )
+        elif case in _RAW_RESPONSE_HEAD_CASES:
+            _write_raw_response_head_case(self, case)
         elif case == "response-trailers":
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -499,6 +528,44 @@ def test_real_header_and_trailer_overflow_map_to_safety_error(
                     {"model": "test", "case": case},
                     "test",
                 )
+        finally:
+            await transport.close()
+
+    asyncio.run(_scenario())
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("malformed-status", "Malformed status line"),
+        ("incomplete-response-head", "Incomplete HTTP response header section"),
+        ("switching-protocols", "HTTP 101 Switching Protocols is unsupported"),
+    ],
+)
+def test_real_response_head_protocol_failures_do_not_retry_or_cool(
+    local_upstream: tuple[_LocalUpstreamServer, str],
+    case: str,
+    message: str,
+) -> None:
+    _server, base_url = local_upstream
+    delays: list[float] = []
+
+    async def retry_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    async def _scenario() -> None:
+        provider = _provider(base_url)
+        transport = HttpTransport(timeout=1, retry_sleep=retry_sleep)
+        try:
+            with pytest.raises(UpstreamProtocolError, match=message):
+                await transport.send_request(
+                    provider,
+                    "openai_chat",
+                    {"model": "test", "case": case},
+                    "test",
+                )
+            assert provider.base_url_statuses() == ((base_url, "available"),)
+            assert delays == []
         finally:
             await transport.close()
 

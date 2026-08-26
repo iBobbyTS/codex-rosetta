@@ -268,6 +268,40 @@ def test_non_connectivity_open_errors_are_not_retried_or_cooled(
 
 
 @pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_response_head_protocol_failure_is_not_retried_or_cooled(
+    monkeypatch,
+    path_kind: str,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(
+            target,
+            transport_module.HttpConnectionError("Malformed status line: BROKEN"),
+        )
+        transport = _transport(monkeypatch, client)
+
+        with pytest.raises(UpstreamProtocolError, match="Malformed status line"):
+            if path_kind == "streaming":
+                await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            elif path_kind == "passthrough":
+                await transport.send_passthrough(provider, target, {})
+            else:
+                await transport.send_request(provider, "openai_responses", {}, "model")
+
+        assert client.calls == [target]
+        assert provider.base_url_statuses() == ((origin, "available"),)
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
 def test_response_body_connection_error_is_not_retried_or_cooled(
     monkeypatch,
     path_kind: str,
