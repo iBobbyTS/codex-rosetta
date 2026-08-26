@@ -772,7 +772,9 @@ def test_proxy_success_survives_request_log_persistence_failure(monkeypatch):
     assert json.loads(response.body) == {"ok": True}
 
 
-def test_proxy_handler_does_not_rotate_model_group_after_502_exhaustion(monkeypatch):
+def test_proxy_handler_does_not_rotate_model_group_after_ordinary_upstream_502(
+    monkeypatch,
+):
     class _Ring:
         current = "first"
         generation = 0
@@ -953,14 +955,24 @@ def test_proxy_handler_cools_group_after_every_candidate_exhausts_503(
     assert ring.cooldown_detail(ring.candidates[1]) is None
 
 
-def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(
+@pytest.mark.parametrize(
+    "base_urls",
+    [
+        ["https://api.example.test/v1"],
+        ["https://api.example.test/v1", "https://backup.example.test/v1"],
+    ],
+)
+def test_proxy_handler_rotates_pair_on_typed_transport_exhaustion(
     monkeypatch,
+    base_urls: list[str],
 ) -> None:
     first_uuid = "0488ffa0-e7b7-59ed-b1d0-6d43275607f5"
     second_uuid = "00000000-0000-4000-8000-000000000002"
     raw = _gateway_config()
     raw["providers"]["test-provider"].update(
         auto_rotate_credentials=False,
+        base_urls=base_urls,
+        current_base_url=base_urls[0],
         api_keys=[
             *raw["providers"]["test-provider"]["api_keys"],
             {
@@ -987,7 +999,7 @@ def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(
     async def fake_handle(_route, provider, *_args: Any, **_kwargs: Any):
         attempts.append(provider.current_credential_id)
         if provider.current_credential_id == "primary":
-            return JSONResponse({"error": "unavailable"}, status_code=503), {
+            return JSONResponse({"error": "unavailable"}, status_code=502), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "transport_exhaustion",
             }
@@ -999,13 +1011,82 @@ def test_proxy_handler_does_not_rotate_pair_on_transport_exhaustion(
         app_module._proxy_handler(_proxy_request(config), "openai_chat")
     )
 
-    assert response.status_code == 503
-    assert attempts == ["primary"]
-    assert writes == []
-    assert ring.current.credential_uuid == first_uuid
+    assert response.status_code == 200
+    assert attempts == ["primary", "second"]
+    assert writes == [ring.candidates[1]]
+    assert ring.current.credential_uuid == second_uuid
     assert ring.status_snapshot() == (
-        (ring.candidates[0], "available"),
+        (ring.candidates[0], "cooling"),
         (ring.candidates[1], "available"),
+    )
+    detail = ring.cooldown_detail(ring.candidates[0])
+    assert detail is not None
+    assert detail[0] == '{"error": "unavailable"}'
+    assert 3599 < detail[1] <= 3600
+
+
+def test_proxy_handler_returns_last_502_after_all_providers_exhaust_transport(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    attempts: list[str] = []
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        attempts.append(route.provider_name)
+        return JSONResponse(
+            {"error": f"{route.provider_name} exhausted"}, status_code=502
+        ), {
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "transport_exhaustion",
+        }
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+    ring = config.model_group_rings["test"]
+
+    assert response.status_code == 502
+    assert isinstance(response, JSONResponse)
+    assert json.loads(response.body) == {"error": "second-provider exhausted"}
+    assert attempts == ["test-provider", "second-provider"]
+    assert ring.status_snapshot() == (
+        ("test-provider", "cooling"),
+        ("second-provider", "cooling"),
+    )
+    for candidate in ring.candidates:
+        detail = ring.cooldown_detail(candidate)
+        assert detail is not None
+        assert 3599 < detail[1] <= 3600
+
+
+def test_proxy_handler_streaming_rotates_on_pre_response_transport_exhaustion(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    attempted_providers: list[str] = []
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        attempted_providers.append(route.provider_name)
+        if route.provider_name == "test-provider":
+            return JSONResponse({"error": "exhausted"}, status_code=502), {
+                "upstream_provider_failure": True,
+                "provider_failure_origin": "transport_exhaustion",
+            }
+        return JSONResponse({"ok": True}), {}
+
+    monkeypatch.setattr(app_module, "handle_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config, stream=True), "openai_chat")
+    )
+
+    assert response.status_code == 200
+    assert attempted_providers == ["test-provider", "second-provider"]
+    assert config.model_group_rings["test"].status_snapshot() == (
+        ("test-provider", "cooling"),
+        ("second-provider", "available"),
     )
 
 
@@ -1282,53 +1363,32 @@ def test_all_disabled_model_group_returns_configuration_unavailable(
 
 
 def test_proxy_handler_does_not_rotate_an_already_open_stream(monkeypatch):
-    class _Ring:
-        current = "first"
-
-        async def await_attempt(self):
-            return (self.current, 0), False, False
-
-        async def handoff(self):
-            raise AssertionError("an open stream must not own provider failover")
-
-    class _Config:
-        models = {"gpt-test": "first"}
-        model_group_names_by_model = {"gpt-test": "main"}
-        model_group_rings = {"main": _Ring()}
-
-        def resolve(self, source_provider: ProviderType, model: str):
-            return (
-                ResolvedRoute(
-                    source_provider=source_provider,
-                    target_provider="openai_chat",
-                    provider_name="first",
-                ),
-                MagicMock(),
-            )
+    config = _two_provider_gateway_config()
+    attempts: list[str] = []
 
     async def _empty_stream():
         if False:
             yield b""
 
-    async def _fake_handle_streaming(*args: Any, **kwargs: Any):
+    async def _fake_handle_streaming(route, *_args: Any, **_kwargs: Any):
+        attempts.append(route.provider_name)
         return StreamingResponse(_empty_stream(), content_type="text/event-stream"), {
-            "upstream_provider_failure": True
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "transport_exhaustion",
         }
 
     monkeypatch.setattr(app_module, "handle_streaming", _fake_handle_streaming)
-    request = MagicMock()
-    request.headers = {}
-    request.json.return_value = {"model": "gpt-test", "messages": [], "stream": True}
-    request.app.metadata_store = MagicMock()
-    request.app.metrics = None
-    request.app.request_log = None
-    request.app.persistence = None
-    request.app.profiler_state = None
-    request.app.gateway_config = _Config()
+    request = _proxy_request(config, stream=True)
 
     response = asyncio.run(app_module._proxy_handler(request, "openai_chat"))
 
     assert isinstance(response, StreamingResponse)
+    assert attempts == ["test-provider"]
+    assert config.model_group_rings["test"].current == "test-provider"
+    assert config.model_group_rings["test"].status_snapshot() == (
+        ("test-provider", "available"),
+        ("second-provider", "available"),
+    )
 
 
 def test_proxy_handler_does_not_rotate_rosetta_generated_error(monkeypatch):

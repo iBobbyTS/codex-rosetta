@@ -516,6 +516,22 @@ def _extract_client_ip(request: Any) -> str | None:
     return None
 
 
+def _is_model_group_provider_failure(
+    response: Response | StreamingResponse,
+    profile: dict[str, Any],
+) -> bool:
+    """Return whether a completed attempt may cool its model-group candidate."""
+    if isinstance(response, StreamingResponse) or not profile.get(
+        "upstream_provider_failure"
+    ):
+        return False
+    origin = profile.get("provider_failure_origin")
+    return (response.status_code, origin) in {
+        (502, "transport_exhaustion"),
+        (503, "upstream_response"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -928,11 +944,7 @@ async def _proxy_handler(  # noqa: C901
 
             error_detail = _response_error_detail(response)
             provider_failed = bool(
-                ring is not None
-                and response.status_code == 503
-                and profile.get("upstream_provider_failure")
-                and profile.get("provider_failure_origin") == "upstream_response"
-                and not isinstance(response, StreamingResponse)
+                ring is not None and _is_model_group_provider_failure(response, profile)
             )
             if provider_failed:
                 assert ring is not None
