@@ -532,6 +532,24 @@ def _is_model_group_provider_failure(
     }
 
 
+def _failed_model_group_candidates(
+    failed_candidate: object,
+    configured_candidates: tuple[object, ...],
+    *,
+    transport_exhausted: bool,
+) -> tuple[object, ...]:
+    """Return the candidate identities owned by one provider-level failure."""
+    if not transport_exhausted:
+        return (failed_candidate,)
+    provider_name = getattr(failed_candidate, "provider_name", failed_candidate)
+    matches = tuple(
+        candidate
+        for candidate in configured_candidates
+        if getattr(candidate, "provider_name", candidate) == provider_name
+    )
+    return matches or (failed_candidate,)
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -967,10 +985,20 @@ async def _proxy_handler(  # noqa: C901
                 configured_candidates = getattr(ring, "candidates", ring.available())
                 if failed_provider not in configured_candidates:
                     failed_provider = route.provider_name
+                failed_candidates = _failed_model_group_candidates(
+                    failed_provider,
+                    tuple(configured_candidates),
+                    transport_exhausted=(
+                        profile.get("provider_failure_origin") == "transport_exhaustion"
+                    ),
+                )
                 next_provider = (
                     config.preferred_model_group_candidate(
                         group_name,
-                        failed=(cast("_ModelGroupProviderCandidate", failed_provider),),
+                        failed=cast(
+                            "tuple[_ModelGroupProviderCandidate, ...]",
+                            failed_candidates,
+                        ),
                         after_503=True,
                     )
                     if hasattr(config, "preferred_model_group_candidate")
@@ -978,7 +1006,7 @@ async def _proxy_handler(  # noqa: C901
                         (
                             candidate
                             for candidate in ring.available()
-                            if candidate != failed_provider
+                            if candidate not in failed_candidates
                         ),
                         None,
                     )
@@ -988,7 +1016,8 @@ async def _proxy_handler(  # noqa: C901
                     # cooldown state changes, so recorder failure cannot split
                     # the two authoritative views.
                     await ring.select_automatically(next_provider)
-                    ring.mark_failed(failed_provider, error_detail)
+                    for candidate in failed_candidates:
+                        ring.mark_failed(candidate, error_detail)
                     _clear_request_local_state(
                         state_scope,
                         metadata_store=store,
@@ -996,7 +1025,8 @@ async def _proxy_handler(  # noqa: C901
                     )
                     state_scope = None
                     continue
-                ring.mark_failed(failed_provider, error_detail)
+                for candidate in failed_candidates:
+                    ring.mark_failed(candidate, error_detail)
                 await ring.publish()
                 failover_leader = False
             elif failover_leader:

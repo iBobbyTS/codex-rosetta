@@ -1129,20 +1129,29 @@ class HttpTransport:
             lambda item: item[1],
             lambda item: item[2],
             lambda item: item[3],
-            lambda: self._synthetic_stream(
-                502, _all_domains_502(len(provider_info.base_urls))
+            lambda: self._closed_error_stream(
+                502,
+                _all_domains_502(len(provider_info.base_urls)),
+                synthetic=True,
             ),
-            lambda: self._synthetic_stream(
+            lambda: self._closed_error_stream(
                 503,
                 _all_credentials_503(len(provider_info.credential_ids)),
+                synthetic=True,
             ),
             allow_failover=allow_failover,
             retry_nonstandard_statuses=retry_nonstandard_statuses,
             release_before_nonstandard_retry=lambda item: item[0].close(),
         )
 
-    def _synthetic_stream(self, status_code: int, message: bytes) -> HttpUpstreamStream:
-        """Build a closed stream carrying one synthetic failover error."""
+    def _closed_error_stream(
+        self,
+        status_code: int,
+        message: bytes,
+        *,
+        synthetic: bool = False,
+    ) -> HttpUpstreamStream:
+        """Build a closed pre-output error stream for one failover attempt."""
         stream = HttpUpstreamStream(
             cast(Any, _ClosedSyntheticResponse(status_code)),
             error_text=message.decode(),
@@ -1150,7 +1159,7 @@ class HttpTransport:
             idle_timeout=self._stream_idle_timeout,
             close_timeout=self._close_timeout,
         )
-        stream.synthetic = True
+        stream.synthetic = synthetic
         return stream
 
     async def _send_streaming_once(
@@ -1207,12 +1216,14 @@ class HttpTransport:
             raise _header_safety_error(exc) from exc
         except UpstreamNetworkError as exc:
             return (
-                self._synthetic_stream(502, _connection_failure_502(exc).raw_content),
+                self._closed_error_stream(
+                    502, _connection_failure_502(exc).raw_content
+                ),
                 True,
             )
         except (HttpConnectionError, HttpTimeoutError) as exc:
             return (
-                self._synthetic_stream(
+                self._closed_error_stream(
                     502, _response_open_failure_502(exc).raw_content
                 ),
                 True,

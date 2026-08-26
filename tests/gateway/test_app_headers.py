@@ -962,7 +962,7 @@ def test_proxy_handler_cools_group_after_every_candidate_exhausts_503(
         ["https://api.example.test/v1", "https://backup.example.test/v1"],
     ],
 )
-def test_proxy_handler_rotates_pair_on_typed_transport_exhaustion(
+def test_proxy_handler_skips_all_provider_credentials_on_transport_exhaustion(
     monkeypatch,
     base_urls: list[str],
 ) -> None:
@@ -982,23 +982,30 @@ def test_proxy_handler_rotates_pair_on_typed_transport_exhaustion(
             },
         ],
     )
+    raw["providers"]["second-provider"] = {
+        **raw["providers"]["test-provider"],
+        "auto_rotate_credentials": True,
+        "base_urls": ["https://second.example.test/v1"],
+        "current_base_url": "https://second.example.test/v1",
+    }
     raw["model_groups"]["test"]["provider"] = [
         {"provider": "test-provider", "credential_uuid": first_uuid},
         {"provider": "test-provider", "credential_uuid": second_uuid},
+        "second-provider",
     ]
     config = GatewayConfig(raw)
     ring = config.model_group_rings["test"]
     writes: list[Any] = []
-    attempts: list[str] = []
+    attempts: list[tuple[str, str]] = []
 
     async def record(_group: str, candidate: Any) -> None:
         writes.append(candidate)
 
     ring.bind_recorder(record)
 
-    async def fake_handle(_route, provider, *_args: Any, **_kwargs: Any):
-        attempts.append(provider.current_credential_id)
-        if provider.current_credential_id == "primary":
+    async def fake_handle(route, provider, *_args: Any, **_kwargs: Any):
+        attempts.append((route.provider_name, provider.current_credential_id))
+        if route.provider_name == "test-provider":
             return JSONResponse({"error": "unavailable"}, status_code=502), {
                 "upstream_provider_failure": True,
                 "provider_failure_origin": "transport_exhaustion",
@@ -1012,17 +1019,22 @@ def test_proxy_handler_rotates_pair_on_typed_transport_exhaustion(
     )
 
     assert response.status_code == 200
-    assert attempts == ["primary", "second"]
-    assert writes == [ring.candidates[1]]
-    assert ring.current.credential_uuid == second_uuid
+    assert attempts == [
+        ("test-provider", "primary"),
+        ("second-provider", "primary"),
+    ]
+    assert writes == [ring.candidates[2]]
+    assert ring.current.provider_name == "second-provider"
     assert ring.status_snapshot() == (
         (ring.candidates[0], "cooling"),
-        (ring.candidates[1], "available"),
+        (ring.candidates[1], "cooling"),
+        (ring.candidates[2], "available"),
     )
-    detail = ring.cooldown_detail(ring.candidates[0])
-    assert detail is not None
-    assert detail[0] == '{"error": "unavailable"}'
-    assert 3599 < detail[1] <= 3600
+    for candidate in ring.candidates[:2]:
+        detail = ring.cooldown_detail(candidate)
+        assert detail is not None
+        assert detail[0] == '{"error": "unavailable"}'
+        assert 3599 < detail[1] <= 3600
 
 
 def test_proxy_handler_returns_last_502_after_all_providers_exhaust_transport(

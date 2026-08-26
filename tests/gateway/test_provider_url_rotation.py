@@ -2361,6 +2361,59 @@ def test_entry_waiter_makes_one_request_after_retry_leader(
     asyncio.run(scenario())
 
 
+def test_streaming_entry_waiter_connection_failure_after_leader_success_is_not_exhaustion(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            transport_module.HttpConnectionError("leader connection refused"),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+            transport_module.HttpConnectionError("follower connection refused"),
+        )
+        retry_started = asyncio.Event()
+        release_retry = asyncio.Event()
+        sleeps: list[float] = []
+
+        async def blocking_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            retry_started.set()
+            await release_retry.wait()
+
+        transport = _transport(monkeypatch, client, retry_sleep=blocking_sleep)
+
+        async def send():
+            return await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+
+        leader = asyncio.create_task(send())
+        await retry_started.wait()
+        follower = asyncio.create_task(send())
+        await asyncio.sleep(0)
+        release_retry.set()
+        leader_result, follower_result = await asyncio.gather(leader, follower)
+
+        assert leader_result.status_code == 200
+        assert follower_result.status_code == 502
+        assert not follower_result.synthetic
+        assert "follower connection refused" in await follower_result.read_error()
+        assert client.calls == [f"{origin}/responses"] * 3
+        assert sleeps == [1.0]
+        assert provider.base_url_statuses() == ((origin, "available"),)
+        await leader_result.close()
+        await follower_result.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_entry_waiter_cdn_rotation_does_not_retry_next_url_literal_502(
     monkeypatch, streaming: bool
