@@ -1409,36 +1409,50 @@ def test_hanging_stream_close_is_bounded(caplog: pytest.LogCaptureFixture) -> No
     assert "Timed out closing upstream stream" in caplog.text
 
 
-def test_stream_open_timeout_returns_connection_error(
+def test_stream_open_timeout_uses_502_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     started = asyncio.Event()
 
     class _BlockingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
         async def post(self, _url: str, **_kwargs: Any) -> Any:
+            self.calls += 1
             started.set()
             await asyncio.Event().wait()
 
-    transport = HttpTransport(stream_open_timeout=0.01)
+    client = _BlockingClient()
+    delays: list[float] = []
+
+    async def retry_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    transport = HttpTransport(
+        stream_open_timeout=0.01,
+        retry_sleep=retry_sleep,
+    )
     transport._pool = cast(
         Any,
-        SimpleNamespace(
-            get=lambda _proxy=None, allow_redirects=False: _BlockingClient()
-        ),
+        SimpleNamespace(get=lambda _proxy=None, allow_redirects=False: client),
     )
 
-    with pytest.raises(
-        transport_module.UpstreamConnectionError,
-        match="did not open a streaming response",
-    ):
-        asyncio.run(
-            transport.send_streaming(
-                _provider(), "openai_chat", {"model": "test"}, "test"
-            )
+    async def _send() -> tuple[Any, str]:
+        stream = await transport.send_streaming(
+            _provider(), "openai_chat", {"model": "test"}, "test"
         )
+        return stream, await stream.read_error()
+
+    stream, error_text = asyncio.run(_send())
+    assert stream.status_code == 502
+    assert stream.synthetic is True
+    assert "did not open a streaming response" in error_text
+    assert client.calls == 6
+    assert delays == [1.0, 2.0, 4.0, 8.0, 16.0]
 
 
-def test_stream_open_peer_reset_returns_connection_error(
+def test_stream_open_peer_reset_uses_502_retry_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _ResettingWriter:
@@ -1459,28 +1473,40 @@ def test_stream_open_peer_reset_returns_connection_error(
 
     writer = _ResettingWriter()
 
+    acquire_calls = 0
+
     async def acquire(*args: Any, **kwargs: Any) -> tuple[Any, _ResettingWriter, str]:
+        nonlocal acquire_calls
         del args, kwargs
+        acquire_calls += 1
         return asyncio.StreamReader(), writer, "/"
 
     monkeypatch.setattr(httpclient_module, "_async_acquire_connection", acquire)
     client = AsyncClient()
-    transport = HttpTransport()
+    delays: list[float] = []
+
+    async def retry_sleep(delay: float) -> None:
+        delays.append(delay)
+
+    transport = HttpTransport(retry_sleep=retry_sleep)
     transport._pool = cast(
         Any,
         SimpleNamespace(get=lambda _proxy=None, allow_redirects=False: client),
     )
 
-    with pytest.raises(
-        transport_module.UpstreamConnectionError,
-        match="Connection to upstream.example:443 failed",
-    ):
-        asyncio.run(
-            transport.send_streaming(
-                _provider(), "openai_chat", {"model": "test"}, "test"
-            )
+    async def _send() -> tuple[Any, str]:
+        stream = await transport.send_streaming(
+            _provider(), "openai_chat", {"model": "test"}, "test"
         )
+        return stream, await stream.read_error()
 
+    stream, error_text = asyncio.run(_send())
+
+    assert stream.status_code == 502
+    assert stream.synthetic is True
+    assert "Connection to upstream.example:443 failed" in error_text
+    assert acquire_calls == 6
+    assert delays == [1.0, 2.0, 4.0, 8.0, 16.0]
     assert writer.closed is True
 
 
@@ -1496,6 +1522,7 @@ def test_stream_open_cancellation_cancels_upstream_operation() -> None:
             finally:
                 cancelled.set()
 
+    provider = _provider()
     transport = HttpTransport(stream_open_timeout=5)
     transport._pool = cast(
         Any,
@@ -1506,15 +1533,16 @@ def test_stream_open_cancellation_cancels_upstream_operation() -> None:
 
     async def _cancel() -> None:
         task = asyncio.create_task(
-            transport.send_streaming(
-                _provider(), "openai_chat", {"model": "test"}, "test"
-            )
+            transport.send_streaming(provider, "openai_chat", {"model": "test"}, "test")
         )
         await started.wait()
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
         await asyncio.wait_for(cancelled.wait(), timeout=0.5)
+        assert provider.base_url_statuses() == (
+            ("https://upstream.example/v1", "available"),
+        )
 
     asyncio.run(_cancel())
 

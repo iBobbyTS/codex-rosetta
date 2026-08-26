@@ -70,7 +70,7 @@ class _FakeStreamingResponse:
 
 class _RoutingClient:
     def __init__(self) -> None:
-        self.responses: dict[str, deque[_FakeStreamingResponse]] = defaultdict(deque)
+        self.responses: dict[str, deque[Any]] = defaultdict(deque)
         self.calls: list[str] = []
         self.headers: list[dict[str, str]] = []
         self.before_response: dict[str, Any] = {}
@@ -134,30 +134,54 @@ def test_provider_success_does_not_round_robin_credentials() -> None:
     assert [_auth_key(provider), _auth_key(provider)] == ["key-first", "key-first"]
 
 
-def test_pre_response_connection_failure_uses_url_retry_budget(monkeypatch) -> None:
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_pre_response_connection_failure_uses_url_retry_budget(
+    monkeypatch,
+    path_kind: str,
+) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         second = "https://second.example/v1"
         provider, writes = _provider("row-a", first, second)
         client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        first_target = f"{first}/{suffix}"
+        second_target = f"{second}/{suffix}"
         client.add(
-            f"{first}/responses",
+            first_target,
             *(
-                transport_module.UpstreamConnectionError("connection refused")
+                transport_module.HttpConnectionError("connection refused")
                 for _ in range(6)
             ),
         )
-        client.add(f"{second}/responses", _json_response(200, {"ok": True}))
+        success = (
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            )
+            if path_kind == "streaming"
+            else _json_response(200, {"ok": True})
+        )
+        client.add(second_target, success)
         delays: list[float] = []
 
         async def retry_sleep(delay: float) -> None:
             delays.append(delay)
 
-        result = await _transport(
-            monkeypatch, client, retry_sleep=retry_sleep
-        ).send_request(provider, "openai_responses", {}, "model")
+        transport = _transport(monkeypatch, client, retry_sleep=retry_sleep)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, first_target, {})
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
         assert result.status_code == 200
-        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"]
+        assert client.calls == [first_target] * 6 + [second_target]
         assert delays == [1, 2, 4, 8, 16]
         assert provider.base_url == second
         assert writes == [("row-a", second)]
@@ -165,25 +189,179 @@ def test_pre_response_connection_failure_uses_url_retry_budget(monkeypatch) -> N
     asyncio.run(scenario())
 
 
-def test_single_url_connection_exhaustion_returns_typed_502(monkeypatch) -> None:
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_single_url_connection_exhaustion_returns_typed_502(
+    monkeypatch,
+    path_kind: str,
+) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
         provider, _ = _provider("row-a", first)
         client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{first}/{suffix}"
         client.add(
-            f"{first}/responses",
-            *(
-                transport_module.UpstreamConnectionError("dns failure")
-                for _ in range(6)
-            ),
+            target,
+            *(transport_module.HttpConnectionError("dns failure") for _ in range(6)),
         )
-        result = await _transport(monkeypatch, client).send_request(
-            provider, "openai_responses", {}, "model"
-        )
+        transport = _transport(monkeypatch, client)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider, "openai_responses", {}, "model"
+            )
+            error_text = await result.read_error()
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(provider, target, {})
+            error_text = result.error_text
+        else:
+            result = await transport.send_request(
+                provider, "openai_responses", {}, "model"
+            )
+            error_text = result.error_text
         assert result.status_code == 502
         assert result.synthetic
-        assert "dns failure" in result.error_text
-        assert client.calls == [f"{first}/responses"] * 6
+        assert "dns failure" in error_text
+        assert client.calls == [target] * 6
+        assert provider.base_url_statuses() == ((first, "cooling"),)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize(
+    "error",
+    [
+        transport_module.UpstreamSafetyError("safety failure"),
+        transport_module.UpstreamProtocolError("protocol failure"),
+        ValueError("local request failure"),
+    ],
+)
+def test_non_connectivity_open_errors_are_not_retried_or_cooled(
+    monkeypatch,
+    path_kind: str,
+    error: Exception,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(target, error)
+        transport = _transport(monkeypatch, client)
+
+        with pytest.raises(type(error), match=str(error)):
+            if path_kind == "streaming":
+                await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            elif path_kind == "passthrough":
+                await transport.send_passthrough(provider, target, {})
+            else:
+                await transport.send_request(provider, "openai_responses", {}, "model")
+
+        assert client.calls == [target]
+        assert provider.base_url_statuses() == ((origin, "available"),)
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+def test_response_body_connection_error_is_not_retried_or_cooled(
+    monkeypatch,
+    path_kind: str,
+) -> None:
+    class _BodyReadFailure(_FakeStreamingResponse):
+        async def aiter_bytes(self, chunk_size: int = 4096):
+            del chunk_size
+            raise transport_module.UpstreamConnectionError("body read failed")
+            yield b"unreachable"
+
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(
+            target,
+            _BodyReadFailure(
+                502 if path_kind == "streaming" else 200,
+                b"unused",
+                content_type=(
+                    "text/event-stream"
+                    if path_kind == "streaming"
+                    else "application/json"
+                ),
+            ),
+        )
+        transport = _transport(monkeypatch, client)
+
+        with pytest.raises(
+            transport_module.UpstreamConnectionError,
+            match="body read failed",
+        ):
+            if path_kind == "streaming":
+                await transport.send_streaming(
+                    provider, "openai_responses", {}, "model"
+                )
+            elif path_kind == "passthrough":
+                await transport.send_passthrough(provider, target, {})
+            else:
+                await transport.send_request(provider, "openai_responses", {}, "model")
+
+        assert client.calls == [target]
+        assert provider.base_url_statuses() == ((origin, "available"),)
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+def test_connection_failure_keeps_pre_request_url_observation(monkeypatch) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        first_target = f"{first}/responses"
+        second_target = f"{second}/responses"
+        provider, writes = _provider("row-a", first, second)
+        request_started = asyncio.Event()
+        release_failure = asyncio.Event()
+
+        class _ObservationClient(_RoutingClient):
+            async def post(self, url: str, **kwargs: Any) -> _FakeStreamingResponse:
+                self.calls.append(url)
+                self.headers.append(dict(kwargs.get("headers", {})))
+                if url == first_target:
+                    request_started.set()
+                    await release_failure.wait()
+                    raise transport_module.HttpConnectionError("connection refused")
+                return self.responses[url].popleft()
+
+        client = _ObservationClient()
+        client.add(second_target, _json_response(200, {"ok": True}))
+        delays: list[float] = []
+
+        async def retry_sleep(delay: float) -> None:
+            delays.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=retry_sleep)
+        request = asyncio.create_task(
+            transport.send_request(provider, "openai_responses", {}, "model")
+        )
+        await request_started.wait()
+        await provider.manually_select_base_url(second)
+        release_failure.set()
+        result = await request
+
+        assert result.body == {"ok": True}
+        assert client.calls == [first_target, second_target]
+        assert delays == []
+        assert provider.base_url_statuses() == (
+            (first, "available"),
+            (second, "available"),
+        )
+        assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
 
@@ -828,6 +1006,7 @@ def test_failover_exhaustion_returns_last_upstream_error(
 
         assert result.status_code == status
         assert json.loads(error_body) == last_error
+        assert result.synthetic is (status == 502)
         assert client.calls == [target] * 6
 
     asyncio.run(scenario())
