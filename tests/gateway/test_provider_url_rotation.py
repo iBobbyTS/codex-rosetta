@@ -1343,6 +1343,17 @@ def _literal_502s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
     return tuple(_json_response(502, {"error": "bad"}) for _ in range(count))
 
 
+def _literal_429s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
+    return tuple(
+        _FakeStreamingResponse(
+            429,
+            b'{"error":"limited"}',
+            headers={"Retry-After": "3600"},
+        )
+        for _ in range(count)
+    )
+
+
 def _literal_503s(count: int = 6) -> tuple[_FakeStreamingResponse, ...]:
     return tuple(_json_response(503, {"error": "busy"}) for _ in range(count))
 
@@ -1638,6 +1649,120 @@ def test_passthrough_literal_502_retries_with_exact_delays(
         )
         assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
         assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
+@pytest.mark.parametrize("failures_before_success", range(1, 6))
+def test_model_group_literal_429_retries_with_exact_delays_and_ignores_retry_after(
+    monkeypatch,
+    path_kind: str,
+    failures_before_success: int,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, writes = _provider("row-a", origin)
+        client = _RoutingClient()
+        success = (
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            )
+            if path_kind == "streaming"
+            else _json_response(200, {"ok": True})
+        )
+        suffix = "models" if path_kind == "passthrough" else "responses"
+        target = f"{origin}/{suffix}"
+        client.add(target, *_literal_429s(failures_before_success), success)
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        if path_kind == "streaming":
+            result = await transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+        elif path_kind == "passthrough":
+            result = await transport.send_passthrough(
+                provider,
+                target,
+                {},
+                retry_nonstandard_statuses=True,
+            )
+        else:
+            result = await transport.send_request(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+
+        assert result.status_code == 200
+        assert client.calls == [target] * (failures_before_success + 1)
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0][:failures_before_success]
+        assert writes == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_model_group_literal_429_rotates_after_url_retry_budget(
+    monkeypatch,
+    streaming: bool,
+) -> None:
+    async def scenario() -> None:
+        first = "https://first.example/v1"
+        second = "https://second.example/v1"
+        provider, writes = _provider("row-a", first, second)
+        client = _RoutingClient()
+        client.add(f"{first}/responses", *_literal_429s())
+        client.add(
+            f"{second}/responses",
+            *_literal_429s(5),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n' if streaming else b'{"ok":true}',
+                content_type=("text/event-stream" if streaming else "application/json"),
+            ),
+        )
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        transport = _transport(monkeypatch, client, retry_sleep=fake_sleep)
+        result = (
+            await transport.send_streaming(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+            if streaming
+            else await transport.send_request(
+                provider,
+                "openai_responses",
+                {},
+                "model",
+                retry_nonstandard_statuses=True,
+            )
+        )
+
+        assert result.status_code == 200
+        assert client.calls == [f"{first}/responses"] * 6 + [f"{second}/responses"] * 6
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0] * 2
+        assert provider.base_url == second
+        assert writes == [("row-a", second)]
 
     asyncio.run(scenario())
 

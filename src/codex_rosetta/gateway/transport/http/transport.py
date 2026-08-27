@@ -820,12 +820,21 @@ class HttpTransport:
             if not provider_info.has_available_credential():
                 return credential_failure()
             attempt = await operation()
-            if not allow_failover or (single_attempt and status_of(attempt) == 502):
+            if not allow_failover or (
+                single_attempt
+                and status_of(attempt) == 502
+                or (
+                    single_attempt
+                    and retry_nonstandard_statuses
+                    and status_of(attempt) == 429
+                )
+            ):
                 return output_of(attempt)
             # Model-group routing explicitly opts in to the provider-level
             # contract for statuses outside the existing URL/key triggers.
             if retry_nonstandard_statuses and status_of(attempt) not in (
                 200,
+                429,
                 502,
                 503,
             ):
@@ -836,7 +845,9 @@ class HttpTransport:
                         await release_before_nonstandard_retry(attempt)
                     await self._retry_sleep(delay)
                     attempt = await operation()
-                if status_of(attempt) not in (502, 503) and not is_url_trigger(attempt):
+                if status_of(attempt) not in (429, 502, 503) and not is_url_trigger(
+                    attempt
+                ):
                     return output_of(attempt)
             attempt, exhausted = await self._retry_before_credential_rotation(
                 provider_info,
@@ -899,7 +910,13 @@ class HttpTransport:
             attempt = await _FAILOVER_RETRY_POLICY.run(
                 attempt,
                 operation,
-                lambda item: not single_attempt and status_of(item) == 502,
+                lambda item: (
+                    not single_attempt
+                    and (
+                        status_of(item) == 502
+                        or (retry_nonstandard_statuses and status_of(item) == 429)
+                    )
+                ),
                 sleep=self._retry_sleep,
             )
             retrying_credential = status_of(attempt) == 503
@@ -917,7 +934,10 @@ class HttpTransport:
                 return output_of(attempt)
             if retrying_credential and status_of(attempt) == 502 and not single_attempt:
                 continue
-            if single_attempt and status_of(attempt) == 502:
+            if single_attempt and (
+                status_of(attempt) == 502
+                or (retry_nonstandard_statuses and status_of(attempt) == 429)
+            ):
                 return output_of(attempt)
             if not is_url_trigger(attempt):
                 return output_of(attempt)
@@ -1009,8 +1029,12 @@ class HttpTransport:
             operation,
             lambda item: item[0],
             lambda item: item[0].status_code,
-            lambda item: _is_base_url_rotation_trigger(
-                item[0].status_code, item[0].raw_content
+            lambda item: (
+                _is_base_url_rotation_trigger(
+                    item[0].status_code,
+                    item[0].raw_content,
+                )
+                or (retry_nonstandard_statuses and item[0].status_code == 429)
             ),
             lambda item: item[1],
             lambda item: item[2],
@@ -1126,7 +1150,9 @@ class HttpTransport:
             operation,
             lambda item: item[0],
             lambda item: item[0].status_code,
-            lambda item: item[1],
+            lambda item: (
+                item[1] or (retry_nonstandard_statuses and item[0].status_code == 429)
+            ),
             lambda item: item[2],
             lambda item: item[3],
             lambda: self._closed_error_stream(
@@ -1314,8 +1340,9 @@ class HttpTransport:
             operation,
             lambda item: item[0],
             lambda item: item[0].status_code,
-            lambda item: _is_base_url_rotation_trigger(
-                item[0].status_code, item[0].raw_content
+            lambda item: (
+                _is_base_url_rotation_trigger(item[0].status_code, item[0].raw_content)
+                or (retry_nonstandard_statuses and item[0].status_code == 429)
             ),
             lambda item: item[1],
             lambda item: item[2],
