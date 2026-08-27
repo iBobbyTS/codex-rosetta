@@ -1046,6 +1046,51 @@ def test_failover_exhaustion_returns_last_upstream_error(
     asyncio.run(scenario())
 
 
+def test_single_url_429_exhaustion_preserves_last_real_error_envelope(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider("row-a", origin)
+        target = f"{origin}/responses"
+        responses = tuple(
+            _FakeStreamingResponse(
+                429,
+                json.dumps(
+                    {"error": {"message": f"attempt-{index}", "type": "rate_limit"}}
+                ).encode(),
+                headers={"Retry-After": "3600"},
+            )
+            for index in range(1, 7)
+        )
+        client = _RoutingClient()
+        client.add(target, *responses)
+        sleeps: list[float] = []
+
+        async def fake_sleep(delay: float) -> None:
+            sleeps.append(delay)
+
+        result = await _transport(
+            monkeypatch, client, retry_sleep=fake_sleep
+        ).send_request(
+            provider,
+            "openai_responses",
+            {},
+            "model",
+            retry_nonstandard_statuses=True,
+        )
+
+        assert result.status_code == 429
+        assert result.raw_content == (
+            b'{"error": {"message": "attempt-6", "type": "rate_limit"}}'
+        )
+        assert result.synthetic
+        assert client.calls == [target] * 6
+        assert sleeps == [1.0, 2.0, 4.0, 8.0, 16.0]
+
+    asyncio.run(scenario())
+
+
 def test_503_with_cdn_marker_does_not_rotate_url(monkeypatch) -> None:
     async def scenario() -> None:
         first = "https://first.example/v1"
