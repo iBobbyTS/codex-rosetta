@@ -527,6 +527,7 @@ def _is_model_group_provider_failure(
         return False
     origin = profile.get("provider_failure_origin")
     return (response.status_code, origin) in {
+        (429, "transport_exhaustion"),
         (502, "transport_exhaustion"),
         (503, "upstream_response"),
     }

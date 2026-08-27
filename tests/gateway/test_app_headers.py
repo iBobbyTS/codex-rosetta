@@ -858,6 +858,30 @@ def test_proxy_handler_does_not_rotate_model_group_after_ordinary_upstream_502(
     assert config.ring.current == "first"
 
 
+def test_proxy_handler_does_not_rotate_model_group_after_ordinary_upstream_429(
+    monkeypatch,
+):
+    config = _two_provider_gateway_config()
+    calls: list[str] = []
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        calls.append(route.provider_name)
+        return JSONResponse({"error": "rate limited"}, status_code=429), {
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "upstream_response",
+        }
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+
+    assert response.status_code == 429
+    assert calls == ["test-provider"]
+    assert config.model_group_rings["test"].current == "test-provider"
+
+
 def test_proxy_handler_rotates_fixed_credential_candidate_without_provider_selection(
     monkeypatch,
 ) -> None:
@@ -1071,6 +1095,38 @@ def test_proxy_handler_returns_last_502_after_all_providers_exhaust_transport(
         detail = ring.cooldown_detail(candidate)
         assert detail is not None
         assert 3599 < detail[1] <= 3600
+
+
+def test_proxy_handler_returns_last_429_after_all_providers_exhaust_transport(
+    monkeypatch,
+) -> None:
+    config = _two_provider_gateway_config()
+    attempts: list[str] = []
+
+    async def fake_handle(route, *_args: Any, **_kwargs: Any):
+        attempts.append(route.provider_name)
+        return JSONResponse(
+            {"error": f"{route.provider_name} rate limited"}, status_code=429
+        ), {
+            "upstream_provider_failure": True,
+            "provider_failure_origin": "transport_exhaustion",
+        }
+
+    monkeypatch.setattr(app_module, "handle_non_streaming", fake_handle)
+
+    response = asyncio.run(
+        app_module._proxy_handler(_proxy_request(config), "openai_chat")
+    )
+    ring = config.model_group_rings["test"]
+
+    assert response.status_code == 429
+    assert isinstance(response, JSONResponse)
+    assert json.loads(response.body) == {"error": "second-provider rate limited"}
+    assert attempts == ["test-provider", "second-provider"]
+    assert ring.status_snapshot() == (
+        ("test-provider", "cooling"),
+        ("second-provider", "cooling"),
+    )
 
 
 def test_proxy_handler_streaming_rotates_on_pre_response_transport_exhaustion(
