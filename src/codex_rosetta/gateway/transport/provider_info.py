@@ -394,6 +394,14 @@ class ProviderInfo:
             self.credential_id_for_uuid(credential_uuid)
         )
 
+    def clear_credential_uuid_cooldown_started_before(
+        self, credential_uuid: str, evidence_started_at: float
+    ) -> bool:
+        """Clear a stable credential cooldown older than recovery evidence."""
+        return self._credential_ring.clear_cooldown_started_before(
+            self.credential_id_for_uuid(credential_uuid), evidence_started_at
+        )
+
     def for_model_group_candidate(
         self,
         candidate_identity: object,

@@ -431,6 +431,7 @@ class ProviderRefreshCoordinator:
             if attempt and self._monotonic() >= deadline:
                 return False
             refreshed.clear()
+            evidence_started_at: dict[str, float] = {}
             for entry in entries:
                 if not isinstance(entry, dict):
                     continue
@@ -444,6 +445,7 @@ class ProviderRefreshCoordinator:
                 ):
                     continue
                 try:
+                    request_started_at = self._monotonic()
                     response = await _request_new_api_nonmodel(
                         transport,
                         str(
@@ -462,15 +464,21 @@ class ProviderRefreshCoordinator:
                         ((ts, rate) for ts, rate in points if ts == target), None
                     )
                     if match is not None:
-                        refreshed[str(entry.get("uuid", entry.get("id")))] = {
+                        credential_uuid = str(entry.get("uuid", entry.get("id")))
+                        refreshed[credential_uuid] = {
                             "value": match[1],
                             "timestamp": match[0],
                             "kind": "success_rate",
                         }
+                        evidence_started_at[credential_uuid] = request_started_at
                 except Exception:
                     continue
             if len(refreshed) == len(expected_entries):
-                await self._persist(name, refreshed)
+                await self._persist(
+                    name,
+                    refreshed,
+                    evidence_started_at=evidence_started_at,
+                )
                 return True
             if self._monotonic() >= deadline:
                 break
@@ -512,6 +520,7 @@ class ProviderRefreshCoordinator:
             if attempt and self._monotonic() >= deadline:
                 return False
             try:
+                request_started_at = self._monotonic()
                 keys_response = await client.request(_SUB2API_KEYS_ENDPOINT)
                 capacity_response = await client.request(_SUB2API_CAPACITY_ENDPOINT)
                 if (
@@ -540,7 +549,14 @@ class ProviderRefreshCoordinator:
                         "timestamp": int(self._clock()),
                         "kind": "available_concurrency",
                     }
-                await self._persist(name, refreshed)
+                await self._persist(
+                    name,
+                    refreshed,
+                    evidence_started_at={
+                        credential_uuid: request_started_at
+                        for credential_uuid in refreshed
+                    },
+                )
                 return True
             except Exception:
                 if self._monotonic() >= deadline:
@@ -559,7 +575,13 @@ class ProviderRefreshCoordinator:
                 provider["current_base_url"] = url
                 write_config(self.config_path, document)
 
-    async def _persist(self, name: str, credentials: dict[str, dict[str, Any]]) -> None:
+    async def _persist(
+        self,
+        name: str,
+        credentials: dict[str, dict[str, Any]],
+        *,
+        evidence_started_at: Mapping[str, float] | None = None,
+    ) -> None:
         async with self._persist_lock:
             previous = self._snapshots.get(name, {}).get("credentials", {})
             merged_credentials = {
@@ -583,6 +605,17 @@ class ProviderRefreshCoordinator:
                 return
             current_provider["availability_snapshot"] = snapshot
             self._snapshots[name] = snapshot
+            recover = getattr(
+                self.config, "recover_provider_credential_from_snapshot", None
+            )
+            if recover is not None:
+                for credential_uuid, started_at in (evidence_started_at or {}).items():
+                    if credential_uuid in credentials:
+                        recover(
+                            name,
+                            credential_uuid,
+                            evidence_started_at=started_at,
+                        )
 
 
 __all__ = ["ProviderRefreshCoordinator"]

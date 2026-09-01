@@ -148,6 +148,16 @@ class ModelGroupProviderRing:
         """Return retained detail and remaining seconds for one cooldown."""
         return self._ring.cooldown_detail(self._canonical_candidate(provider))
 
+    def clear_cooldown_started_before(
+        self,
+        provider: _ModelGroupProviderCandidate | str,
+        evidence_started_at: float,
+    ) -> bool:
+        """Clear one candidate cooldown older than recovery evidence."""
+        return self._ring.clear_cooldown_started_before(
+            self._canonical_candidate(provider), evidence_started_at
+        )
+
     def next_available(
         self, failed: _ModelGroupProviderCandidate | str
     ) -> _ModelGroupProviderCandidate | None:
@@ -1952,6 +1962,28 @@ class GatewayConfig:
         provider = self.providers.get(candidate.provider_name)
         if provider is not None:
             provider.clear_credential_uuid_cooldown(candidate.credential_uuid)
+
+    def recover_provider_credential_from_snapshot(
+        self,
+        provider_name: str,
+        credential_uuid: str,
+        *,
+        evidence_started_at: float,
+    ) -> None:
+        """Apply fresh snapshot evidence to matching process-local cooldowns."""
+        provider = self.providers.get(provider_name)
+        if provider is None:
+            return
+        provider.clear_credential_uuid_cooldown_started_before(
+            credential_uuid, evidence_started_at
+        )
+        for ring in self.model_group_rings.values():
+            for candidate in ring.candidates:
+                if (
+                    candidate.provider_name == provider_name
+                    and candidate.credential_uuid == credential_uuid
+                ):
+                    ring.clear_cooldown_started_before(candidate, evidence_started_at)
 
     def _model_group_candidate_available(
         self, candidate: _ModelGroupProviderCandidate

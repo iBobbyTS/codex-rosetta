@@ -113,6 +113,7 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         self._cooldown_seconds = cooldown_seconds
         self._clock = clock
         self._cooldown_until: dict[_CandidateT, float] = {}
+        self._cooldown_started_at: dict[_CandidateT, float] = {}
         self._cooldown_details: dict[_CandidateT, str | None] = {}
         self._gate = FailoverGate[None, None]()
 
@@ -173,7 +174,9 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         return leader, waited
 
     def mark_failed(self, candidate: _CandidateT, detail: str | None = None) -> None:
-        self._cooldown_until[candidate] = self._clock() + self._cooldown_seconds
+        now = self._clock()
+        self._cooldown_started_at[candidate] = now
+        self._cooldown_until[candidate] = now + self._cooldown_seconds
         self._cooldown_details[candidate] = detail
 
     def _prune(self, now: float | None = None) -> None:
@@ -185,6 +188,10 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         }
         self._cooldown_details = {
             candidate: self._cooldown_details.get(candidate)
+            for candidate in self._cooldown_until
+        }
+        self._cooldown_started_at = {
+            candidate: self._cooldown_started_at[candidate]
             for candidate in self._cooldown_until
         }
 
@@ -223,7 +230,21 @@ class OrderedFailoverCoordinator(Generic[_CandidateT]):
         if candidate not in self._candidates:
             raise ValueError("candidate must belong to ordered candidates")
         self._cooldown_until.pop(candidate, None)
+        self._cooldown_started_at.pop(candidate, None)
         self._cooldown_details.pop(candidate, None)
+
+    def clear_cooldown_started_before(
+        self, candidate: _CandidateT, evidence_started_at: float
+    ) -> bool:
+        """Clear a cooldown only when it predates fresh recovery evidence."""
+        if candidate not in self._candidates:
+            raise ValueError("candidate must belong to ordered candidates")
+        self._prune()
+        started_at = self._cooldown_started_at.get(candidate)
+        if started_at is None or started_at >= evidence_started_at:
+            return False
+        self.clear_cooldown(candidate)
+        return True
 
     def next_available_after(self, candidate: _CandidateT) -> _CandidateT | None:
         self._prune()

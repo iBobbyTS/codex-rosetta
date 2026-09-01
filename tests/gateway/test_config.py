@@ -6,6 +6,7 @@ import json
 import asyncio
 import os
 import sys
+import time
 from argparse import Namespace
 from uuid import UUID
 
@@ -2153,6 +2154,45 @@ class TestModelGroups:
         asyncio.run(ring.select(ring.current))
         _route, restored = cfg.resolve("openai_responses", "gpt-other")
         assert restored.auth_headers()["Authorization"] == "Bearer sk-test"
+
+    def test_fresh_snapshot_clears_matching_fixed_credential_cooldowns_across_groups(
+        self,
+    ):
+        raw = _minimal_raw()
+        raw["providers"]["test"]["auto_rotate_credentials"] = False
+        pair = {
+            "provider": "test",
+            "credential_uuid": _PRIMARY_CREDENTIAL_UUID,
+        }
+        raw["model_groups"]["test-llm"]["provider"] = [pair]
+        raw["model_groups"]["other-llm"] = {
+            "provider": [pair],
+            "type": "llm",
+            "models": {"gpt-other": {"upstream_model": "gpt-5.6-sol"}},
+        }
+
+        cfg = GatewayConfig(raw)
+        provider = cfg.providers["test"]
+        for ring in cfg.model_group_rings.values():
+            ring.mark_failed(ring.current)
+        provider.mark_credential_failed("primary")
+        evidence_started_at = time.monotonic()
+
+        cfg.recover_provider_credential_from_snapshot(
+            "test",
+            _PRIMARY_CREDENTIAL_UUID,
+            evidence_started_at=evidence_started_at,
+        )
+
+        assert provider.credential_statuses() == (("primary", "available"),)
+        assert all(
+            ring.status_snapshot() == ((ring.current, "available"),)
+            for ring in cfg.model_group_rings.values()
+        )
+        assert (
+            cfg.model_group_rings["test-llm"].current
+            == cfg.model_group_rings["other-llm"].current
+        )
 
     def test_provider_only_candidate_requires_one_globally_available_credential(self):
         raw = _minimal_raw()

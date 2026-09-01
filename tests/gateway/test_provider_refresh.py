@@ -115,8 +115,29 @@ async def test_new_api_refresh_accepts_late_target_bucket_and_retains_stale_on_m
             }
         ],
     }
+    recoveries: list[tuple[str, str, float, float]] = []
+
+    def recover(
+        provider_name: str,
+        credential_uuid: str,
+        *,
+        evidence_started_at: float,
+    ) -> None:
+        recoveries.append(
+            (
+                provider_name,
+                credential_uuid,
+                evidence_started_at,
+                provider["availability_snapshot"]["credentials"][credential_uuid][
+                    "value"
+                ],
+            )
+        )
+
     config: Any = SimpleNamespace(
-        _all_raw_providers={"new": provider}, model_group_candidates={}
+        _all_raw_providers={"new": provider},
+        model_group_candidates={},
+        recover_provider_credential_from_snapshot=recover,
     )
 
     class Transport:
@@ -128,7 +149,7 @@ async def test_new_api_refresh_accepts_late_target_bucket_and_retains_stale_on_m
                         "groups": [
                             {
                                 "group": "cheap",
-                                "series": [{"ts": 3660, "success_rate": 88}],
+                                "series": [{"ts": 3660, "success_rate": 0}],
                             }
                         ]
                     }
@@ -143,15 +164,126 @@ async def test_new_api_refresh_accepts_late_target_bucket_and_retains_stale_on_m
         sleep=lambda _delay: asyncio.sleep(0),
     )
     assert await coordinator._refresh_new_api("new", provider)
-    assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 88
+    assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 0
     assert (
         cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["timestamp"] == 3660
     )
+    assert recoveries and recoveries[0][0:2] == ("new", "u1")
+    assert recoveries[0][3] == 0
 
     provider["new_api_aggregation_bin"] = "5m"
     coordinator._snapshots["new"]["credentials"]["u1"]["value"] = 77
     assert not await coordinator._refresh_new_api("new", provider)
     assert cast(dict[str, Any], coordinator.snapshot_for("new", "u1"))["value"] == 77
+
+
+@pytest.mark.asyncio
+async def test_sub2api_partial_snapshot_recovery_only_clears_returned_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_uuid = "u1"
+    second_uuid = "u2"
+    provider = {
+        "openai_variant": "sub2api",
+        "new_api_aggregation_bin": "5m",
+        "sub2api_account_id": "account",
+        "base_urls": ["https://sub.example"],
+        "current_base_url": "https://sub.example",
+        "api_keys": [
+            {"uuid": first_uuid, "id": "key-1", "key": "secret-1"},
+            {"uuid": second_uuid, "id": "key-2", "key": "secret-2"},
+        ],
+        "availability_snapshot": {
+            "updated_at": 1,
+            "credentials": {
+                first_uuid: {"value": 4, "timestamp": 1},
+                second_uuid: {"value": 5, "timestamp": 1},
+            },
+        },
+    }
+    recoveries: list[tuple[str, str, float, int]] = []
+
+    def recover(
+        provider_name: str,
+        credential_uuid: str,
+        *,
+        evidence_started_at: float,
+    ) -> None:
+        recoveries.append(
+            (
+                provider_name,
+                credential_uuid,
+                evidence_started_at,
+                coordinator.snapshot_for("sub", credential_uuid)["value"],
+            )
+        )
+
+    config: Any = SimpleNamespace(
+        _all_raw_providers={"sub": provider},
+        model_group_candidates={},
+        recover_provider_credential_from_snapshot=recover,
+    )
+
+    class Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class Client:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def request(self, endpoint: str) -> Response:
+            if endpoint.startswith("/api/v1/keys"):
+                return Response(
+                    {
+                        "code": 0,
+                        "data": {
+                            "items": [
+                                {
+                                    "id": 1,
+                                    "name": "key-1",
+                                    "key": "secret-1",
+                                    "group_id": 7,
+                                    "group_routes": [],
+                                }
+                            ]
+                        },
+                    }
+                )
+            return Response(
+                {
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "group_id": 7,
+                                "concurrency_used": 0,
+                                "concurrency_max": 0,
+                            }
+                        ]
+                    },
+                }
+            )
+
+    monkeypatch.setattr(
+        "codex_rosetta.gateway.admin.provider_refresh.Sub2APIProviderClient", Client
+    )
+    coordinator = ProviderRefreshCoordinator(
+        SimpleNamespace(),
+        config,
+        None,
+        clock=lambda: 100.0,
+        monotonic=lambda: 10.0,
+    )
+
+    assert await coordinator._refresh_sub2api("sub", provider)
+    assert coordinator.snapshot_for("sub", first_uuid)["value"] == 0
+    assert coordinator.snapshot_for("sub", second_uuid)["value"] == 5
+    assert recoveries == [("sub", first_uuid, 10.0, 0)]
 
 
 @pytest.mark.asyncio
