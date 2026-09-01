@@ -7,7 +7,6 @@ This package splits the admin route handlers into focused modules:
 - keys        — Gateway API key management
 - observability — Metrics, request log, network diagnostics
 - testing     — Async model test tasks
-- profiling   — On-demand pyinstrument profiling
 - tools       — Read-only bundled tools catalog
 """
 
@@ -75,26 +74,13 @@ from .network_search import (
     test_network_search,
 )
 from .observability import (
-    clear_error_dumps,
     clear_requests,
-    get_error_dump_body,
-    get_error_dump_detail,
-    get_error_dumps,
     get_host_ip,
     get_metrics,
     get_request_key_labels,
     get_requests,
     network_diagnostics,
     rebuild_metrics,
-)
-from .profiling import (
-    clear_profiling_results,
-    disable_profiling,
-    download_profiling_results,
-    enable_profiling,
-    get_profiling_result,
-    get_profiling_results,
-    get_profiling_status,
 )
 from .testing import (
     cancel_test,
@@ -213,18 +199,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/requests", methods=["GET"])(get_requests)
     app.route("/admin/api/requests/key-labels", methods=["GET"])(get_request_key_labels)
     app.route("/admin/api/requests", methods=["DELETE"])(clear_requests)
-    # Network diagnostics
+    # Network diagnostics used by the server settings page.
     app.route("/admin/api/diagnostics/network", methods=["GET"])(network_diagnostics)
     app.route("/admin/api/diagnostics/host-ip", methods=["GET"])(get_host_ip)
-    # Error dumps
-    app.route("/admin/api/error-dumps", methods=["GET"])(get_error_dumps)
-    app.route("/admin/api/error-dumps/<dump_id>", methods=["GET"])(
-        get_error_dump_detail
-    )
-    app.route("/admin/api/error-dumps/<dump_id>/body", methods=["GET"])(
-        get_error_dump_body
-    )
-    app.route("/admin/api/error-dumps", methods=["DELETE"])(clear_error_dumps)
     # API key management
     app.route("/admin/api/keys", methods=["GET"])(get_api_keys)
     app.route("/admin/api/keys", methods=["POST"])(create_api_key)
@@ -238,17 +215,3 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/test/<task_id>", methods=["GET"])(get_test_result)
     app.route("/admin/api/test/<task_id>/poll", methods=["POST"])(get_test_result)
     app.route("/admin/api/test/<task_id>", methods=["DELETE"])(cancel_test)
-    # Profiling
-    app.route("/admin/api/profiling/status", methods=["GET"])(get_profiling_status)
-    app.route("/admin/api/profiling/enable", methods=["POST"])(enable_profiling)
-    app.route("/admin/api/profiling/disable", methods=["POST"])(disable_profiling)
-    app.route("/admin/api/profiling/results", methods=["GET"])(get_profiling_results)
-    app.route("/admin/api/profiling/results/download", methods=["GET"])(
-        download_profiling_results
-    )
-    app.route("/admin/api/profiling/results/<int:index>", methods=["GET"])(
-        get_profiling_result
-    )
-    app.route("/admin/api/profiling/results", methods=["DELETE"])(
-        clear_profiling_results
-    )

@@ -13,8 +13,6 @@ test.beforeEach(async ({ page }) => {
     let body: object = {};
     if (path.endsWith('/auth-check')) body = { requires_auth: false };
     else if (path.endsWith('/metrics')) body = { total_requests: 0, error_rate: 0, active_streams: 0, uptime_seconds: 1, by_target_provider: {} };
-    else if (path.endsWith('/profiling/status')) body = { enabled: false, remaining: 0 };
-    else if (path.endsWith('/profiling/results')) body = { results: [] };
     else if (path.endsWith('/config')) body = config;
     else if (path.endsWith('/config/providers/upstream') && route.request().method() === 'PUT') {
       Object.assign(upstream, route.request().postDataJSON());
@@ -46,7 +44,6 @@ test('renders the shared Admin shell without viewport overflow', async ({ page }
   await expect(page.getByText('gateway admin')).toBeVisible();
   await page.getByRole('link', { name: 'Dashboard' }).click();
   await expect(page.getByText('Total requests')).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Profiling' })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });

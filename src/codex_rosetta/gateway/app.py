@@ -21,7 +21,6 @@ from codex_rosetta._vendor.httpserver import (
     StreamingResponse,
 )
 from codex_rosetta.auto_detect import ProviderType
-from codex_rosetta.observability.error_dump import dump_error
 from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
 from .admin.restart_notice import (
@@ -418,7 +417,6 @@ def _instrument_stream_response(
     target_provider: ProviderType,
     provider_name: str,
     profile: dict[str, Any] | None,
-    profiler: Any,
     started_at: float,
     on_finish: Callable[[], None] | None = None,
 ) -> None:
@@ -440,16 +438,6 @@ def _instrument_stream_response(
     def _finalize_stream(status: int, stream_error: str | None) -> None:
         try:
             duration_ms = (time.monotonic() - started_at) * 1000
-            _try_stop_profiler(
-                profiler,
-                request.app,
-                request_id=request_id,
-                model=model,
-                source=source_provider,
-                target=target_provider,
-                is_stream=True,
-                duration_ms=duration_ms,
-            )
             _finalize_stream_telemetry(
                 request,
                 entry_id=entry_id,
@@ -598,58 +586,6 @@ async def _probe_codex_cockpit_after_model_error(
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
-
-
-def _try_start_profiler(app: Any) -> Any | None:
-    """Start a per-request deep profiler if profiling is enabled.
-
-    Returns a started DeepProfiler instance, or ``None`` if profiling
-    is disabled or pyinstrument is not installed.
-    """
-    state = getattr(app, "profiler_state", None)
-    if state is None or not state.should_profile():
-        return None
-    try:
-        profiler = state.create_profiler()
-        profiler.start()
-        return profiler
-    except RuntimeError:
-        # pyinstrument not installed — restore the consumed slot
-        state.remaining += 1
-        if not state.enabled:
-            state.enabled = True
-        return None
-
-
-def _try_stop_profiler(
-    profiler: Any,
-    app: Any,
-    *,
-    request_id: str,
-    model: str,
-    source: str,
-    target: str,
-    is_stream: bool,
-    duration_ms: float,
-) -> None:
-    """Stop a running deep profiler and store the result."""
-    if profiler is None:
-        return
-    try:
-        profiler.stop()
-        state = getattr(app, "profiler_state", None)
-        if state is not None:
-            state.store_result(
-                profiler,
-                request_id=request_id,
-                model=model,
-                source=source,
-                target=target,
-                is_stream=is_stream,
-                duration_ms=duration_ms,
-            )
-    except Exception:
-        logger.debug("Failed to store profiling result")
 
 
 def _proxy_request_id_or_error(
@@ -834,7 +770,6 @@ async def _proxy_handler(  # noqa: C901
     status_code = 500
     error_detail: str | None = None
     profile: dict[str, Any] | None = None
-    deep_profiler = _try_start_profiler(request.app)
     pre_entry_id = uuid.uuid4().hex if is_stream else None
     stream_telemetry_deferred = False
     request_state_cleanup_deferred = False
@@ -1166,7 +1101,6 @@ async def _proxy_handler(  # noqa: C901
                     target_provider=route.target_provider,
                     provider_name=route.provider_name,
                     profile=profile,
-                    profiler=deep_profiler,
                     started_at=t0,
                     on_finish=lambda: _clear_request_local_state(
                         state_scope,
@@ -1197,20 +1131,6 @@ async def _proxy_handler(  # noqa: C901
         logger.exception("[%s] unhandled error in proxy handler", request_id)
         status_code = 500
         pre_entry_id = None
-        dump_error(
-            persistence,
-            request_body=body,
-            response_text=error_detail,
-            model=model,
-            source_provider=source_provider,
-            target_provider=route.target_provider
-            if route is not None
-            else source_provider,
-            provider_name=route.provider_name if route is not None else "",
-            status_code=500,
-            error_phase="conversion",
-            response_redaction="protocol_fields",
-        )
         resp = error_response_for_source(
             source_provider, 500, f"Internal server error: {exc}"
         )
@@ -1231,16 +1151,6 @@ async def _proxy_handler(  # noqa: C901
                 route.target_provider if route is not None else source_provider
             )
             provider_name = route.provider_name if route is not None else ""
-            _try_stop_profiler(
-                deep_profiler,
-                request.app,
-                request_id=request_id,
-                model=model,
-                source=source_provider,
-                target=target_provider,
-                is_stream=is_stream,
-                duration_ms=duration_ms,
-            )
             _record_telemetry(
                 request,
                 model=model,

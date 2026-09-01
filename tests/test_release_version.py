@@ -53,5 +53,5 @@ def test_docker_build_requires_current_checkout_wheel():
     assert "--build-arg LOCAL_WHEEL=" in makefile
     assert "PACKAGE_VERSION" not in dockerfile
     assert 'test -n "$LOCAL_WHEEL"' in dockerfile
-    assert '"/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"' in dockerfile
+    assert '"/tmp/dist/${LOCAL_WHEEL}[gateway]"' in dockerfile
     assert '"codex-rosetta[gateway,profiling]' not in dockerfile

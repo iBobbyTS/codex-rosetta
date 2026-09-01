@@ -356,7 +356,6 @@ def test_internal_summary_retains_persistence_but_disables_body_logging(
     assert captured["body_log_state"] is None
     assert captured["upstream_error_log_state"] is None
     assert captured["skip_codex_compaction"] is True
-    assert captured["disable_error_dump"] is True
     assert captured["model_group_failover"] is True
     assert persistence.count_codex_compaction_mappings() == 1
     persistence.close()

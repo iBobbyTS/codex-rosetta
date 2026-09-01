@@ -31,9 +31,9 @@ COPY dist/ /tmp/dist/
 RUN test -n "$LOCAL_WHEEL" && test -f "/tmp/dist/$LOCAL_WHEEL" && \
     echo "Installing from current local wheel: $LOCAL_WHEEL" && \
     if [ -n "$PYPI_MIRROR" ]; then \
-        pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
+        pip install -i "$PYPI_MIRROR" --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway]"; \
     else \
-        pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway,profiling]"; \
+        pip install --no-cache-dir "/tmp/dist/${LOCAL_WHEEL}[gateway]"; \
     fi && \
     (pip uninstall -y pip setuptools 2>/dev/null || true) && \
     rm -rf /tmp/dist/

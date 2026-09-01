@@ -36,7 +36,6 @@ from codex_rosetta.converters.google_genai.image_fetch import (
 from codex_rosetta.pipeline import ConversionError, ConversionPipeline
 from codex_rosetta.routing import ResolvedRoute, is_responses_passthrough
 
-from codex_rosetta.observability.error_dump import dump_error
 from codex_rosetta.observability.tool_history_store import (
     ToolHistoryCapacityError,
     ToolHistoryConflictError,
@@ -370,7 +369,6 @@ async def _run_rosetta_compaction(
         body_log_state=None,
         image_fetch_workers=image_fetch_workers,
         skip_codex_compaction=True,
-        disable_error_dump=True,
         model_group_failover=model_group_failover,
     )
     profile: dict[str, Any] = {
@@ -1757,7 +1755,6 @@ async def handle_non_streaming(  # noqa: C901
     body_log_state: BodyLogState | None = None,
     image_fetch_workers: ImageFetchWorkerPool | None = None,
     skip_codex_compaction: bool = False,
-    disable_error_dump: bool = False,
     model_group_failover: bool = False,
 ) -> tuple[Response, dict[str, Any]]:
     """Non-streaming proxy: convert -> forward -> convert back -> respond.
@@ -1787,7 +1784,6 @@ async def handle_non_streaming(  # noqa: C901
     tool_history_hit_indexes: set[int] = set()
     tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
     profile: dict[str, Any] = {}
-    error_dump_persistence = None if disable_error_dump else persistence
     (
         body,
         compaction_response,
@@ -1872,20 +1868,6 @@ async def handle_non_streaming(  # noqa: C901
                 resp.error_text,
                 endpoint=str(route.target_provider),
                 state=upstream_error_log_state,
-                response_redaction="protocol_fields",
-            )
-            dump_error(
-                error_dump_persistence,
-                request_body=body,
-                response_text=resp.error_text,
-                converted_body=body,
-                model=model,
-                source_provider=route.source_provider,
-                target_provider=route.target_provider,
-                provider_name=route.provider_name,
-                status_code=resp.status_code,
-                error_phase="upstream",
-                upstream_url=str(provider_info.base_url),
                 response_redaction="protocol_fields",
             )
             return (
@@ -2042,20 +2024,6 @@ async def handle_non_streaming(  # noqa: C901
             resp.error_text,
             endpoint=str(route.target_provider),
             state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
-        dump_error(
-            error_dump_persistence,
-            request_body=body,
-            response_text=resp.error_text,
-            converted_body=target_body,
-            model=model,
-            source_provider=route.source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            status_code=resp.status_code,
-            error_phase="upstream",
-            upstream_url=str(provider_info.base_url),
             response_redaction="protocol_fields",
         )
         return (
@@ -2818,21 +2786,6 @@ async def _handle_direct_responses_streaming(
             ttfb_ms=None,
             passthrough=True,
         )
-        dump_error(
-            persistence,
-            request_body=body,
-            response_text=error_msg,
-            converted_body=body,
-            model=model,
-            source_provider=route.source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            status_code=502,
-            error_phase="stream_header",
-            upstream_url=str(provider_info.base_url),
-            request_log_id=entry_id,
-            response_redaction="protocol_fields",
-        )
         return (
             error_response_for_source(
                 route.source_provider,
@@ -2878,21 +2831,6 @@ async def _handle_direct_responses_streaming(
             endpoint=str(route.target_provider),
             is_streaming=True,
             state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
-        dump_error(
-            persistence,
-            request_body=body,
-            response_text=error_text,
-            converted_body=body,
-            model=model,
-            source_provider=route.source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            status_code=stream.status_code,
-            error_phase="stream_header",
-            upstream_url=str(provider_info.base_url),
-            request_log_id=entry_id,
             response_redaction="protocol_fields",
         )
         return (
@@ -3177,21 +3115,6 @@ async def handle_streaming(  # noqa: C901
         # Connection-level failure — no upstream HTTP response exists, so
         # the gateway synthesizes an error message and returns 502.
         error_msg = str(exc)
-        dump_error(
-            persistence,
-            request_body=body,
-            response_text=error_msg,
-            converted_body=target_body,
-            model=model,
-            source_provider=route.source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            status_code=502,
-            error_phase="stream_header",
-            upstream_url=str(provider_info.base_url),
-            request_log_id=entry_id,
-            response_redaction="protocol_fields",
-        )
         return (
             error_response_for_source(
                 route.source_provider,
@@ -3216,21 +3139,6 @@ async def handle_streaming(  # noqa: C901
             endpoint=str(route.target_provider),
             is_streaming=True,
             state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
-        dump_error(
-            persistence,
-            request_body=body,
-            response_text=error_text,
-            converted_body=target_body,
-            model=model,
-            source_provider=route.source_provider,
-            target_provider=route.target_provider,
-            provider_name=route.provider_name,
-            status_code=stream.status_code,
-            error_phase="stream_header",
-            upstream_url=str(provider_info.base_url),
-            request_log_id=entry_id,
             response_redaction="protocol_fields",
         )
         return (

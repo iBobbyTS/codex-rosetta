@@ -38,7 +38,6 @@ openai = ["openai==2.45.0"]
 anthropic = ["anthropic"]
 google = ["google-genai"]
 gateway = ["cryptography>=42.0.0"]
-profiling = ["pyinstrument>=5.0.0"]
 dev = [
     "python-dotenv",
     "pytest",
@@ -52,7 +51,7 @@ dev = [
 ]
 desktop-build = ["pyinstaller==6.21.0"]
 
-all = ["codex-rosetta[openai,anthropic,google,gateway,profiling,dev]"]
+all = ["codex-rosetta[openai,anthropic,google,gateway,dev]"]
 
 [project.urls]
 Documentation = "https://github.com/iBobbyTS/codex-rosetta/tree/main/docs"

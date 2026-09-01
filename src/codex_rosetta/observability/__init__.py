@@ -1,8 +1,7 @@
 """Reusable observability layer for LLM proxy servers.
 
 This package provides framework-agnostic building blocks for metrics
-collection, request logging, SQLite persistence, and on-demand
-profiling.  Any HTTP proxy built on top of ``codex-rosetta`` can import
+collection, request logging, and SQLite persistence. Any HTTP proxy built on top of ``codex-rosetta`` can import
 from here — no dependency on the gateway's config system or HTTP
 server.
 
@@ -11,7 +10,6 @@ Typical usage::
     from codex_rosetta.observability import (
         MetricsCollector,
         PersistenceManager,
-        ProfilerState,
         RequestLog,
         RequestLogEntry,
     )
@@ -19,24 +17,15 @@ Typical usage::
     metrics = MetricsCollector()
     persistence = PersistenceManager("/var/data/myproxy")
     request_log = RequestLog(persistence=persistence)
-    profiler = ProfilerState()
 """
 
 from __future__ import annotations
 
-from .error_dump import (
-    compress_body,
-    compute_body_hash,
-    decompress_body,
-    dump_error,
-    offload_images,
-)
 from .metrics import MetricsCollector
 from .persistence import (
     CompactionMappingCapacityError,
     PersistenceManager,
 )
-from .profiling import ProfilerState
 from .request_log import RequestLog, RequestLogEntry
 from .tool_history_store import ToolHistoryCapacityError, ToolHistoryConflictError
 from .retention import (
@@ -54,16 +43,10 @@ __all__ = [
     "MetricsCollector",
     "CompactionMappingCapacityError",
     "PersistenceManager",
-    "ProfilerState",
     "RequestLog",
     "RequestLogEntry",
     "ToolHistoryCapacityError",
     "ToolHistoryConflictError",
-    "compress_body",
-    "compute_body_hash",
-    "decompress_body",
-    "dump_error",
-    "offload_images",
     "resolve_request_log_caps",
     "validate_retention_cap",
 ]

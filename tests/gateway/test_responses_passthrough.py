@@ -470,7 +470,7 @@ def test_model_switch_compaction_uses_rosetta_summary_on_responses_passthrough_r
     persistence.close()
 
 
-def test_internal_call_can_retain_persistence_without_writing_error_dump():
+def test_internal_call_can_retain_persistence_on_upstream_error():
     async def send_request(
         provider_info, target_provider, body, model, *, extra_headers=None
     ):
@@ -491,13 +491,10 @@ def test_internal_call_can_retain_persistence_without_writing_error_dump():
             {"model": "gpt-test", "input": []},
             transport=transport,
             persistence=persistence,
-            disable_error_dump=True,
         )
     )
 
     assert response.status_code == 500
-    persistence.insert_error_dump.assert_not_called()
-    persistence.insert_dump_body.assert_not_called()
 
 
 def test_direct_passthrough_preserves_image_generation_tools():

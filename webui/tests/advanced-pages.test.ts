@@ -147,21 +147,18 @@ describe('advanced tool profiles', () => {
   });
 });
 
-describe('request and error-dump details', () => {
-  it('renders full request details and dump detail as text', async () => {
+describe('request details', () => {
+  it('renders full request details as escaped text', async () => {
     apiMock.get.mockImplementation((path: string) => {
       if (path.includes('key-labels')) return Promise.resolve({ labels: [] });
       if (path.startsWith('/admin/api/requests?')) return Promise.resolve({ entries: [{ timestamp: '2026-01-01', model: 'demo', status_code: 500, error_detail: '<script>bad()</script>', request_id: 'req-one' }], total: 1 });
-      if (path.startsWith('/admin/api/error-dumps?')) return Promise.resolve({ entries: [{ id: 'dump-one', model: 'demo', body_hash: 'hash' }] });
-      if (path === '/admin/api/error-dumps/dump-one') return Promise.resolve({ id: 'dump-one', request_body: { prompt: '<img onerror=bad()>' } });
       return Promise.resolve({});
     });
     render(RequestLogsPage);
     await screen.findByText('demo');
     await fireEvent.click(screen.getAllByText('demo')[0]);
     expect(await screen.findByText(/request_id/)).toBeInTheDocument();
-    await fireEvent.click(screen.getByRole('button', { name: 'Details' }));
-    expect(await screen.findByLabelText('Error dump detail')).toHaveTextContent('<img onerror=bad()>');
+    expect(screen.getByText(/<script>bad\(\)<\/script>/)).toBeInTheDocument();
     expect(document.querySelector('script')).toBeNull();
     expect(document.querySelector('img')).toBeNull();
   });

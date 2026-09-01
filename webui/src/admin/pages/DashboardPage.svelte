@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { api, download } from '../lib/api';
+import { api } from '../lib/api';
   import { createSerialPoll } from '../lib/polling';
   import { t } from '../../shared/i18n.svelte';
 
@@ -14,21 +14,12 @@
     persistence?: Dict;
     series?: Array<Record<string, number | string>>;
   };
-  type ProfileStatus = { enabled?: boolean; remaining?: number };
-  type ProfileResult = {
-    timestamp?: string; model?: string; source?: string; target?: string;
-    is_stream?: boolean; duration_ms?: number;
-  };
 
   let metrics = $state<Metrics | null>(null);
-  let profileStatus = $state<ProfileStatus>({});
-  let results = $state<ProfileResult[]>([]);
-  let count = $state(5);
   let loading = $state(true);
   let busy = $state(false);
   let error = $state('');
   let notice = $state('');
-  let selectedProfile = $state<unknown>(null);
   let throughputCanvas = $state<HTMLCanvasElement>();
   let latencyCanvas = $state<HTMLCanvasElement>();
 
@@ -81,14 +72,8 @@
 
   async function load(signal: AbortSignal): Promise<void> {
     try {
-      const [nextMetrics, status, profileResults] = await Promise.all([
-        api.get<Metrics>('/admin/api/metrics?seconds=60', signal),
-        api.get<ProfileStatus>('/admin/api/profiling/status', signal),
-        api.get<{ results?: ProfileResult[] }>('/admin/api/profiling/results', signal),
-      ]);
+      const nextMetrics = await api.get<Metrics>('/admin/api/metrics?seconds=60', signal);
       metrics = nextMetrics;
-      profileStatus = status;
-      results = profileResults.results ?? [];
       error = '';
     } catch (cause) {
       if (!aborted(cause)) error = message(cause);
@@ -109,21 +94,6 @@
     finally { busy = false; }
   }
 
-  function toggleProfiling(): void {
-    const requests = Math.max(1, Math.min(100, Math.trunc(count || 5)));
-    void operation(
-      () => profileStatus.enabled
-        ? api.post('/admin/api/profiling/disable')
-        : api.post('/admin/api/profiling/enable', { requests }),
-      profileStatus.enabled ? t('toast.profilingDisabled') : t('toast.profilingEnabled'),
-    );
-  }
-  function clearProfiling(): void {
-    if (!confirm(t('confirm.clearProfiling'))) return;
-    void operation(() => api.del('/admin/api/profiling/results'), t('toast.profilingCleared'));
-  }
-  async function inspectProfile(index: number): Promise<void> { busy = true; error = ''; try { selectedProfile = await api.get(`/admin/api/profiling/results/${index}`); } catch (cause) { error = message(cause); } finally { busy = false; } }
-  async function downloadProfiles(): Promise<void> { busy = true; error = ''; try { const blob = await download('/admin/api/profiling/results/download'); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'profiling-results.zip'; link.click(); URL.revokeObjectURL(url); } catch (cause) { error = message(cause); } finally { busy = false; } }
 
   onMount(() => { poll.start(); return () => poll.stop(); });
 </script>
@@ -147,13 +117,4 @@
       </tbody></table></div>
     </div>
   {/if}
-  <div class="section"><h2 style="margin-bottom:12px">{t('section.profiling')}</h2><div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap"><span class="badge" class:badge-success={profileStatus.enabled} style="padding:4px 10px;border-radius:4px;font-size:12px;font-weight:600">{profileStatus.enabled?t('profiling.remaining',{n:profileStatus.remaining??0}):t('profiling.off')}</span><label for="profilingCount" style="font-size:13px">{t('profiling.requests')}</label><input id="profilingCount" aria-label={t('aria.profilingRequests')} type="number" min="1" max="100" bind:value={count} style="width:60px;padding:4px 6px" /><button class="btn btn-sm" disabled={busy} onclick={toggleProfiling}>{profileStatus.enabled?t('profiling.disable'):t('profiling.enable')}</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={clearProfiling}>{t('profiling.clear')}</button><button class="btn btn-sm" disabled={busy||results.length===0} onclick={()=>void downloadProfiles()}>{t('profiling.downloadAll')}</button></div>
-    <p style="font-size:12px;color:var(--text-dim);margin:0 0 8px">{t('profiling.hint')}</p>
-    <div class="table-scroll"><table><thead><tr><th>{t('col.time')}</th><th>{t('col.model')}</th><th>{t('col.sourceTarget')}</th><th>{t('col.mode')}</th><th>{t('col.duration')}</th><th>{t('profiling.flamegraph')}</th></tr></thead><tbody>
-      {#each results as result, index}
-        <tr><td>{result.timestamp?new Date(result.timestamp).toLocaleString():'-'}</td><td>{result.model??'-'}</td><td>{result.source??'-'} → {result.target??'-'}</td><td>{result.is_stream?t('profiling.stream'):t('profiling.sync')}</td><td>{typeof result.duration_ms==='number'?`${result.duration_ms.toFixed(0)} ms`:'-'}</td><td><button class="btn btn-sm" onclick={()=>void inspectProfile(index)}>{t('btn.view')}</button></td></tr>
-      {:else}<tr><td colspan="6" class="empty">{t('profiling.empty')}</td></tr>{/each}
-    </tbody></table></div>
-    {#if selectedProfile}<pre aria-label={t('aria.profilingArtifact')}>{JSON.stringify(selectedProfile, null, 2)}</pre>{/if}
-  </div>
 </div>

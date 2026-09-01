@@ -37,36 +37,14 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe('DashboardPage', () => {
-  it('loads metrics and enables profiling with a bounded request count', async () => {
+  it('loads dashboard metrics', async () => {
     apiMock.get.mockImplementation((path: string) => {
       if (path.startsWith('/admin/api/metrics')) return Promise.resolve({ total_requests: 12, error_rate: 0.25, active_streams: 1, uptime_seconds: 90, by_target_provider: { openai: 12 } });
-      if (path.endsWith('/status')) return Promise.resolve({ enabled: false, remaining: 0 });
-      return Promise.resolve({ results: [] });
+      return Promise.resolve({});
     });
     render(DashboardPage);
     expect(await screen.findByText('Total requests')).toBeInTheDocument();
     expect(screen.getAllByText('12')).toHaveLength(2);
-    const count = screen.getByLabelText('Requests');
-    await fireEvent.input(count, { target: { value: '500' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Enable' }));
-    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith('/admin/api/profiling/enable', { requests: 100 }));
-  });
-
-  it('downloads profiling results through the registered backend route', async () => {
-    apiMock.get.mockImplementation((path: string) => {
-      if (path.startsWith('/admin/api/metrics')) return Promise.resolve({ total_requests: 1 });
-      if (path.endsWith('/status')) return Promise.resolve({ enabled: false, remaining: 0 });
-      return Promise.resolve({ results: [{ timestamp: '2026-01-01T00:00:00Z', model: 'gpt-test' }] });
-    });
-    downloadMock.mockResolvedValue(new Blob(['zip']));
-    const createObjectURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:test');
-    const revokeObjectURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
-    render(DashboardPage);
-    await screen.findByText('gpt-test');
-    await fireEvent.click(screen.getByRole('button', { name: 'Download all' }));
-    await waitFor(() => expect(downloadMock).toHaveBeenCalledWith('/admin/api/profiling/results/download'));
-    createObjectURL.mockRestore();
-    revokeObjectURL.mockRestore();
   });
 });
 

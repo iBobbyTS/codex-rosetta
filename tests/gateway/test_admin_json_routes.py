@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import json
-import zipfile
 from typing import Any, cast
 
 import pytest
@@ -67,7 +65,6 @@ def _config_data() -> dict[str, Any]:
         ("POST", "/admin/api/keys", True),
         ("PUT", "/admin/api/keys/test-client", True),
         ("POST", "/admin/api/test", True),
-        ("POST", "/admin/api/profiling/enable", True),
     ],
 )
 def test_admin_json_routes_reject_non_object_bodies(
@@ -99,32 +96,6 @@ def test_admin_json_routes_reject_non_object_bodies(
         assert response.status_code == 400
         assert isinstance(response, JSONResponse)
         assert json.loads(response.body) == {"error": "JSON body must be an object"}
-    finally:
-        persistence = getattr(app, "persistence", None)
-        if persistence is not None:
-            persistence.close()
-
-
-def test_profiling_rejects_non_integer_request_count(tmp_path):
-    config_data = _config_data()
-    config_path = tmp_path / "config.jsonc"
-    config_path.write_text(json.dumps(config_data), encoding="utf-8")
-    app = create_app(GatewayConfig(config_data), config_path=str(config_path))
-    request = Request(
-        method="POST",
-        path="/admin/api/profiling/enable",
-        query_string="",
-        headers={"x-admin-token": getattr(app, "auth_state").admin_token},
-        body=json.dumps({"requests": "not-an-integer"}).encode("utf-8"),
-        client_addr=("198.51.100.10", 12345),
-        app=app,
-    )
-
-    try:
-        response = asyncio.run(app._dispatch(request))
-        assert response.status_code == 400
-        assert isinstance(response, JSONResponse)
-        assert json.loads(response.body) == {"error": "'requests' must be an integer"}
     finally:
         persistence = getattr(app, "persistence", None)
         if persistence is not None:
@@ -268,25 +239,6 @@ def _admin_get(app: Any, path: str, query_string: str = "") -> Response:
     return asyncio.run(app._dispatch(request))
 
 
-def test_profiling_download_static_route_returns_zip():
-    app = cast(Any, create_app(GatewayConfig(_config_data())))
-    app.profiler_state.results.append(
-        {
-            "model": "test/model",
-            "timestamp": "2026-07-10T12:34:56+00:00",
-            "html": "<html>profile</html>",
-        }
-    )
-
-    response = _admin_get(app, "/admin/api/profiling/results/download")
-
-    assert response.status_code == 200
-    assert response.headers["Content-Type"] == "application/zip"
-    with zipfile.ZipFile(io.BytesIO(response.body)) as archive:
-        assert archive.namelist() == ["profile-0-test_model-2026-07-10T123456.html"]
-        assert archive.read(archive.namelist()[0]) == b"<html>profile</html>"
-
-
 @pytest.mark.parametrize(
     ("path", "query_string"),
     [
@@ -301,9 +253,6 @@ def test_profiling_download_static_route_returns_zip():
         ("/admin/api/requests", "limit=1&limit=2"),
         ("/admin/api/requests", "offset=-1"),
         ("/admin/api/requests", "offset=1000001"),
-        ("/admin/api/error-dumps", "limit=bad"),
-        ("/admin/api/error-dumps", "limit=0"),
-        ("/admin/api/error-dumps", "offset=-1"),
     ],
 )
 def test_admin_observability_rejects_invalid_integer_queries(

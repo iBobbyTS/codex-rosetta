@@ -72,17 +72,11 @@ def setup_admin(
     # Request log delegates to persistence when available
     request_log = RequestLog(persistence=persistence)
 
-    # On-demand deep profiling state
-    from codex_rosetta.observability import ProfilerState
-
-    profiler_state = ProfilerState()
-
     app.metrics = metrics
     app.request_log = request_log
     app.persistence = persistence
     app.gateway_config = config
     app.config_path = config_path
-    app.profiler_state = profiler_state
     app.stream_trace_state = StreamTraceState(
         config.stream_trace, token_values=token_values
     )

@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import ErrorDumpsPanel from '../components/ErrorDumpsPanel.svelte';
   import { api } from '../lib/api';
   import { createSerialPoll } from '../lib/polling';
   import { t } from '../../shared/i18n.svelte';
@@ -89,7 +88,7 @@
       {@const id = rowId(entry, index)}
       <tr style="cursor:pointer" onclick={() => toggle(id)}>
         <td>{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : '-'}</td><td><code>{entry.model ?? '-'}</code></td>
-        <td>{entry.source_provider ?? '-'} → {entry.target_provider_name ?? entry.target_provider ?? '-'}</td><td>{entry.is_stream ? t('profiling.stream') : t('profiling.sync')}</td>
+        <td>{entry.source_provider ?? '-'} → {entry.target_provider_name ?? entry.target_provider ?? '-'}</td><td>{entry.is_stream ? t('requestLog.stream') : t('requestLog.sync')}</td>
         <td>{entry.api_key_label ?? '-'}</td><td>{entry.client_ip ?? '-'}</td><td><span class="badge" class:badge-error={(entry.status_code??0)>=400} class:badge-success={(entry.status_code??0)>0&&(entry.status_code??0)<400}>{entry.status_code ?? '-'}</span></td>
         <td>{typeof entry.duration_ms === 'number' ? `${entry.duration_ms.toFixed(0)} ms` : '-'}</td>
       </tr>
@@ -97,5 +96,4 @@
     {:else}<tr><td colspan="8" class="empty">{t('empty.filteredLogs')}</td></tr>{/each}
   </tbody></table></div>{/if}
   <div class="pagination"><button class="btn btn-sm" disabled={offset===0} onclick={()=>{offset=Math.max(0,offset-limit);void reload();}}>{t('btn.prev')}</button><span class="info">{t('format.page',{page:Math.floor(offset/limit)+1,pages:Math.max(1,Math.ceil(total/limit)),entries:total})}</span><button class="btn btn-sm" disabled={offset+limit>=total} onclick={()=>{offset+=limit;void reload();}}>{t('btn.next')}</button></div>
-  <ErrorDumpsPanel />
 </div>

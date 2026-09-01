@@ -7,7 +7,6 @@ from codex_rosetta.gateway.admin.persistence import (
     PersistenceManager,
 )
 from codex_rosetta.gateway.admin.request_log import RequestLog, RequestLogEntry
-from codex_rosetta.gateway.admin.routes.profiling import ProfilerState
 
 # Also verify they are the same objects (not copies)
 import codex_rosetta.observability as obs
@@ -36,6 +35,3 @@ class TestBackwardCompatImports:
 
     def test_request_log_entry_identity(self):
         assert RequestLogEntry is obs.RequestLogEntry
-
-    def test_profiler_state_identity(self):
-        assert ProfilerState is obs.ProfilerState
