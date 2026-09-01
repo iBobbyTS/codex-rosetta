@@ -381,6 +381,93 @@ async def get_new_api_success_rate(request: Any, **kwargs: Any) -> Response:
     return JSONResponse({"success_rate": success_rate})
 
 
+async def get_codex_cockpit_health(request: Any, **kwargs: Any) -> Response:
+    """Probe one configured Codex Cockpit provider for account availability."""
+    body = _parse_json_object(request)
+    if isinstance(body, Response):
+        return body
+
+    provider_name = request.path_params["name"]
+    runtime_provider = request.app.gateway_config.providers.get(provider_name)
+    if runtime_provider is None:
+        return JSONResponse({"error": "Provider not found"}, status_code=404)
+    variant_override = body.get("openai_variant")
+    if variant_override is not None and not isinstance(variant_override, str):
+        return JSONResponse(
+            {"error": "'openai_variant' must be a string"}, status_code=400
+        )
+    if isinstance(variant_override, str):
+        variant_override = variant_override.strip()
+    effective_variant = (
+        runtime_provider.provider_variant
+        if variant_override is None
+        else variant_override.strip()
+    )
+    if effective_variant != "codex_cockpit":
+        return JSONResponse(
+            {"error": "Provider is not a Codex Cockpit provider"}, status_code=400
+        )
+
+    base_url = body.get("base_url")
+    if not isinstance(base_url, str) or not base_url.strip():
+        return JSONResponse(
+            {"error": "'base_url' must be a non-empty string"}, status_code=400
+        )
+    base_url = base_url.strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")):
+        return JSONResponse(
+            {"error": "'base_url' must be an http(s) URL"}, status_code=400
+        )
+
+    bearer_key = body.get("bearer_key", body.get("api_key", ""))
+    if not isinstance(bearer_key, str):
+        return JSONResponse({"error": "'bearer_key' must be a string"}, status_code=400)
+    bearer_key = bearer_key.strip()
+    # The editor sends a masked/empty key for an unchanged credential. Reuse
+    # the runtime provider's current wire credential in that case.
+    if not bearer_key:
+        headers = runtime_provider.auth_headers()
+        authorization = headers.get("Authorization", "")
+        if authorization.startswith("Bearer "):
+            bearer_key = authorization[7:].strip()
+    if not bearer_key:
+        return JSONResponse(
+            {"error": "'bearer_key' must be non-empty"}, status_code=400
+        )
+
+    transport = getattr(request.app, "transport", None)
+    client_pool = getattr(transport, "_pool", None)
+    if client_pool is None:
+        return JSONResponse(
+            {"error": "Codex Cockpit health transport is unavailable"}, status_code=502
+        )
+
+    # Probe through the runtime descriptor so successful counts and retained
+    # failure state are shared with model-group routing. Draft URL/key values
+    # are request-local overrides and never rotate or mutate runtime rings.
+    health = await runtime_provider.probe_codex_cockpit_health(
+        client_pool,
+        base_url=base_url,
+        bearer_key=bearer_key,
+        variant_override=variant_override,
+    )
+    available = False if health.error is not None else health.available
+    request.app.gateway_config.update_codex_cockpit_health(
+        provider_name,
+        available=available,
+        detail=health.error,
+    )
+    payload = {
+        "available_accounts": health.available_accounts,
+        "all_accounts": health.all_accounts,
+        "available": available,
+    }
+    if health.error is not None:
+        payload["error"] = health.error
+        return JSONResponse(payload, status_code=502)
+    return JSONResponse(payload)
+
+
 async def get_sub2api_keys(request: Any, **kwargs: Any) -> Response:
     """Fetch one bound account's keys through an existing runtime Provider."""
     body = _parse_json_object(request)
@@ -533,6 +620,7 @@ __all__ = [
     "chatgpt_callback",
     "delete_account",
     "get_accounts",
+    "get_codex_cockpit_health",
     "get_new_api_pricing",
     "get_new_api_success_rate",
     "get_sub2api_capacity",

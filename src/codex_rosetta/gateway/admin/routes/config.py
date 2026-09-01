@@ -92,7 +92,7 @@ import logging
 logger = logging.getLogger("codex-rosetta-gateway")
 _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 _CREDENTIAL_REFERENCE_CODE_PREFIX = "provider_credential_references:"
-_OPENAI_VARIANTS = frozenset({"official", "sub2api", "new_api", "custom"})
+_OPENAI_VARIANTS = frozenset({"official", "sub2api", "new_api", "codex_cockpit", "custom"})
 _NEW_API_AGGREGATION_BINS = frozenset({"1m", "5m", "1h"})
 _SUB2API_AGGREGATION_BINS = frozenset({"30s", "1m", "5m", "10m"})
 
@@ -1514,7 +1514,7 @@ def _normalize_openai_variant(body: dict[str, Any]) -> None:
     value = body["openai_variant"]
     if not isinstance(value, str) or value not in _OPENAI_VARIANTS:
         raise ValueError(
-            "'openai_variant' must be one of official, sub2api, new_api, custom"
+            "'openai_variant' must be one of official, sub2api, new_api, codex_cockpit, custom"
         )
 
 

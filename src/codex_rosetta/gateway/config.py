@@ -10,6 +10,7 @@ import os
 import re
 import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
@@ -1247,6 +1248,10 @@ class GatewayConfig:
         self.model_group_provider_names: dict[str, tuple[str, ...]] = {}
         self.model_group_names_by_model: dict[str, str] = {}
         self.model_group_rings: dict[str, ModelGroupProviderRing] = {}
+        # Codex Cockpit health exclusions are deliberately process-local.  The
+        # provider owns the latest display result; config owns the routing
+        # exclusion deadline shared by every model-group candidate.
+        self._codex_cockpit_health_exclusions: dict[str, tuple[float, str | None]] = {}
         self._initialize_model_group_rings(raw.get("model_groups", {}))
         (
             self.models,
@@ -1927,7 +1932,14 @@ class GatewayConfig:
         return tuple(
             (
                 candidate.provider_name,
-                statuses.get(candidate, "disabled"),
+                (
+                    "cooling"
+                    if self.codex_cockpit_health_exclusion_detail(
+                        candidate.provider_name
+                    )
+                    is not None
+                    else statuses.get(candidate, "disabled")
+                ),
             )
             for candidate in self.model_group_candidates.get(group_name, ())
         )
@@ -1949,9 +1961,49 @@ class GatewayConfig:
         provider = self.providers.get(candidate.provider_name)
         if provider is None or not provider.has_available_base_url():
             return False
+        exclusion = self._codex_cockpit_health_exclusions.get(candidate.provider_name)
+        if exclusion is not None:
+            deadline, _detail = exclusion
+            if deadline > time.monotonic():
+                return False
+            self._codex_cockpit_health_exclusions.pop(candidate.provider_name, None)
         if candidate.credential_uuid is None:
             return provider.has_available_credential()
         return provider.credential_uuid_is_available(candidate.credential_uuid)
+
+    def update_codex_cockpit_health(
+        self,
+        provider_name: str,
+        *,
+        available: bool | None,
+        detail: str | None = None,
+        cooldown_seconds: float = 3600.0,
+    ) -> None:
+        """Apply one provider-scoped Cockpit health result to model-group routing."""
+        provider = self.providers.get(provider_name)
+        if provider is None or provider.provider_variant != "codex_cockpit":
+            return
+        if available is True:
+            self._codex_cockpit_health_exclusions.pop(provider_name, None)
+            return
+        self._codex_cockpit_health_exclusions[provider_name] = (
+            time.monotonic() + cooldown_seconds,
+            detail,
+        )
+
+    def codex_cockpit_health_exclusion_detail(
+        self, provider_name: str
+    ) -> tuple[str | None, float] | None:
+        """Return the active process-local Cockpit exclusion, if any."""
+        item = self._codex_cockpit_health_exclusions.get(provider_name)
+        if item is None:
+            return None
+        deadline, detail = item
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            self._codex_cockpit_health_exclusions.pop(provider_name, None)
+            return None
+        return detail, remaining
 
     def available_model_group_candidates(
         self, group_name: str

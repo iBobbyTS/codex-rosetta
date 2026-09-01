@@ -2,6 +2,21 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.hoisted(() => {
+  if (globalThis.localStorage) return;
+  const values = new Map<string, string>();
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, String(value)),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+    },
+  });
+});
+
 import KeysPage from '../src/admin/pages/KeysPage.svelte';
 import ModelsPage from '../src/admin/pages/ModelsPage.svelte';
 import ProvidersPage from '../src/admin/pages/ProvidersPage.svelte';
@@ -53,7 +68,7 @@ const FALLBACK_UUID = '00000000-0000-4000-8000-000000000005';
 const providerCatalog = {
   api_types: ['responses', 'chat', 'anthropic', 'google'],
   providers: {
-    openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, sub2api: { endpoints: {} }, new_api: { endpoints: {} }, custom: { endpoints: {} } } },
+    openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, sub2api: { endpoints: {} }, new_api: { endpoints: {} }, codex_cockpit: { endpoints: {} }, custom: { endpoints: {} } } },
     moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
     deepseek: { label_key: 'provider.deepseek', soft_interrupt_default: true, recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
     custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
@@ -76,6 +91,101 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ProvidersPage', () => {
+  it('checks Codex Cockpit availability once when its editor opens and renders available counts', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'codex_cockpit', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://cockpit.example/v1'], current_base_url: 'https://cockpit.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'secret-cockpit-key' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockImplementation((path: string) => path.endsWith('/codex-cockpit-health')
+      ? Promise.resolve({ available_accounts: 1, all_accounts: 2 })
+      : Promise.resolve({ ok: true }));
+
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    const availability = dialog.getByText('1/2').closest('.cockpit-health')!;
+    expect(availability).toHaveTextContent('1/2');
+    expect(availability).toHaveTextContent('Available');
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+    expect(apiMock.post).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay/codex-cockpit-health',
+      { base_url: 'https://cockpit.example/v1', bearer_key: 'secret-cockpit-key', openai_variant: 'codex_cockpit' },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('checks a Codex Cockpit draft immediately without persisting on cancel', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'custom', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://custom.example/v1'], current_base_url: 'https://custom.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'draft-secret' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockImplementation((path: string) => path.endsWith('/codex-cockpit-health')
+      ? Promise.resolve({ available_accounts: 1, all_accounts: 1 })
+      : Promise.resolve({ ok: true }));
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await selectDropdown(dialog.getByLabelText('Provider variant'), 'Codex Cockpit');
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay/codex-cockpit-health',
+      { base_url: 'https://custom.example/v1', bearer_key: 'draft-secret', openai_variant: 'codex_cockpit' },
+      expect.any(AbortSignal),
+    ));
+    const baseUrlInput = dialog.getByLabelText('Base URL 1');
+    await fireEvent.input(baseUrlInput, { target: { value: 'http://127.0.0.1:8846/v1' } });
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+    await fireEvent.blur(baseUrlInput);
+    await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
+      '/admin/api/config/providers/relay/codex-cockpit-health',
+      { base_url: 'http://127.0.0.1:8846/v1', bearer_key: 'draft-secret', openai_variant: 'codex_cockpit' },
+      expect.any(AbortSignal),
+    ));
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    expect(apiMock.put).not.toHaveBeenCalled();
+  });
+
+  it('renders Codex Cockpit as unavailable for zero accounts and exposes probe errors', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'codex_cockpit', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://cockpit.example/v1'], current_base_url: 'https://cockpit.example/v1',
+        api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'secret-cockpit-key' }], current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockImplementation((path: string) => {
+      if (!path.endsWith('/codex-cockpit-health')) return Promise.resolve({ ok: true });
+      return Promise.reject(new Error('health offline'));
+    });
+    render(ProvidersPage);
+
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await waitFor(() => expect(dialog.getByText('Check failed')).toBeInTheDocument());
+    expect(dialog.getByText('health offline')).toBeInTheDocument();
+    expect(dialog.queryByText('Unknown')).not.toBeInTheDocument();
+    expect(apiMock.post).toHaveBeenCalledTimes(1);
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Cancel' }));
+    apiMock.post.mockImplementation((path: string) => path.endsWith('/codex-cockpit-health')
+      ? Promise.resolve({ available_accounts: 0, all_accounts: 3 })
+      : Promise.resolve({ ok: true }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const reopened = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    await waitFor(() => expect(reopened.getByText('0/3')).toBeInTheDocument());
+    expect(reopened.getByText('Unavailable')).toBeInTheDocument();
+    expect(apiMock.post).toHaveBeenCalledTimes(2);
+  });
+
   it('orders OpenAI variants and persists ordered New API groups with rates', async () => {
     mockProviderPage({
       providers: { relay: {
@@ -92,7 +202,7 @@ describe('ProvidersPage', () => {
     const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
     const variant = dialog.getByLabelText('Provider variant');
     await fireEvent.click(variant);
-    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['official', 'sub2api', 'new_api', 'custom']);
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['official', 'sub2api', 'new_api', 'codex_cockpit', 'custom']);
     await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'New API' }));
 
     await waitFor(() => expect(apiMock.post).toHaveBeenCalledWith(
@@ -2007,7 +2117,22 @@ describe('ModelsPage', () => {
       expect(hiddenRow).not.toHaveTextContent('Available');
       expect(hiddenRow).not.toHaveTextContent('99%');
       expect(hiddenRow).not.toHaveTextContent('2x');
-      expect(within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' })).not.toBeChecked();
+      const hiddenRouting = within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' });
+      expect(hiddenRouting).not.toBeChecked();
+
+      await fireEvent.click(hiddenRouting);
+      expect(hiddenRow).toHaveTextContent('Resume scheduling after saving model group');
+      expect(hiddenRow).not.toHaveTextContent('Not scheduled');
+
+      await fireEvent.click(within(coolingRow).getByRole('radio', { name: 'Current provider sub2api' }));
+      expect(coolingRow).toHaveTextContent('Resume scheduling after saving model group');
+      expect(coolingRow).not.toHaveTextContent('Cooling');
+      expect(coolingRow).not.toHaveTextContent(longDetail);
+
+      setLanguage('zh');
+      await tick();
+      expect(hiddenRow).toHaveTextContent('保存模型组后恢复调度');
+      expect(coolingRow).toHaveTextContent('保存模型组后恢复调度');
     } finally {
       localTime.mockRestore();
     }

@@ -39,7 +39,13 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
 def test_openai_variants_have_stable_admin_order() -> None:
     variants = provider_catalog_for_admin()["providers"]["openai"]["variants"]
 
-    assert list(variants) == ["official", "sub2api", "new_api", "custom"]
+    assert list(variants) == [
+        "official",
+        "sub2api",
+        "new_api",
+        "codex_cockpit",
+        "custom",
+    ]
 
 
 def test_soft_interrupt_defaults_are_protocol_scoped_and_overridable() -> None:

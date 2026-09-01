@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
+from typing import Any
 
 from .._ordered_failover import OrderedFailoverCoordinator
 from ..provider_profiles import (
@@ -27,6 +29,22 @@ from ..provider_profiles import (
 AuthHeaderFn = Callable[[str], dict[str, str]]
 CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
 CurrentCredentialRecorder = Callable[[str, str], Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class CodexCockpitHealth:
+    """Process-local account-pool health observed from Codex Cockpit."""
+
+    available_accounts: int | None = None
+    all_accounts: int | None = None
+    error: str | None = None
+
+    @property
+    def available(self) -> bool | None:
+        """Return availability, or ``None`` when no valid result exists."""
+        if self.available_accounts is None:
+            return None
+        return self.available_accounts > 0
 
 
 def _normalize_credential_uuid_mapping(
@@ -83,6 +101,7 @@ class ProviderInfo:
         soft_interrupt: bool = False,
         force_rosetta_compaction: bool = False,
         request_encoding: ResponsesRequestEncoding | None = None,
+        provider_variant: str | None = None,
     ) -> None:
         if base_urls is None:
             if base_url is None:
@@ -162,6 +181,8 @@ class ProviderInfo:
                 "request_encoding must be one of 'passthrough', 'identity', or 'zstd'"
             )
         self.request_encoding = request_encoding
+        self.provider_variant = provider_variant
+        self._codex_cockpit_health_state = {"value": CodexCockpitHealth()}
 
     @staticmethod
     def _normalize_base_url(name: str, value: str) -> str:
@@ -407,6 +428,84 @@ class ProviderInfo:
         """Return auth headers using the configured credential."""
         _credential_id, headers = self._credential_snapshot()
         return headers
+
+    @property
+    def codex_cockpit_health(self) -> CodexCockpitHealth:
+        """Return the latest process-local Codex Cockpit health result."""
+        return self._codex_cockpit_health_state["value"]
+
+    async def probe_codex_cockpit_health(
+        self,
+        client_pool: Any,
+        *,
+        base_url: str | None = None,
+        bearer_key: str | None = None,
+        variant_override: str | None = None,
+    ) -> CodexCockpitHealth:
+        """Probe ``{current_base_url}/health`` once with one wire credential.
+
+        The probe intentionally bypasses both URL and credential rotation. A
+        caller may provide a draft ``base_url``/``bearer_key`` pair for an
+        unsaved Admin-editor probe; those values, and an optional
+        ``variant_override``, are used only for this request and never alter
+        the runtime URL, credential rings, or provider variant. A failed probe
+        preserves the last successful account counts while exposing the error
+        to callers.
+        """
+        effective_variant = (
+            self.provider_variant if variant_override is None else variant_override
+        )
+        if effective_variant != "codex_cockpit":
+            raise ValueError("Codex Cockpit health requires the codex_cockpit variant")
+        from .http.transport import request_bounded_response
+
+        probe_base_url = self.base_url if base_url is None else base_url.rstrip("/")
+        probe_headers = (
+            self.auth_headers()
+            if bearer_key is None
+            else self._auth_header_fn(bearer_key)
+        )
+        url = f"{probe_base_url}/health"
+        try:
+            response = await request_bounded_response(
+                client_pool.get(self.proxy_url, allow_redirects=self.allow_redirects),
+                "GET",
+                url,
+                headers=probe_headers,
+                max_success_bytes=64 * 1024,
+                max_error_bytes=64 * 1024,
+                allow_redirects=self.allow_redirects,
+            )
+            if response.status_code != 200:
+                raise ValueError(
+                    f"health endpoint returned HTTP {response.status_code}"
+                )
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("health response must be a JSON object")
+            available = payload.get("available_accounts")
+            total = payload.get("all_accounts")
+            if (
+                isinstance(available, bool)
+                or not isinstance(available, int)
+                or available < 0
+                or isinstance(total, bool)
+                or not isinstance(total, int)
+                or total < 0
+                or available > total
+            ):
+                raise ValueError("health response contains invalid account counts")
+            self._codex_cockpit_health_state["value"] = CodexCockpitHealth(
+                available, total
+            )
+        except Exception as exc:
+            previous = self.codex_cockpit_health
+            self._codex_cockpit_health_state["value"] = CodexCockpitHealth(
+                previous.available_accounts,
+                previous.all_accounts,
+                str(exc) or type(exc).__name__,
+            )
+        return self.codex_cockpit_health
 
     def upstream_url(self, model: str, *, stream: bool = False) -> str:
         """Build the upstream URL for the given model."""

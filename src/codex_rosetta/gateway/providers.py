@@ -290,4 +290,7 @@ def build_provider_info(
         soft_interrupt=soft_interrupt,
         force_rosetta_compaction=force_rosetta_compaction,
         request_encoding=request_encoding,
+        provider_variant=cfg.get("openai_variant")
+        if base_type in {"openai_chat", "openai_responses", "open_responses"}
+        else None,
     )

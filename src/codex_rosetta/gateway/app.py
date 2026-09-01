@@ -551,6 +551,50 @@ def _failed_model_group_candidates(
     return matches or (failed_candidate,)
 
 
+async def _probe_codex_cockpit_after_model_error(
+    request: Any,
+    config: GatewayConfig,
+    provider_info: Any,
+    provider_name: str,
+    response: Response | StreamingResponse,
+    profile: dict[str, Any],
+) -> bool | None:
+    """Refresh Cockpit routing state after a non-404 model error.
+
+    Returns ``True`` when the provider is confirmed available, ``False`` when
+    it must be excluded, and ``None`` when the route is not Cockpit-backed or
+    the response is the explicitly exempted 404.
+    """
+    if (
+        response.status_code == 404
+        or response.status_code == 200
+        or getattr(provider_info, "provider_variant", None) != "codex_cockpit"
+        or profile.get("upstream_attempted") is not True
+        or profile.get("upstream_provider_failure") is not True
+    ):
+        return None
+    transport = getattr(request.app, "transport", None)
+    client_pool = getattr(transport, "_pool", None)
+    if client_pool is None:
+        config.update_codex_cockpit_health(
+            provider_name,
+            available=None,
+            detail="health probe transport unavailable",
+        )
+        return False
+    health = await provider_info.probe_codex_cockpit_health(client_pool)
+    # A retained account count is display-only after a failed probe.  Routing
+    # must treat any probe error as unavailable even when the previous counts
+    # were positive.
+    available = False if health.error is not None else health.available
+    config.update_codex_cockpit_health(
+        provider_name,
+        available=available,
+        detail=health.error,
+    )
+    return available is True
+
+
 # ---------------------------------------------------------------------------
 # Route handlers
 # ---------------------------------------------------------------------------
@@ -962,8 +1006,78 @@ async def _proxy_handler(  # noqa: C901
                 )
 
             error_detail = _response_error_detail(response)
+            cockpit_health = await _probe_codex_cockpit_after_model_error(
+                request,
+                config,
+                provider_info,
+                route.provider_name,
+                response,
+                profile if profile is not None else {},
+            )
+            # A successful Cockpit health result is authoritative for this
+            # attempt: preserve the original model error and bypass the
+            # ordinary 429/502/503 failover policy.
+            if cockpit_health is False and ring is not None:
+                assert group_name is not None
+                assert observation is not None
+                if not failover_leader:
+                    failover_leader, _waited = await ring.claim_observation(observation)
+                    if not failover_leader:
+                        # A concurrent leader may have switched the ring to a
+                        # new candidate.  Retry against that candidate; when
+                        # the leader exhausted a sole candidate, the current
+                        # observation is unchanged and this request must keep
+                        # its own upstream response instead of resolving a
+                        # synthetic blocked 503 on the next loop.
+                        current_available = False
+                        if ring.current != observation[0]:
+                            available_candidates = getattr(
+                                config, "available_model_group_candidates", None
+                            )
+                            current_available = (
+                                ring.current in available_candidates(group_name)
+                                if callable(available_candidates)
+                                else True
+                            )
+                        if current_available:
+                            _clear_request_local_state(
+                                state_scope,
+                                metadata_store=store,
+                                codex_tool_store=codex_tool_store,
+                            )
+                            state_scope = None
+                            continue
+                if failover_leader:
+                    failed_provider_name = route.provider_name
+                    failed_candidates = tuple(
+                        candidate
+                        for candidate in ring.candidates
+                        if getattr(candidate, "provider_name", candidate)
+                        == failed_provider_name
+                    ) or (failed_provider_name,)
+                    next_provider = config.preferred_model_group_candidate(
+                        group_name,
+                        failed=cast(
+                            "tuple[_ModelGroupProviderCandidate, ...]",
+                            failed_candidates,
+                        ),
+                        after_503=True,
+                    )
+                    if next_provider is not None:
+                        await ring.select_automatically(next_provider)
+                        _clear_request_local_state(
+                            state_scope,
+                            metadata_store=store,
+                            codex_tool_store=codex_tool_store,
+                        )
+                        state_scope = None
+                        continue
+                    await ring.publish()
+                    failover_leader = False
             provider_failed = bool(
-                ring is not None and _is_model_group_provider_failure(response, profile)
+                cockpit_health is None
+                and ring is not None
+                and _is_model_group_provider_failure(response, profile)
             )
             if provider_failed:
                 assert ring is not None

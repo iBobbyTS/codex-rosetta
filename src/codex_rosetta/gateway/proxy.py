@@ -394,6 +394,8 @@ async def _run_rosetta_compaction(
         profile["upstream_provider_failure"] = True
         profile["provider_failure_origin"] = failure_origin
     if summary_response.status_code != 200:
+        if summary_profile.get("upstream_attempted") is True:
+            profile["upstream_attempted"] = True
         return summary_response, profile
     try:
         summary_payload = json.loads(summary_response.body)
@@ -1859,6 +1861,7 @@ async def handle_non_streaming(  # noqa: C901
                 ),
                 profile,
             )
+        profile["upstream_attempted"] = True
         profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
         profile["passthrough"] = True
 
@@ -2029,6 +2032,7 @@ async def handle_non_streaming(  # noqa: C901
             ),
             profile,
         )
+    profile["upstream_attempted"] = True
     profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
 
     if resp.status_code != 200:
@@ -2839,6 +2843,7 @@ async def _handle_direct_responses_streaming(
             profile,
         )
 
+    profile["upstream_attempted"] = True
     profile["stream_connect_ms"] = round((time.perf_counter() - t_connect) * 1000, 2)
     profile["passthrough"] = True
 
@@ -3196,6 +3201,7 @@ async def handle_streaming(  # noqa: C901
             ),
             profile,
         )
+    profile["upstream_attempted"] = True
     profile["stream_connect_ms"] = round((time.perf_counter() - t_connect) * 1000, 2)
 
     # Application-level error — preserve the upstream envelope and codes while

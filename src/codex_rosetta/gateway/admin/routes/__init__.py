@@ -36,6 +36,7 @@ from .accounts import (
     add_sub2api,
     chatgpt_callback,
     delete_account,
+    get_codex_cockpit_health,
     get_accounts,
     get_new_api_pricing,
     get_new_api_success_rate,
@@ -154,6 +155,9 @@ def register_admin_routes(app: Any) -> None:
     app.route("/admin/api/config/providers/<name>/new-api-pricing", methods=["POST"])(
         get_new_api_pricing
     )
+    app.route(
+        "/admin/api/config/providers/<name>/codex-cockpit-health", methods=["POST"]
+    )(get_codex_cockpit_health)
     app.route(
         "/admin/api/config/providers/<name>/new-api-success-rate", methods=["POST"]
     )(get_new_api_success_rate)
