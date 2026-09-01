@@ -134,6 +134,7 @@
   })[value];
   const chainDescription = (): string => {
     if (!contractsCurrent || !chainContract) return '';
+    if (chainContract.mode === 'full_gpt_passthrough') return '';
     return t(`network.chain.${chainContract.mode}`);
   };
   const routingEntry = (id: string): RoutingEntry | undefined =>

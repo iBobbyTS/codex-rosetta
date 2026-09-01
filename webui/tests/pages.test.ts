@@ -160,7 +160,7 @@ describe('NetworkSearchPage', () => {
     apiMock.put.mockResolvedValue(configResponse(rows).server);
     render(NetworkSearchPage);
     expect(await screen.findByDisplayValue('tav***key')).toBeInTheDocument();
-    expect(screen.getByText(/Requests start with the current provider/)).toBeInTheDocument();
+    expect(screen.getByText('Search providers rotate automatically based on availability, with a one-hour cooldown. Applies to all non-passthrough web.run and /alpha/search requests.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Drag Tavily search provider to reorder' })).toHaveAttribute('title', 'Drag Tavily search provider to reorder');
     expect(screen.getByRole('button', { name: 'Remove Tavily search provider' })).toHaveAttribute('title', 'Remove Tavily search provider');
     expect(screen.queryByRole('button', { name: 'Drag tavily-a' })).not.toBeInTheDocument();
@@ -416,7 +416,7 @@ describe('NetworkSearchPage', () => {
   ])('hides stale saved contracts during dirty edits: $name', async ({ rows, savedContract, mutate }) => {
     mockConfig(configResponse(rows, { search: { api_type: 'responses' } }, savedContract));
     render(NetworkSearchPage);
-    await waitFor(() => expect(document.querySelector('.chain-contract')).not.toBeNull());
+    await waitFor(() => expect(document.querySelector('tr[data-sortable-id]')).not.toBeNull());
 
     await mutate();
 
@@ -456,7 +456,7 @@ describe('NetworkSearchPage', () => {
 
     await waitFor(() => {
       expect(screen.getByLabelText('Search provider type')).toHaveAttribute('data-value', 'configured_responses_provider');
-      expect(document.querySelector('[data-chain-mode="full_gpt_passthrough"]')).not.toBeNull();
+      expect(document.querySelector('[data-chain-mode="full_gpt_passthrough"]')).toBeNull();
     });
     expect(apiMock.get.mock.calls.filter(([path]) => path === '/admin/api/config')).toHaveLength(2);
   });
