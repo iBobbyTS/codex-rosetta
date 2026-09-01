@@ -2071,6 +2071,9 @@ describe('ModelsPage', () => {
       expect(groupMeta).toHaveTextContent('newapi → sub2api');
       expect(groupMeta).not.toHaveTextContent('LLM');
       expect(groupMeta).not.toHaveTextContent('1');
+      const modelRow = screen.getByText('demo-model', { selector: 'code' }).closest('tr')!;
+      expect(modelRow).not.toHaveTextContent('newapi');
+      expect(modelRow).not.toHaveTextContent('sub2api');
       const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
       expect(dialog.getByRole('columnheader', { name: 'Provider / participation' })).toBeInTheDocument();
       expect(dialog.getByRole('columnheader', { name: 'Availability' })).toBeInTheDocument();
