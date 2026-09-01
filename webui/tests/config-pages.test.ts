@@ -2424,6 +2424,17 @@ describe('ModelsPage', () => {
     }
   });
 
+  it('shows a single model-group provider without a count', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: { only: { api_type: 'chat' } },
+      model_groups: { Main: { providers: [{ name: 'only', current: true, enabled: true, status: 'available', error: null }], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    });
+    render(ModelsPage);
+    await waitFor(() => expect(document.querySelector('.model-group-meta')).toHaveTextContent('only'));
+    expect(document.querySelector('.model-group-meta')).not.toHaveTextContent('providers');
+  });
+
   it('persists a non-first current provider through the ordered provider contract', async () => {
     const initial = {
       providers: {
@@ -2466,6 +2477,8 @@ describe('ModelsPage', () => {
       : { cursor: 0, events: [] }));
     render(ModelsPage);
 
+    await waitFor(() => expect(document.querySelector('.model-group-meta')).toHaveTextContent('3 providers, current: first'));
+
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     let dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
     await fireEvent.click(dialog.getByRole('radio', { name: 'Current provider second' }));
@@ -2475,6 +2488,7 @@ describe('ModelsPage', () => {
       '/admin/api/config/model-groups/Main',
       { providers: ['first', 'second', 'third'], current_provider: 'second', type: 'llm', models: { 'demo-model': {} } },
     ));
+    expect(document.querySelector('.model-group-meta')).toHaveTextContent('3 providers, current: second');
     await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
     dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
     expect(dialog.getByRole('radio', { name: 'Current provider second' })).toBeChecked();
