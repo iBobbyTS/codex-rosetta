@@ -2066,6 +2066,11 @@ describe('ModelsPage', () => {
     try {
       render(ModelsPage);
       await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+      const groupCard = (await screen.findByText('Main', { selector: 'code' })).closest('.model-group-card')!;
+      const groupMeta = groupCard.querySelector('.model-group-meta')!;
+      expect(groupMeta).toHaveTextContent('newapi → sub2api');
+      expect(groupMeta).not.toHaveTextContent('LLM');
+      expect(groupMeta).not.toHaveTextContent('1');
       const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
       expect(dialog.getByRole('columnheader', { name: 'Provider / participation' })).toBeInTheDocument();
       expect(dialog.getByRole('columnheader', { name: 'Availability' })).toBeInTheDocument();
