@@ -25,6 +25,7 @@
   let sub2apiUrl = $state('');
   let sub2apiAuth = $state('');
   let sub2apiBusy = $state(false);
+  let sub2apiReloginAccount = $state<Account | null>(null);
   let deleteAccount = $state<Account | null>(null);
   let refreshingAccountId = $state('');
 
@@ -139,11 +140,16 @@
     try {
       let auth: unknown;
       try { auth = JSON.parse(sub2apiAuth); } catch { throw new Error(t('accounts.sub2apiInvalidJson')); }
-      await api.post('/admin/api/accounts/sub2api', { base_url: sub2apiUrl, auth });
+      const result = await api.post<{ account?: Account }>('/admin/api/accounts/sub2api', { base_url: sub2apiUrl, auth });
+      const previous = sub2apiReloginAccount;
+      if (previous && result.account?.id && result.account.id !== previous.id) {
+        await api.del(`/admin/api/accounts/${encodeURIComponent(previous.id)}`);
+      }
       sub2apiOpen = false;
+      sub2apiReloginAccount = null;
       sub2apiUrl = '';
       sub2apiAuth = '';
-      notice = t('accounts.sub2apiSaved');
+      notice = previous ? t('accounts.sub2apiRelogged') : t('accounts.sub2apiSaved');
       await load();
     } catch (cause) { error = message(cause); }
     finally { sub2apiBusy = false; }
@@ -169,6 +175,15 @@
       await load();
     } catch (cause) { error = message(cause); }
     finally { refreshingAccountId = ''; }
+  }
+
+  function reloginSub2API(account: Account): void {
+    sub2apiReloginAccount = account;
+    sub2apiUrl = account.base_url ?? account.name ?? '';
+    sub2apiAuth = '';
+    error = '';
+    notice = '';
+    sub2apiOpen = true;
   }
 
   onMount(() => {
@@ -204,14 +219,14 @@
       <thead><tr><th>{t('accounts.name')}</th><th>{t('accounts.email')}</th><th>{t('accounts.actions')}</th></tr></thead>
       <tbody>
         {#each accounts.filter((account) => account.provider === 'sub2api') as account}
-          <tr><td>{account.name ?? account.base_url ?? ''}</td><td>{account.email ?? ''}</td><td><button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
+          <tr><td>{account.name ?? account.base_url ?? ''}</td><td>{account.email ?? ''}</td><td><button class="btn btn-sm" disabled={sub2apiBusy} onclick={() => reloginSub2API(account)}>{t('accounts.sub2apiRelogin')}</button> <button class="btn btn-sm" onclick={() => deleteAccount = account}>{t('btn.delete')}</button></td></tr>
         {:else}<tr><td colspan="3" class="empty">{t('empty.accounts')}</td></tr>{/each}
       </tbody>
     </table></div>
   {/if}
 </div>
 
-<Dialog open={sub2apiOpen} title={t('accounts.sub2apiTitle')} size="md" closeLabel={t('btn.cancel')} onClose={() => { if (!sub2apiBusy) sub2apiOpen = false; }}>
+<Dialog open={sub2apiOpen} title={t(sub2apiReloginAccount ? 'accounts.sub2apiReloginTitle' : 'accounts.sub2apiTitle')} size="md" closeLabel={t('btn.cancel')} onClose={() => { if (!sub2apiBusy) { sub2apiOpen = false; sub2apiReloginAccount = null; } }}>
   <div class="account-dialog-content">
     <section class="sub2api-guide" aria-labelledby="sub2api-guide-title">
       <h3 id="sub2api-guide-title">{t('accounts.sub2apiGuideTitle')}</h3>

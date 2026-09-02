@@ -36,6 +36,9 @@ vi.mock('../src/shared/i18n.svelte', () => ({
     'accounts.subscription': 'Subscription',
     'empty.accounts': 'No accounts.',
     'accounts.sub2apiDeferred': 'Sub2API account flow is coming soon',
+    'accounts.sub2apiRelogin': 'Re-login',
+    'accounts.sub2apiReloginTitle': 'Re-login Sub2API account',
+    'accounts.sub2apiRelogged': 'Sub2API account re-logged in.',
   }[key] ?? key),
 }));
 
@@ -204,5 +207,15 @@ describe('AccountsPage Sub2API dialog', () => {
 
     await waitFor(() => expect(screen.getByText('https://ai-pixel.online')).toBeInTheDocument());
     expect(screen.getByText('owner@example.test')).toBeInTheDocument();
+  });
+
+  it('re-logs in a saved Sub2API account and reloads the list', async () => {
+    apiMock.get.mockResolvedValue({ accounts: [{ id: 'sub2api-1', provider: 'sub2api', base_url: 'https://ai-pixel.online', email: 'owner@example.test' }] });
+    apiMock.post.mockResolvedValue({ account: { id: 'sub2api-1', provider: 'sub2api' } });
+    render(AccountsPage);
+    await waitFor(() => expect(screen.getByText('owner@example.test')).toBeInTheDocument());
+    await fireEvent.click(screen.getByRole('button', { name: 'Re-login' }));
+    expect(screen.getByRole('dialog', { name: 'Re-login Sub2API account' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Base URL')).toHaveValue('https://ai-pixel.online');
   });
 });
