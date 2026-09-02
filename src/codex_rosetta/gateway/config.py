@@ -32,6 +32,7 @@ from .provider_profiles import (
     resolve_force_rosetta_compaction,
     resolve_request_encoding,
     resolve_provider_profile,
+    provider_responses_request_encoding,
     resolve_soft_interrupt,
 )
 from .stream_trace import StreamTraceConfig
@@ -1612,6 +1613,20 @@ class GatewayConfig:
             cfg["allow_redirects"] = allow_redirects
             api_type = resolve_provider_api_type(name, cfg, warn_on_default=True)
             cfg["api_type"] = api_type
+            provider_id = cfg.get("provider")
+            if not isinstance(provider_id, str) or not provider_id.strip():
+                raise ValueError(
+                    f"config: provider '{name}' requires an explicit provider main identity"
+                )
+            provider_id = provider_id.strip()
+            resolve_provider_profile(provider_id, api_type)
+            recommended_encoding = provider_responses_request_encoding(provider_id)
+            if (
+                api_type == "responses"
+                and recommended_encoding is not None
+                and "request_encoding" not in cfg
+            ):
+                cfg["request_encoding"] = recommended_encoding
             request_encoding = resolve_request_encoding(
                 api_type,
                 *([cfg["request_encoding"]] if "request_encoding" in cfg else []),
@@ -1626,13 +1641,8 @@ class GatewayConfig:
                     else []
                 ),
             )
-            provider_id = cfg.get("provider")
-            if not isinstance(provider_id, str) or not provider_id.strip():
-                raise ValueError(
-                    f"config: provider '{name}' requires an explicit provider main identity"
-                )
             cfg["soft_interrupt"] = resolve_soft_interrupt(
-                provider_id.strip(),
+                provider_id,
                 api_type,
                 *([cfg["soft_interrupt"]] if "soft_interrupt" in cfg else []),
             )

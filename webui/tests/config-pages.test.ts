@@ -71,6 +71,7 @@ const providerCatalog = {
     openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, sub2api: { endpoints: {} }, new_api: { endpoints: {} }, codex_cockpit: { endpoints: {} }, custom: { endpoints: {} } } },
     moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
     deepseek: { label_key: 'provider.deepseek', soft_interrupt_default: true, recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
+    zhipu: { label_key: 'provider.zhipu', recommended_api_type: 'chat', adapted_api_types: { chat: 'zhipu', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], responses_request_encoding: 'identity', request_encoding_groups: { recommended: ['identity'], not_recommended: ['passthrough', 'zstd'] }, variants: { official: { endpoints: { chat: 'https://open.bigmodel.cn/api/paas/v4', responses: 'https://api.z.ai/api/v1' } }, custom: { endpoints: {} } } },
     custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
   },
 };
@@ -1377,6 +1378,27 @@ describe('ProvidersPage', () => {
     expect(screen.getByRole('listbox')).not.toHaveTextContent('open_responses');
     expect(protocol).not.toHaveTextContent('openai_chat');
     expect(protocol).not.toHaveTextContent('openai_responses');
+  });
+
+  it('groups Zhipu Responses encodings and defaults to recommended identity', async () => {
+    apiMock.get.mockResolvedValue({
+      providers: {},
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'],
+      provider_catalog: providerCatalog,
+      registered_shims: [],
+      credential_visible: false,
+    });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    await selectDropdown(dialog.getByLabelText('Provider'), 'Zhipu (GLM)');
+    await selectDropdown(dialog.getByLabelText('Protocol'), 'OpenAI Responses');
+    const encoding = dialog.getByLabelText('Upstream request encoding');
+    expect(encoding).toHaveAttribute('data-value', 'identity');
+    await fireEvent.click(encoding);
+    expect(screen.getByText('Recommended')).toBeInTheDocument();
+    expect(screen.getByText('Not recommended')).toBeInTheDocument();
+    expect(screen.getByRole('listbox')).toHaveTextContent('Always uncompressed JSON');
   });
 
   it('defaults DeepSeek Chat to late-developer cache compatibility and hides it for non-Chat protocols', async () => {

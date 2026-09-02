@@ -11,7 +11,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from .provider_profiles import resolve_request_encoding
+from .provider_profiles import (
+    provider_responses_request_encoding,
+    resolve_request_encoding,
+)
 from .transport.provider_info import (
     ProviderInfo,
     anthropic_auth,
@@ -29,6 +32,23 @@ __all__ = [
 ]
 
 logger = logging.getLogger("codex-rosetta-gateway")
+
+
+def _apply_response_encoding_restriction(
+    provider_type: str, cfg: dict[str, Any]
+) -> dict[str, Any]:
+    """Apply catalog-defined Responses encoding restrictions to one config."""
+
+    provider_id = cfg.get("provider")
+    if not isinstance(provider_id, str) or provider_type not in {
+        "openai_responses",
+        "open_responses",
+    }:
+        return cfg
+    encoding = provider_responses_request_encoding(provider_id)
+    if encoding is None or "request_encoding" in cfg:
+        return cfg
+    return {**cfg, "request_encoding": encoding}
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +217,10 @@ def build_provider_info(
                 cfg = {**cfg, "api_keys": [{"id": "primary", "key": env_val}]}
     else:
         base_type = provider_type
+
+    # Some native Responses endpoints accept JSON but not Zstandard frames.
+    # Apply the catalog restriction defensively even for legacy configurations.
+    cfg = _apply_response_encoding_restriction(base_type, cfg)
 
     reg = _PROVIDER_REGISTRY.get(base_type)
 

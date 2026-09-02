@@ -31,6 +31,12 @@ def test_recommended_protocols_are_declared_per_provider() -> None:
         "qwen3.7-plus"
     ] == {"temperature": 0.55, "top_p": 1.0}
     assert providers["openai"]["runtime_capabilities_by_model"] == {}
+    assert providers["zhipu"]["adapted_api_types"]["responses"] == "openai_responses"
+    assert providers["zhipu"]["responses_request_encoding"] == "identity"
+    assert providers["zhipu"]["request_encoding_groups"] == {
+        "recommended": ["identity"],
+        "not_recommended": ["passthrough", "zstd"],
+    }
     assert providers["deepseek"]["soft_interrupt_default"] is True
     assert providers["openai"]["soft_interrupt_default"] is False
     assert {"argo", "volcengine", "xai"}.isdisjoint(providers)

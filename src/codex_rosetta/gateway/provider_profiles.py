@@ -125,6 +125,31 @@ def _validate_runtime_capabilities_by_model(
     return result
 
 
+def _validate_request_encoding_groups(provider_id: str, value: Any) -> None:
+    """Validate optional Admin grouping for Responses encodings."""
+
+    if value is None:
+        return
+    if not isinstance(value, dict) or set(value) - {"recommended", "not_recommended"}:
+        raise ValueError(
+            f"provider {provider_id!r} has invalid request encoding groups"
+        )
+    seen: set[str] = set()
+    for group_name, encodings in value.items():
+        if not isinstance(encodings, list) or any(
+            not isinstance(item, str) or item not in RESPONSES_REQUEST_ENCODINGS
+            for item in encodings
+        ):
+            raise ValueError(
+                f"provider {provider_id!r} has invalid request encoding group {group_name!r}"
+            )
+        if seen.intersection(encodings):
+            raise ValueError(
+                f"provider {provider_id!r} repeats a request encoding across groups"
+            )
+        seen.update(encodings)
+
+
 def _soft_interrupt_default(provider_id: str, entry: dict[str, Any]) -> bool:
     value = entry.get("soft_interrupt_default", False)
     if not isinstance(value, bool):
@@ -154,6 +179,7 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
         adapted = entry.get("adapted_api_types")
         known = entry.get("known_supported_api_types")
         variants = entry.get("variants")
+        responses_request_encoding = entry.get("responses_request_encoding")
         runtime_capabilities = entry.get("runtime_capabilities", {})
         soft_interrupt_default = _soft_interrupt_default(provider_id, entry)
         runtime_capability_fields = _validate_runtime_capability_fields(
@@ -176,6 +202,16 @@ def _catalog() -> tuple[tuple[str, ...], Mapping[str, Mapping[str, Any]]]:
             raise ValueError(f"provider {provider_id!r} adapts an unsupported protocol")
         if not isinstance(variants, dict) or not variants:
             raise ValueError(f"provider {provider_id!r} has no endpoint variants")
+        if responses_request_encoding is not None and (
+            not isinstance(responses_request_encoding, str)
+            or responses_request_encoding not in RESPONSES_REQUEST_ENCODINGS
+        ):
+            raise ValueError(
+                f"provider {provider_id!r} has invalid Responses request encoding"
+            )
+        _validate_request_encoding_groups(
+            provider_id, entry.get("request_encoding_groups")
+        )
         if not isinstance(runtime_capabilities, dict):
             raise ValueError(
                 f"provider {provider_id!r} has invalid runtime capabilities"
@@ -208,6 +244,16 @@ def get_provider_catalog_entry(provider_id: str) -> Mapping[str, Any] | None:
     """Return immutable metadata for a provider main identity."""
 
     return _catalog()[1].get(provider_id)
+
+
+def provider_responses_request_encoding(
+    provider_id: str,
+) -> ResponsesRequestEncoding | None:
+    """Return a provider-specific Responses wire-encoding restriction."""
+
+    entry = get_provider_catalog_entry(provider_id)
+    value = entry.get("responses_request_encoding") if entry is not None else None
+    return value if isinstance(value, str) else None
 
 
 def resolve_soft_interrupt(

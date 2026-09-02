@@ -164,6 +164,38 @@ def test_responses_provider_requires_explicit_request_encoding() -> None:
         GatewayConfig(raw)
 
 
+def test_zhipu_responses_defaults_to_identity_request_encoding() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        {
+            "provider": "zhipu",
+            "api_type": "responses",
+        }
+    )
+
+    config = GatewayConfig(raw)
+
+    assert config._raw_providers["test"]["request_encoding"] == "identity"
+    route, provider = config.resolve("openai_responses", "gpt-test")
+    assert route.target_provider == "openai_responses"
+    assert provider.request_encoding == "identity"
+
+
+def test_zhipu_responses_preserves_explicit_nonrecommended_encoding() -> None:
+    raw = _minimal_raw()
+    raw["providers"]["test"].update(
+        {
+            "provider": "zhipu",
+            "api_type": "responses",
+            "request_encoding": "passthrough",
+        }
+    )
+
+    config = GatewayConfig(raw)
+
+    assert config.providers["test"].request_encoding == "passthrough"
+
+
 @pytest.mark.parametrize("request_encoding", ["passthrough", "identity", "zstd"])
 def test_responses_provider_propagates_request_encoding(
     request_encoding: str,
