@@ -264,6 +264,7 @@ def normalize_model_preset(
         set(value)
         - MODEL_INFO_FIELDS
         - MODEL_PRESET_EXTRA_OVERRIDE_FIELDS
+        - MODEL_PRESET_TEMPLATE_FIELDS
         - shared_override_fields
     )
     if unknown:
@@ -286,6 +287,19 @@ def normalize_model_preset(
             if key in value
         }
     )
+    if "default_reasoning_level" in value:
+        default_reasoning = value["default_reasoning_level"]
+        if not isinstance(default_reasoning, str) or not default_reasoning.strip():
+            raise ValueError(
+                f"{field}.default_reasoning_level must be a non-empty string"
+            )
+        default_reasoning = default_reasoning.strip()
+        if default_reasoning not in normalized["supported_reasoning_levels"]:
+            raise ValueError(
+                f"{field}.default_reasoning_level must be one of "
+                f"{normalized['supported_reasoning_levels']}"
+            )
+        normalized["default_reasoning_level"] = default_reasoning
     normalized.update(special_overrides)
     context_presets = special_overrides.get("context_window_presets")
     if context_presets:
@@ -391,7 +405,9 @@ def _materialize_full_preset(
         copy.deepcopy(by_effort[effort]) for effort in requested
     ]
     model["max_context_window"] = model["context_window"]
-    default = terra.get("default_reasoning_level")
+    default = preset.get("default_reasoning_level") or terra.get(
+        "default_reasoning_level"
+    )
     model["default_reasoning_level"] = default if default in requested else requested[0]
     return model
 

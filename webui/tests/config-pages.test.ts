@@ -71,7 +71,7 @@ const providerCatalog = {
     openai: { label_key: 'provider.openai', recommended_api_type: 'responses', adapted_api_types: { chat: 'openai', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], variants: { official: { endpoints: { chat: 'https://api.openai.com/v1', responses: 'https://api.openai.com/v1' } }, sub2api: { endpoints: {} }, new_api: { endpoints: {} }, codex_cockpit: { endpoints: {} }, custom: { endpoints: {} } } },
     moonshot: { label_key: 'provider.kimi', recommended_api_type: 'chat', adapted_api_types: { chat: 'moonshot' }, known_supported_api_types: ['chat', 'anthropic'], variants: { china: { endpoints: { chat: 'https://api.moonshot.cn/v1' } }, international: { endpoints: { chat: 'https://api.moonshot.ai/v1' } }, custom: { endpoints: {} } } },
     deepseek: { label_key: 'provider.deepseek', soft_interrupt_default: true, recommended_api_type: 'chat', adapted_api_types: { chat: 'deepseek' }, known_supported_api_types: ['chat', 'anthropic'], variants: { official: { endpoints: { chat: 'https://api.deepseek.com' } }, custom: { endpoints: {} } } },
-    zhipu: { label_key: 'provider.zhipu', recommended_api_type: 'chat', adapted_api_types: { chat: 'zhipu', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], responses_request_encoding: 'identity', request_encoding_groups: { recommended: ['identity'], not_recommended: ['passthrough', 'zstd'] }, variants: { official: { endpoints: { chat: 'https://open.bigmodel.cn/api/paas/v4', responses: 'https://api.z.ai/api/v1' } }, custom: { endpoints: {} } } },
+    zhipu: { label_key: 'provider.zhipu', recommended_api_type: 'chat', adapted_api_types: { chat: 'zhipu', responses: 'openai_responses' }, known_supported_api_types: ['chat', 'responses'], responses_request_encoding: 'identity', request_encoding_groups: { recommended: ['identity'], not_recommended: ['passthrough', 'zstd'] }, variants: { official: { endpoints: { chat: 'https://open.bigmodel.cn/api/coding/paas/v4' }, legacy_endpoints: { chat: 'https://open.bigmodel.cn/api/paas/v4' } }, international: { endpoints: { chat: 'https://api.z.ai/api/coding/paas/v4', responses: 'https://api.z.ai/api/v1' } }, custom: { endpoints: {} } } },
     custom: { label_key: 'provider.custom', recommended_api_type: 'chat', adapted_api_types: {}, known_supported_api_types: [], variants: { custom: { endpoints: {} } } },
   },
 };
@@ -1392,6 +1392,7 @@ describe('ProvidersPage', () => {
     await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
     const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
     await selectDropdown(dialog.getByLabelText('Provider'), 'Zhipu (GLM)');
+    await selectDropdown(dialog.getByLabelText('Provider variant'), 'International');
     await selectDropdown(dialog.getByLabelText('Protocol'), 'OpenAI Responses');
     const encoding = dialog.getByLabelText('Upstream request encoding');
     expect(encoding).toHaveAttribute('data-value', 'identity');
@@ -1399,6 +1400,90 @@ describe('ProvidersPage', () => {
     expect(screen.getByText('Recommended')).toBeInTheDocument();
     expect(screen.getByText('Not recommended')).toBeInTheDocument();
     expect(screen.getByRole('listbox')).toHaveTextContent('Always uncompressed JSON');
+  });
+
+  it('uses provider-specific Zhipu China and International labels and switches endpoints', async () => {
+    apiMock.get.mockResolvedValue({ providers: {}, known_api_types: ['responses', 'chat'], provider_catalog: providerCatalog, registered_shims: [], credential_visible: false });
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: '+ Add Provider' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Add Provider' }));
+    await selectDropdown(dialog.getByLabelText('Provider'), 'Zhipu (GLM)');
+    const variant = dialog.getByLabelText('Provider variant');
+    expect(variant).toHaveAttribute('data-value', 'official');
+    await fireEvent.click(dialog.getByLabelText('Protocol'));
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['chat']);
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'OpenAI Chat Completions' }));
+    await fireEvent.click(variant);
+    expect(screen.getByRole('listbox')).toHaveTextContent('China');
+    expect(screen.getByRole('listbox')).toHaveTextContent('International');
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'International' }));
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://api.z.ai/api/coding/paas/v4');
+    await fireEvent.click(dialog.getByLabelText('Protocol'));
+    expect(within(screen.getByRole('listbox')).getAllByRole('option').map((option) => option.getAttribute('data-value'))).toEqual(['chat', 'responses']);
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'OpenAI Responses' }));
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://api.z.ai/api/v1');
+    await selectDropdown(variant, 'China');
+    expect(dialog.getByLabelText('Protocol')).toHaveAttribute('data-value', 'chat');
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4');
+  });
+
+  it('recognizes the legacy Zhipu China URL as official and saves the canonical URL', async () => {
+    const config = { providers: { glm: { provider: 'zhipu', api_type: 'chat', base_urls: ['https://open.bigmodel.cn/api/paas/v4'], current_base_url: 'https://open.bigmodel.cn/api/paas/v4', api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'glm-secret' }], current_api_key: 'primary' } }, known_api_types: ['responses', 'chat'], provider_catalog: providerCatalog, registered_shims: [], credential_visible: false };
+    mockProviderPage(config);
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
+    await fireEvent.click(dialog.getByLabelText('Provider variant'));
+    await fireEvent.click(within(screen.getByRole('listbox')).getByRole('option', { name: 'China' }));
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4');
+  });
+
+  it('round-trips the Zhipu China variant through save, reload, and edit', async () => {
+    const config = {
+      providers: { glm: { provider: 'zhipu', openai_variant: 'official', api_type: 'chat', base_urls: ['https://open.bigmodel.cn/api/coding/paas/v4'], current_base_url: 'https://open.bigmodel.cn/api/coding/paas/v4', api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'glm-secret' }], current_api_key: 'primary' } },
+      known_api_types: ['responses', 'chat'], provider_catalog: providerCatalog, registered_shims: [], credential_visible: false,
+    };
+    mockProviderPage(config);
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4');
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/glm', expect.objectContaining({
+      provider: 'zhipu', openai_variant: 'official', api_type: 'chat', base_urls: ['https://open.bigmodel.cn/api/coding/paas/v4'], current_base_url: 'https://open.bigmodel.cn/api/coding/paas/v4',
+    })));
+    await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config', expect.any(AbortSignal)));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const reloaded = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(reloaded.getByLabelText('Provider')).toHaveAttribute('data-value', 'zhipu');
+    expect(reloaded.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'official');
+    expect(reloaded.getByLabelText('Base URL 1')).toHaveValue('https://open.bigmodel.cn/api/coding/paas/v4');
+  });
+
+  it('round-trips the Zhipu International variant through save, reload, and edit', async () => {
+    const config = {
+      providers: { glm: { provider: 'zhipu', openai_variant: 'international', api_type: 'responses', request_encoding: 'identity', base_urls: ['https://api.z.ai/api/v1'], current_base_url: 'https://api.z.ai/api/v1', api_keys: [{ uuid: PRIMARY_UUID, id: 'primary', key: 'glm-secret' }], current_api_key: 'primary' } },
+      known_api_types: ['responses', 'chat'], provider_catalog: providerCatalog, registered_shims: [], credential_visible: false,
+    };
+    mockProviderPage(config);
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(dialog.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'international');
+    expect(dialog.getByLabelText('Base URL 1')).toHaveValue('https://api.z.ai/api/v1');
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith('/admin/api/config/providers/glm', expect.objectContaining({
+      provider: 'zhipu', openai_variant: 'international', api_type: 'responses', request_encoding: 'identity', base_urls: ['https://api.z.ai/api/v1'], current_base_url: 'https://api.z.ai/api/v1',
+    })));
+    await waitFor(() => expect(apiMock.get).toHaveBeenCalledWith('/admin/api/config', expect.any(AbortSignal)));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const reloaded = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(reloaded.getByLabelText('Provider')).toHaveAttribute('data-value', 'zhipu');
+    expect(reloaded.getByLabelText('Provider variant')).toHaveAttribute('data-value', 'international');
+    expect(reloaded.getByLabelText('Protocol')).toHaveAttribute('data-value', 'responses');
+    expect(reloaded.getByLabelText('Base URL 1')).toHaveValue('https://api.z.ai/api/v1');
   });
 
   it('defaults DeepSeek Chat to late-developer cache compatibility and hides it for non-Chat protocols', async () => {

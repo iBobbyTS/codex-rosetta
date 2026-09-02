@@ -13,6 +13,7 @@ from codex_rosetta.gateway.model_presets import (
     model_input_modalities,
     model_presets_for_admin,
     normalize_model_preset,
+    _materialize_full_preset,
 )
 
 
@@ -169,6 +170,58 @@ def test_admin_detection_combines_codex_catalog_and_third_party_presets() -> Non
         "limit": 10000,
     }
     assert "supports_parallel_tool_calls" not in presets["minimax-m3"]
+
+
+def test_glm_53_overrides_responses_runtime_capabilities() -> None:
+    presets = full_model_presets()
+    glm = presets["glm-5.3"]
+
+    assert glm["context_window"] == 1048576
+    assert glm["max_context_window"] == 1048576
+    assert [level["effort"] for level in glm["supported_reasoning_levels"]] == [
+        "low",
+        "high",
+        "max",
+    ]
+    assert glm["default_reasoning_level"] == "max"
+    assert glm["support_verbosity"] is False
+    assert glm["supports_parallel_tool_calls"] is True
+    assert glm["supports_reasoning_summary_parameter"] is True
+    assert glm["supports_search_tool"] is False
+    assert glm["truncation_policy"] == {"mode": "bytes", "limit": 10000}
+    assert glm["tool_mode"] is None
+    assert glm["use_responses_lite"] is False
+
+
+def test_model_preset_rejects_default_reasoning_level_outside_supported_levels() -> (
+    None
+):
+    resource = load_model_preset_resource()
+    preset = dict(
+        next(model for model in resource["models"] if model["slug"] == "glm-5.3")
+    )
+    preset["default_reasoning_level"] = "ultra"
+
+    with pytest.raises(ValueError, match="default_reasoning_level must be one of"):
+        normalize_model_preset(
+            preset,
+            field="glm-5.3",
+            shared_overrides=resource["shared_overrides"],
+        )
+
+
+def test_model_preset_omitted_default_reasoning_level_uses_terra_fallback() -> None:
+    resource = load_model_preset_resource()
+    preset = dict(
+        next(model for model in resource["models"] if model["slug"] == "glm-5.3")
+    )
+    del preset["default_reasoning_level"]
+    preset["supported_reasoning_levels"] = ["medium", "max"]
+    terra = full_model_presets()["gpt-5.6-terra"]
+
+    materialized = _materialize_full_preset(terra, resource, preset)
+
+    assert materialized["default_reasoning_level"] == terra["default_reasoning_level"]
 
 
 def test_official_and_third_party_presets_preserve_codex_0149_guidance_fields() -> None:

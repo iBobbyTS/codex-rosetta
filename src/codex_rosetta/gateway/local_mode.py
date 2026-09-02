@@ -534,7 +534,9 @@ def _materialize_model_preset(
         raise ValueError(f"model preset '{model['slug']}' has invalid context window")
     model["max_context_window"] = context_window
     model["supported_reasoning_levels"] = _reasoning_levels(terra, requested_efforts)
-    default_reasoning = terra.get("default_reasoning_level")
+    default_reasoning = raw_preset.get("default_reasoning_level") or terra.get(
+        "default_reasoning_level"
+    )
     model["default_reasoning_level"] = (
         default_reasoning
         if default_reasoning in requested_efforts

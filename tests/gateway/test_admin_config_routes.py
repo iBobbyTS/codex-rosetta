@@ -3281,6 +3281,49 @@ def test_sub2api_save_reports_missing_credential_diagnostic(monkeypatch):
     ]
 
 
+@pytest.mark.parametrize("variant", ["official", "international", "custom"])
+def test_put_zhipu_provider_accepts_site_variants(tmp_path, variant):
+    data = _config_data()
+    data["providers"]["zhipu"] = json.loads(json.dumps(data["providers"]["openai"]))
+    data["providers"]["zhipu"]["provider"] = "zhipu"
+    data["providers"]["zhipu"]["base_urls"] = [
+        "https://api.z.ai/api/v1"
+        if variant == "international"
+        else "https://open.bigmodel.cn/api/coding/paas/v4"
+    ]
+    data["providers"]["zhipu"]["current_base_url"] = data["providers"]["zhipu"][
+        "base_urls"
+    ][0]
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(data), encoding="utf-8")
+    body = _provider_put_body(data, "zhipu")
+    body["openai_variant"] = variant
+    request = _provider_admin_request(config_path, data, "zhipu", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 200
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["providers"]["zhipu"]["openai_variant"] == variant
+
+
+def test_put_zhipu_provider_rejects_openai_only_variant_without_write(tmp_path):
+    data = _config_data()
+    data["providers"]["zhipu"] = json.loads(json.dumps(data["providers"]["openai"]))
+    data["providers"]["zhipu"]["provider"] = "zhipu"
+    config_path = tmp_path / "config.jsonc"
+    original = json.dumps(data)
+    config_path.write_text(original, encoding="utf-8")
+    body = _provider_put_body(data, "zhipu")
+    body["openai_variant"] = "sub2api"
+    request = _provider_admin_request(config_path, data, "zhipu", body)
+
+    response = _run(put_provider(request))
+
+    assert response.status_code == 400
+    assert config_path.read_text(encoding="utf-8") == original
+
+
 def test_put_provider_rejects_unknown_openai_variant_without_write(tmp_path):
     data = _config_data()
     config_path = tmp_path / "config.jsonc"

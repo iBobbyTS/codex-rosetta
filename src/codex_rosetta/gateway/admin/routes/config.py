@@ -92,7 +92,9 @@ import logging
 logger = logging.getLogger("codex-rosetta-gateway")
 _PROVIDER_MODEL_DISCOVERY_TIMEOUT_SECONDS = 60.0
 _CREDENTIAL_REFERENCE_CODE_PREFIX = "provider_credential_references:"
-_OPENAI_VARIANTS = frozenset({"official", "sub2api", "new_api", "codex_cockpit", "custom"})
+_OPENAI_VARIANTS = frozenset(
+    {"official", "sub2api", "new_api", "codex_cockpit", "custom"}
+)
 _NEW_API_AGGREGATION_BINS = frozenset({"1m", "5m", "1h"})
 _SUB2API_AGGREGATION_BINS = frozenset({"30s", "1m", "5m", "10m"})
 
@@ -1508,14 +1510,23 @@ def _normalize_sub2api_account_id(body: dict[str, Any]) -> None:
 
 
 def _normalize_openai_variant(body: dict[str, Any]) -> None:
-    """Validate the optional explicit OpenAI Admin variant metadata."""
+    """Validate the optional provider variant metadata."""
     if "openai_variant" not in body:
         return
     value = body["openai_variant"]
-    if not isinstance(value, str) or value not in _OPENAI_VARIANTS:
-        raise ValueError(
-            "'openai_variant' must be one of official, sub2api, new_api, codex_cockpit, custom"
+    provider = body.get("provider")
+    allowed = (
+        frozenset({"official", "international", "custom"})
+        if provider == "zhipu"
+        else _OPENAI_VARIANTS
+    )
+    if not isinstance(value, str) or value not in allowed:
+        allowed_values = (
+            "official, international, custom"
+            if provider == "zhipu"
+            else "official, sub2api, new_api, codex_cockpit, custom"
         )
+        raise ValueError(f"'openai_variant' must be one of {allowed_values}")
 
 
 def _normalize_new_api_aggregation_bin(body: dict[str, Any]) -> None:
