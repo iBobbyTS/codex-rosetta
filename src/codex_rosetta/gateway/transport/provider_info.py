@@ -383,6 +383,13 @@ class ProviderInfo:
         """Return the effective multiplier for a fixed model-group credential."""
         return self.credential_multiplier(self.credential_id_for_uuid(credential_uuid))
 
+    def update_credential_multiplier_for_uuid(
+        self, credential_uuid: str, multiplier: float
+    ) -> None:
+        """Apply a refreshed effective multiplier to one configured credential."""
+        credential_id = self.credential_id_for_uuid(credential_uuid)
+        self._credential_multipliers[credential_id] = multiplier
+
     def credential_uuid_is_available(self, credential_uuid: str) -> bool:
         """Return whether one configured credential UUID is globally available."""
         credential_id = self.credential_id_for_uuid(credential_uuid)

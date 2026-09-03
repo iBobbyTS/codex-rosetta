@@ -15,6 +15,8 @@ from codex_rosetta.gateway.admin.provider_refresh import (
     _new_api_points,
 )
 from codex_rosetta.gateway import app as gateway_app
+from codex_rosetta.gateway.config import load_config_raw
+from codex_rosetta.gateway.transport.provider_info import ProviderInfo
 
 
 def test_new_api_points_are_grouped_by_unix_timestamp() -> None:
@@ -190,8 +192,18 @@ async def test_sub2api_partial_snapshot_recovery_only_clears_returned_credential
         "base_urls": ["https://sub.example"],
         "current_base_url": "https://sub.example",
         "api_keys": [
-            {"uuid": first_uuid, "id": "key-1", "key": "secret-1"},
-            {"uuid": second_uuid, "id": "key-2", "key": "secret-2"},
+            {
+                "uuid": first_uuid,
+                "id": "key-1",
+                "key": "secret-1",
+                "automatic_rate_multiplier": 0.25,
+            },
+            {
+                "uuid": second_uuid,
+                "id": "key-2",
+                "key": "secret-2",
+                "automatic_rate_multiplier": 0.4,
+            },
         ],
         "availability_snapshot": {
             "updated_at": 1,
@@ -248,7 +260,15 @@ async def test_sub2api_partial_snapshot_recovery_only_clears_returned_credential
                                     "name": "key-1",
                                     "key": "secret-1",
                                     "group_id": 7,
-                                    "group_routes": [],
+                                    "group_routes": [
+                                        {
+                                            "enabled": True,
+                                            "group": {
+                                                "id": 7,
+                                                "rate_multiplier": 0.15,
+                                            },
+                                        }
+                                    ],
                                 }
                             ]
                         },
@@ -283,7 +303,126 @@ async def test_sub2api_partial_snapshot_recovery_only_clears_returned_credential
     assert await coordinator._refresh_sub2api("sub", provider)
     assert coordinator.snapshot_for("sub", first_uuid)["value"] == 0
     assert coordinator.snapshot_for("sub", second_uuid)["value"] == 5
+    assert provider["api_keys"][0]["automatic_rate_multiplier"] == 0.15
+    assert provider["api_keys"][1]["automatic_rate_multiplier"] == 0.4
     assert recoveries == [("sub", first_uuid, 10.0, 0)]
+
+
+@pytest.mark.asyncio
+async def test_sub2api_refresh_persists_and_applies_automatic_multiplier(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    credential_uuid = "credential-uuid"
+    provider = {
+        "openai_variant": "sub2api",
+        "new_api_aggregation_bin": "5m",
+        "sub2api_account_id": "account",
+        "base_urls": ["https://sub.example"],
+        "current_base_url": "https://sub.example",
+        "api_keys": [
+            {
+                "uuid": credential_uuid,
+                "id": "pro",
+                "key": "secret",
+                "automatic_rate_multiplier": 0.25,
+                "rate_multiplier_adjustment": 0.5,
+            }
+        ],
+    }
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps({"providers": {"sub": provider}}))
+    runtime_provider = ProviderInfo(
+        "openai_responses",
+        configured_id="sub",
+        api_keys=(("pro", "secret"),),
+        credential_uuids=((credential_uuid, "pro"),),
+        credential_multipliers={"pro": 0.125},
+        auto_rotate_credentials=False,
+        base_url="https://sub.example",
+        auth_header_fn=lambda key: {"Authorization": f"Bearer {key}"},
+        url_template="{base_url}/responses",
+        request_encoding="passthrough",
+        provider_variant="sub2api",
+    )
+    config: Any = SimpleNamespace(
+        _all_raw_providers={"sub": provider},
+        providers={"sub": runtime_provider},
+        model_group_candidates={},
+    )
+
+    class Response:
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class Client:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            pass
+
+        async def request(self, endpoint: str) -> Response:
+            if endpoint.startswith("/api/v1/keys"):
+                return Response(
+                    {
+                        "code": 0,
+                        "data": {
+                            "items": [
+                                {
+                                    "id": 1,
+                                    "name": "pro",
+                                    "key": "secret",
+                                    "group_id": 7,
+                                    "group_routes": [
+                                        {
+                                            "enabled": True,
+                                            "group": {
+                                                "id": 7,
+                                                "rate_multiplier": 0.15,
+                                            },
+                                        }
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                )
+            return Response(
+                {
+                    "code": 0,
+                    "data": {
+                        "items": [
+                            {
+                                "group_id": 7,
+                                "concurrency_used": 5,
+                                "concurrency_max": 20,
+                            }
+                        ]
+                    },
+                }
+            )
+
+    monkeypatch.setattr(
+        "codex_rosetta.gateway.admin.provider_refresh.Sub2APIProviderClient", Client
+    )
+    monkeypatch.setattr(
+        "codex_rosetta.gateway.admin.provider_refresh.get_account_store",
+        lambda _app: object(),
+    )
+    coordinator = ProviderRefreshCoordinator(
+        SimpleNamespace(), config, str(config_path), clock=lambda: 100.0
+    )
+
+    assert await coordinator._refresh_sub2api("sub", provider)
+    persisted = load_config_raw(str(config_path))["providers"]["sub"]
+    assert persisted["api_keys"][0]["automatic_rate_multiplier"] == 0.15
+    assert (
+        persisted["availability_snapshot"]["credentials"][credential_uuid]["value"]
+        == 15
+    )
+    assert provider["api_keys"][0]["automatic_rate_multiplier"] == 0.15
+    assert runtime_provider.credential_multiplier_for_uuid(credential_uuid) == 0.075
 
 
 @pytest.mark.asyncio

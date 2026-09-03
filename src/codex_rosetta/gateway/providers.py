@@ -29,6 +29,7 @@ __all__ = [
     "build_provider_info",
     "normalize_provider_api_key",
     "provider_api_key_values",
+    "special_credential_multiplier",
 ]
 
 logger = logging.getLogger("codex-rosetta-gateway")
@@ -148,22 +149,9 @@ def _credential_multipliers(
         if not isinstance(item, dict) or not isinstance(item.get("id"), str):
             continue
         if variant in {"sub2api", "new_api"}:
-            automatic = item.get("automatic_rate_multiplier")
-            adjustment = item.get("rate_multiplier_adjustment", 1)
-            automatic_value = (
-                automatic
-                if isinstance(automatic, (int, float))
-                and not isinstance(automatic, bool)
-                else 1
-            )
-            adjustment_value = (
-                adjustment
-                if isinstance(adjustment, (int, float))
-                and not isinstance(adjustment, bool)
-                else 1
-            )
-            result[item["id"]] = max(0.0, float(automatic_value)) * max(
-                0.0, float(adjustment_value)
+            result[item["id"]] = special_credential_multiplier(
+                item.get("automatic_rate_multiplier"),
+                item.get("rate_multiplier_adjustment", 1),
             )
         else:
             multiplier = item.get("rate_multiplier", 1)
@@ -172,6 +160,21 @@ def _credential_multipliers(
             ):
                 result[item["id"]] = max(0.0, float(multiplier))
     return result
+
+
+def special_credential_multiplier(automatic: Any, adjustment: Any) -> float:
+    """Return the effective multiplier for one Sub2API or New API credential."""
+    automatic_value = (
+        automatic
+        if isinstance(automatic, (int, float)) and not isinstance(automatic, bool)
+        else 1
+    )
+    adjustment_value = (
+        adjustment
+        if isinstance(adjustment, (int, float)) and not isinstance(adjustment, bool)
+        else 1
+    )
+    return max(0.0, float(automatic_value)) * max(0.0, float(adjustment_value))
 
 
 def build_provider_info(

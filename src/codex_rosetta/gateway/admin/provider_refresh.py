@@ -24,6 +24,7 @@ from .routes.accounts import (
 )
 from .sub2api_client import Sub2APIProviderClient
 from ..config import GatewayConfig, load_config_raw, write_config
+from ..providers import special_credential_multiplier
 
 _SPECIAL_VARIANTS = frozenset({"new_api", "sub2api"})
 _NEW_API_RETRIES = {"1m": 5, "5m": 7, "1h": 10}
@@ -533,16 +534,19 @@ class ProviderRefreshCoordinator:
                 by_group = {item["group_id"]: item for item in capacity}
                 by_name = {str(item["name"]): item for item in keys}
                 refreshed: dict[str, dict[str, Any]] = {}
+                refreshed_multipliers: dict[str, int | float | None] = {}
                 for entry in entries:
                     if not isinstance(entry, dict):
                         continue
                     item = by_name.get(str(entry.get("id")))
                     if item is None:
                         continue
+                    credential_uuid = str(entry.get("uuid", entry.get("id")))
+                    refreshed_multipliers[credential_uuid] = item["rate_multiplier"]
                     cap = by_group.get(int(item["group_id"]))
                     if cap is None:
                         continue
-                    refreshed[str(entry.get("uuid", entry.get("id")))] = {
+                    refreshed[credential_uuid] = {
                         "value": cap["concurrency_max"] - cap["concurrency_used"],
                         "used": cap["concurrency_used"],
                         "maximum": cap["concurrency_max"],
@@ -552,6 +556,7 @@ class ProviderRefreshCoordinator:
                 await self._persist(
                     name,
                     refreshed,
+                    automatic_multipliers=refreshed_multipliers,
                     evidence_started_at={
                         credential_uuid: request_started_at
                         for credential_uuid in refreshed
@@ -580,6 +585,7 @@ class ProviderRefreshCoordinator:
         name: str,
         credentials: dict[str, dict[str, Any]],
         *,
+        automatic_multipliers: Mapping[str, int | float | None] | None = None,
         evidence_started_at: Mapping[str, float] | None = None,
     ) -> None:
         async with self._persist_lock:
@@ -599,11 +605,17 @@ class ProviderRefreshCoordinator:
                 if not isinstance(provider, dict):
                     return
                 provider["availability_snapshot"] = snapshot
+                self._update_persisted_automatic_multipliers(
+                    provider, automatic_multipliers or {}
+                )
                 write_config(self.config_path, document)
             current_provider = self.config._all_raw_providers.get(name)
             if current_provider is None:
                 return
             current_provider["availability_snapshot"] = snapshot
+            self._apply_automatic_multipliers(
+                name, current_provider, automatic_multipliers or {}
+            )
             self._snapshots[name] = snapshot
             recover = getattr(
                 self.config, "recover_provider_credential_from_snapshot", None
@@ -616,6 +628,46 @@ class ProviderRefreshCoordinator:
                             credential_uuid,
                             evidence_started_at=started_at,
                         )
+
+    @staticmethod
+    def _update_persisted_automatic_multipliers(
+        provider: Mapping[str, Any],
+        multipliers: Mapping[str, int | float | None],
+    ) -> None:
+        entries = provider.get("api_keys")
+        if not isinstance(entries, list):
+            return
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            credential_uuid = str(entry.get("uuid", entry.get("id")))
+            if credential_uuid in multipliers:
+                entry["automatic_rate_multiplier"] = multipliers[credential_uuid]
+
+    def _apply_automatic_multipliers(
+        self,
+        name: str,
+        provider: Mapping[str, Any],
+        multipliers: Mapping[str, int | float | None],
+    ) -> None:
+        self._update_persisted_automatic_multipliers(provider, multipliers)
+        runtime_provider = getattr(self.config, "providers", {}).get(name)
+        if runtime_provider is None:
+            return
+        by_uuid = {
+            str(entry.get("uuid", entry.get("id"))): entry
+            for entry in provider.get("api_keys", [])
+            if isinstance(entry, dict)
+        }
+        for credential_uuid, automatic in multipliers.items():
+            entry = by_uuid.get(credential_uuid)
+            if entry is not None:
+                runtime_provider.update_credential_multiplier_for_uuid(
+                    credential_uuid,
+                    special_credential_multiplier(
+                        automatic, entry.get("rate_multiplier_adjustment", 1)
+                    ),
+                )
 
 
 __all__ = ["ProviderRefreshCoordinator"]
