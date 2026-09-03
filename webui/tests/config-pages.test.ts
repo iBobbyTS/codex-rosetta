@@ -2280,7 +2280,7 @@ describe('ModelsPage', () => {
     }
   });
 
-  it('makes a short CJK cooldown detail fully reachable through the accessible toggle', async () => {
+  it('makes cooldown detail accessible and lets the current cooling provider be selected again for recovery', async () => {
     const detailText = '上游返回暂时不可用，请等待冷却完成后重试。该错误内容已经过服务端脱敏处理。';
     expect(detailText.length).toBeLessThanOrEqual(120);
     apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config' ? {
@@ -2301,6 +2301,19 @@ describe('ModelsPage', () => {
     expect(detail).toHaveClass('expanded');
     expect(detail).toHaveTextContent(detailText);
     expect(within(providerRow).getByRole('button', { name: 'Collapse cooldown detail for cjk' })).toHaveAttribute('aria-expanded', 'true');
+
+    const current = within(providerRow).getByRole('radio', { name: 'Current provider cjk' });
+    expect(current).toBeChecked();
+    await fireEvent.pointerDown(current);
+    expect(providerRow).toHaveTextContent('Resume scheduling after saving model group');
+    expect(providerRow).not.toHaveTextContent('Cooling');
+    expect(providerRow).not.toHaveTextContent(detailText);
+
+    await fireEvent.click(dialog.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(apiMock.put).toHaveBeenCalledWith(
+      '/admin/api/config/model-groups/Main',
+      { providers: ['cjk'], current_provider: 'cjk', type: 'llm', models: { 'demo-model': {} } },
+    ));
   });
 
   it('live-merges only matching runtime fields while preserving reordered edited drafts', async () => {
