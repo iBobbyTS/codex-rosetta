@@ -234,6 +234,33 @@ describe('ProvidersPage', () => {
     })));
   });
 
+  it('rounds New API availability to two decimal places', async () => {
+    mockProviderPage({
+      providers: { relay: {
+        provider: 'openai', openai_variant: 'new_api', api_type: 'responses', request_encoding: 'passthrough',
+        base_urls: ['https://new-api.example/v1'], current_base_url: 'https://new-api.example/v1',
+        api_keys: [{
+          uuid: PRIMARY_UUID,
+          id: 'primary',
+          key: 'prov***cret',
+          new_api_group: 'vip',
+          new_api_model: 'gpt-5',
+        }],
+        current_api_key: 'primary',
+      } },
+      known_api_types: ['responses', 'chat', 'anthropic', 'google'], provider_catalog: providerCatalog,
+    });
+    apiMock.post.mockImplementation((path: string) => path.endsWith('/new-api-success-rate')
+      ? Promise.resolve({ success_rate: 87.356 })
+      : Promise.resolve({ group_ratio: { vip: 0.75 } }));
+
+    render(ProvidersPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Provider' }));
+    expect(await dialog.findByText('87.36%')).toBeInTheDocument();
+  });
+
   it('preserves the New API draft across pricing failure, retries, and fences stale responses on variant change', async () => {
     mockProviderPage({
       providers: { relay: {
