@@ -2280,6 +2280,34 @@ describe('ModelsPage', () => {
     }
   });
 
+  it('compares routing changes with the state at editor open before showing resume after save', async () => {
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config' ? {
+      providers: {
+        available: { api_type: 'chat', auto_rotate_credentials: true },
+        hidden: { api_type: 'chat', auto_rotate_credentials: true },
+      },
+      model_groups: { Main: { providers: [
+        { name: 'available', auto_rotate_credentials: true, current: true, enabled: true, routing_enabled: true, status: 'available', error: null },
+        { name: 'hidden', auto_rotate_credentials: true, current: false, enabled: true, routing_enabled: false, status: 'available', error: null },
+      ], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    } : { cursor: 0, events: [] }));
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    const availableRow = dialog.getByRole('button', { name: 'Drag provider available' }).closest('tr')!;
+    const availableRouting = within(availableRow).getByRole('checkbox', { name: 'Allow available in model group routing' });
+
+    await fireEvent.click(availableRouting);
+    await fireEvent.click(availableRouting);
+    expect(availableRow).toHaveTextContent('Available');
+    expect(availableRow).not.toHaveTextContent('Resume scheduling after saving model group');
+
+    const hiddenRow = dialog.getByRole('button', { name: 'Drag provider hidden' }).closest('tr')!;
+    await fireEvent.click(within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' }));
+    expect(hiddenRow).toHaveTextContent('Resume scheduling after saving model group');
+  });
+
   it('makes cooldown detail accessible and lets the current cooling provider be selected again for recovery', async () => {
     const detailText = '上游返回暂时不可用，请等待冷却完成后重试。该错误内容已经过服务端脱敏处理。';
     expect(detailText.length).toBeLessThanOrEqual(120);
