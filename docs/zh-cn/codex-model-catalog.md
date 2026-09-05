@@ -1,8 +1,8 @@
 # Codex 模型目录字段参考
 
 本文说明 Codex 消费的模型目录，以及 Codex-Rosetta 在暴露第三方模型时应如何使用这些字段。当前源码优先检查目标是 Codex
-`0.147.0`、源码提交
-`be6e8eac029b183056b7e4402879f15d2c85f61b`，主要参考：
+`0.153.3`、源码提交
+`b1a547b1f73ce86205d9222ac19cff334b3b7a2e`，主要参考：
 
 - `codex-rs/models-manager/models.json`；
 - `codex-rs/protocol/src/openai_models.rs`；
@@ -17,12 +17,12 @@
 
 ## 范围和字段状态
 
-打包目录目前包含八个条目：`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.2` 和 `codex-auto-review`。本文特意不包含本地自定义的目录条目。
+打包目录目前包含九个条目：`gpt-6-astra`、`gpt-5.6-sol`、`gpt-5.6-terra`、`gpt-5.6-luna`、`gpt-5.5`、`gpt-5.4`、`gpt-5.4-mini`、`gpt-5.2` 和 `codex-auto-review`。本文特意不包含本地自定义的目录条目。
 
-只有网关未配置任何模型时，本地模式才会以全部八个打包条目为基础。只要配置了至少一个
-模型，生成的目录就只包含已配置的模型名称。已配置名称与八个打包 slug 之一相同时，
+只有网关未配置任何模型时，本地模式才会以全部九个打包条目为基础。只要配置了至少一个
+模型，生成的目录就只包含已配置的模型名称。已配置名称与九个打包 slug 之一相同时，
 会在解析后的 JSON 值层面复用该条目，然后再应用 Rosetta 的运行时 overlay。打包资产仍
-与正式版 `0.147.0` 源码完全一致；生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
+与已审查的 Codex `0.153.3` 模型条目一致；Rosetta 资产只收录选定的稳定条目，生成的本地模式目录会额外携带供 Codex 0.144.x 客户端解析的旧版
 `supports_reasoning_summaries` 布尔字段，因此有意不会与打包资产逐字节一致。
 
 ### 压缩哈希 overlay

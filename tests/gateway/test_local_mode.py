@@ -68,6 +68,7 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
 
     bundled = build_model_catalog({})["models"]
     assert [model["slug"] for model in bundled] == [
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -77,6 +78,11 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
         "gpt-5.2",
         "codex-auto-review",
     ]
+
+    astra = next(model for model in bundled if model["slug"] == "gpt-6-astra")
+    assert astra["visibility"] == "list"
+    assert astra["minimal_client_version"] == "0.153.0"
+    assert astra["node_repl_auto_review_required"] is True
 
     terra = next(model for model in bundled if model["slug"] == "gpt-5.6-terra")
     custom = next(model for model in models if model["slug"] == "alpha-model")
@@ -374,7 +380,7 @@ def test_sync_replaces_catalog_setting_and_preserves_other_toml(tmp_path: Path) 
     assert config_toml_has_model_catalog(str(codex_home)) is True
 
     written = json.loads(Path(catalog_path(str(codex_home))).read_text("utf-8"))
-    assert len(written["models"]) == 8
+    assert len(written["models"]) == 9
 
     transaction.rollback()
     assert config_toml.read_text(encoding="utf-8") == original

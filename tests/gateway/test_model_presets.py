@@ -47,19 +47,19 @@ EXPECTED_RUNTIME_SHARED_OVERRIDES = {
     "additional_speed_tiers": [],
 }
 
-CODEX_0149_MODEL_CATALOG_SHA256 = (
-    "c18214b1ba88ab9bd164753115324a7a29c0582e8d071f7b3babf749d892f549"
+CODEX_0153_MODEL_CATALOG_SHA256 = (
+    "b130f4fd18261cf9f1d20e3b344dc18cbb7699f95567a85875decc2a1aa29c05"
 )
 
 
-def test_bundled_catalog_matches_reviewed_codex_0147_asset() -> None:
+def test_bundled_catalog_matches_reviewed_codex_0153_asset() -> None:
     raw = (
         resources.files("codex_rosetta.gateway")
         .joinpath("codex_models.json")
         .read_bytes()
     )
 
-    assert hashlib.sha256(raw).hexdigest() == CODEX_0149_MODEL_CATALOG_SHA256
+    assert hashlib.sha256(raw).hexdigest() == CODEX_0153_MODEL_CATALOG_SHA256
 
 
 def test_shared_overrides_match_runtime_snapshot() -> None:

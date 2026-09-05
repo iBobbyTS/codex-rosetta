@@ -2,8 +2,8 @@
 
 This document describes the model catalog consumed by Codex and how
 Codex-Rosetta should use it when exposing third-party models. The current
-source-first review target is Codex `0.147.0`, source commit
-`be6e8eac029b183056b7e4402879f15d2c85f61b`, especially:
+source-first review target is Codex `0.153.3`, source commit
+`b1a547b1f73ce86205d9222ac19cff334b3b7a2e`, especially:
 
 - `codex-rs/models-manager/models.json`;
 - `codex-rs/protocol/src/openai_models.rs`;
@@ -22,17 +22,17 @@ input field and its nested values.
 
 ## Scope and field status
 
-The bundled catalog currently contains eight entries:
-`gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`,
-`gpt-5.4-mini`, `gpt-5.2`, and `codex-auto-review`. Local custom catalog
+The bundled catalog currently contains nine entries:
+`gpt-6-astra`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`,
+`gpt-5.4`, `gpt-5.4-mini`, `gpt-5.2`, and `codex-auto-review`. Local custom catalog
 entries are intentionally excluded from this reference.
 
-Local mode starts from all eight bundled entries only when the gateway has no
+Local mode starts from all nine bundled entries only when the gateway has no
 configured models. If at least one model is configured, the generated catalog
 contains only the configured model names. A configured name matching one of the
-eight bundled slugs reuses that entry at the parsed JSON value level before
+the nine bundled slugs reuses that entry at the parsed JSON value level before
 Rosetta applies its runtime overlays. The packaged asset remains byte-identical
-to the formal `0.147.0` source; generated local-mode catalogs additionally carry the legacy
+to the reviewed Codex `0.153.3` model entries; generated local-mode catalogs additionally carry the legacy
 `supports_reasoning_summaries` boolean for Codex 0.144.x clients and therefore
 are intentionally not byte-identical to the packaged asset.
 
