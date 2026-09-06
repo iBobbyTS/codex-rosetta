@@ -24,6 +24,12 @@ from codex_rosetta.gateway.proxy import (
     _web_search_stream_event_generator,
     handle_streaming,
 )
+from codex_rosetta.gateway.logging import (
+    create_compaction_request_shape,
+    log_compaction_failure,
+    log_compaction_request,
+    log_compaction_result,
+)
 from codex_rosetta.gateway.stream_trace import (
     DEFAULT_TRACE_PATH,
     StreamTraceConfig,
@@ -769,6 +775,70 @@ def test_stream_trace_state_does_not_force_logger_when_disabled(tmp_path):
     assert logger is None
 
 
+def test_compaction_diagnostic_events_share_trace_and_request_id(tmp_path):
+    trace_path = tmp_path / "compaction-trace.jsonl"
+    state = StreamTraceState(StreamTraceConfig(enabled=True, path=str(trace_path)))
+    trace = state.create_logger(
+        request_id="req-compaction",
+        request_log_id="log-compaction",
+        model="gpt-6-astra",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="Pixel (GPT)",
+    )
+    assert trace is not None
+    body = {
+        "model": "gpt-6-astra",
+        "parallel_tool_calls": False,
+        "input": [{"type": "message"}, {"type": "compaction_trigger"}],
+    }
+    shape = create_compaction_request_shape(
+        body,
+        stage="incoming",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="Pixel (GPT)",
+        stream=True,
+    )
+    log_compaction_request(shape, trace=trace)
+    log_compaction_result(shape, outcome="native", reason="context_limit", trace=trace)
+    log_compaction_failure(shape, category="native_http", status_code=400, trace=trace)
+
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "compaction_request",
+        "compaction_result",
+        "compaction_failure",
+    ]
+    assert {record["request_id"] for record in records} == {"req-compaction"}
+    assert {record["request_log_id"] for record in records} == {"log-compaction"}
+    assert records[0]["data"]["parallel_tool_calls"] == "false"
+    assert records[1]["data"]["outcome"] == "native"
+    assert records[2]["data"]["category"] == "native_http"
+
+
+def test_compaction_trace_filter_and_disabled_state_write_nothing(tmp_path):
+    for enabled, trace_filter in ((False, ""), (True, "other-model")):
+        trace_path = tmp_path / f"trace-{enabled}.jsonl"
+        state = StreamTraceState(
+            StreamTraceConfig(
+                enabled=enabled,
+                filter=trace_filter,
+                path=str(trace_path),
+            )
+        )
+        trace = state.create_logger(
+            request_id="req",
+            request_log_id=None,
+            model="gpt-6-astra",
+            source_provider="openai_responses",
+            target_provider="openai_responses",
+            provider_name="Pixel (GPT)",
+        )
+        assert trace is None
+        assert not trace_path.exists()
+
+
 def test_raw_stream_trace_records_passthrough_chunk_once(tmp_path):
     """Responses passthrough traces should not duplicate identical raw bytes."""
     trace_path = tmp_path / "raw-stream-trace.jsonl"
@@ -867,6 +937,62 @@ def test_raw_stream_trace_records_early_close_as_cancelled(tmp_path):
 
     asyncio.run(scenario())
     _assert_cancelled_terminal_record(trace_path)
+
+
+def test_native_compaction_raw_midstream_failure_is_prompt_free(tmp_path):
+    trace_path = tmp_path / "raw-compaction-failure.jsonl"
+    trace = StreamTraceLogger(
+        path=trace_path,
+        request_id="req-native-compaction",
+        request_log_id=None,
+        model="model",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="provider",
+    )
+    trace.defer_response_diagnostics()
+    shape = create_compaction_request_shape(
+        {
+            "model": "model",
+            "parallel_tool_calls": False,
+            "input": [{"type": "compaction_trigger"}],
+        },
+        stage="incoming",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="provider",
+        stream=True,
+    )
+
+    class _FailingRawStream(_RawStream):
+        def aiter_raw_bytes(self) -> AsyncIterator[bytes]:
+            async def gen() -> AsyncIterator[bytes]:
+                yield b"data: first\n\n"
+                raise UpstreamConnectionError("SECRET_MIDSTREAM_ERROR")
+
+            return gen()
+
+    async def scenario() -> None:
+        generator = _raw_stream_event_generator(
+            stream=_FailingRawStream([b"unused"]),
+            source_provider="openai_responses",
+            model="model",
+            trace=trace,
+            compaction_shape=shape,
+        )
+        assert await generator.__anext__() == b"data: first\n\n"
+        with pytest.raises(UpstreamConnectionError, match="SECRET_MIDSTREAM_ERROR"):
+            await generator.__anext__()
+
+    asyncio.run(scenario())
+    records = [json.loads(line) for line in trace_path.read_text().splitlines()]
+    assert [record["stage"] for record in records] == [
+        "compaction_failure",
+        "stream_complete",
+    ]
+    assert records[0]["data"]["category"] == "native_transport"
+    assert records[1]["data"]["stream_error"] is None
+    assert "SECRET_MIDSTREAM_ERROR" not in trace_path.read_text()
 
 
 def test_web_search_stream_trace_records_early_close_as_cancelled(tmp_path):

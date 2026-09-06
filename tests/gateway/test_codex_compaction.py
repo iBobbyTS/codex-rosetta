@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response, StreamingResponse
+from codex_rosetta.gateway import logging as gateway_logging
 from codex_rosetta.gateway import proxy
 from codex_rosetta.gateway.codex_compaction import (
     COMPACT_PROMPT,
@@ -25,7 +26,8 @@ from codex_rosetta.gateway.codex_compaction import (
     prepare_codex_compaction,
 )
 from codex_rosetta.gateway.state_scope import GatewayStateScope
-from codex_rosetta.gateway.transport import UpstreamResponse
+from codex_rosetta.gateway.logging import create_compaction_request_shape
+from codex_rosetta.gateway.transport import UpstreamConnectionError, UpstreamResponse
 from codex_rosetta.observability.persistence import PersistenceManager
 from codex_rosetta.routing import ResolvedRoute
 
@@ -56,6 +58,18 @@ def _request(reason: str = "context_limit") -> dict:
     }
 
 
+def _capture_gateway_logs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    records: list[str] = []
+
+    def capture(message: str, *args) -> None:
+        records.append(message % args)
+
+    monkeypatch.setattr(gateway_logging._logger, "info", capture)
+    monkeypatch.setattr(gateway_logging._logger, "warning", capture)
+    monkeypatch.setattr(gateway_logging._logger, "error", capture)
+    return records
+
+
 @pytest.mark.parametrize(
     ("passthrough", "reason", "expected"),
     [
@@ -84,6 +98,22 @@ def test_policy_uses_only_route_configuration_and_metadata_reason(
         assert prepared.summary_request is None
     else:
         assert prepared.summary_request is not None
+
+
+def test_openai_provider_transparently_passes_through_hash_change() -> None:
+    body = _request("comp_hash_changed")
+    prepared = prepare_codex_compaction(
+        body,
+        route=_route(passthrough=True),
+        persistence=None,
+        principal_id="client-a",
+        provider_type="openai",
+        force_rosetta_compaction=True,
+    )
+
+    assert prepared.mode == "native"
+    assert prepared.body == body
+    assert prepared.summary_request is None
 
 
 @pytest.mark.parametrize(
@@ -151,6 +181,112 @@ def test_invalid_trigger_sequence_is_rejected(input_items: list[dict]) -> None:
         prepare_codex_compaction(
             body, route=_route(), persistence=None, principal_id="client-a"
         )
+
+
+def test_compaction_shape_buckets_non_string_item_types_as_unknown() -> None:
+    shape = create_compaction_request_shape(
+        {
+            "model": "gpt-6-astra",
+            "input": [{"type": ["not", "hashable"]}, {"type": None}],
+        },
+        stage="incoming",
+        source_provider="openai_responses",
+        target_provider="openai_chat",
+        provider_name="test",
+        stream=False,
+    )
+    assert shape.input_type_counts == (("unknown", 2),)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_invalid_trigger_warning_is_self_contained_and_prompt_free(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    body = _request("SECRET_REASON")
+    body["parallel_tool_calls"] = "SECRET_INVALID_BOOLEAN"
+    body["input"] = [
+        {"type": "message", "content": "SECRET_PROMPT"},
+        {"type": "SECRET_UNKNOWN_TYPE", "value": "SECRET_ITEM_VALUE"},
+        {"type": "compaction_trigger"},
+        {"type": "compaction_trigger"},
+    ]
+    handler = proxy.handle_streaming if stream else proxy.handle_non_streaming
+
+    response, _ = asyncio.run(
+        handler(
+            _route(),
+            MagicMock(force_rosetta_compaction=False),
+            body,
+            transport=MagicMock(),
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+        )
+    )
+
+    assert response.status_code == 400
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert '"category":"invalid_request"' in failures[0]
+    assert '"parallel_tool_calls":"invalid"' in failures[0]
+    assert '"compaction_trigger":2' in failures[0]
+    assert '"unknown":1' in failures[0]
+    for secret in (
+        "SECRET_REASON",
+        "SECRET_INVALID_BOOLEAN",
+        "SECRET_PROMPT",
+        "SECRET_UNKNOWN_TYPE",
+        "SECRET_ITEM_VALUE",
+    ):
+        assert secret not in "\n".join(records)
+
+
+def test_preparation_failure_warning_does_not_log_exception_or_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    persistence = MagicMock()
+    persistence.get_codex_compaction_mapping.side_effect = RuntimeError(
+        "SECRET_PREPARATION_ERROR"
+    )
+    body = {
+        "model": "gpt-6-astra",
+        "input": [
+            {
+                "type": "compaction",
+                "encrypted_content": "rskc_v1_SECRET_OPAQUE_TOKEN",
+            }
+        ],
+    }
+
+    with pytest.raises(RuntimeError, match="SECRET_PREPARATION_ERROR"):
+        asyncio.run(
+            proxy.handle_non_streaming(
+                _route(passthrough=True),
+                MagicMock(force_rosetta_compaction=False),
+                body,
+                transport=MagicMock(),
+                persistence=persistence,
+                state_scope=GatewayStateScope.for_request(
+                    principal_id="client-a",
+                    provider_name="test",
+                    model="gpt-6-astra",
+                    window_id="thread-a:0",
+                ),
+            )
+        )
+
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert '"category":"preparation"' in failures[0]
+    assert '"replay_count":1' in failures[0]
+    assert "SECRET_PREPARATION_ERROR" not in "\n".join(records)
+    assert "SECRET_OPAQUE_TOKEN" not in "\n".join(records)
 
 
 def test_rosetta_summary_request_strips_tools_and_preserves_other_fields() -> None:
@@ -434,9 +570,263 @@ def test_compaction_summary_failure_promotes_model_group_rotation_marker(
 
 
 @pytest.mark.parametrize("stream", [False, True])
+def test_summary_http_failure_uses_safe_warning_and_distinct_summary_shape(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    persistence = PersistenceManager(str(tmp_path))
+    transport = MagicMock()
+    transport.send_request = AsyncMock(
+        return_value=UpstreamResponse(
+            status_code=400,
+            body=None,
+            raw_content=b'{"error":{"message":"SECRET_UPSTREAM_ERROR"}}',
+        )
+    )
+    body = _request("SECRET_REASON")
+    body["parallel_tool_calls"] = False
+    body["input"].insert(
+        1,
+        {"type": "SECRET_UNKNOWN_TYPE", "encrypted_content": "SECRET_TOKEN"},
+    )
+    handler = proxy.handle_streaming if stream else proxy.handle_non_streaming
+
+    response, _ = asyncio.run(
+        handler(
+            _route(),
+            MagicMock(force_rosetta_compaction=False),
+            body,
+            transport=transport,
+            persistence=persistence,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+        )
+    )
+
+    assert response.status_code == 400
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert '"category":"summary_http"' in failures[0]
+    assert '"parallel_tool_calls":"false"' in failures[0]
+    assert '"summary_shape"' in failures[0]
+    assert '"parallel_tool_calls":"absent"' in failures[0]
+    assert '"stage":"summary"' in failures[0]
+    assert not [record for record in records if "[UPSTREAM ERROR]" in record]
+    for secret in (
+        "SECRET_UPSTREAM_ERROR",
+        "SECRET_REASON",
+        "SECRET_UNKNOWN_TYPE",
+        "SECRET_TOKEN",
+    ):
+        assert secret not in "\n".join(records)
+    persistence.close()
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_category"),
+    [("http", "native_http"), ("transport", "native_transport")],
+)
+def test_native_failure_uses_safe_warning_without_generic_raw_error(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    failure_kind: str,
+    expected_category: str,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    transport = MagicMock()
+    if failure_kind == "transport":
+        failure = UpstreamConnectionError("SECRET_TRANSPORT_ERROR")
+        if stream:
+            transport.send_streaming = AsyncMock(side_effect=failure)
+        else:
+            transport.send_request = AsyncMock(side_effect=failure)
+    elif stream:
+        upstream_stream = MagicMock(status_code=400)
+        upstream_stream.read_error = AsyncMock(return_value="SECRET_HTTP_ERROR")
+        upstream_stream.close = AsyncMock()
+        transport.send_streaming = AsyncMock(return_value=upstream_stream)
+    else:
+        transport.send_request = AsyncMock(
+            return_value=UpstreamResponse(
+                status_code=400,
+                body=None,
+                raw_content=b'{"error":{"message":"SECRET_HTTP_ERROR"}}',
+            )
+        )
+    body = _request("context_limit")
+    body["parallel_tool_calls"] = False
+    body["stream"] = stream
+    handler = proxy.handle_streaming if stream else proxy.handle_non_streaming
+
+    response, _ = asyncio.run(
+        handler(
+            _route(passthrough=True),
+            MagicMock(force_rosetta_compaction=False, request_encoding="identity"),
+            body,
+            transport=transport,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+        )
+    )
+
+    assert response.status_code in {400, 502}
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert f'"category":"{expected_category}"' in failures[0]
+    assert '"parallel_tool_calls":"false"' in failures[0]
+    assert f'"stream":"{str(stream).lower()}"' in failures[0]
+    assert not [record for record in records if "[UPSTREAM ERROR]" in record]
+    assert "SECRET_HTTP_ERROR" not in "\n".join(records)
+    assert "SECRET_TRANSPORT_ERROR" not in "\n".join(records)
+
+
+def test_summary_transport_failure_uses_safe_warning(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    persistence = PersistenceManager(str(tmp_path))
+    transport = MagicMock()
+    transport.send_request = AsyncMock(
+        side_effect=UpstreamConnectionError("SECRET_SUMMARY_TRANSPORT_ERROR")
+    )
+    body = _request()
+    body["parallel_tool_calls"] = False
+
+    response, _ = asyncio.run(
+        proxy.handle_non_streaming(
+            _route(),
+            MagicMock(force_rosetta_compaction=False),
+            body,
+            transport=transport,
+            persistence=persistence,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+        )
+    )
+
+    assert response.status_code == 502
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert '"category":"summary_transport"' in failures[0]
+    assert '"summary_shape"' in failures[0]
+    assert "SECRET_SUMMARY_TRANSPORT_ERROR" not in "\n".join(records)
+    persistence.close()
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "expected_category", "expected_status"),
+    [("parse", "summary_parse", 502), ("persistence", "persistence", 503)],
+)
+def test_summary_post_response_failures_use_safe_warning(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure_kind: str,
+    expected_category: str,
+    expected_status: int,
+) -> None:
+    records = _capture_gateway_logs(monkeypatch)
+    persistence = PersistenceManager(str(tmp_path))
+    prepared = prepare_codex_compaction(
+        _request("comp_hash_changed"),
+        route=_route(),
+        persistence=persistence,
+        principal_id="client-a",
+    )
+
+    async def summary_handler(*args, **kwargs):
+        del args, kwargs
+        if failure_kind == "parse":
+            return (
+                JSONResponse(
+                    {
+                        "output": [
+                            {
+                                "type": "function_call",
+                                "name": "SECRET_SUMMARY_PAYLOAD",
+                            }
+                        ]
+                    }
+                ),
+                {},
+            )
+        return (
+            JSONResponse(
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [
+                                {"type": "output_text", "text": "safe summary"}
+                            ],
+                        }
+                    ]
+                }
+            ),
+            {},
+        )
+
+    monkeypatch.setattr(proxy, "handle_non_streaming", summary_handler)
+    if failure_kind == "persistence":
+        monkeypatch.setattr(
+            proxy,
+            "create_compaction_mapping",
+            MagicMock(side_effect=RuntimeError("SECRET_PERSISTENCE_ERROR")),
+        )
+
+    response, _ = asyncio.run(
+        proxy._run_rosetta_compaction(
+            route=_route(),
+            provider_info=MagicMock(force_rosetta_compaction=False),
+            preparation=prepared,
+            transport=MagicMock(),
+            metadata_store=None,
+            codex_tool_store=None,
+            extra_headers=None,
+            persistence=persistence,
+            state_scope=GatewayStateScope.for_request(
+                principal_id="client-a",
+                provider_name="test",
+                model="deepseek-v4-flash",
+                window_id="thread-a:0",
+            ),
+            codex_window_id="thread-a:0",
+            image_fetch_workers=None,
+            stream=False,
+        )
+    )
+
+    assert response.status_code == expected_status
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert f'"category":"{expected_category}"' in failures[0]
+    assert '"summary_shape"' in failures[0]
+    assert "SECRET_SUMMARY_PAYLOAD" not in "\n".join(records)
+    assert "SECRET_PERSISTENCE_ERROR" not in "\n".join(records)
+    persistence.close()
+
+
+@pytest.mark.parametrize("stream", [False, True])
 def test_missing_persistence_returns_exact_503_before_summary_call(
     monkeypatch, stream: bool
 ) -> None:
+    records = _capture_gateway_logs(monkeypatch)
     prepared = prepare_codex_compaction(
         _request("user_requested"),
         route=_route(passthrough=True),
@@ -479,6 +869,10 @@ def test_missing_persistence_returns_exact_503_before_summary_call(
     assert profile["compaction_forced_rosetta"] is True
     summary_handler.assert_not_called()
     assert transport.mock_calls == []
+    failures = [record for record in records if "[COMPACTION FAILURE]" in record]
+    assert len(failures) == 1
+    assert '"category":"summary_persistence_unavailable"' in failures[0]
+    assert '"summary_shape"' in failures[0]
 
 
 def test_live_quality_matrix_uses_identical_input_and_optional_gpt_provider() -> None:

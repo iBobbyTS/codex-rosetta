@@ -205,6 +205,7 @@ def prepare_codex_compaction(
     route: ResolvedRoute,
     persistence: Any | None,
     principal_id: str,
+    provider_type: str | None = None,
     force_rosetta_compaction: bool = False,
     now: datetime | None = None,
 ) -> CompactionPreparation:
@@ -236,11 +237,16 @@ def prepare_codex_compaction(
             dropped_native,
         )
     reason = _compaction_reason(request)
+    # The OpenAI supplier owns the Remote V2 compaction contract. Preserve
+    # every compaction request for it, including hash-change and forced-policy
+    # cases; other suppliers retain the Rosetta summary fallback policy.
     mode = (
         "native"
-        if not force_rosetta_compaction
-        and is_responses_passthrough(route)
-        and reason in NATIVE_COMPACTION_REASONS
+        if is_responses_passthrough(route)
+        and (
+            provider_type == "openai"
+            or (not force_rosetta_compaction and reason in NATIVE_COMPACTION_REASONS)
+        )
         else "rosetta"
     )
     if mode == "native":

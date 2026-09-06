@@ -334,6 +334,19 @@ class StreamTraceLogger:
             return
         self._append_lines([line])
 
+    def log_immediate(
+        self,
+        stage: str,
+        data: Any,
+    ) -> None:
+        """Append one already-safe event even while response diagnostics are deferred."""
+        was_deferred = self._defer_response
+        self._defer_response = False
+        try:
+            self.log(stage, data)
+        finally:
+            self._defer_response = was_deferred
+
     def log_full(self, stage: str, data: Any) -> None:
         """Append a redacted, non-truncated diagnostic record.
 

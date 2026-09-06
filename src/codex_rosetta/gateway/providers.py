@@ -320,4 +320,7 @@ def build_provider_info(
         provider_variant=cfg.get("openai_variant")
         if base_type in {"openai_chat", "openai_responses", "open_responses"}
         else None,
+        supplier_type=cfg.get("provider")
+        if isinstance(cfg.get("provider"), str)
+        else None,
     )

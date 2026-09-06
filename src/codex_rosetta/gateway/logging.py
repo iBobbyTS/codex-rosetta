@@ -225,6 +225,47 @@ _body_logger.propagate = True
 UPSTREAM_ERROR_MAX_CHARS = 4096
 BODY_LOG_MAX_CHARS = 20_000
 ResponseRedactionPolicy = Literal["exact", "protocol_fields"]
+CompactionDiagnosticStage = Literal["incoming", "summary"]
+CompactionFailureCategory = Literal[
+    "invalid_request",
+    "preparation",
+    "summary_persistence_unavailable",
+    "summary_transport",
+    "summary_http",
+    "summary_parse",
+    "persistence",
+    "native_transport",
+    "native_http",
+]
+
+_COMPACTION_INPUT_TYPES = frozenset(
+    {
+        "additional_tools",
+        "code_interpreter_call",
+        "compaction",
+        "compaction_trigger",
+        "computer_call",
+        "computer_call_output",
+        "custom_tool_call",
+        "custom_tool_call_output",
+        "file_search_call",
+        "function_call",
+        "function_call_output",
+        "image_generation_call",
+        "local_shell_call",
+        "local_shell_call_output",
+        "mcp_approval_request",
+        "mcp_approval_response",
+        "mcp_call",
+        "mcp_list_tools",
+        "message",
+        "reasoning",
+        "web_search_call",
+    }
+)
+_COMPACTION_REASONS = frozenset(
+    {"comp_hash_changed", "context_limit", "model_downshift", "user_requested"}
+)
 
 
 def _single_line(value: str) -> str:
@@ -243,6 +284,186 @@ def _single_line(value: str) -> str:
         else:
             escaped.append(char)
     return "".join(escaped)
+
+
+def _diagnostic_identity(value: Any) -> str:
+    """Return one bounded printable identity without serializing arbitrary values."""
+    if not isinstance(value, str):
+        return "invalid"
+    if not value or len(value) > 256:
+        return "invalid"
+    if any(ord(char) < 0x20 or ord(char) > 0x7E for char in value):
+        return "invalid"
+    return value
+
+
+def _boolean_state(value: Any, *, present: bool) -> str:
+    if not present:
+        return "absent"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "invalid"
+
+
+@dataclass(frozen=True)
+class CompactionRequestShape:
+    """Allowlisted request metadata safe for always-on compaction diagnostics."""
+
+    stage: CompactionDiagnosticStage
+    model: str
+    source_provider: str
+    target_provider: str
+    provider_name: str
+    stream: str
+    parallel_tool_calls: str
+    input_state: str
+    input_type_counts: tuple[tuple[str, int], ...]
+    trigger_count: int
+    replay_count: int
+
+    @property
+    def is_compaction_related(self) -> bool:
+        """Return whether the request contains a trigger or replay item."""
+        return self.trigger_count > 0 or self.replay_count > 0
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return the fixed-schema representation used by log records."""
+        return {
+            "stage": self.stage,
+            "model": self.model,
+            "source_provider": self.source_provider,
+            "target_provider": self.target_provider,
+            "provider_name": self.provider_name,
+            "stream": self.stream,
+            "parallel_tool_calls": self.parallel_tool_calls,
+            "input_state": self.input_state,
+            "input_type_counts": dict(self.input_type_counts),
+            "trigger_count": self.trigger_count,
+            "replay_count": self.replay_count,
+        }
+
+
+def create_compaction_request_shape(
+    data: dict[str, Any],
+    *,
+    stage: CompactionDiagnosticStage,
+    source_provider: Any,
+    target_provider: Any,
+    provider_name: Any,
+    stream: bool,
+) -> CompactionRequestShape:
+    """Build a compaction shape without reading message, tool, or token content."""
+    raw_input = data.get("input")
+    counts: dict[str, int] = {}
+    if "input" not in data:
+        input_state = "absent"
+    elif not isinstance(raw_input, list):
+        input_state = "invalid"
+    else:
+        input_state = "list"
+        for item in raw_input:
+            item_type = item.get("type") if isinstance(item, dict) else None
+            bucket = (
+                item_type
+                if isinstance(item_type, str) and item_type in _COMPACTION_INPUT_TYPES
+                else "unknown"
+            )
+            counts[bucket] = counts.get(bucket, 0) + 1
+    return CompactionRequestShape(
+        stage=stage,
+        model=_diagnostic_identity(data.get("model")),
+        source_provider=_diagnostic_identity(source_provider),
+        target_provider=_diagnostic_identity(target_provider),
+        provider_name=_diagnostic_identity(provider_name),
+        stream="true" if stream else "false",
+        parallel_tool_calls=_boolean_state(
+            data.get("parallel_tool_calls"), present="parallel_tool_calls" in data
+        ),
+        input_state=input_state,
+        input_type_counts=tuple(sorted(counts.items())),
+        trigger_count=counts.get("compaction_trigger", 0),
+        replay_count=counts.get("compaction", 0),
+    )
+
+
+def compaction_reason_bucket(reason: Any) -> str:
+    """Map an untrusted compaction reason to a fixed diagnostic bucket."""
+    return (
+        reason
+        if isinstance(reason, str) and reason in _COMPACTION_REASONS
+        else "unknown"
+    )
+
+
+def _emit_compaction_trace(
+    trace: Any, stage: str, payload: dict[str, Any], *, immediate: bool = False
+) -> None:
+    """Write a fixed compaction event to an optional stream trace."""
+    if trace is not None:
+        if immediate and hasattr(trace, "log_immediate"):
+            trace.log_immediate(stage, payload)
+        else:
+            trace.log(stage, payload)
+
+
+def log_compaction_request(
+    shape: CompactionRequestShape,
+    *,
+    trace: Any = None,
+) -> None:
+    """Emit one prompt-free compaction request-shape record."""
+    payload = shape.as_dict()
+    _logger.info(
+        "[COMPACTION REQUEST] %s",
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+    )
+    _emit_compaction_trace(trace, "compaction_request", payload)
+
+
+def log_compaction_result(
+    shape: CompactionRequestShape,
+    *,
+    outcome: Literal["none", "native", "rosetta", "completed"],
+    reason: Any,
+    trace: Any = None,
+) -> None:
+    """Emit one bounded preparation or completion result."""
+    payload = {
+        "outcome": outcome,
+        "reason": compaction_reason_bucket(reason),
+        "shape": shape.as_dict(),
+    }
+    _logger.info(
+        "[COMPACTION RESULT] %s",
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+    )
+    _emit_compaction_trace(trace, "compaction_result", payload)
+
+
+def log_compaction_failure(
+    shape: CompactionRequestShape,
+    *,
+    category: CompactionFailureCategory,
+    status_code: int,
+    summary_shape: CompactionRequestShape | None = None,
+    trace: Any = None,
+    immediate: bool = False,
+) -> None:
+    """Emit a self-contained warning without arbitrary exception or response text."""
+    payload: dict[str, Any] = {
+        "category": category,
+        "status": int(status_code),
+        "shape": shape.as_dict(),
+    }
+    if summary_shape is not None:
+        payload["summary_shape"] = summary_shape.as_dict()
+    _logger.warning(
+        "[COMPACTION FAILURE] %s",
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+    )
+    _emit_compaction_trace(trace, "compaction_failure", payload, immediate=immediate)
 
 
 class UpstreamErrorLogState:

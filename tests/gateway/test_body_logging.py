@@ -17,6 +17,9 @@ from codex_rosetta.gateway.admin.routes import _shared
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.logging import (
     BodyLogState,
+    create_compaction_request_shape,
+    log_compaction_failure,
+    compaction_reason_bucket,
     log_converted_request,
     log_ir_request,
     log_original_request,
@@ -450,3 +453,68 @@ def test_render_does_not_mutate_the_original_body() -> None:
     BodyLogState(enabled=True).render(body)
 
     assert body == original
+
+
+def test_compaction_shape_logs_only_allowlisted_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[str] = []
+    monkeypatch.setattr(
+        gateway_logging._logger,
+        "warning",
+        lambda message, *args: records.append(message % args),
+    )
+    body = {
+        "model": "gpt-6-astra",
+        "stream": True,
+        "parallel_tool_calls": False,
+        "input": [
+            {
+                "type": "message",
+                "content": "SECRET_PROMPT_CONTENT",
+            },
+            {
+                "type": "SECRET_UNKNOWN_ITEM_TYPE",
+                "encrypted_content": "SECRET_OPAQUE_TOKEN",
+            },
+            {"type": "compaction_trigger"},
+        ],
+        "tools": [{"description": "SECRET_TOOL_SCHEMA"}],
+    }
+    shape = create_compaction_request_shape(
+        body,
+        stage="incoming",
+        source_provider="openai_responses",
+        target_provider="openai_responses",
+        provider_name="Pixel (GPT)",
+        stream=True,
+    )
+
+    log_compaction_failure(shape, category="native_http", status_code=400)
+
+    assert shape.parallel_tool_calls == "false"
+    assert dict(shape.input_type_counts) == {
+        "compaction_trigger": 1,
+        "message": 1,
+        "unknown": 1,
+    }
+    assert shape.trigger_count == 1
+    assert shape.replay_count == 0
+    output = "\n".join(records)
+    assert '"category":"native_http"' in output
+    assert '"status":400' in output
+    assert '"parallel_tool_calls":"false"' in output
+    for secret in (
+        "SECRET_PROMPT_CONTENT",
+        "SECRET_UNKNOWN_ITEM_TYPE",
+        "SECRET_OPAQUE_TOKEN",
+        "SECRET_TOOL_SCHEMA",
+    ):
+        assert secret not in output
+
+
+@pytest.mark.parametrize(
+    "reason", [["context_limit"], {"reason": "context_limit"}, None]
+)
+def test_compaction_reason_bucket_rejects_non_string_values(reason: Any) -> None:
+    assert compaction_reason_bucket(reason) == "unknown"

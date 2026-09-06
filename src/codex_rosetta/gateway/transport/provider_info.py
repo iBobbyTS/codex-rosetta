@@ -102,6 +102,7 @@ class ProviderInfo:
         force_rosetta_compaction: bool = False,
         request_encoding: ResponsesRequestEncoding | None = None,
         provider_variant: str | None = None,
+        supplier_type: str | None = None,
     ) -> None:
         if base_urls is None:
             if base_url is None:
@@ -124,6 +125,7 @@ class ProviderInfo:
                 f"Provider '{name}': current_base_url must be a member of base_urls"
             )
         self.name = name
+        self.supplier_type = supplier_type
         self.configured_id = configured_id or name
         self._url_ring = OrderedFailoverCoordinator(normalized_urls, normalized_current)
         self._record_current_base_url: CurrentBaseUrlRecorder | None = None

@@ -563,6 +563,15 @@ response batches are still discarded. Trace-directory, spool, or final-file
 write failures disable tracing for that request without interrupting or
 changing the model stream.
 
+Remote Compaction diagnostics use the same matching stream-trace instance as
+the request. Before preparation, and on compaction result or failure, Rosetta
+writes fixed `compaction_request`, `compaction_result`, or `compaction_failure`
+events with the parsed gateway `x-request-id`. These events contain only
+allowlisted shape fields, bounded item-type counts, and fixed failure
+categories; they never include prompts, tool schemas, opaque handles, reason
+text, exception text, or upstream error bodies. A matching enabled trace also
+receives failures returned before the normal stream trace is established.
+
 Request-log success and error caps are validated during both startup and Admin
 hot reload. `server.request_log.success_max`, `error_max`, legacy
 `max_entries`, and the `REQUEST_LOG_SUCCESS_MAX` / `REQUEST_LOG_ERROR_MAX`

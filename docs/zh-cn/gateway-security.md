@@ -429,6 +429,13 @@ record 只执行协议字段脱敏。响应等待最终安全分类期间，每�
 取消或其他不安全的响应 batch 仍会丢弃。trace 目录、暂存文件或最终文件写入失败时，只会
 停止记录当前请求，不得中断或改变模型 stream。
 
+Remote Compaction 诊断会复用同一个匹配的 stream-trace 实例。准备前以及 compaction
+结果或失败时，Rosetta 会用已解析的网关 `x-request-id` 写入固定的
+`compaction_request`、`compaction_result` 或 `compaction_failure` 事件。这些事件只包含
+白名单 shape 字段、有界的 item 类型计数和固定失败分类；不会包含 prompt、tool schema、
+opaque handle、reason 文本、异常文本或上游错误 body。即使失败发生在普通 stream trace
+建立前，只要 trace 已启用且匹配，也会收到该失败事件。
+
 Request log 的 success/error 上限会在启动和 Admin 热更新时使用同一规则验证。
 `server.request_log.success_max`、`error_max`、旧版 `max_entries`，以及环境变量
 `REQUEST_LOG_SUCCESS_MAX` / `REQUEST_LOG_ERROR_MAX` 都必须是 0 到 1,000,000 之间的

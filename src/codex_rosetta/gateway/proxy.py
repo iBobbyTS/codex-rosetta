@@ -23,7 +23,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from codex_rosetta._vendor.httpserver import JSONResponse, Response, StreamingResponse
 
@@ -73,8 +73,13 @@ from .downstream_errors import (
 )
 from .logging import (
     BodyLogState,
+    CompactionRequestShape,
     UpstreamErrorLogState,
+    create_compaction_request_shape,
     get_logger,
+    log_compaction_failure,
+    log_compaction_request,
+    log_compaction_result,
     log_converted_request,
     log_ir_request,
     log_original_request,
@@ -330,13 +335,43 @@ async def _run_rosetta_compaction(
     codex_window_id: str | None,
     image_fetch_workers: ImageFetchWorkerPool | None,
     stream: bool,
+    inbound_shape: CompactionRequestShape | None = None,
+    trace: StreamTraceLogger | None = None,
     model_group_failover: bool = False,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Execute the internal no-tools summary call and return a V2 item."""
+    if inbound_shape is None:
+        inbound_shape = create_compaction_request_shape(
+            preparation.body,
+            stage="incoming",
+            source_provider=route.source_provider,
+            target_provider=route.target_provider,
+            provider_name=route.provider_name,
+            stream=stream,
+        )
+    provider_type = getattr(provider_info, "supplier_type", None)
     force_rosetta_compaction = (
-        getattr(provider_info, "force_rosetta_compaction", False) is True
+        provider_type != "openai"
+        and getattr(provider_info, "force_rosetta_compaction", False) is True
     )
+    assert preparation.summary_request is not None
+    summary_shape = create_compaction_request_shape(
+        preparation.summary_request,
+        stage="summary",
+        source_provider=route.source_provider,
+        target_provider=route.target_provider,
+        provider_name=route.provider_name,
+        stream=False,
+    )
+    log_compaction_request(summary_shape, trace=trace)
     if persistence is None:
+        log_compaction_failure(
+            inbound_shape,
+            category="summary_persistence_unavailable",
+            status_code=503,
+            summary_shape=summary_shape,
+            trace=trace,
+        )
         return (
             error_response_for_source(
                 route.source_provider,
@@ -353,7 +388,6 @@ async def _run_rosetta_compaction(
                 ),
             },
         )
-    assert preparation.summary_request is not None
     summary_response, summary_profile = await handle_non_streaming(
         route,
         provider_info,
@@ -369,6 +403,7 @@ async def _run_rosetta_compaction(
         body_log_state=None,
         image_fetch_workers=image_fetch_workers,
         skip_codex_compaction=True,
+        suppress_upstream_error_logging=True,
         model_group_failover=model_group_failover,
     )
     profile: dict[str, Any] = {
@@ -394,6 +429,17 @@ async def _run_rosetta_compaction(
     if summary_response.status_code != 200:
         if summary_profile.get("upstream_attempted") is True:
             profile["upstream_attempted"] = True
+        log_compaction_failure(
+            inbound_shape,
+            category=(
+                "summary_http"
+                if summary_profile.get("upstream_provider_failure") is True
+                else "summary_transport"
+            ),
+            status_code=summary_response.status_code,
+            summary_shape=summary_shape,
+            trace=trace,
+        )
         return summary_response, profile
     try:
         summary_payload = json.loads(summary_response.body)
@@ -401,13 +447,20 @@ async def _run_rosetta_compaction(
             raise InvalidCompactionSummary("internal compaction response is not JSON")
         summary = extract_assistant_summary(summary_payload)
     except (InvalidCompactionSummary, ValueError, TypeError) as exc:
-        logger.warning(
-            "Rosetta compaction summary failed (reason=%s, prompt_sha256=%s): %s",
-            preparation.reason,
-            COMPACT_PROMPT_SHA256,
-            exc,
+        log_compaction_failure(
+            inbound_shape,
+            category="summary_parse",
+            status_code=502,
+            summary_shape=summary_shape,
+            trace=trace,
         )
         return error_response_for_source(route.source_provider, 502, str(exc)), profile
+    log_compaction_result(
+        summary_shape,
+        outcome="completed",
+        reason=preparation.reason,
+        trace=trace,
+    )
     try:
         mapping = create_compaction_mapping(
             persistence,
@@ -417,11 +470,12 @@ async def _run_rosetta_compaction(
             summary=summary,
         )
     except Exception as exc:
-        logger.warning(
-            "Rosetta compaction persistence failed (reason=%s, prompt_sha256=%s): %s",
-            preparation.reason,
-            COMPACT_PROMPT_SHA256,
-            exc,
+        log_compaction_failure(
+            inbound_shape,
+            category="persistence",
+            status_code=503,
+            summary_shape=summary_shape,
+            trace=trace,
         )
         return error_response_for_source(route.source_provider, 503, str(exc)), profile
     return (
@@ -450,12 +504,26 @@ async def _prepare_codex_compaction_request(
     stream: bool,
     enabled: bool = True,
     model_group_failover: bool = False,
+    trace: StreamTraceLogger | None = None,
 ) -> tuple[dict[str, Any], Response | StreamingResponse | None, dict[str, Any]]:
     """Apply V2 replay/policy, returning an early response only when required."""
     if not enabled:
         return body, None, {}
+    inbound_shape = create_compaction_request_shape(
+        body,
+        stage="incoming",
+        source_provider=route.source_provider,
+        target_provider=route.target_provider,
+        provider_name=route.provider_name,
+        stream=stream,
+    )
+    if inbound_shape.is_compaction_related:
+        log_compaction_request(inbound_shape, trace=trace)
+    provider_type = getattr(provider_info, "supplier_type", None)
+    is_openai_provider = provider_type == "openai"
     force_rosetta_compaction = (
-        getattr(provider_info, "force_rosetta_compaction", False) is True
+        not is_openai_provider
+        and getattr(provider_info, "force_rosetta_compaction", False) is True
     )
     try:
         preparation = prepare_codex_compaction(
@@ -463,23 +531,53 @@ async def _prepare_codex_compaction_request(
             route=route,
             persistence=persistence,
             principal_id=state_scope.principal_id,
+            provider_type=provider_type,
             force_rosetta_compaction=force_rosetta_compaction,
         )
     except InvalidCodexCompactionRequest as exc:
+        log_compaction_failure(
+            inbound_shape,
+            category="invalid_request",
+            status_code=400,
+            trace=trace,
+        )
         return (
             body,
             error_response_for_source(route.source_provider, 400, str(exc)),
             {},
         )
+    except Exception:
+        log_compaction_failure(
+            inbound_shape,
+            category="preparation",
+            status_code=500,
+            trace=trace,
+        )
+        raise
     profile = {
         "compaction_mode": preparation.mode,
         "compaction_reason": preparation.reason,
         "compaction_rehydrated_count": preparation.rehydrated_count,
         "compaction_dropped_rosetta_count": preparation.dropped_rosetta_count,
         "compaction_dropped_native_count": preparation.dropped_native_count,
+        "_compaction_inbound_shape": inbound_shape,
     }
     if preparation.mode and force_rosetta_compaction:
         profile["compaction_forced_rosetta"] = True
+    if inbound_shape.is_compaction_related:
+        preparation_outcome: Literal["none", "native", "rosetta"]
+        if preparation.mode == "native":
+            preparation_outcome = "native"
+        elif preparation.mode == "rosetta":
+            preparation_outcome = "rosetta"
+        else:
+            preparation_outcome = "none"
+        log_compaction_result(
+            inbound_shape,
+            outcome=preparation_outcome,
+            reason=preparation.reason,
+            trace=trace,
+        )
     if preparation.mode != "rosetta":
         return preparation.body, None, profile if preparation.mode else {}
     response, compaction_profile = await _run_rosetta_compaction(
@@ -495,6 +593,8 @@ async def _prepare_codex_compaction_request(
         codex_window_id=codex_window_id,
         image_fetch_workers=image_fetch_workers,
         stream=stream,
+        inbound_shape=inbound_shape,
+        trace=trace,
         model_group_failover=model_group_failover,
     )
     return preparation.body, response, compaction_profile
@@ -1755,6 +1855,7 @@ async def handle_non_streaming(  # noqa: C901
     body_log_state: BodyLogState | None = None,
     image_fetch_workers: ImageFetchWorkerPool | None = None,
     skip_codex_compaction: bool = False,
+    suppress_upstream_error_logging: bool = False,
     model_group_failover: bool = False,
 ) -> tuple[Response, dict[str, Any]]:
     """Non-streaming proxy: convert -> forward -> convert back -> respond.
@@ -1808,6 +1909,11 @@ async def handle_non_streaming(  # noqa: C901
     if compaction_response is not None:
         assert isinstance(compaction_response, Response)
         return compaction_response, profile
+    native_compaction_shape = (
+        profile.pop("_compaction_inbound_shape", None)
+        if profile.get("compaction_mode") == "native"
+        else None
+    )
     # model was already injected into body by app.py
     original_body = body
     runtime_plan = build_tool_runtime_plan(original_body, route)
@@ -1848,6 +1954,12 @@ async def handle_non_streaming(  # noqa: C901
             )
         except UpstreamConnectionError as exc:
             profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
+            if native_compaction_shape is not None:
+                log_compaction_failure(
+                    native_compaction_shape,
+                    category="native_transport",
+                    status_code=502,
+                )
             return (
                 error_response_for_source(
                     route.source_provider,
@@ -1863,13 +1975,20 @@ async def handle_non_streaming(  # noqa: C901
 
         if resp.status_code != 200:
             _record_provider_failure(profile, resp)
-            log_upstream_error(
-                resp.status_code,
-                resp.error_text,
-                endpoint=str(route.target_provider),
-                state=upstream_error_log_state,
-                response_redaction="protocol_fields",
-            )
+            if native_compaction_shape is not None:
+                log_compaction_failure(
+                    native_compaction_shape,
+                    category="native_http",
+                    status_code=resp.status_code,
+                )
+            elif not suppress_upstream_error_logging:
+                log_upstream_error(
+                    resp.status_code,
+                    resp.error_text,
+                    endpoint=str(route.target_provider),
+                    state=upstream_error_log_state,
+                    response_redaction="protocol_fields",
+                )
             return (
                 _upstream_http_error_response(
                     body=resp.raw_content,
@@ -2005,6 +2124,12 @@ async def handle_non_streaming(  # noqa: C901
         )
     except UpstreamConnectionError as exc:
         profile["upstream_ms"] = round((time.perf_counter() - t_upstream) * 1000, 2)
+        if native_compaction_shape is not None:
+            log_compaction_failure(
+                native_compaction_shape,
+                category="native_transport",
+                status_code=502,
+            )
         return (
             error_response_for_source(
                 route.source_provider,
@@ -2019,13 +2144,20 @@ async def handle_non_streaming(  # noqa: C901
 
     if resp.status_code != 200:
         _record_provider_failure(profile, resp)
-        log_upstream_error(
-            resp.status_code,
-            resp.error_text,
-            endpoint=str(route.target_provider),
-            state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
+        if native_compaction_shape is not None:
+            log_compaction_failure(
+                native_compaction_shape,
+                category="native_http",
+                status_code=resp.status_code,
+            )
+        elif not suppress_upstream_error_logging:
+            log_upstream_error(
+                resp.status_code,
+                resp.error_text,
+                endpoint=str(route.target_provider),
+                state=upstream_error_log_state,
+                response_redaction="protocol_fields",
+            )
         return (
             _upstream_http_error_response(
                 body=resp.raw_content,
@@ -2614,6 +2746,7 @@ async def _raw_stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    compaction_shape: CompactionRequestShape | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
@@ -2654,6 +2787,16 @@ async def _raw_stream_event_generator(
         terminal_state.complete()
     except BaseException as exc:
         terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        if compaction_shape is not None:
+            if terminal_state.outcome != "cancelled":
+                log_compaction_failure(
+                    compaction_shape,
+                    category="native_transport",
+                    status_code=502,
+                    trace=trace,
+                    immediate=True,
+                )
+            terminal_state.error = None
         terminal_exception = exc
     finally:
         _finalize_response_stream(
@@ -2686,6 +2829,8 @@ async def _handle_direct_responses_streaming(
     body_log_state: BodyLogState | None,
     inbound_wire_request: InboundWireRequest | None,
     original_request_body: dict[str, Any] | None,
+    compaction_shape: CompactionRequestShape | None,
+    trace: StreamTraceLogger | None,
     model_group_failover: bool,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Handle same-protocol Responses streaming passthrough."""
@@ -2696,14 +2841,6 @@ async def _handle_direct_responses_streaming(
         and provider_info.request_encoding == "passthrough"
         and body.get("stream") is True
         and inbound_wire_request.matches(body)
-    )
-    request_id = extra_headers.get("x-request-id") if extra_headers else None
-    trace = _create_stream_trace_logger(
-        stream_trace_state,
-        request_id=request_id,
-        request_log_id=entry_id,
-        model=model,
-        route=route,
     )
     trace_started_at = time.monotonic()
     if trace is not None:
@@ -2765,7 +2902,14 @@ async def _handle_direct_responses_streaming(
             (time.perf_counter() - t_connect) * 1000, 2
         )
         error_msg = str(exc)
-        if trace is not None:
+        if compaction_shape is not None:
+            log_compaction_failure(
+                compaction_shape,
+                category="native_transport",
+                status_code=502,
+                trace=trace,
+            )
+        if trace is not None and compaction_shape is None:
             trace.log(
                 "upstream_connection_error",
                 {
@@ -2782,7 +2926,7 @@ async def _handle_direct_responses_streaming(
             t0=trace_started_at,
             chunk_count=0,
             terminal_outcome="error",
-            stream_error=error_msg,
+            stream_error=None if compaction_shape is not None else error_msg,
             ttfb_ms=None,
             passthrough=True,
         )
@@ -2804,7 +2948,7 @@ async def _handle_direct_responses_streaming(
         _record_provider_failure(profile, stream)
         error_text = await stream.read_error()
         await stream.close()
-        if trace is not None:
+        if trace is not None and compaction_shape is None:
             trace.log(
                 "upstream_error",
                 {
@@ -2821,18 +2965,26 @@ async def _handle_direct_responses_streaming(
             t0=trace_started_at,
             chunk_count=0,
             terminal_outcome="error",
-            stream_error=error_text,
+            stream_error=None if compaction_shape is not None else error_text,
             ttfb_ms=None,
             passthrough=True,
         )
-        log_upstream_error(
-            stream.status_code,
-            error_text,
-            endpoint=str(route.target_provider),
-            is_streaming=True,
-            state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
+        if compaction_shape is not None:
+            log_compaction_failure(
+                compaction_shape,
+                category="native_http",
+                status_code=stream.status_code,
+                trace=trace,
+            )
+        else:
+            log_upstream_error(
+                stream.status_code,
+                error_text,
+                endpoint=str(route.target_provider),
+                is_streaming=True,
+                state=upstream_error_log_state,
+                response_redaction="protocol_fields",
+            )
         return (
             _upstream_http_error_response(
                 body=error_text,
@@ -2853,6 +3005,7 @@ async def _handle_direct_responses_streaming(
                 entry_id=entry_id,
                 request_log=request_log,
                 trace=trace,
+                compaction_shape=compaction_shape,
             ),
             content_type="text/event-stream",
         ),
@@ -2917,6 +3070,14 @@ async def handle_streaming(  # noqa: C901
     tool_history_hit_indexes: set[int] = set()
     tool_history_candidates: list[ToolHistoryTranslationCandidate] = []
     profile: dict[str, Any] = {}
+    request_id = extra_headers.get("x-request-id") if extra_headers else None
+    trace = _create_stream_trace_logger(
+        stream_trace_state,
+        request_id=request_id,
+        request_log_id=entry_id,
+        model=model,
+        route=route,
+    )
     (
         body,
         compaction_response,
@@ -2935,10 +3096,16 @@ async def handle_streaming(  # noqa: C901
         image_fetch_workers=image_fetch_workers,
         stream=True,
         model_group_failover=model_group_failover,
+        trace=trace,
     )
     profile.update(compaction_profile)
     if compaction_response is not None:
         return compaction_response, profile
+    native_compaction_shape = (
+        profile.pop("_compaction_inbound_shape", None)
+        if profile.get("compaction_mode") == "native"
+        else None
+    )
     # model was already injected into body by app.py
     original_body = body
     runtime_plan = build_tool_runtime_plan(original_body, route)
@@ -2991,6 +3158,8 @@ async def handle_streaming(  # noqa: C901
             body_log_state=body_log_state,
             inbound_wire_request=inbound_wire_request,
             original_request_body=original_request_body,
+            compaction_shape=native_compaction_shape,
+            trace=trace,
             model_group_failover=model_group_failover,
         )
         profile.update(direct_profile)
@@ -3114,7 +3283,13 @@ async def handle_streaming(  # noqa: C901
         )
         # Connection-level failure — no upstream HTTP response exists, so
         # the gateway synthesizes an error message and returns 502.
-        error_msg = str(exc)
+        if native_compaction_shape is not None:
+            log_compaction_failure(
+                native_compaction_shape,
+                category="native_transport",
+                status_code=502,
+                trace=trace,
+            )
         return (
             error_response_for_source(
                 route.source_provider,
@@ -3133,14 +3308,22 @@ async def handle_streaming(  # noqa: C901
         _record_provider_failure(profile, stream)
         error_text = await stream.read_error()
         await stream.close()
-        log_upstream_error(
-            stream.status_code,
-            error_text,
-            endpoint=str(route.target_provider),
-            is_streaming=True,
-            state=upstream_error_log_state,
-            response_redaction="protocol_fields",
-        )
+        if native_compaction_shape is not None:
+            log_compaction_failure(
+                native_compaction_shape,
+                category="native_http",
+                status_code=stream.status_code,
+                trace=trace,
+            )
+        else:
+            log_upstream_error(
+                stream.status_code,
+                error_text,
+                endpoint=str(route.target_provider),
+                is_streaming=True,
+                state=upstream_error_log_state,
+                response_redaction="protocol_fields",
+            )
         return (
             _upstream_http_error_response(
                 body=error_text,
@@ -3165,15 +3348,6 @@ async def handle_streaming(  # noqa: C901
         profile["tool_history_cache_write_skips"] = skipped
 
     # Phase 4: No error — create stream processor and return SSE response
-    request_id = extra_headers.get("x-request-id") if extra_headers else None
-    trace = _create_stream_trace_logger(
-        stream_trace_state,
-        request_id=request_id,
-        request_log_id=entry_id,
-        model=model,
-        route=route,
-    )
-
     if trace is not None:
         trace.log_full("original_request", original_request_body)
         trace.log("tool_runtime_plan", runtime_plan.trace_summary())
