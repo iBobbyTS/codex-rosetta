@@ -4297,9 +4297,11 @@ def test_get_config_separates_global_and_model_group_route_enabled(tmp_path):
 
     assert rows[0]["enabled"] is True
     assert rows[0]["routing_enabled"] is False
-    assert rows[0]["status"] == "disabled"
+    assert rows[0]["status"] == "available"
     assert rows[0]["error"] is None
     assert rows[0]["current"] is False
+    assert rows[0]["availability"] is None
+    assert rows[0]["rate_multiplier"] == 1.0
     assert rows[1]["enabled"] is True
     assert rows[1]["routing_enabled"] is True
     assert rows[1]["current"] is True
@@ -4357,7 +4359,21 @@ def test_put_model_group_round_trips_disabled_provider_only_candidate(tmp_path):
 
 def test_put_model_group_round_trips_disabled_fixed_credential_candidate(tmp_path):
     config = _config_data()
-    config["providers"]["openai"]["auto_rotate_credentials"] = False
+    config["providers"]["openai"].update(
+        auto_rotate_credentials=False,
+        openai_variant="new_api",
+        availability_snapshot={
+            "updated_at": 1,
+            "credentials": {
+                _PRIMARY_CREDENTIAL_UUID: {
+                    "value": 82,
+                    "timestamp": 1,
+                    "kind": "success_rate",
+                }
+            },
+        },
+    )
+    config["providers"]["openai"]["api_keys"][0]["automatic_rate_multiplier"] = 0.25
     config["providers"]["openai"]["api_keys"].append(
         {
             "uuid": _SECONDARY_CREDENTIAL_UUID,
@@ -4410,6 +4426,13 @@ def test_put_model_group_round_trips_disabled_fixed_credential_candidate(tmp_pat
     rows = projected["model_groups"]["OpenAI"]["providers"]
     assert rows[0]["routing_enabled"] is False
     assert rows[0]["credential_uuid"] == _PRIMARY_CREDENTIAL_UUID
+    assert rows[0]["status"] == "available"
+    assert rows[0]["availability"] == {
+        "kind": "percentage",
+        "value": 82.0,
+        "band": "green",
+    }
+    assert rows[0]["rate_multiplier"] == 0.25
     assert rows[1]["routing_enabled"] is True
     assert rows[1]["credential_uuid"] == _SECONDARY_CREDENTIAL_UUID
 

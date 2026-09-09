@@ -2000,6 +2000,12 @@ class GatewayConfig:
     ) -> bool:
         if not candidate.enabled:
             return False
+        return self.model_group_candidate_runtime_available(candidate)
+
+    def model_group_candidate_runtime_available(
+        self, candidate: _ModelGroupProviderCandidate
+    ) -> bool:
+        """Return candidate health without considering model-group participation."""
         provider = self.providers.get(candidate.provider_name)
         if provider is None or not provider.has_available_base_url():
             return False

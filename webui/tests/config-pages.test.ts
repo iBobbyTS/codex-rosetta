@@ -2256,9 +2256,9 @@ describe('ModelsPage', () => {
 
       const hiddenRow = providerRow('hidden');
       expect(hiddenRow).not.toHaveClass('suu-sortable-table-enhanced__row--green');
-      expect(hiddenRow).not.toHaveTextContent('Available');
-      expect(hiddenRow).not.toHaveTextContent('99%');
-      expect(hiddenRow).not.toHaveTextContent('2x');
+      expect(hiddenRow).toHaveTextContent('Available');
+      expect(hiddenRow).toHaveTextContent('99%');
+      expect(hiddenRow).toHaveTextContent('2x');
       const hiddenRouting = within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' });
       expect(hiddenRouting).not.toBeChecked();
 
@@ -2306,6 +2306,26 @@ describe('ModelsPage', () => {
     const hiddenRow = dialog.getByRole('button', { name: 'Drag provider hidden' }).closest('tr')!;
     await fireEvent.click(within(hiddenRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' }));
     expect(hiddenRow).toHaveTextContent('Resume scheduling after saving model group');
+  });
+
+  it('shows runtime status, availability, and multiplier for a provider excluded from routing', async () => {
+    apiMock.get.mockImplementation((path: string) => Promise.resolve(path === '/admin/api/config' ? {
+      providers: { hidden: { api_type: 'chat', auto_rotate_credentials: true } },
+      model_groups: { Main: { providers: [
+        { name: 'hidden', auto_rotate_credentials: true, current: false, enabled: true, routing_enabled: false, status: 'available', error: null, availability: { kind: 'percentage', value: 99, band: 'green' }, rate_multiplier: 2 },
+      ], type: 'llm', models: { 'demo-model': {} } } },
+      tool_profile_presets: [],
+    } : { cursor: 0, events: [] }));
+
+    render(ModelsPage);
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit' }));
+    const dialog = within(screen.getByRole('dialog', { name: 'Edit Model Group' }));
+    const providerRow = dialog.getByRole('button', { name: 'Drag provider hidden' }).closest('tr')!;
+
+    expect(within(providerRow).getByRole('checkbox', { name: 'Allow hidden in model group routing' })).not.toBeChecked();
+    expect(providerRow).toHaveTextContent('Available');
+    expect(providerRow.querySelector('.availability-green')).toHaveTextContent('99%');
+    expect(providerRow).toHaveTextContent('2x');
   });
 
   it('makes cooldown detail accessible and lets the current cooling provider be selected again for recovery', async () => {

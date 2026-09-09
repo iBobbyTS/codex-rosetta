@@ -193,3 +193,24 @@ test('wraps collapsed and expanded model-group cooldown detail inside the status
     expect(expanded.detailRight).toBeLessThanOrEqual(expanded.cellRight + 1);
   }
 });
+
+test('shows runtime columns for a model-group provider excluded from routing', async ({ page }) => {
+  const config = {
+    providers: { upstream: { provider: 'moonshot', base_url: 'https://api.moonshot.ai/v1', api_type: 'responses', auto_rotate_credentials: true } },
+    models: { 'demo-model': { provider: 'upstream' } },
+    model_groups: { Main: { providers: [{ name: 'upstream', auto_rotate_credentials: true, current: false, enabled: true, routing_enabled: false, status: 'available', error: null, availability: { kind: 'percentage', value: 99, band: 'green' }, rate_multiplier: 0.5 }], type: 'llm', models: { 'demo-model': {} } } },
+    known_api_types: ['responses', 'chat', 'anthropic', 'google'], registered_shims: [], tool_profile_presets: [], model_presets: [], server: { request_body_limit_mb: 128 },
+  };
+  await page.route('**/admin/api/config', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(config) }));
+  await page.goto('/admin/admin.html');
+  await page.getByRole('link', { name: 'Models' }).click();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+
+  const dialog = page.getByRole('dialog', { name: 'Edit Model Group' });
+  const row = dialog.getByRole('button', { name: 'Drag provider upstream' }).locator('xpath=ancestor::tr');
+  await expect(row.getByRole('checkbox', { name: 'Allow upstream in model group routing' })).not.toBeChecked();
+  await expect(row.locator('.model-group-provider-status')).toHaveText('Available');
+  await expect(row.locator('.model-group-provider-availability')).toHaveText('99%');
+  await expect(row.locator('.model-group-provider-multiplier')).toHaveText('0.5x');
+  expect(await dialog.locator('.model-group-provider-table').evaluate((element) => element.scrollWidth - element.clientWidth)).toBeLessThanOrEqual(1);
+});
