@@ -78,6 +78,27 @@ class UpstreamStream(ABC):
     status_code: int
 
     @property
+    def opened_credential_id(self) -> str | None:
+        """Return the credential that opened this stream, when known.
+
+        Wrapper streams inherit this property and transparently expose the
+        underlying transport's observation, while concrete transports may set
+        an explicit value after a successful open.
+        """
+        value = self.__dict__.get("_opened_credential_id")
+        if value is not None:
+            return value
+        wrapped = self.__dict__.get("_stream")
+        return getattr(wrapped, "opened_credential_id", None)
+
+    @opened_credential_id.setter
+    def opened_credential_id(self, value: str | None) -> None:
+        # Set by transports that can identify the credential which opened a
+        # 200 stream. Terminal accounting must never infer this from mutable
+        # provider selection state.
+        self.__dict__["_opened_credential_id"] = value
+
+    @property
     def is_error(self) -> bool:
         """True if the upstream returned an error status."""
         return self.status_code >= 400

@@ -493,6 +493,57 @@ def _mark_stream_active(request: Any, *, is_stream: bool) -> None:
         metrics.active_streams += 1
 
 
+async def _record_stream_terminal_credential(
+    provider_info: Any,
+    state: Any,
+    *,
+    ring: Any | None,
+    stream_candidate: Any | None,
+) -> None:
+    """Account one opened stream against the credential that opened it."""
+    credential_id = getattr(state, "credential_id", None)
+    if credential_id is None:
+        return
+    if state.response_completed:
+        provider_info.clear_cross_request_failure(
+            CROSS_REQUEST_STREAM_DISCONNECT, credential_id
+        )
+        return
+    if not state.should_count_stream_disconnect:
+        return
+    rotation_active = provider_info.record_cross_request_failure(
+        CROSS_REQUEST_STREAM_DISCONNECT, credential_id
+    )
+    if not rotation_active:
+        return
+    fixed_credential = getattr(provider_info, "_fixed_credential_id", None)
+    credential_leader = False
+    if fixed_credential is not None:
+        # A model-group fixed view has its own credential while sharing the
+        # provider's global ring.  Claim the model-group gate directly so a
+        # different global current credential cannot suppress its cooldown.
+        if ring is not None and stream_candidate is not None:
+            leader, _waited = await ring.claim(stream_candidate)
+            if not leader:
+                return
+    else:
+        leader = await provider_info.claim_credential_rotation(credential_id)
+        if not leader:
+            return
+        credential_leader = True
+    try:
+        provider_info.mark_credential_failed(credential_id)
+        next_credential = provider_info.next_available_credential(credential_id)
+        if next_credential is not None:
+            await provider_info.select_credential(next_credential)
+        if ring is not None and stream_candidate is not None:
+            ring.mark_failed(stream_candidate, state.error)
+            await ring.publish()
+    finally:
+        if credential_leader:
+            await provider_info.publish_credential_rotation()
+
+
 def _extract_client_ip(request: Any) -> str | None:
     """Return the direct TCP peer address for request attribution.
 
@@ -889,31 +940,16 @@ async def _proxy_handler(  # noqa: C901
                 else build_upstream_extra_headers(request, request_id)
             )
             if is_stream:
-                stream_credential_id = provider_info.current_credential_id
                 stream_candidate = provider_info.model_group_candidate_identity
 
                 async def _on_stream_terminal(state: Any) -> None:
                     try:
-                        if state.response_completed:
-                            provider_info.clear_cross_request_failure(
-                                CROSS_REQUEST_STREAM_DISCONNECT,
-                                stream_credential_id,
-                            )
-                        elif state.should_count_stream_disconnect:
-                            rotation_active = (
-                                provider_info.record_cross_request_failure(
-                                    CROSS_REQUEST_STREAM_DISCONNECT,
-                                    stream_credential_id,
-                                )
-                            )
-                            if rotation_active:
-                                provider_info.mark_credential_failed(
-                                    stream_credential_id
-                                )
-                                await provider_info.publish_credential_rotation()
-                                if ring is not None and stream_candidate is not None:
-                                    ring.mark_failed(stream_candidate, state.error)
-                                    await ring.publish()
+                        await _record_stream_terminal_credential(
+                            provider_info,
+                            state,
+                            ring=ring,
+                            stream_candidate=stream_candidate,
+                        )
                     except Exception:
                         logger.warning(
                             "Failed to record cross-request stream disconnect",

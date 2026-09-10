@@ -999,6 +999,8 @@ class HttpTransport:
             failover_enabled=failover_enabled,
             credential_headers=credential_headers,
         )
+        if result.status_code == 200:
+            result.opened_credential_id = credential_observation[0]
         return result, trigger, url_observation, credential_observation
 
     async def send_request(

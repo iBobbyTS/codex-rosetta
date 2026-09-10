@@ -2213,6 +2213,7 @@ async def _stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    opened_credential_id: str | None = None,
     on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events from an already-opened upstream stream.
@@ -2225,7 +2226,7 @@ async def _stream_event_generator(
     """
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_state = _StreamTerminalState()
+    terminal_state = _StreamTerminalState(credential_id=opened_credential_id)
     terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
@@ -2330,7 +2331,9 @@ async def _web_search_stream_event_generator(  # noqa: C901
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_state = _StreamTerminalState()
+    terminal_state = _StreamTerminalState(
+        credential_id=getattr(initial_stream, "opened_credential_id", None)
+    )
     terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
@@ -2434,6 +2437,9 @@ async def _web_search_stream_event_generator(  # noqa: C901
                 current_body,
                 model,
                 extra_headers=extra_headers,
+            )
+            terminal_state.credential_id = getattr(
+                current_stream, "opened_credential_id", None
             )
             if current_stream.is_error:
                 error_text = await current_stream.read_error()
@@ -2611,6 +2617,7 @@ def _converted_stream_response_generator(
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
+            opened_credential_id=getattr(stream, "opened_credential_id", None),
             on_terminal=on_terminal,
         )
     return _web_search_stream_event_generator(
@@ -2750,6 +2757,7 @@ class _StreamTerminalState:
     response_completed: bool = False
     response_failed: bool = False
     upstream_disconnect: bool = False
+    credential_id: str | None = None
 
     def complete(self) -> None:
         """Mark a stream as normally completed."""
@@ -2781,12 +2789,13 @@ async def _raw_stream_event_generator(
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
     compaction_shape: CompactionRequestShape | None = None,
+    opened_credential_id: str | None = None,
     on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
     t0 = time.monotonic()
-    terminal_state = _StreamTerminalState()
+    terminal_state = _StreamTerminalState(credential_id=opened_credential_id)
     terminal_exception: BaseException | None = None
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
@@ -3057,6 +3066,7 @@ async def _handle_direct_responses_streaming(
                 request_log=request_log,
                 trace=trace,
                 compaction_shape=compaction_shape,
+                opened_credential_id=getattr(stream, "opened_credential_id", None),
                 on_terminal=on_terminal,
             ),
             content_type="text/event-stream",

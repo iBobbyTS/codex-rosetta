@@ -32,8 +32,15 @@ from codex_rosetta.gateway.transport import ProviderInfo, UpstreamProtocolError
 from codex_rosetta.gateway.transport._retry import _RetryPolicy
 from codex_rosetta.gateway.transport.http import transport as transport_module
 from codex_rosetta.gateway.transport.http.transport import HttpTransport
-from codex_rosetta.gateway.proxy import _StreamTerminalState
+from codex_rosetta.gateway.proxy import (
+    _StreamTerminalState,
+    _raw_stream_event_generator,
+    _stream_event_generator,
+)
 from codex_rosetta.gateway.transport._base import UpstreamNetworkError
+from codex_rosetta.gateway.transport.credential_redaction import (
+    CredentialRedactingStream,
+)
 
 
 _CDN_502_HTML = (
@@ -155,6 +162,83 @@ def test_cross_request_stream_disconnect_counters_are_independent_and_thresholde
     assert provider.record_cross_request_failure("stream_disconnect", "first") is False
 
 
+def test_tenth_stream_disconnect_rotates_next_ordinary_credential() -> None:
+    async def scenario() -> None:
+        provider, _ = _provider(
+            "row-a",
+            "https://first.example/v1",
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        state = _StreamTerminalState(
+            outcome="error", error="closed", credential_id="first"
+        )
+        state.upstream_disconnect = True
+        for _ in range(9):
+            await app_module._record_stream_terminal_credential(
+                provider, state, ring=None, stream_candidate=None
+            )
+        assert provider.current_credential_id == "first"
+        await app_module._record_stream_terminal_credential(
+            provider, state, ring=None, stream_candidate=None
+        )
+        assert provider.current_credential_id == "second"
+        assert provider.credential_statuses() == (
+            ("first", "cooling"),
+            ("second", "available"),
+        )
+
+    asyncio.run(scenario())
+
+
+def test_terminal_success_clears_opened_credential_after_opening_503_rotation(
+    monkeypatch,
+) -> None:
+    async def scenario() -> None:
+        origin = "https://first.example/v1"
+        provider, _ = _provider(
+            "row-a",
+            origin,
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        client = _RoutingClient()
+        client.add(
+            f"{origin}/responses",
+            *_literal_503s(),
+            _FakeStreamingResponse(
+                200,
+                b'data: {"ok":true}\n\n',
+                content_type="text/event-stream",
+            ),
+        )
+        stream = await _transport(monkeypatch, client).send_streaming(
+            provider, "openai_responses", {}, "model"
+        )
+        assert stream.opened_credential_id == "second"
+        state = _StreamTerminalState(
+            outcome="error", error="closed", credential_id=stream.opened_credential_id
+        )
+        state.upstream_disconnect = True
+        for _ in range(9):
+            await app_module._record_stream_terminal_credential(
+                provider, state, ring=None, stream_candidate=None
+            )
+        completed = _StreamTerminalState(
+            outcome="completed",
+            error=None,
+            credential_id="second",
+            response_completed=True,
+        )
+        await app_module._record_stream_terminal_credential(
+            provider, completed, ring=None, stream_candidate=None
+        )
+        assert provider.credential_statuses() == (
+            ("first", "cooling"),
+            ("second", "available"),
+        )
+
+    asyncio.run(scenario())
+
+
 def test_stream_terminal_finalize_completion_clears_disconnect_trigger() -> None:
     state = _StreamTerminalState(outcome="completed", error=None)
     state.observe_event({"type": "response.completed"})
@@ -171,6 +255,191 @@ def test_stream_terminal_counts_network_disconnect_but_not_protocol_error() -> N
     protocol = _StreamTerminalState(outcome="error", error="invalid event")
     protocol.upstream_disconnect = False
     assert protocol.should_count_stream_disconnect is False
+
+
+class _DisconnectingStream:
+    status_code = 200
+    opened_credential_id = "first"
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    def __aiter__(self):
+        async def events():
+            yield {"type": "response.output_text.delta", "delta": "x"}
+            raise UpstreamNetworkError("closed")
+
+        return events()
+
+    def aiter_raw_bytes(self):
+        async def chunks():
+            yield b'data: {"type":"response.output_text.delta"}\n\n'
+            raise UpstreamNetworkError("closed")
+
+        return chunks()
+
+
+class _ModelGroupTerminalRing:
+    def __init__(self, candidate: object) -> None:
+        self.candidate = candidate
+        self.claims = 0
+        self.failed: list[object] = []
+        self.published = 0
+
+    async def claim(self, candidate: object) -> tuple[bool, bool]:
+        assert candidate is self.candidate
+        self.claims += 1
+        return True, False
+
+    def mark_failed(self, candidate: object, detail: str | None) -> None:
+        assert candidate is self.candidate
+        self.failed.append(detail)
+
+    async def publish(self) -> None:
+        self.published += 1
+
+
+def test_credential_redacting_stream_propagates_opened_credential_to_terminal_seam() -> (
+    None
+):
+    async def scenario() -> None:
+        provider, _ = _provider(
+            "row-a",
+            "https://first.example/v1",
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        wrapped = CredentialRedactingStream(
+            _DisconnectingStream(), provider, "openai_responses"
+        )
+        assert wrapped.opened_credential_id == "first"
+
+        terminal_states: list[_StreamTerminalState] = []
+
+        async def terminal(state: _StreamTerminalState) -> None:
+            terminal_states.append(state)
+
+        generator = _raw_stream_event_generator(
+            stream=wrapped,
+            source_provider="openai_responses",
+            model="model",
+            opened_credential_id=wrapped.opened_credential_id,
+            on_terminal=terminal,
+        )
+        with pytest.raises(UpstreamNetworkError):
+            async for _chunk in generator:
+                pass
+        assert len(terminal_states) == 1
+        assert terminal_states[0].credential_id == "first"
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("raw", [False, True])
+def test_real_stream_terminal_seam_attributes_opened_credential_and_persists_rotation(
+    raw: bool,
+) -> None:
+    async def scenario() -> None:
+        provider, writes = _provider(
+            "row-a",
+            "https://first.example/v1",
+            credentials=(("first", "key-first"), ("second", "key-second")),
+        )
+        credential_writes: list[tuple[str, str]] = []
+
+        async def record_credential(configured_id: str, credential_id: str) -> None:
+            credential_writes.append((configured_id, credential_id))
+
+        provider.bind_current_credential_recorder(record_credential)
+
+        async def terminal(state: Any) -> None:
+            await app_module._record_stream_terminal_credential(
+                provider, state, ring=None, stream_candidate=None
+            )
+
+        for _ in range(10):
+            stream = _DisconnectingStream()
+            if raw:
+                generator = _raw_stream_event_generator(
+                    stream=stream,
+                    source_provider="openai_responses",
+                    model="model",
+                    opened_credential_id=stream.opened_credential_id,
+                    on_terminal=terminal,
+                )
+            else:
+                processor = SimpleNamespace(
+                    process_chunk=lambda _chunk: [],
+                    finalize_stream=lambda: [],
+                )
+                generator = _stream_event_generator(
+                    source_provider="openai_responses",
+                    stream=stream,
+                    processor=processor,
+                    model="model",
+                    format_sse=lambda event: str(event),
+                    opened_credential_id=stream.opened_credential_id,
+                    on_terminal=terminal,
+                )
+            with pytest.raises(UpstreamNetworkError):
+                async for _chunk in generator:
+                    pass
+
+        assert provider.current_credential_id == "second"
+        assert credential_writes == [("row-a", "second")]
+        assert _auth_key(provider) == "key-second"
+
+    asyncio.run(scenario())
+
+
+def test_real_stream_terminal_seam_cools_fixed_model_group_credential() -> None:
+    async def scenario() -> None:
+        provider, _ = _provider(
+            "row-a",
+            "https://first.example/v1",
+            credentials=(("first", "key-first"), ("second", "key-second")),
+            credential_uuids=(
+                ("00000000-0000-4000-8000-000000000001", "first"),
+                ("00000000-0000-4000-8000-000000000002", "second"),
+            ),
+        )
+        candidate = object()
+        view = provider.for_model_group_candidate(
+            candidate,
+            credential_uuid="00000000-0000-4000-8000-000000000002",
+        )
+        ring = _ModelGroupTerminalRing(candidate)
+
+        async def terminal(state: Any) -> None:
+            await app_module._record_stream_terminal_credential(
+                view, state, ring=ring, stream_candidate=candidate
+            )
+
+        for _ in range(10):
+            stream = _DisconnectingStream()
+            stream.opened_credential_id = "second"
+            generator = _raw_stream_event_generator(
+                stream=stream,
+                source_provider="openai_responses",
+                model="model",
+                opened_credential_id=stream.opened_credential_id,
+                on_terminal=terminal,
+            )
+            with pytest.raises(UpstreamNetworkError):
+                async for _chunk in generator:
+                    pass
+
+        assert provider.current_credential_id == "first"
+        assert provider.credential_statuses() == (
+            ("first", "available"),
+            ("second", "cooling"),
+        )
+        assert ring.failed == ["closed"]
+        assert ring.published == 1
+
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])
