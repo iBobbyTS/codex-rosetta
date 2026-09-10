@@ -95,6 +95,7 @@ from .chat_tool_surface import (
 from .tool_adaptation import CodexToolLocalizationStore
 from .tool_profiles import route_tool_state
 from .transport._base import UpstreamNetworkError
+from .transport.provider_info import CROSS_REQUEST_STREAM_DISCONNECT
 from .web_run_capabilities import (
     WEB_RUN_BASIC_SEARCH_CAPABILITY,
     WEB_RUN_PROFILE_ITEM_ID,
@@ -888,6 +889,37 @@ async def _proxy_handler(  # noqa: C901
                 else build_upstream_extra_headers(request, request_id)
             )
             if is_stream:
+                stream_credential_id = provider_info.current_credential_id
+                stream_candidate = provider_info.model_group_candidate_identity
+
+                async def _on_stream_terminal(state: Any) -> None:
+                    try:
+                        if state.response_completed:
+                            provider_info.clear_cross_request_failure(
+                                CROSS_REQUEST_STREAM_DISCONNECT,
+                                stream_credential_id,
+                            )
+                        elif state.should_count_stream_disconnect:
+                            rotation_active = (
+                                provider_info.record_cross_request_failure(
+                                    CROSS_REQUEST_STREAM_DISCONNECT,
+                                    stream_credential_id,
+                                )
+                            )
+                            if rotation_active:
+                                provider_info.mark_credential_failed(
+                                    stream_credential_id
+                                )
+                                await provider_info.publish_credential_rotation()
+                                if ring is not None and stream_candidate is not None:
+                                    ring.mark_failed(stream_candidate, state.error)
+                                    await ring.publish()
+                    except Exception:
+                        logger.warning(
+                            "Failed to record cross-request stream disconnect",
+                            exc_info=True,
+                        )
+
                 response, profile = await handle_streaming(
                     route,
                     provider_info,
@@ -914,6 +946,7 @@ async def _proxy_handler(  # noqa: C901
                     ),
                     inbound_wire_request=inbound_wire_request,
                     model_group_failover=ring is not None,
+                    on_terminal=_on_stream_terminal,
                 )
             else:
                 response, profile = await handle_non_streaming(

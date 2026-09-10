@@ -20,7 +20,7 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -136,6 +136,7 @@ from .search_provider_contract import SearchProviderCapability
 from .transport import (
     ProviderInfo,
     UpstreamConnectionError,
+    UpstreamNetworkError,
     UpstreamProtocolError,
     UpstreamTransport,
 )
@@ -2212,6 +2213,7 @@ async def _stream_event_generator(
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> AsyncIterator[str]:
     """Stream SSE events from an already-opened upstream stream.
 
@@ -2240,6 +2242,7 @@ async def _stream_event_generator(
                 if trace is not None:
                     trace.log("upstream_chunk", chunk, chunk_index=chunk_count)
                 for source_event in processor.process_chunk(chunk):
+                    terminal_state.observe_event(source_event)
                     for sse_event in _format_source_event_sse(
                         source_event,
                         event_buffer=event_buffer,
@@ -2252,6 +2255,7 @@ async def _stream_event_generator(
         finalize_stream = getattr(processor, "finalize_stream", None)
         if finalize_stream is not None:
             for source_event in finalize_stream():
+                terminal_state.observe_event(source_event)
                 for sse_event in _format_source_event_sse(
                     source_event,
                     event_buffer=event_buffer,
@@ -2285,6 +2289,7 @@ async def _stream_event_generator(
         terminal_state.complete()
     except BaseException as exc:
         terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_state.upstream_disconnect = isinstance(exc, UpstreamNetworkError)
         terminal_exception = exc
     finally:
         _finalize_response_stream(
@@ -2296,6 +2301,8 @@ async def _stream_event_generator(
             terminal_state=terminal_state,
             ttfb_ms=ttfb_ms,
         )
+        if on_terminal is not None:
+            await on_terminal(terminal_state)
     if terminal_exception is not None:
         raise terminal_exception from None
 
@@ -2317,6 +2324,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
     entry_id: str | None = None,
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
     max_rounds: int = 5,
 ) -> AsyncIterator[str]:
     """Stream Chat upstream output, executing synthetic web_search calls inline."""
@@ -2357,6 +2365,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
                         )
                         trace.log(stage, chunk, chunk_index=chunk_count)
                     for source_event in processor.process_chunk(chunk):
+                        terminal_state.observe_event(source_event)
                         for sse_event in _format_web_search_source_event_sse(
                             source_event,
                             controller=controller,
@@ -2371,6 +2380,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
             finalize_stream = getattr(processor, "finalize_stream", None)
             if finalize_stream is not None:
                 for source_event in finalize_stream():
+                    terminal_state.observe_event(source_event)
                     for sse_event in _format_web_search_source_event_sse(
                         source_event,
                         controller=controller,
@@ -2457,6 +2467,7 @@ async def _web_search_stream_event_generator(  # noqa: C901
         terminal_state.complete()
     except BaseException as exc:
         terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_state.upstream_disconnect = isinstance(exc, UpstreamNetworkError)
         terminal_exception = exc
     finally:
         _finalize_response_stream(
@@ -2468,6 +2479,8 @@ async def _web_search_stream_event_generator(  # noqa: C901
             terminal_state=terminal_state,
             ttfb_ms=ttfb_ms,
         )
+        if on_terminal is not None:
+            await on_terminal(terminal_state)
     if terminal_exception is not None:
         raise terminal_exception from None
 
@@ -2585,6 +2598,7 @@ def _converted_stream_response_generator(
     target_provider: ProviderType,
     target_body: dict[str, Any],
     extra_headers: dict[str, str] | None,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> AsyncIterator[str]:
     if web_search_runtime is None:
         return _stream_event_generator(
@@ -2597,6 +2611,7 @@ def _converted_stream_response_generator(
             entry_id=entry_id,
             request_log=request_log,
             trace=trace,
+            on_terminal=on_terminal,
         )
     return _web_search_stream_event_generator(
         source_provider=source_provider,
@@ -2614,6 +2629,7 @@ def _converted_stream_response_generator(
         entry_id=entry_id,
         request_log=request_log,
         trace=trace,
+        on_terminal=on_terminal,
     )
 
 
@@ -2731,11 +2747,29 @@ class _StreamTerminalState:
 
     outcome: str = "cancelled"
     error: str | None = "Stream closed before completion"
+    response_completed: bool = False
+    response_failed: bool = False
+    upstream_disconnect: bool = False
 
     def complete(self) -> None:
         """Mark a stream as normally completed."""
         self.outcome = "completed"
         self.error = None
+
+    def observe_event(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type == "response.completed":
+            self.response_completed = True
+        elif event_type == "response.failed":
+            self.response_failed = True
+
+    @property
+    def should_count_stream_disconnect(self) -> bool:
+        if self.response_completed or self.response_failed:
+            return False
+        if self.outcome == "cancelled":
+            return False
+        return self.outcome == "completed" or self.upstream_disconnect
 
 
 async def _raw_stream_event_generator(
@@ -2747,6 +2781,7 @@ async def _raw_stream_event_generator(
     request_log: Any | None = None,
     trace: StreamTraceLogger | None = None,
     compaction_shape: CompactionRequestShape | None = None,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> AsyncIterator[bytes]:
     """Pass raw upstream stream bytes to the client without event conversion."""
     chunk_count = 0
@@ -2756,6 +2791,7 @@ async def _raw_stream_event_generator(
     ttfb_ms: float | None = None
     t_stream_open = time.perf_counter()
     error_prefixer = SSEErrorPrefixer(DownstreamErrorOrigin.UPSTREAM)
+    raw_event_tail = b""
 
     try:
         async with stream:
@@ -2771,6 +2807,17 @@ async def _raw_stream_event_generator(
                 chunk_count += 1
                 if trace is not None:
                     trace.log("raw_passthrough_chunk", chunk, chunk_index=chunk_count)
+                normalized_chunk = (raw_event_tail + chunk).replace(b" ", b"")
+                normalized_chunk = (
+                    normalized_chunk.replace(b"\n", b"")
+                    .replace(b"\r", b"")
+                    .replace(b"\t", b"")
+                )
+                if b'"type":"response.completed"' in normalized_chunk:
+                    terminal_state.response_completed = True
+                elif b'"type":"response.failed"' in normalized_chunk:
+                    terminal_state.response_failed = True
+                raw_event_tail = normalized_chunk[-64:]
                 released = error_prefixer.feed(chunk)
                 if released:
                     yield released
@@ -2787,6 +2834,7 @@ async def _raw_stream_event_generator(
         terminal_state.complete()
     except BaseException as exc:
         terminal_state.outcome, terminal_state.error = _stream_terminal_failure(exc)
+        terminal_state.upstream_disconnect = isinstance(exc, UpstreamNetworkError)
         if compaction_shape is not None:
             if terminal_state.outcome != "cancelled":
                 log_compaction_failure(
@@ -2809,6 +2857,8 @@ async def _raw_stream_event_generator(
             ttfb_ms=ttfb_ms,
             passthrough=True,
         )
+        if on_terminal is not None:
+            await on_terminal(terminal_state)
     if terminal_exception is not None:
         raise terminal_exception from None
 
@@ -2832,6 +2882,7 @@ async def _handle_direct_responses_streaming(
     compaction_shape: CompactionRequestShape | None,
     trace: StreamTraceLogger | None,
     model_group_failover: bool,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Handle same-protocol Responses streaming passthrough."""
     profile: dict[str, Any] = {}
@@ -3006,6 +3057,7 @@ async def _handle_direct_responses_streaming(
                 request_log=request_log,
                 trace=trace,
                 compaction_shape=compaction_shape,
+                on_terminal=on_terminal,
             ),
             content_type="text/event-stream",
         ),
@@ -3035,6 +3087,7 @@ async def handle_streaming(  # noqa: C901
     web_search_client: TavilySearchClient | None = None,
     inbound_wire_request: InboundWireRequest | None = None,
     model_group_failover: bool = False,
+    on_terminal: Callable[[_StreamTerminalState], Awaitable[None]] | None = None,
 ) -> tuple[Response | StreamingResponse, dict[str, Any]]:
     """Streaming proxy: convert -> forward -> stream-convert back -> SSE.
 
@@ -3161,6 +3214,7 @@ async def handle_streaming(  # noqa: C901
             compaction_shape=native_compaction_shape,
             trace=trace,
             model_group_failover=model_group_failover,
+            on_terminal=on_terminal,
         )
         profile.update(direct_profile)
         return response, profile
@@ -3436,6 +3490,7 @@ async def handle_streaming(  # noqa: C901
                 target_provider=route.target_provider,
                 target_body=target_body,
                 extra_headers=extra_headers,
+                on_terminal=on_terminal,
             ),
             content_type="text/event-stream",
         ),

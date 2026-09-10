@@ -32,6 +32,8 @@ from codex_rosetta.gateway.transport import ProviderInfo, UpstreamProtocolError
 from codex_rosetta.gateway.transport._retry import _RetryPolicy
 from codex_rosetta.gateway.transport.http import transport as transport_module
 from codex_rosetta.gateway.transport.http.transport import HttpTransport
+from codex_rosetta.gateway.proxy import _StreamTerminalState
+from codex_rosetta.gateway.transport._base import UpstreamNetworkError
 
 
 _CDN_502_HTML = (
@@ -132,6 +134,43 @@ def test_provider_success_does_not_round_robin_credentials() -> None:
         credentials=(("first", "key-first"), ("second", "key-second")),
     )
     assert [_auth_key(provider), _auth_key(provider)] == ["key-first", "key-first"]
+
+
+def test_cross_request_stream_disconnect_counters_are_independent_and_thresholded() -> (
+    None
+):
+    provider, _ = _provider(
+        "row-a",
+        "https://first.example/v1",
+        credentials=(("first", "key-first"), ("second", "key-second")),
+    )
+
+    assert not any(
+        provider.record_cross_request_failure("stream_disconnect", "first")
+        for _ in range(9)
+    )
+    assert provider.record_cross_request_failure("stream_disconnect", "first")
+    assert provider.record_cross_request_failure("other_trigger", "first") is False
+    provider.clear_cross_request_failure("stream_disconnect", "first")
+    assert provider.record_cross_request_failure("stream_disconnect", "first") is False
+
+
+def test_stream_terminal_finalize_completion_clears_disconnect_trigger() -> None:
+    state = _StreamTerminalState(outcome="completed", error=None)
+    state.observe_event({"type": "response.completed"})
+    assert state.should_count_stream_disconnect is False
+
+
+def test_stream_terminal_counts_network_disconnect_but_not_protocol_error() -> None:
+    network = _StreamTerminalState(outcome="error", error="closed")
+    network.upstream_disconnect = isinstance(
+        UpstreamNetworkError("closed"), UpstreamNetworkError
+    )
+    assert network.should_count_stream_disconnect is True
+
+    protocol = _StreamTerminalState(outcome="error", error="invalid event")
+    protocol.upstream_disconnect = False
+    assert protocol.should_count_stream_disconnect is False
 
 
 @pytest.mark.parametrize("path_kind", ["request", "streaming", "passthrough"])

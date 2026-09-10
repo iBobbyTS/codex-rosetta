@@ -30,6 +30,9 @@ AuthHeaderFn = Callable[[str], dict[str, str]]
 CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
 CurrentCredentialRecorder = Callable[[str, str], Awaitable[None]]
 
+CROSS_REQUEST_STREAM_DISCONNECT = "stream_disconnect"
+CROSS_REQUEST_FAILURE_THRESHOLD = 10
+
 
 @dataclass(frozen=True, slots=True)
 class CodexCockpitHealth:
@@ -167,6 +170,7 @@ class ProviderInfo:
         self._credential_ring = OrderedFailoverCoordinator(
             credential_ids, selected_credential
         )
+        self._cross_request_failure_counts: dict[str, dict[str, int]] = {}
         self._record_current_credential: CurrentCredentialRecorder | None = None
         self._auth_header_fn = auth_header_fn
         self._url_template = url_template
@@ -313,6 +317,22 @@ class ProviderInfo:
 
     def mark_credential_failed(self, credential_id: str) -> None:
         self._credential_ring.mark_failed(credential_id)
+
+    def record_cross_request_failure(self, trigger: str, credential_id: str) -> bool:
+        """Increment an independent cross-request trigger counter."""
+        counts = self._cross_request_failure_counts.setdefault(trigger, {})
+        count = counts.get(credential_id, 0) + 1
+        counts[credential_id] = count
+        return count >= CROSS_REQUEST_FAILURE_THRESHOLD
+
+    def clear_cross_request_failure(self, trigger: str, credential_id: str) -> None:
+        """Clear one trigger counter without changing other failure state."""
+        counts = self._cross_request_failure_counts.get(trigger)
+        if counts is None:
+            return
+        counts.pop(credential_id, None)
+        if not counts:
+            self._cross_request_failure_counts.pop(trigger, None)
 
     def credential_statuses(self) -> tuple[tuple[str, str], ...]:
         """Return credential IDs with process-local availability."""
