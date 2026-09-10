@@ -19,7 +19,7 @@ try:
 except ImportError:  # pragma: no cover - Python < 3.14 is unsupported by this repo
     zstd = None
 
-from codex_rosetta.gateway.config import load_config_raw
+from codex_rosetta.gateway.config import GatewayConfig, load_config
 from codex_rosetta.gateway.live_gate import require_live_call_approval
 
 MAX_BODY_BYTES = 64 * 1024 * 1024
@@ -101,6 +101,9 @@ def summarize_request(
         "json": True,
         "top_level_keys": sorted(payload) if isinstance(payload, dict) else [],
         "model": payload.get("model") if isinstance(payload, dict) else None,
+        "parallel_tool_calls": (
+            payload.get("parallel_tool_calls") if isinstance(payload, dict) else None
+        ),
         "input_types": input_types,
         "has_internal_item_metadata": _contains_key(
             payload, "internal_chat_message_metadata_passthrough"
@@ -119,22 +122,35 @@ class CaptureState:
     def __init__(
         self,
         *,
-        upstream_base_url: str,
-        upstream_api_key: str,
+        config: dict[str, Any],
         log_path: Path,
-        actual_model: str,
         fail_old_model_compact: bool,
         normalize_zstd_upstream: bool,
     ) -> None:
-        self.upstream_base_url = upstream_base_url
-        self.upstream_api_key = upstream_api_key
+        self.gateway_config = GatewayConfig.from_raw_with_env(config)
         self.log_path = log_path
-        self.actual_model = actual_model
         self.fail_old_model_compact = fail_old_model_compact
         self.normalize_zstd_upstream = normalize_zstd_upstream
         self._failed_old_model_compact = False
         self._sequence = 0
         self._lock = threading.Lock()
+
+    def connection_for_model(self, model: str | None) -> tuple[str, str, str]:
+        """Resolve a model through the configured model group and credential."""
+        if not isinstance(model, str):
+            raise ValueError(f"model {model!r} is not configured in model_groups")
+        try:
+            route, provider = self.gateway_config.resolve("responses", model)
+        except (KeyError, ValueError) as exc:
+            raise ValueError(
+                f"model {model!r} is not configured in model_groups"
+            ) from exc
+        credential_id = provider.current_credential_id
+        credentials = self.gateway_config._raw_providers[route.provider_name][
+            "api_keys"
+        ]
+        credential = next(item for item in credentials if item["id"] == credential_id)
+        return route.provider_name, provider.base_url, credential["key"]
 
     def record(self, event: dict[str, Any]) -> None:
         with self._lock:
@@ -196,6 +212,11 @@ class CaptureHandler(BaseHTTPRequestHandler):
             {
                 "kind": "request",
                 "path": self.path,
+                "endpoint_kind": (
+                    "compact"
+                    if self.path.rstrip("/").endswith("/responses/compact")
+                    else "responses"
+                ),
                 "content_encoding": encoding,
                 "upstream_content_encoding": (
                     None
@@ -240,18 +261,22 @@ class CaptureHandler(BaseHTTPRequestHandler):
 
         forwarded_model = requested_model
         try:
-            payload = json.loads(decoded)
-            if isinstance(payload, dict) and requested_model == "relay-probe-old":
-                payload["model"] = self.server.state.actual_model
-                forwarded_model = self.server.state.actual_model
-                decoded = json.dumps(
-                    payload, ensure_ascii=False, separators=(",", ":")
-                ).encode()
-                raw_body = _encode_request(decoded, encoding)
-        except UnicodeDecodeError, json.JSONDecodeError:
-            pass
+            provider_name, upstream_base_url, upstream_api_key = (
+                self.server.state.connection_for_model(requested_model)
+            )
+        except ValueError as exc:
+            self.server.state.record(
+                {
+                    "kind": "routing_error",
+                    "path": self.path,
+                    "model": requested_model,
+                    "error": str(exc),
+                }
+            )
+            self.send_error(400, str(exc))
+            return
 
-        upstream_url = _join_upstream(self.server.state.upstream_base_url, self.path)
+        upstream_url = _join_upstream(upstream_base_url, self.path)
         headers = {
             key: value
             for key, value in self.headers.items()
@@ -259,7 +284,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
             and key.lower()
             not in {"host", "content-length", "authorization", "api-key"}
         }
-        headers["Authorization"] = f"Bearer {self.server.state.upstream_api_key}"
+        headers["Authorization"] = f"Bearer {upstream_api_key}"
         # The capture client is a test harness, but the forwarded request models Codex.
         headers["User-Agent"] = "codex-cli/0.145.0"
         if (
@@ -283,6 +308,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 {
                     "kind": "upstream_error",
                     "path": self.path,
+                    "provider": provider_name,
                     "forwarded_model": forwarded_model,
                     "error_type": type(exc).__name__,
                     "error": str(exc),
@@ -328,6 +354,7 @@ class CaptureHandler(BaseHTTPRequestHandler):
                 "status": status,
                 "synthetic": False,
                 "forwarded_model": forwarded_model,
+                "provider": provider_name,
                 "content_type": content_type.split(";", 1)[0],
                 "event_names": event_names,
                 "stream_completed": "response.completed" in event_names,
@@ -355,31 +382,16 @@ def main() -> int:
     require_live_call_approval()
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--provider-name", required=True)
-    parser.add_argument("--model", required=True)
     parser.add_argument("--log", type=Path, required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--fail-old-model-compact", action="store_true")
     parser.add_argument("--normalize-zstd-upstream", action="store_true")
     args = parser.parse_args()
-    raw = load_config_raw(str(args.config))
-    provider = raw.get("providers", {}).get(args.provider_name)
-    if not isinstance(provider, dict):
-        parser.error(f"provider {args.provider_name!r} not found")
-    api_key = provider.get("api_key")
-    base_url = provider.get("base_url")
-    if not isinstance(api_key, str) or not api_key:
-        parser.error("selected provider has no api_key")
-    if not isinstance(base_url, str) or not base_url.startswith(
-        ("http://", "https://")
-    ):
-        parser.error("selected provider has no valid base_url")
+    raw = load_config(str(args.config))
     args.log.parent.mkdir(parents=True, exist_ok=True)
     state = CaptureState(
-        upstream_base_url=base_url,
-        upstream_api_key=api_key,
+        config=raw,
         log_path=args.log,
-        actual_model=args.model,
         fail_old_model_compact=args.fail_old_model_compact,
         normalize_zstd_upstream=args.normalize_zstd_upstream,
     )

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from .capture_proxy import (
+    CaptureState,
     _decode_request,
     _encode_request,
     _join_upstream,
@@ -27,6 +28,56 @@ def test_join_upstream_deduplicates_v1() -> None:
     assert (
         _join_upstream("https://relay.example/v1", "/v1/responses")
         == "https://relay.example/v1/responses"
+    )
+
+
+def test_capture_state_resolves_model_group_current_credentials(tmp_path: Path) -> None:
+    state = CaptureState(
+        config={
+            "providers": {
+                "sol": {
+                    "api_keys": [
+                        {
+                            "uuid": "11111111-1111-4111-8111-111111111111",
+                            "id": "old",
+                            "key": "old-key",
+                        },
+                        {
+                            "uuid": "22222222-2222-4222-8222-222222222222",
+                            "id": "current",
+                            "key": "current-key",
+                        },
+                    ],
+                    "current_api_key": "current",
+                    "auto_rotate_credentials": True,
+                    "base_urls": ["https://relay.example/v1"],
+                    "current_base_url": "https://relay.example/v1",
+                    "provider": "openai",
+                    "api_type": "responses",
+                    "request_encoding": "passthrough",
+                }
+            },
+            "server": {
+                "admin_password": "admin",
+                "api_keys": [{"id": "client", "key": "client-key"}],
+            },
+            "model_groups": {
+                "Sol": {
+                    "provider": ["sol"],
+                    "type": "llm",
+                    "models": {"gpt-sol": {}},
+                }
+            },
+        },
+        log_path=tmp_path / "capture.jsonl",
+        fail_old_model_compact=False,
+        normalize_zstd_upstream=False,
+    )
+
+    assert state.connection_for_model("gpt-sol") == (
+        "sol",
+        "https://relay.example/v1",
+        "current-key",
     )
     assert (
         _join_upstream("https://relay.example", "/v1/responses/compact")
@@ -55,6 +106,7 @@ def test_request_summary_records_shape_without_prompt(encoding: str | None) -> N
     summary, restored = summarize_request(encoded, encoding)
     assert restored == decoded
     assert summary["model"] == "gpt-test"
+    assert summary["parallel_tool_calls"] is None
     assert summary["input_types"] == ["message"]
     assert summary["has_internal_item_metadata"] is True
     assert summary["reasoning_summary_delivery"] == "sequential_cutoff"

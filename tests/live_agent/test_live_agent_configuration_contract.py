@@ -58,7 +58,7 @@ def test_live_call_gate_accepts_only_explicit_non_secret_marker(monkeypatch) -> 
         ("tests/integration/test_openai_responses_sdk_e2e.py", "dotenv.load_dotenv"),
         ("tests/integration/test_gateway_agentabi.py", "from agentabi import run_sync"),
         ("tests/integration/gpt_relay/run.py", "raw = load_config_raw("),
-        ("tests/integration/gpt_relay/capture_proxy.py", "raw = load_config_raw("),
+        ("tests/integration/gpt_relay/capture_proxy.py", "raw = load_config("),
     ],
 )
 def test_every_python_live_entrypoint_gates_before_sensitive_work(
