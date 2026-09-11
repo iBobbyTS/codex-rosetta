@@ -14,6 +14,7 @@ Higher-level factory logic (shim resolution, config parsing) stays in
 from __future__ import annotations
 
 import copy
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
@@ -24,6 +25,7 @@ from ..provider_profiles import (
     RESPONSES_REQUEST_ENCODINGS,
     ResponsesRequestEncoding,
 )
+from ..state_scope import GatewayStateScope
 
 # Type alias for auth-header builder callables
 AuthHeaderFn = Callable[[str], dict[str, str]]
@@ -31,7 +33,19 @@ CurrentBaseUrlRecorder = Callable[[str, str], Awaitable[None]]
 CurrentCredentialRecorder = Callable[[str, str], Awaitable[None]]
 
 CROSS_REQUEST_STREAM_DISCONNECT = "stream_disconnect"
-CROSS_REQUEST_FAILURE_THRESHOLD = 10
+CROSS_REQUEST_FAILURE_THRESHOLD = 4
+_MAX_CROSS_REQUEST_FAILURE_SCOPES = 10_000
+
+
+class _OpenedCredentialId(str):
+    """Credential ID carrying the failover generation that opened a stream."""
+
+    generation: int
+
+    def __new__(cls, credential_id: str, generation: int) -> _OpenedCredentialId:
+        value = super().__new__(cls, credential_id)
+        value.generation = generation
+        return value
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,7 +184,9 @@ class ProviderInfo:
         self._credential_ring = OrderedFailoverCoordinator(
             credential_ids, selected_credential
         )
-        self._cross_request_failure_counts: dict[str, dict[str, int]] = {}
+        self._cross_request_failure_counts: OrderedDict[
+            tuple[str, GatewayStateScope, str, int], int
+        ] = OrderedDict()
         self._record_current_credential: CurrentCredentialRecorder | None = None
         self._auth_header_fn = auth_header_fn
         self._url_template = url_template
@@ -318,21 +334,39 @@ class ProviderInfo:
     def mark_credential_failed(self, credential_id: str) -> None:
         self._credential_ring.mark_failed(credential_id)
 
-    def record_cross_request_failure(self, trigger: str, credential_id: str) -> bool:
-        """Increment an independent cross-request trigger counter."""
-        counts = self._cross_request_failure_counts.setdefault(trigger, {})
-        count = counts.get(credential_id, 0) + 1
-        counts[credential_id] = count
+    def record_cross_request_failure(
+        self,
+        trigger: str,
+        scope: GatewayStateScope,
+        credential_id: str,
+        lifecycle_generation: int | None = None,
+    ) -> bool:
+        """Increment one bounded session-and-credential failure counter."""
+        if lifecycle_generation is None:
+            lifecycle_generation = self.observe_credential_rotation()[1]
+        key = (trigger, scope, credential_id, lifecycle_generation)
+        count = self._cross_request_failure_counts.get(key, 0) + 1
+        self._cross_request_failure_counts[key] = count
+        self._cross_request_failure_counts.move_to_end(key)
+        while (
+            len(self._cross_request_failure_counts) > _MAX_CROSS_REQUEST_FAILURE_SCOPES
+        ):
+            self._cross_request_failure_counts.popitem(last=False)
         return count >= CROSS_REQUEST_FAILURE_THRESHOLD
 
-    def clear_cross_request_failure(self, trigger: str, credential_id: str) -> None:
-        """Clear one trigger counter without changing other failure state."""
-        counts = self._cross_request_failure_counts.get(trigger)
-        if counts is None:
-            return
-        counts.pop(credential_id, None)
-        if not counts:
-            self._cross_request_failure_counts.pop(trigger, None)
+    def clear_cross_request_failure(
+        self,
+        trigger: str,
+        scope: GatewayStateScope,
+        credential_id: str,
+        lifecycle_generation: int | None = None,
+    ) -> None:
+        """Clear one session-and-credential counter without other state changes."""
+        if lifecycle_generation is None:
+            lifecycle_generation = self.observe_credential_rotation()[1]
+        self._cross_request_failure_counts.pop(
+            (trigger, scope, credential_id, lifecycle_generation), None
+        )
 
     def credential_statuses(self) -> tuple[tuple[str, str], ...]:
         """Return credential IDs with process-local availability."""
@@ -460,6 +494,24 @@ class ProviderInfo:
         observation = self.observe_credential_rotation()
         credential_id = observation[0]
         return observation, self._auth_header_fn(self._credentials[credential_id])
+
+    @staticmethod
+    def _opened_credential_id(observation: tuple[str, int]) -> str:
+        """Attach one selection lifecycle to a wire-compatible credential ID."""
+        credential_id, generation = observation
+        return _OpenedCredentialId(credential_id, generation)
+
+    def matching_credential_lifecycle(self, credential_id: str) -> int | None:
+        """Return the lifecycle when *credential_id* matches the current selection."""
+        if not isinstance(credential_id, _OpenedCredentialId):
+            return None
+        current_id, current_generation = self.observe_credential_rotation()
+        if (
+            credential_id != current_id
+            or credential_id.generation != current_generation
+        ):
+            return None
+        return credential_id.generation
 
     def auth_headers(self) -> dict[str, str]:
         """Return auth headers using the configured credential."""

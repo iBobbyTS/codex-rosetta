@@ -497,35 +497,65 @@ async def _record_stream_terminal_credential(
     provider_info: Any,
     state: Any,
     *,
+    failure_scope: GatewayStateScope,
     ring: Any | None,
     stream_candidate: Any | None,
+    stream_candidate_observation: tuple[Any, int] | None = None,
 ) -> None:
     """Account one opened stream against the credential that opened it."""
     credential_id = getattr(state, "credential_id", None)
     if credential_id is None:
         return
+    fixed_credential = getattr(provider_info, "_fixed_credential_id", None)
+    if fixed_credential is not None:
+        if (
+            ring is None
+            or stream_candidate is None
+            or stream_candidate_observation is None
+            or credential_id != fixed_credential
+            or stream_candidate_observation[0] != stream_candidate
+            or ring.observe() != stream_candidate_observation
+        ):
+            # Fixed credentials belong to the model-group candidate lifecycle,
+            # which is independent from the Provider's global credential ring.
+            return
+        lifecycle_generation = stream_candidate_observation[1]
+    else:
+        lifecycle_generation = provider_info.matching_credential_lifecycle(
+            credential_id
+        )
+        if lifecycle_generation is None:
+            # The terminal belongs to an older selection cycle, even if the same
+            # credential became current again after an A -> B -> A transition.
+            return
     if state.response_completed:
         provider_info.clear_cross_request_failure(
-            CROSS_REQUEST_STREAM_DISCONNECT, credential_id
+            CROSS_REQUEST_STREAM_DISCONNECT,
+            failure_scope,
+            credential_id,
+            lifecycle_generation,
         )
         return
     if not state.should_count_stream_disconnect:
         return
     rotation_active = provider_info.record_cross_request_failure(
-        CROSS_REQUEST_STREAM_DISCONNECT, credential_id
+        CROSS_REQUEST_STREAM_DISCONNECT,
+        failure_scope,
+        credential_id,
+        lifecycle_generation,
     )
     if not rotation_active:
         return
-    fixed_credential = getattr(provider_info, "_fixed_credential_id", None)
     credential_leader = False
     if fixed_credential is not None:
         # A model-group fixed view has its own credential while sharing the
         # provider's global ring.  Claim the model-group gate directly so a
         # different global current credential cannot suppress its cooldown.
-        if ring is not None and stream_candidate is not None:
-            leader, _waited = await ring.claim(stream_candidate)
-            if not leader:
-                return
+        assert ring is not None
+        assert stream_candidate_observation is not None
+        leader, _waited = await ring.claim_observation(stream_candidate_observation)
+        if not leader:
+            return
     else:
         leader = await provider_info.claim_credential_rotation(credential_id)
         if not leader:
@@ -539,6 +569,12 @@ async def _record_stream_terminal_credential(
         if ring is not None and stream_candidate is not None:
             ring.mark_failed(stream_candidate, state.error)
             await ring.publish()
+        provider_info.clear_cross_request_failure(
+            CROSS_REQUEST_STREAM_DISCONNECT,
+            failure_scope,
+            credential_id,
+            lifecycle_generation,
+        )
     finally:
         if credential_leader:
             await provider_info.publish_credential_rotation()
@@ -941,14 +977,22 @@ async def _proxy_handler(  # noqa: C901
             )
             if is_stream:
                 stream_candidate = provider_info.model_group_candidate_identity
+                failure_scope = GatewayStateScope.for_stream_failover(
+                    principal_id=principal_id,
+                    provider_name=route.provider_name,
+                    model=model,
+                    client_metadata=request_body.get("client_metadata"),
+                )
 
                 async def _on_stream_terminal(state: Any) -> None:
                     try:
                         await _record_stream_terminal_credential(
                             provider_info,
                             state,
+                            failure_scope=failure_scope,
                             ring=ring,
                             stream_candidate=stream_candidate,
+                            stream_candidate_observation=observation,
                         )
                     except Exception:
                         logger.warning(
