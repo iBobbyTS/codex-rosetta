@@ -20,6 +20,7 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from codex_rosetta.platform_files import set_private_directory, set_private_path
 from typing import Any, Literal
 
 from .redaction import SecretRedactor
@@ -266,17 +267,17 @@ class PersistenceManager:
             field="codex_compaction_max_global_bytes",
         )
         self._data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(self._data_dir, 0o700)
 
         db_fd = os.open(self.db_path, os.O_RDWR | os.O_CREAT, 0o600)
         os.close(db_fd)
-        os.chmod(self.db_path, 0o600)
 
         self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
         try:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._init_tables()
+            set_private_directory(self._data_dir)
+            set_private_path(self.db_path)
             self.cleanup_expired_codex_compaction_mappings(
                 datetime.now(timezone.utc).isoformat()
             )
@@ -295,7 +296,7 @@ class PersistenceManager:
             Path(f"{self.db_path}-shm"),
         ):
             if path.exists():
-                os.chmod(path, 0o600)
+                set_private_path(path)
 
     def update_token_values(self, token_values: Iterable[str]) -> None:
         """Update exact token values removed from newly persisted diagnostics."""

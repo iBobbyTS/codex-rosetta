@@ -31,6 +31,17 @@ def _admin_token(
     ).admin_token
 
 
+def _assert_private_key(path) -> None:
+    if os.name == "nt":
+        import subprocess
+
+        output = subprocess.check_output(["icacls", str(path)], text=True)
+        assert os.environ["USERNAME"].lower() in output.lower()
+        assert "Everyone" not in output
+    else:
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def _gateway_config() -> dict[str, Any]:
     return {
         "providers": {
@@ -91,7 +102,7 @@ def test_persisted_secret_keeps_admin_login_across_process_tokens(tmp_path) -> N
         internal_token="rsk-internal-second", session_secret=second_secret
     )
     key_path = tmp_path / ADMIN_SESSION_SECRET_FILENAME
-    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    _assert_private_key(key_path)
 
 
 def test_create_app_reuses_admin_login_after_gateway_restart(tmp_path) -> None:
@@ -139,7 +150,7 @@ def test_existing_secret_permissions_are_tightened(tmp_path) -> None:
 
     load_or_create_admin_session_secret(str(config_path))
 
-    assert stat.S_IMODE(key_path.stat().st_mode) == 0o600
+    _assert_private_key(key_path)
 
 
 def test_malformed_secret_fails_closed_without_rotation(tmp_path) -> None:

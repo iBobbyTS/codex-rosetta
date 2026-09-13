@@ -8,6 +8,13 @@ import os
 import secrets
 import stat
 from pathlib import Path
+from codex_rosetta.platform_files import (
+    exclusive_create_flags,
+    fsync_directory,
+    open_regular_readonly,
+    set_private_file,
+    set_private_path,
+)
 
 ADMIN_SESSION_SECRET_FILENAME = "admin-session.key"
 
@@ -54,9 +61,8 @@ def _decode_key(value: str, *, source: str) -> bytes:
 
 
 def _read_key_file(path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
+        fd = open_regular_readonly(path)
     except OSError as exc:
         raise AdminSessionSecretError(
             f"Cannot open Admin session secret file {path}"
@@ -67,7 +73,8 @@ def _read_key_file(path: Path) -> bytes:
             raise AdminSessionSecretError(
                 f"Admin session secret path {path} is not a regular file"
             )
-        os.fchmod(fd, 0o600)
+        set_private_file(fd)
+        set_private_path(path)
         raw = os.read(fd, _MAX_KEY_FILE_BYTES)
         if os.read(fd, 1):
             raise AdminSessionSecretError(
@@ -98,10 +105,9 @@ def _create_key_file_atomic(config_dir: Path, key_path: Path) -> bytes:
     temp_path = config_dir / (
         f".{ADMIN_SESSION_SECRET_FILENAME}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     )
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(temp_path, flags, 0o600)
+    fd = os.open(temp_path, exclusive_create_flags(), 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        set_private_file(fd)
         view = memoryview(encoded)
         while view:
             written = os.write(fd, view)
@@ -115,8 +121,8 @@ def _create_key_file_atomic(config_dir: Path, key_path: Path) -> bytes:
         try:
             os.link(temp_path, key_path)
             published = True
-            os.chmod(key_path, 0o600)
-            _fsync_directory(config_dir)
+            set_private_path(key_path)
+            fsync_directory(config_dir)
         except FileExistsError:
             pass
     finally:
@@ -125,12 +131,3 @@ def _create_key_file_atomic(config_dir: Path, key_path: Path) -> bytes:
     if published:
         return key
     return _read_key_file(key_path)
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    fd = os.open(path, flags)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)

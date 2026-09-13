@@ -21,6 +21,14 @@ from codex_rosetta.auto_detect import ProviderType
 from codex_rosetta.observability.redaction import collect_token_values
 from codex_rosetta.observability.retention import resolve_request_log_caps
 from codex_rosetta.routing import ResolvedRoute
+from codex_rosetta.platform_files import (
+    exclusive_lock,
+    fsync_directory,
+    open_lock_file,
+    set_private_directory,
+    set_private_file,
+    set_private_path,
+)
 
 from .providers import (
     build_provider_info,
@@ -1066,7 +1074,7 @@ def _ensure_private_directory(path: str) -> None:
         current = parent
     os.makedirs(directory, mode=0o700, exist_ok=True)
     for created in missing:
-        os.chmod(created, 0o700)
+        set_private_directory(created)
 
 
 def _atomic_write_bytes(path: str, content: bytes) -> None:
@@ -1074,14 +1082,14 @@ def _atomic_write_bytes(path: str, content: bytes) -> None:
     parent = os.path.dirname(path) or "."
     fd, temporary = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=parent)
     try:
-        os.fchmod(fd, 0o600)
+        set_private_file(fd)
         with os.fdopen(fd, "wb") as stream:
             fd = -1
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        os.chmod(path, 0o600)
+        set_private_path(path)
     except Exception:
         if fd >= 0:
             os.close(fd)
@@ -1093,11 +1101,8 @@ def _atomic_write_bytes(path: str, content: bytes) -> None:
 
 
 def _fsync_directory(path: str) -> None:
-    directory_fd = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(directory_fd)
-    finally:
-        os.close(directory_fd)
+    """Compatibility wrapper for tests and callers of the old private helper."""
+    fsync_directory(path)
 
 
 def write_config(
@@ -1114,48 +1119,45 @@ def write_config(
     failure restores the exact previous file bytes before the exception is
     re-raised.
     """
-    import fcntl
-
     parent = os.path.dirname(os.path.abspath(path)) or "."
     _ensure_private_directory(parent)
     serialized = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
     lock_path = f"{path}.lock"
-    lock_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    lock_file = open_lock_file(lock_path)
+    lock_fd = lock_file.fileno()
     try:
-        os.fchmod(lock_fd, 0o600)
-        with os.fdopen(lock_fd, "r+") as lock_file:
-            lock_fd = -1
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            current = b""
-            if os.path.exists(path):
-                with open(path, "rb") as existing:
-                    current = existing.read()
-            expected_digest = getattr(data, "source_digest", None)
-            current_digest = _content_digest(current)
-            if expected_digest is not None and expected_digest != current_digest:
-                raise ConfigConflictError(
-                    "config changed on disk after it was loaded; reload and retry"
-                )
-
-            if current:
-                _atomic_write_bytes(f"{path}.bak", current)
-            _atomic_write_bytes(path, serialized)
-            try:
-                _fsync_directory(parent)
-                if activate is not None:
-                    activate()
-            except Exception:
+        lock_fd = -1
+        with lock_file:
+            with exclusive_lock(lock_file):
+                current = b""
+                if os.path.exists(path):
+                    with open(path, "rb") as existing:
+                        current = existing.read()
+                expected_digest = getattr(data, "source_digest", None)
+                current_digest = _content_digest(current)
+                if expected_digest is not None and expected_digest != current_digest:
+                    raise ConfigConflictError(
+                        "config changed on disk after it was loaded; reload and retry"
+                    )
                 if current:
-                    _atomic_write_bytes(path, current)
-                else:
-                    try:
-                        os.unlink(path)
-                    except FileNotFoundError:
-                        pass
-                _fsync_directory(parent)
-                raise
-            if isinstance(data, ConfigDocument):
-                data.source_digest = _content_digest(serialized)
+                    _atomic_write_bytes(f"{path}.bak", current)
+                _atomic_write_bytes(path, serialized)
+                try:
+                    _fsync_directory(parent)
+                    if activate is not None:
+                        activate()
+                except Exception:
+                    if current:
+                        _atomic_write_bytes(path, current)
+                    else:
+                        try:
+                            os.unlink(path)
+                        except FileNotFoundError:
+                            pass
+                    _fsync_directory(parent)
+                    raise
+                if isinstance(data, ConfigDocument):
+                    data.source_digest = _content_digest(serialized)
     finally:
         if lock_fd >= 0:
             os.close(lock_fd)

@@ -20,15 +20,26 @@ def _mode(path) -> int:
     return stat.S_IMODE(path.stat().st_mode)
 
 
+def _assert_private(path, mode: int) -> None:
+    if os.name == "nt":
+        import subprocess
+
+        output = subprocess.check_output(["icacls", str(path)], text=True)
+        assert os.environ["USERNAME"].lower() in output.lower()
+        assert "Everyone" not in output
+    else:
+        assert _mode(path) == mode
+
+
 def test_write_config_creates_private_files_and_directory(tmp_path):
     directory = tmp_path / "new" / "gateway"
     path = directory / "config.jsonc"
     write_config(str(path), {"value": 1})
 
     assert json.loads(path.read_text()) == {"value": 1}
-    assert _mode(directory) == 0o700
-    assert _mode(path) == 0o600
-    assert _mode(directory / "config.jsonc.lock") == 0o600
+    _assert_private(directory, 0o700)
+    _assert_private(path, 0o600)
+    _assert_private(directory / "config.jsonc.lock", 0o600)
 
 
 def test_write_config_keeps_private_backup(tmp_path):
@@ -40,8 +51,8 @@ def test_write_config_keeps_private_backup(tmp_path):
 
     backup = tmp_path / "config.jsonc.bak"
     assert json.loads(backup.read_text()) == {"value": 1}
-    assert _mode(backup) == 0o600
-    assert _mode(path) == 0o600
+    _assert_private(backup, 0o600)
+    _assert_private(path, 0o600)
 
 
 def test_write_config_rejects_lost_update(tmp_path):
@@ -65,7 +76,7 @@ def test_write_config_tightens_existing_permissions(tmp_path):
     os.chmod(path, 0o644)
     document = load_config_raw(str(path))
     write_config(str(path), document)
-    assert _mode(path) == 0o600
+    _assert_private(path, 0o600)
 
 
 def test_write_config_fsyncs_before_activation_and_restores_on_failure(

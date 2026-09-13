@@ -18,6 +18,13 @@ import secrets
 import stat
 from pathlib import Path
 from typing import Any
+from codex_rosetta.platform_files import (
+    exclusive_create_flags,
+    fsync_directory,
+    open_regular_readonly,
+    set_private_file,
+    set_private_path,
+)
 
 
 KEY_ENV_VAR = "CODEX_ROSETTA_TOOL_MAPPING_KEY"
@@ -372,16 +379,16 @@ def _decode_key(value: str, *, source: str) -> bytes:
 
 
 def _read_key_file(path: Path) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(path, flags)
+        fd = open_regular_readonly(path)
     except OSError as exc:
         raise ToolMappingKeyError(f"Cannot open tool-mapping key file {path}") from exc
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode):
             raise ToolMappingKeyError(f"Tool-mapping key path {path} is not a file")
-        os.fchmod(fd, 0o600)
+        set_private_file(fd)
+        set_private_path(path)
         raw = os.read(fd, 4096)
         if os.read(fd, 1):
             raise ToolMappingKeyError(f"Tool-mapping key file {path} is too large")
@@ -403,10 +410,9 @@ def _create_key_file_atomic(data_dir: Path, key_path: Path) -> bytes:
         _KEY_FILE_PREFIX + base64.urlsafe_b64encode(key).decode("ascii") + "\n"
     ).encode("ascii")
     temp_path = data_dir / (f".{KEY_FILENAME}.{os.getpid()}.{secrets.token_hex(8)}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(temp_path, flags, 0o600)
+    fd = os.open(temp_path, exclusive_create_flags(), 0o600)
     try:
-        os.fchmod(fd, 0o600)
+        set_private_file(fd)
         view = memoryview(encoded)
         while view:
             written = os.write(fd, view)
@@ -422,8 +428,8 @@ def _create_key_file_atomic(data_dir: Path, key_path: Path) -> bytes:
             # process's key.  The temporary inode is fully fsynced first.
             os.link(temp_path, key_path)
             published = True
-            os.chmod(key_path, 0o600)
-            _fsync_directory(data_dir)
+            set_private_path(key_path)
+            fsync_directory(data_dir)
         except FileExistsError:
             pass
     finally:
@@ -432,12 +438,3 @@ def _create_key_file_atomic(data_dir: Path, key_path: Path) -> bytes:
     if published:
         return key
     return _read_key_file(key_path)
-
-
-def _fsync_directory(path: Path) -> None:
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    fd = os.open(path, flags)
-    try:
-        os.fsync(fd)
-    finally:
-        os.close(fd)
