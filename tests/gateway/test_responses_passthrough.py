@@ -18,7 +18,11 @@ from codex_rosetta.gateway.code_mode_projection import (
 )
 from codex_rosetta.gateway.config import GatewayConfig
 from codex_rosetta.gateway.inbound_content_encoding import InboundWireRequest
-from codex_rosetta.gateway.proxy import handle_non_streaming, handle_streaming
+from codex_rosetta.gateway.proxy import (
+    handle_non_streaming,
+    handle_streaming,
+    normalize_standalone_automation_outputs,
+)
 from codex_rosetta.gateway.tool_profiles import tool_profile_contract
 from codex_rosetta.gateway.transport._base import UpstreamResponse, UpstreamStream
 from codex_rosetta.gateway.web_run_capabilities import WEB_RUN_BASIC_SEARCH_CAPABILITY
@@ -120,6 +124,42 @@ def test_openai_responses_non_streaming_direct_passthrough():
     assert captured_body == body
     assert profile["passthrough"] is True
     assert "request_conversion_ms" not in profile
+
+
+def test_standalone_codex_automation_output_becomes_developer_message() -> None:
+    body = {
+        "model": "gpt-test",
+        "input": [
+            {"type": "message", "role": "user", "content": "hello"},
+            {
+                "type": "function_call_output",
+                "id": "fco_1",
+                "name": "automation_update",
+                "namespace": "codex_app",
+                "output": "<heartbeat>status</heartbeat>",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_real",
+                "output": "real result",
+            },
+        ],
+    }
+
+    normalized = normalize_standalone_automation_outputs(body)
+
+    assert normalized["input"][1] == {
+        "type": "message",
+        "role": "developer",
+        "content": [{"type": "input_text", "text": "<heartbeat>status</heartbeat>"}],
+    }
+    assert normalized["input"][2] == body["input"][2]
+    assert body["input"][1]["type"] == "function_call_output"
+
+
+def test_non_automation_call_id_less_output_is_not_rewritten() -> None:
+    body = {"input": [{"type": "function_call_output", "name": "other", "output": "x"}]}
+    assert normalize_standalone_automation_outputs(body) == body
 
 
 @pytest.mark.parametrize("status_code", [201, 204, 302])

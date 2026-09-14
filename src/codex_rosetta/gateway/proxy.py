@@ -195,6 +195,47 @@ def _tool_history_source_template(
     }
 
 
+def normalize_standalone_automation_outputs(body: dict[str, Any]) -> dict[str, Any]:
+    """Convert Codex automation outputs that are invalid on strict Responses APIs.
+
+    Codex app-server may persist a synthetic ``automation_update`` as a
+    ``function_call_output`` without a preceding function call (and therefore
+    without ``call_id``).  Responses providers reject that item.  Preserve the
+    user-visible text as a developer message instead; real tool outputs are
+    left untouched.
+    """
+    items = body.get("input")
+    if not isinstance(items, list):
+        return body
+    normalized = copy.deepcopy(body)
+    output_items: list[Any] = []
+    changed = False
+    for item in items:
+        if (
+            isinstance(item, dict)
+            and item.get("type") == "function_call_output"
+            and not item.get("call_id")
+            and item.get("name") == "automation_update"
+            and item.get("namespace") == "codex_app"
+        ):
+            output = item.get("output", "")
+            if not isinstance(output, str):
+                output = json.dumps(output, ensure_ascii=False)
+            output_items.append(
+                {
+                    "type": "message",
+                    "role": "developer",
+                    "content": [{"type": "input_text", "text": output}],
+                }
+            )
+            changed = True
+        else:
+            output_items.append(item)
+    if changed:
+        normalized["input"] = output_items
+    return normalized
+
+
 async def _convert_request(
     pipeline: ConversionPipeline,
     route: ResolvedRoute,
@@ -1924,6 +1965,7 @@ async def handle_non_streaming(  # noqa: C901
         original_body, body, route
     )
     if is_responses_passthrough(route):
+        body = normalize_standalone_automation_outputs(body)
         try:
             surface_decision = apply_chat_tool_surface(
                 chat_tool_surface_coordinator,
@@ -3191,6 +3233,7 @@ async def handle_streaming(  # noqa: C901
         original_body, body, route
     )
     if is_responses_passthrough(route):
+        body = normalize_standalone_automation_outputs(body)
         try:
             surface_decision = apply_chat_tool_surface(
                 chat_tool_surface_coordinator,
