@@ -228,6 +228,34 @@ def test_put_server_settings_updates_stream_trace_and_runtime_state(tmp_path):
     assert app.stream_trace_state.config.path == "~/trace/log.jsonl"
 
 
+def test_put_server_settings_preserves_cli_listener_override(tmp_path):
+    """Admin saves keep runtime host/port aligned with CLI listener overrides."""
+    config_path = tmp_path / "config.jsonc"
+    config_path.write_text(json.dumps(_config_data()), encoding="utf-8")
+
+    initial_config = GatewayConfig(_config_data())
+    app = SimpleNamespace(
+        config_path=str(config_path),
+        gateway_config=initial_config,
+        cli_host_override="127.0.0.1",
+        cli_port_override=18765,
+        stream_trace_state=StreamTraceState(initial_config.stream_trace),
+        auth_state=None,
+    )
+    request = SimpleNamespace(app=app)
+    request.json = lambda: {"stream_trace": {"enabled": True}}
+
+    response = _run(put_server_settings(request))
+
+    assert response.status_code == 200
+    assert app.gateway_config.host == "127.0.0.1"
+    assert app.gateway_config.port == 18765
+    response_server = json.loads(response.body.decode("utf-8"))["server"]
+    assert response_server["port"] == 18765
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["server"].get("port") != 18765
+
+
 @pytest.mark.parametrize(
     ("value", "expected_bytes"),
     [

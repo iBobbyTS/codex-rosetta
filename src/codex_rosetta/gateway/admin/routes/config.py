@@ -1196,6 +1196,8 @@ async def get_config(request: Any) -> Response:
 
     config: GatewayConfig = request.app.gateway_config
     server = _mask_server_config(raw.get("server", {}))
+    server["host"] = config.host
+    server["port"] = config.port
     server.setdefault("request_body_limit_mb", config.request_body_limit_config_value)
     server.setdefault("local_mode", config.local_mode)
     server.setdefault("local_mode_confirmed", config.local_mode_confirmed)
@@ -2595,6 +2597,12 @@ async def put_server_settings(request: Any) -> Response:
         return commit_error
 
     response_server = _mask_server_config(data.get("server", {}))
+    # CLI listener overrides are process-local and intentionally are not
+    # persisted, but the Admin response must report the effective endpoint.
+    if getattr(request.app, "cli_host_override", None) is not None:
+        response_server["host"] = request.app.cli_host_override
+    if getattr(request.app, "cli_port_override", None) is not None:
+        response_server["port"] = request.app.cli_port_override
     return JSONResponse({"ok": True, "server": response_server})
 
 

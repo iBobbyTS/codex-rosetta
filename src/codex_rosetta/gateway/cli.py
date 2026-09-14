@@ -696,6 +696,10 @@ def main() -> None:
         host = _cli_value_or_config(args.host, config.host)
         port = _cli_value_or_config(args.port, config.port)
         socket_path = _cli_value_or_config(args.socket, config.socket)
+        # The app-facing config must describe the listener selected by CLI
+        # overrides, while the persisted document remains untouched.
+        config.host = host
+        config.port = port
 
         if config.local_mode and host.strip().lower() not in {
             "127.0.0.1",
@@ -727,6 +731,15 @@ def main() -> None:
             codex_home=codex_home,
             gateway_port=port,
         )
+        # Preserve CLI listener overrides across Admin hot-reloads.  The
+        # persisted config remains unchanged, but runtime config rebuilds must
+        # continue to describe the listener this process actually owns.
+        try:
+            app.cli_host_override = args.host
+            app.cli_port_override = args.port
+        except AttributeError:
+            # Keep lightweight CLI tests and custom app wrappers usable.
+            pass
 
         from .app import run_gateway
 

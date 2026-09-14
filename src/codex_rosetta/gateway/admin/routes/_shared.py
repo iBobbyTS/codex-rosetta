@@ -115,8 +115,24 @@ def _reload_gateway_config(request: Any, config_path: str) -> GatewayConfig:
     """Re-read config from disk, rebuild GatewayConfig, swap into app state."""
     raw = load_config(config_path)
     new_config = GatewayConfig(raw)
+    _apply_runtime_server_overrides(request.app, new_config)
     _activate_gateway_config(request, new_config)
     return new_config
+
+
+def _apply_runtime_server_overrides(app: Any, config: GatewayConfig) -> None:
+    """Keep CLI host/port overrides authoritative for this process.
+
+    CLI overrides intentionally do not rewrite the persisted config file, but
+    every runtime config rebuild (including Admin hot reload) must see the same
+    effective listener values as the process that was started.
+    """
+    host = getattr(app, "cli_host_override", None)
+    port = getattr(app, "cli_port_override", None)
+    if host is not None:
+        config.host = host
+    if port is not None:
+        config.port = port
 
 
 @dataclass(frozen=True)
@@ -461,6 +477,8 @@ def _commit_gateway_config(
             {"error": f"Invalid config: {exc}"},
             status_code=status_code,
         )
+
+    _apply_runtime_server_overrides(request.app, new_config)
 
     try:
         prepared = _prepare_gateway_activation(request, new_config)
