@@ -36,6 +36,7 @@ from .auth import (
     create_auth_hook,
 )
 from .config import (
+    ConfigConflictError,
     GatewayConfig,
     ModelGroupConfigurationUnavailable,
     _model_group_candidate_raw,
@@ -1540,28 +1541,45 @@ def _bind_provider_current_recorders(  # noqa: C901
         if config_path is None:
             raise RuntimeError("Model group provider state cannot be persisted")
         async with write_lock:
-            try:
-                document = load_config_raw(config_path)
-                groups = document.get("model_groups")
-                if not isinstance(groups, dict):
-                    raise ValueError
-                group = groups.get(group_name)
-                if not isinstance(group, dict):
-                    raise ValueError
-                candidates = _model_group_provider_candidates(
-                    group.get("provider"),
-                    field=f"model_groups.{group_name}.provider",
-                )
-                if provider_name not in candidates:
-                    raise ValueError
-                group["current_provider"] = _model_group_candidate_raw(provider_name)
-                write_config(config_path, document)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                raise RuntimeError(
-                    "Model group provider state could not be persisted"
-                ) from None
+            # Loading happens before ``write_config`` acquires its process-wide
+            # file lock, so an Admin save in between can legitimately trip the
+            # digest CAS.  Re-read and retry a few times instead of turning a
+            # harmless concurrent update into a failed proxy request.
+            for attempt in range(3):
+                try:
+                    document = load_config_raw(config_path)
+                    groups = document.get("model_groups")
+                    if not isinstance(groups, dict):
+                        raise ValueError
+                    group = groups.get(group_name)
+                    if not isinstance(group, dict):
+                        raise ValueError
+                    candidates = _model_group_provider_candidates(
+                        group.get("provider"),
+                        field=f"model_groups.{group_name}.provider",
+                    )
+                    if provider_name not in candidates:
+                        raise ValueError
+                    group["current_provider"] = _model_group_candidate_raw(provider_name)
+                    write_config(config_path, document)
+                    return
+                except asyncio.CancelledError:
+                    raise
+                except ConfigConflictError:
+                    if attempt < 2:
+                        await asyncio.sleep(0)
+                        continue
+                    logger.warning(
+                        "Model group state changed concurrently; giving up after retries"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to persist model group %s provider: %s",
+                        group_name,
+                        exc,
+                    )
+                    break
+            raise RuntimeError("Model group provider state could not be persisted") from None
 
     for provider_info in config.providers.values():
         provider_info.bind_current_base_url_recorder(record)
