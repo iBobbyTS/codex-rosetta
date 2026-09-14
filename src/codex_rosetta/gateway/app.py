@@ -1558,7 +1558,15 @@ def _bind_provider_current_recorders(  # noqa: C901
                         group.get("provider"),
                         field=f"model_groups.{group_name}.provider",
                     )
-                    if provider_name not in candidates:
+                    # ``enabled`` is runtime policy and may differ from the
+                    # candidate captured by the ring when an Admin reload
+                    # happens concurrently.  Persist by stable provider
+                    # identity instead of full dataclass equality.
+                    if not any(
+                        candidate.provider_name == provider_name.provider_name
+                        and candidate.credential_uuid == provider_name.credential_uuid
+                        for candidate in candidates
+                    ):
                         raise ValueError
                     group["current_provider"] = _model_group_candidate_raw(provider_name)
                     write_config(config_path, document)
@@ -1574,9 +1582,10 @@ def _bind_provider_current_recorders(  # noqa: C901
                     )
                 except Exception as exc:
                     logger.warning(
-                        "Failed to persist model group %s provider: %s",
+                        "Failed to persist model group %s provider: %r (config=%s)",
                         group_name,
                         exc,
+                        config_path,
                     )
                     break
             raise RuntimeError("Model group provider state could not be persisted") from None
