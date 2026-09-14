@@ -38,14 +38,6 @@ CODEX_API_KEY_LABEL = "codex"
 CODEX_PROVIDER_ID = "codex_rosetta"
 ENABLED_REASONING_EFFORTS = ("low", "medium", "high", "xhigh", "max", "ultra")
 
-_UPSTREAM_COMPACTION_GROUPS = {
-    "gpt-5.6-sol": "gpt-5.6",
-    "gpt-5.6-terra": "gpt-5.6",
-    "gpt-5.6-luna": "gpt-5.6",
-    "gpt-5.5": "gpt-5.5-5.4",
-    "gpt-5.4": "gpt-5.5-5.4",
-    "gpt-5.4-mini": "gpt-5.5-5.4",
-}
 _ROSETTA_COMPACTION_GROUPS = {
     "gpt-5.2": "rosetta-comp-v1:gpt-5.2",
     "codex-auto-review": "rosetta-comp-v1:codex-auto-review",
@@ -645,6 +637,26 @@ def _configured_model_specs(raw_config: dict[str, Any]) -> dict[str, dict[str, A
     return configured
 
 
+def _ordered_configured_model_names(
+    configured_specs: dict[str, dict[str, Any]],
+    source_models: list[dict[str, Any]],
+) -> list[str]:
+    """Order native models like the source catalog, then append custom models."""
+    ordered: list[str] = []
+    used: set[str] = set()
+    for source_model in source_models:
+        source_slug = source_model.get("slug")
+        if not isinstance(source_slug, str):
+            continue
+        for name, spec in configured_specs.items():
+            upstream = spec.get("upstream_model") or name
+            if name not in used and upstream == source_slug:
+                ordered.append(name)
+                used.add(name)
+    ordered.extend(name for name in sorted(configured_specs) if name not in used)
+    return ordered
+
+
 def _apply_compaction_hash_overlay(
     models: list[dict[str, Any]],
     *,
@@ -653,20 +665,12 @@ def _apply_compaction_hash_overlay(
     preset_compaction_hashes: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Apply preset or Rosetta-owned compaction groups to catalog candidates."""
-    upstream_values: dict[str, str] = {}
-    for model in upstream_catalog or models:
-        slug = model.get("slug")
-        if not isinstance(slug, str):
-            raise ValueError("Codex catalog model has no valid slug")
-        upstream_group = _UPSTREAM_COMPACTION_GROUPS.get(slug)
-        if upstream_group is None:
-            continue
-        value = model.get("comp_hash")
-        if not isinstance(value, str) or not value:
-            raise ValueError(f"upstream comp_hash is missing for {slug}")
-        existing = upstream_values.setdefault(upstream_group, value)
-        if existing != value:
-            raise ValueError(f"upstream comp_hash collision in group {upstream_group}")
+    source_models = upstream_catalog or models
+    source_by_slug = {
+        model["slug"]: model
+        for model in source_models
+        if isinstance(model, dict) and isinstance(model.get("slug"), str)
+    }
 
     seen: dict[str, str] = {}
     for model in models:
@@ -675,8 +679,10 @@ def _apply_compaction_hash_overlay(
         preset_comp_hash = (preset_compaction_hashes or {}).get(slug)
         if preset_comp_hash is not None:
             comp_hash = preset_comp_hash
-        elif upstream_name in _UPSTREAM_COMPACTION_GROUPS:
-            comp_hash = upstream_values[_UPSTREAM_COMPACTION_GROUPS[upstream_name]]
+        elif (
+            source_model := source_by_slug.get(upstream_name)
+        ) is not None and isinstance(source_model.get("comp_hash"), str):
+            comp_hash = source_model["comp_hash"]
         else:
             comp_hash = _ROSETTA_COMPACTION_GROUPS.get(upstream_name)
             if comp_hash is None:
@@ -685,11 +691,15 @@ def _apply_compaction_hash_overlay(
         prior_slug = seen.get(comp_hash)
         if prior_slug is not None:
             prior_upstream = (upstream_model_names or {}).get(prior_slug, prior_slug)
-            prior_group = _UPSTREAM_COMPACTION_GROUPS.get(
-                prior_upstream, _ROSETTA_COMPACTION_GROUPS.get(prior_upstream)
+            prior_group = (
+                ("source", comp_hash)
+                if prior_upstream in source_by_slug
+                else _ROSETTA_COMPACTION_GROUPS.get(prior_upstream)
             )
-            this_group = _UPSTREAM_COMPACTION_GROUPS.get(
-                upstream_name, _ROSETTA_COMPACTION_GROUPS.get(upstream_name)
+            this_group = (
+                ("source", comp_hash)
+                if upstream_name in source_by_slug
+                else _ROSETTA_COMPACTION_GROUPS.get(upstream_name)
             )
             if prior_group != this_group:
                 raise ValueError(
@@ -755,7 +765,7 @@ def build_model_catalog(raw_config: dict[str, Any]) -> dict[str, Any]:
 
     selected_models: list[dict[str, Any]] = []
     preset_compaction_hashes: dict[str, str] = {}
-    for name in sorted(configured_specs):
+    for name in _ordered_configured_model_names(configured_specs, base_models):
         spec = configured_specs[name]
         upstream_name = spec.get("upstream_model")
         profile = resolve_model_profile(

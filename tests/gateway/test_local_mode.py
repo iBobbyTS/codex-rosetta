@@ -64,7 +64,7 @@ def test_catalog_uses_only_configured_models_and_matches_aliases_to_upstream() -
     models = catalog["models"]
     slugs = [model["slug"] for model in models]
 
-    assert slugs == ["alpha-model", "gpt-5.6-sol", "zeta-model"]
+    assert slugs == ["gpt-5.6-sol", "zeta-model", "alpha-model"]
 
     bundled = build_model_catalog({})["models"]
     assert [model["slug"] for model in bundled] == [
@@ -171,8 +171,37 @@ def test_catalog_preserves_official_bundled_entries_for_configured_slugs() -> No
     defaults = {model["slug"]: model for model in build_model_catalog({})["models"]}
     configured = build_model_catalog(raw)["models"]
 
-    assert [model["slug"] for model in configured] == ["gpt-5.5", "gpt-5.6-terra"]
-    assert configured == [defaults["gpt-5.5"], defaults["gpt-5.6-terra"]]
+    assert [model["slug"] for model in configured] == ["gpt-5.6-terra", "gpt-5.5"]
+    assert configured == [defaults["gpt-5.6-terra"], defaults["gpt-5.5"]]
+
+
+def test_catalog_native_models_inherit_source_compaction_hash_and_order() -> None:
+    raw = {
+        "model_groups": {
+            "llm": {
+                "provider": ["test"],
+                "type": "llm",
+                "models": {
+                    "gpt-5.6-terra-alias": {"upstream_model": "gpt-5.6-terra"},
+                    "gpt-6-astra": {},
+                    "gpt-5.6-sol": {},
+                },
+            }
+        }
+    }
+
+    models = build_model_catalog(raw)["models"]
+
+    assert [model["slug"] for model in models] == [
+        "gpt-6-astra",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra-alias",
+    ]
+    assert {model["slug"]: model["comp_hash"] for model in models} == {
+        "gpt-6-astra": "3000",
+        "gpt-5.6-sol": "3000",
+        "gpt-5.6-terra-alias": "3000",
+    }
 
 
 @pytest.mark.parametrize(
